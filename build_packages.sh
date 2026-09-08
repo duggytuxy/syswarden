@@ -560,11 +560,13 @@ prepare_rpm_build_id_links() {
 
 install -d -m 0755 staging-rpm
 cp -a staging/. staging-rpm/
-prepare_rpm_build_id_links \
-    staging-rpm \
-    staging-rpm/opt/syswarden/bin/syswarden-cli \
-    staging-rpm/opt/syswarden/bin/syswarden-core \
-    staging-rpm/opt/syswarden/bin/syswarden-tui
+if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 0 ]; then
+    prepare_rpm_build_id_links \
+        staging-rpm \
+        staging-rpm/opt/syswarden/bin/syswarden-cli \
+        staging-rpm/opt/syswarden/bin/syswarden-core \
+        staging-rpm/opt/syswarden/bin/syswarden-tui
+fi
 
 RHEL_PROFILE_STAGE=""
 if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
@@ -574,6 +576,11 @@ if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
         --enable-rhel-package-owned-profile \
         --shared-base-payload "${PACKAGE_WORKSPACE}/staging-rpm" \
         --output "${RHEL_PROFILE_STAGE}"
+    rhel_profile_build_id_tree="${PACKAGE_WORKSPACE}/staging-rpm/usr/lib/.build-id"
+    [ ! -e "${rhel_profile_build_id_tree}" ] && [ ! -L "${rhel_profile_build_id_tree}" ] || {
+        echo "[-] RHEL package-owned staging unexpectedly contains a build-id tree." >&2
+        exit 1
+    }
     for profile_path in \
         usr/lib/systemd/system/syswarden-core.service \
         usr/lib/systemd/system/syswarden-firewall.service \
@@ -991,8 +998,12 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
 
 RPM_PROFILE_DEPENDENCIES=()
 RPM_PROFILE_FPM_OPTIONS=()
+RPM_BUILD_ID_FPM_OPTIONS=(--directories /usr/lib/.build-id)
+RPM_BUILD_ID_DEFINE_OPTIONS=()
 if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
     RPM_PROFILE_DEPENDENCIES=(-d "systemd")
+    RPM_BUILD_ID_FPM_OPTIONS=()
+    RPM_BUILD_ID_DEFINE_OPTIONS=(--rpm-rpmbuild-define "_build_id_links none")
     RPM_PROFILE_FPM_OPTIONS=(
         --rpm-digest sha256
         --directories /etc/syswarden
@@ -1011,6 +1022,7 @@ if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
         --rpm-attr "0750,root,root:/var/lib/syswarden"
         --rpm-attr "0750,root,root:/var/lib/syswarden/ui"
         --rpm-attr "0750,root,root:/var/log/syswarden"
+        --rpm-attr "0755,root,root:/usr/share/doc/syswarden"
     )
 fi
 
@@ -1066,13 +1078,13 @@ fi
         --before-remove "${RPM_SCRIPTS}/prerm.sh" \
         --after-remove "${RPM_SCRIPTS}/postrm.sh" \
         --rpm-digest sha256 \
-        --rpm-rpmbuild-define "_build_id_links none" \
+        "${RPM_BUILD_ID_DEFINE_OPTIONS[@]}" \
         --rpm-rpmbuild-define "_binary_filedigest_algorithm 8" \
         --rpm-rpmbuild-define "_source_filedigest_algorithm 8" \
         --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
         --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
         --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
-        --directories /usr/lib/.build-id \
+        "${RPM_BUILD_ID_FPM_OPTIONS[@]}" \
         --directories /usr/share/doc/syswarden \
         -p "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" \
         -C staging-rpm .
@@ -1241,6 +1253,14 @@ validate_local_rpm_build_ids() {
             '[%{FILENAMES}\t%{FILEMODES:perms}\t%{FILEUSERNAME}:%{FILEGROUPNAME}\t%{FILELINKTOS}\n]' \
             "${rpm_path}"
     )" || return 1
+    if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
+        while IFS=$'\t' read -r rpm_pathname _; do
+            case "${rpm_pathname}" in
+                /usr/lib/.build-id|/usr/lib/.build-id/*) return 1 ;;
+            esac
+        done <<< "${rpm_inventory}"
+        return 0
+    fi
     while IFS=$'\t' read -r rpm_pathname rpm_permissions rpm_owner rpm_target; do
         case "${rpm_pathname}" in
             /usr/lib/.build-id)

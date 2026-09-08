@@ -112,6 +112,7 @@ jobs:
           set -euo pipefail
           (cd scripts/versionctl && GOWORK=off go test ./...)
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+            scripts/ci/candidate_update_bundle_workflow_test.py \
             scripts/ci/package_binary_provenance_gate_test.py \
             scripts/ci/package_systemd_ordering_artifact_gate_test.py \
             scripts/ci/package_systemd_ordering_preflight_test.py \
@@ -120,6 +121,7 @@ jobs:
             scripts/ci/native_package_signing_bundle_test.py \
             scripts/ci/native_package_signing_workflow_test.py \
             scripts/ci/native_capability_evidence_test.py \
+            scripts/ci/native_lifecycle_evidence_test.py \
             scripts/ci/native_performance_adapter_test.py \
             scripts/ci/native_performance_probe_test.py \
             scripts/ci/native_release_evidence_workflow_test.py \
@@ -1215,6 +1217,7 @@ jobs:
             --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
             --rpm-changelog "${RHEL_PROFILE_RPM_CHANGELOG}" \
             --rpm-digest sha256 \
+            --rpm-rpmbuild-define "_build_id_links none" \
             --rpm-rpmbuild-define "_binary_filedigest_algorithm 8" \
             --rpm-rpmbuild-define "_source_filedigest_algorithm 8" \
             --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
@@ -1243,6 +1246,7 @@ jobs:
             --rpm-attr "0750,root,root:/var/lib/syswarden" \
             --rpm-attr "0750,root,root:/var/lib/syswarden/ui" \
             --rpm-attr "0750,root,root:/var/log/syswarden" \
+            --rpm-attr "0755,root,root:/usr/share/doc/syswarden" \
             --directories /usr/share/doc/syswarden \
             -C "${RHEL_PROFILE_STAGING}" .
 

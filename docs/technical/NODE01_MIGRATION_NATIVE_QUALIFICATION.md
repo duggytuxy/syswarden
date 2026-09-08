@@ -142,7 +142,15 @@ Run `syswarden update` from v4.03.2 while the public latest stable release is de
 
 The v4.04.3 production updater resolves only GitHub's public latest stable release. It has no supported candidate endpoint and does not recognize qualification flags. Do not redirect DNS, replace certificates, or claim that the installed v4.04.3 updater installed a non-public candidate.
 
-For pre-publication qualification, use the exact DEB and signed metadata emitted by the release qualification run. Verify every item externally with the trust already available to v4.04.3. Only after this verification, extract the candidate CLI from that same verified candidate DEB, attest its digest and its source package digest, and run exactly:
+For pre-publication qualification, use the exact protected artifact emitted by
+`candidate-update-bundle.yml` for the untagged `main` candidate after the
+qualified native-signing phase. Before copying anything to NODE01, verify the
+artifact inventory and checksums, the descriptor, its GitHub producer
+attestation, the updater-manifest signature and the detached DEB signature.
+Use only the artifact's exact `node01/` directory as the qualification bundle.
+Only after this external verification, extract the candidate CLI from that
+same verified candidate DEB, attest its digest and its source package digest,
+and run exactly:
 
 ```text
 syswarden update --qualification-bundle /absolute/path --candidate-version v4.10.0
@@ -159,7 +167,11 @@ Both flags are mandatory together. The command accepts no positional argument, p
   `qualified-policy` native-signing provenance;
 - the candidate CLI digest and proof that it was extracted from the same verified package digest;
 - the canonical bundle descriptor identity and SHA-256;
-- the producer attestation that binds the protected producer candidate SHA to that descriptor and its separate manifest, signature, package, and candidate CLI digests;
+- the producer attestation that binds the protected producer candidate SHA to
+  the descriptor, which in turn binds the updater manifest, its signature and
+  the candidate package;
+- the candidate CLI digest derived separately from that authenticated DEB and
+  bound to its exact package digest;
 - the updater stdout proving offline mode, current and candidate versions, selected DEB, verified manifest signature, verified package SHA-256, installation, and activation;
 - counters proving that no configuration load and no firewall recovery hook ran before bundle validation;
 - operator-state and firewall-state digests immediately before validation and at the installation boundary, each equal to the corresponding attested v4.04.3 source-checkpoint digest;

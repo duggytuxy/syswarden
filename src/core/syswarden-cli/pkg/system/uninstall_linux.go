@@ -35,6 +35,8 @@ type firewallRemovalPreparationHost struct {
 	resolveWireGuardExe        func() (string, error)
 	wireGuardInterface         func() (bool, error)
 	attestSystemdUnit          func(string) error
+	attestRHELPackageOwned     func() (bool, error)
+	attestRHELPackageUnit      func(string) error
 	attestSystemdDropIns       func(firewallManagerExecutor, string) (string, error)
 	attestOpenRCUnit           func(firewallRemovalService) error
 	openRCUnitPresent          func(firewallRemovalService) (bool, error)
@@ -48,6 +50,8 @@ type firewallRemovalManager struct {
 	runlevelPath               string
 	executor                   firewallManagerExecutor
 	attestSystemdUnit          func(string) error
+	rhelPackageOwned           bool
+	attestRHELPackageUnit      func(string) error
 	attestSystemdDropIns       func(firewallManagerExecutor, string) (string, error)
 	attestOpenRCUnit           func(firewallRemovalService) error
 	openRCUnitPresent          func(firewallRemovalService) (bool, error)
@@ -79,6 +83,8 @@ func productionFirewallRemovalPreparationHost() firewallRemovalPreparationHost {
 		resolveWireGuardExe:        resolveWireGuardRemovalExecutable,
 		wireGuardInterface:         inspectWireGuardRemovalInterface,
 		attestSystemdUnit:          attestSystemdFirewallRemovalUnitFile,
+		attestRHELPackageOwned:     attestInstalledRHELPackageOwnedProfile,
+		attestRHELPackageUnit:      attestRHELPackageOwnedUnit,
 		attestSystemdDropIns:       attestApprovedSystemdServiceDropIns,
 		attestOpenRCUnit:           attestOpenRCFirewallRemovalUnit,
 		openRCUnitPresent:          inspectOpenRCFirewallRemovalUnitPresence,
@@ -121,11 +127,23 @@ func (host firewallRemovalPreparationHost) resolveManager() (firewallRemovalMana
 	if err != nil {
 		return firewallRemovalManager{}, err
 	}
+	rhelPackageOwned := false
+	if !host.alpine && host.attestRHELPackageOwned != nil {
+		rhelPackageOwned, err = host.attestRHELPackageOwned()
+		if err != nil {
+			return firewallRemovalManager{}, fmt.Errorf("attest RHEL package-owned profile: %w", err)
+		}
+		if rhelPackageOwned && host.attestRHELPackageUnit == nil {
+			return firewallRemovalManager{}, fmt.Errorf("RHEL package-owned unit attestation is unavailable")
+		}
+	}
 	manager := firewallRemovalManager{
 		alpine:                     host.alpine,
 		servicePath:                servicePath,
 		executor:                   host.executor,
 		attestSystemdUnit:          host.attestSystemdUnit,
+		rhelPackageOwned:           rhelPackageOwned,
+		attestRHELPackageUnit:      host.attestRHELPackageUnit,
 		attestSystemdDropIns:       host.attestSystemdDropIns,
 		attestOpenRCUnit:           host.attestOpenRCUnit,
 		openRCUnitPresent:          host.openRCUnitPresent,
@@ -241,10 +259,16 @@ func attestSystemdFirewallRemovalService(
 	switch service.name {
 	case "syswarden-core":
 		expectedFragment = "/etc/systemd/system/syswarden-core.service"
+		if manager.rhelPackageOwned {
+			expectedFragment = rhelPackageOwnedCoreUnitPath
+		}
 		expectedStartPath = "/opt/syswarden/bin/syswarden-core"
 		expectedStartArguments = expectedStartPath
 	case "syswarden-firewall":
 		expectedFragment = "/etc/systemd/system/syswarden-firewall.service"
+		if manager.rhelPackageOwned {
+			expectedFragment = rhelPackageOwnedFirewallUnitPath
+		}
 		expectedStartPath = "/opt/syswarden/bin/syswarden-cli"
 		expectedStartArguments = expectedStartPath + " reload --no-restart"
 	case "wg-quick@wg-syswarden":
@@ -264,7 +288,12 @@ func attestSystemdFirewallRemovalService(
 	if expectedFragment != "" && fragment != expectedFragment {
 		return fmt.Errorf("refusing unexpected unit fragment %s for %s", fragment, unit)
 	}
-	if err := manager.attestSystemdUnit(fragment); err != nil {
+	attestUnit := manager.attestSystemdUnit
+	if manager.rhelPackageOwned &&
+		(fragment == rhelPackageOwnedCoreUnitPath || fragment == rhelPackageOwnedFirewallUnitPath) {
+		attestUnit = manager.attestRHELPackageUnit
+	}
+	if err := attestUnit(fragment); err != nil {
 		return fmt.Errorf("attest unit fragment %s: %w", fragment, err)
 	}
 	if !exactSystemdExecutionProperty(execStart, expectedStartPath, expectedStartArguments) {
@@ -766,7 +795,15 @@ func PrepareFirewallStateForRemoval() error {
 	if err := RequireRemovalTombstone(); err != nil {
 		return fmt.Errorf("firewall removal preparation requires the durable removal tombstone: %w", err)
 	}
+	rhelPackageOwned := false
 	if !IsAlpine() {
+		var err error
+		rhelPackageOwned, err = attestInstalledRHELPackageOwnedProfile()
+		if err != nil {
+			return fmt.Errorf("attest RHEL package-owned profile before service preparation: %w", err)
+		}
+	}
+	if !IsAlpine() && !rhelPackageOwned {
 		if err := productionPreparedSystemdServiceArtifactHost().recoverInterruptedRemoval(); err != nil {
 			return fmt.Errorf("recover interrupted systemd service artifact removal: %w", err)
 		}
@@ -790,6 +827,14 @@ func UninstallSystem() error {
 	if err := RequireRemovalTombstone(); err != nil {
 		return fmt.Errorf("host removal requires the durable removal tombstone: %w", err)
 	}
+	rhelPackageOwned := false
+	if !IsAlpine() {
+		var err error
+		rhelPackageOwned, err = attestInstalledRHELPackageOwnedProfile()
+		if err != nil {
+			return fmt.Errorf("attest RHEL package-owned profile before host removal: %w", err)
+		}
+	}
 	if err := ReattestFirewallStatePreparedForRemoval(); err != nil {
 		return fmt.Errorf("host removal requires prepared firewall mutators: %w", err)
 	}
@@ -807,6 +852,20 @@ func UninstallSystem() error {
 	}
 
 	fmt.Println("[WARN] Starting verified SysWarden host removal...")
+	if rhelPackageOwned {
+		present, err := attestInstalledRHELPackageOwnedProfile()
+		if err != nil || !present {
+			return errors.Join(
+				fmt.Errorf("RHEL package-owned payload changed before runtime cleanup"), err,
+			)
+		}
+		if err := prepareRHELPackageOwnedRuntimeForErase(); err != nil {
+			return fmt.Errorf("prepare RHEL package-owned payload for RPM erase: %w", err)
+		}
+		fmt.Println("[READY] Verified runtime state is removed and the exact RPM payload is preserved.")
+		fmt.Println("[ACTION] Complete removal with: rpm -e syswarden-4.10.0-1.rhelpo.x86_64")
+		return nil
+	}
 
 	// Exact core and firewall service artifacts were already removed by the
 	// shared verified preparation while this executable path was available.

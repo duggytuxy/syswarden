@@ -555,6 +555,18 @@ func currentSysWardenRPMEVR() (string, error) {
 	return version + "-1", nil
 }
 
+func currentSysWardenRPMEVRs() ([]string, error) {
+	standard, err := currentSysWardenRPMEVR()
+	if err != nil {
+		return nil, err
+	}
+	version, err := currentSysWardenPackageVersion()
+	if err != nil {
+		return nil, err
+	}
+	return []string{standard, version + "-" + rhelPackageOwnedRPMRelease}, nil
+}
+
 func parseSysWardenRPMDropInOwners(output []byte, packageTransaction bool) (string, error) {
 	if len(output) == 0 || output[len(output)-1] != '\n' || bytes.ContainsAny(output, "\x00\r") {
 		return "", fmt.Errorf("SysWarden RPM ownership is ambiguous")
@@ -563,7 +575,7 @@ func parseSysWardenRPMDropInOwners(output []byte, packageTransaction bool) (stri
 	if len(lines) == 0 || len(lines) > 2 || (!packageTransaction && len(lines) != 1) {
 		return "", fmt.Errorf("SysWarden RPM ownership count is not exact")
 	}
-	currentEVR, err := currentSysWardenRPMEVR()
+	currentEVRs, err := currentSysWardenRPMEVRs()
 	if err != nil {
 		return "", err
 	}
@@ -575,8 +587,11 @@ func parseSysWardenRPMDropInOwners(output []byte, packageTransaction bool) (stri
 			fields[2] != "x86_64" || fields[3] != "8" {
 			return "", fmt.Errorf("SysWarden RPM owner is not exact")
 		}
-		if fields[1] == currentEVR {
-			currentPresent = true
+		for _, currentEVR := range currentEVRs {
+			if fields[1] == currentEVR {
+				currentPresent = true
+				break
+			}
 		}
 		claims = append(claims, "syswarden@"+fields[1]+"#x86_64#sha256#rpm")
 	}

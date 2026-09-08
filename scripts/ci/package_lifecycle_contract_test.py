@@ -1546,13 +1546,28 @@ class PackageLifecycleContractTests(unittest.TestCase):
             '"../../../../opt/syswarden/bin/$(basename -- "${rpm_binary}")"',
             source,
         )
+        self.assertEqual(
+            source.count('--rpm-rpmbuild-define "_build_id_links none"'), 1
+        )
+        self.assertIn('RPM_BUILD_ID_DEFINE_OPTIONS=()', source)
         self.assertIn(
-            '--rpm-rpmbuild-define "_build_id_links none"', rpm_block
+            'RPM_BUILD_ID_DEFINE_OPTIONS=(--rpm-rpmbuild-define "_build_id_links none")',
+            source,
+        )
+        self.assertIn('"${RPM_BUILD_ID_DEFINE_OPTIONS[@]}"', rpm_block)
+        self.assertIn(
+            'if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 0 ]; then\n'
+            '    prepare_rpm_build_id_links',
+            source,
         )
         self.assertEqual(rpm_block.count("umask 022"), 1)
         self.assertIn("\n    fpm -f -s dir -t rpm", rpm_block)
         self.assertTrue(rpm_block.rstrip().endswith(")"))
-        self.assertIn("--directories /usr/lib/.build-id", rpm_block)
+        self.assertIn(
+            "RPM_BUILD_ID_FPM_OPTIONS=(--directories /usr/lib/.build-id)", source
+        )
+        self.assertIn("RPM_BUILD_ID_FPM_OPTIONS=()", source)
+        self.assertIn('"${RPM_BUILD_ID_FPM_OPTIONS[@]}"', rpm_block)
         self.assertIn("--directories /usr/share/doc/syswarden", rpm_block)
         self.assertIn("-C staging-rpm .", rpm_block)
         self.assertNotIn("-C staging .", rpm_block)

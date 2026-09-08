@@ -37,15 +37,23 @@ The package transaction must prove all of the following:
 - no service is started and no firewall state is mutated in the build root;
 - only the two SysWarden units are preset on initial installation;
 - an upgrade does not reapply the preset or replace administrator TOML files;
+- an upgrade from the standard v4.04.3 RPM migrates only the exact legacy
+  `/etc/systemd/system` units and keeps the administrator's enabled or disabled
+  decision while making the vendor units authoritative;
+- rollback restores the standard unit ownership model, and re-upgrade proves
+  the same migration a second time;
+- final removal requires verified runtime cleanup before the native RPM erase;
 - an offline erase removes the enablement links without attempting a live
-  service stop;
+  service stop and rejects a missing cleanup boundary;
 - service activation and dynamic nftables policy compilation occur only after
   the first real boot.
 
 The package owns the units, preset, integration directories and protected
 configuration directories. The image owner seeds the approved TOML files.
 Those files are not RPM payload files and remain byte-for-byte under operator
-control across an upgrade.
+control across an upgrade. A complete purge must prove the package record, both
+vendor units, the drop-in file and directory, the preset, profile identity,
+enablement links and all mutable SysWarden state are absent.
 
 ## Required independent campaigns
 
@@ -91,6 +99,25 @@ bash extensions/rhel-package-owned/tests/test-rpm-assembly.sh
 ```
 
 The assembly test builds the exact profile NEVRA, verifies its payload and
-scriptlets, exercises install, upgrade and erase inside an offline chroot, and
-proves that the first-install preset and administrator upgrade choice behave as
-declared. Only passing native evidence for both hosts can qualify the profile.
+scriptlets, exercises clean install, v4.04.3 migration, rollback, re-upgrade and
+erase inside an offline chroot, and proves that the first-install preset,
+administrator enablement choice, cleanup barrier and zero-residue contract
+behave as declared. Only passing native evidence for both hosts can qualify the
+profile.
+
+The final removal scenario must also inject a `%postun` failure after the RPM
+record and payload are removed. It must prove that the root-owned durable helper
+remains at `/var/lib/.syswarden-rhelpo-postun-recovery-v1`, that its metadata is
+exactly `0:0:700:1:9843`, and that its SHA-256 is
+`64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c`.
+The package-executed wrapper uses the exact private `rpm-postun-v1` mode and
+must not issue a nested RPM database query while the erase transaction holds
+the package-manager lock. Its authority remains the exact PREUN identity,
+ownership, payload and barrier evidence plus the reviewed POSTUN wrapper's
+digest-bound helper invocation. Only the no-argument operator replay, outside
+that transaction, performs the canonical package-absence query with empty
+stderr.
+After `LC_ALL=C rpm -q syswarden` reports exactly that the package is not
+installed, replay `/bin/sh /var/lib/.syswarden-rhelpo-postun-recovery-v1` and
+require the complete zero-residue result. A substituted helper or standalone
+residual path must be refused without consuming the recovery boundary.

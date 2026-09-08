@@ -64,6 +64,19 @@ then boots the resulting system and proves both SysWarden services and the
 firewall are active. The initial clean-host checkpoint has no real boot ID;
 first boot and both later reboots carry distinct attested boot IDs.
 
+The v4.04.3 upgrade and re-upgrade scenarios must also prove that the exact
+legacy units under `/etc/systemd/system` were migrated, that the package-owned
+units under `/usr/lib/systemd/system` are the authoritative loaded fragments,
+and that the installed package-owned profile is exact. The rollback scenario
+must prove the inverse transition: the standard units are authoritative again
+and no package-owned vendor payload from v4.10.0 remains.
+
+For both package-owned purge scenarios, run the verified SysWarden cleanup
+before the final native RPM erase. The cleanup must stop and disable the exact
+services and remove owned runtime state without deleting unverified objects.
+The RPM transaction must then remove its vendor payload and package record.
+Direct `rpm -e` without the completed cleanup boundary is a hard failure.
+
 ## Preservation boundary
 
 Every checkpoint carries separate SHA-256 canaries for:
@@ -104,6 +117,16 @@ digests must match the native-signing provenance. The `1.rhelpo` package must
 also match the sealed package-owned signing sub-bundle and use the same approved
 RPM key while remaining absent from the updater manifest. The v4.04.3 package
 digest must match the published release checksum evidence.
+
+The protected native-evidence workflow runs only through the existing
+`syswarden-release-qualification` environment. Before dispatch, define the
+operator-approved host-key fingerprints as environment variables named
+`NODE02_SSH_HOST_KEY_SHA256`, `NODE03_SSH_HOST_KEY_SHA256`,
+`NODE04_SSH_HOST_KEY_SHA256` and `NODE05_SSH_HOST_KEY_SHA256`. The workflow
+fails closed if any value is absent or malformed, if two hosts share a value,
+or if the environment no longer has its exact owner review, main-only branch
+policy and disabled administrator bypass. Fingerprint values remain outside
+the repository.
 
 The caller rejects bootstrap provenance. During a bounded rotation overlap,
 the selected identities come from the exact signed-bundle provenance, never
@@ -201,6 +224,8 @@ must explicitly attest every path in the contract, including:
 - CLI and TUI links plus shell completion and package documentation;
 - systemd and OpenRC units, enablement links, legacy Web TUI remnants, and runtime
   files;
+- the package-owned systemd units, drop-in directory and file, and preset under
+  `/usr/lib/systemd`;
 - the SysWarden cron and rsyslog integration files;
 - dedicated WireGuard unit, runlevel, and configuration paths.
 

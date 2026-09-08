@@ -16,8 +16,9 @@ remain runtime components:
 
 - the RPM owns the two systemd units, the SysWarden-only preset and the
   protected configuration, state and log directories;
-- the four RPM scriptlets are reviewed flat shell sources and never call a
-  SysWarden binary;
+- the four expected RPM scriptlets are reviewed flat shell sources, never call
+  a SysWarden binary, and every other transaction, verification and trigger
+  script section must be absent;
 - initial installation presets only `syswarden-firewall.service` and
   `syswarden-core.service` and does not start them during the package
   transaction;
@@ -25,8 +26,15 @@ remain runtime components:
   running systemd manager and performs no network or host firewall mutation;
 - upgrade does not reapply presets or override an administrator's enablement
   decision or configuration files;
-- final removal always removes only the two SysWarden enablement links and
-  stops the services only when a live systemd manager is present;
+- upgrade from the standard v4.04.3 RPM accepts only its exact protected
+  `/etc/systemd/system` units, preserves the administrator's enablement choice,
+  and makes the package-owned vendor units authoritative;
+- verified removal is deliberately two phase: `syswarden uninstall` cleans
+  mutable runtime state and publishes the exact erase-ready boundary, then the
+  native RPM erase removes the package-owned payload;
+- final RPM removal rejects a missing cleanup boundary, removes only the two
+  SysWarden enablement links, and attests that the services are inactive and
+  unqueued when a live systemd manager is present;
 - no scriptlet calls `firewall-cmd`, changes SELinux policy, or enables,
   disables, starts or stops `firewalld.service` or `nftables.service`;
 - the RPM requires systemd, while the existing generic nftables dependency
@@ -75,7 +83,9 @@ The builder performs these profile-specific operations:
 4. selects the four package-owned scriptlets;
 5. fixes private directory ownership metadata to `root:root` and mode `0750`;
 6. requires SHA-256 RPM file digests;
-7. verifies the built RPM without installing it.
+7. disables automatic `/usr/lib/.build-id` links because this profile ships no
+   debuginfo and exact reversible payload ownership takes precedence;
+8. verifies the built RPM without installing it.
 
 Without `--rhel-package-owned-profile`, the historical builder sources and
 arguments remain selected.
@@ -126,12 +136,14 @@ python3 extensions/rhel-package-owned/verify-rpm.py \
 ```
 
 The verifier is read-only. It checks the package bytes, identity, architecture,
-SHA-256 payload digest algorithm, required dependencies, exact profile-owned
-paths, types, modes, owners, single-link metadata, link targets, file digests
-and all four scriptlet bytes. It also rejects unsafe integration-path parents,
-undeclared service-manager payload, an OpenRC payload, a forced firewalld
-dependency and any SysWarden binary or firewall-frontend transition in
-scriptlets.
+SHA-256 payload digest algorithm, required dependencies, the exhaustive RPM
+path allowlist, types, modes, owners, single-link metadata, link targets, file
+digests, file flags, empty capabilities and contexts, and all four expected
+scriptlet bytes. It also proves every other transaction,
+verification and trigger script section is absent, and rejects unsafe
+integration-path parents, undeclared service-manager payload, an OpenRC
+payload, a forced firewalld dependency and any SysWarden binary or
+firewall-frontend transition in scriptlets.
 
 The supplied digest alone does not establish publisher identity. Release
 qualification also requires the complete sealed signing sub-bundle, its native
@@ -160,6 +172,44 @@ its approved configuration after the RPM transaction. Later RPM upgrades do
 not replace those files and do not re-enable a service disabled by the image
 owner. Dynamic nftables policy is compiled only when the packaged firewall
 service starts on the real system.
+
+On a configured host, do not erase this variant directly. Run
+`syswarden uninstall` first and require its package-owned erase-ready result,
+then erase the exact `syswarden` RPM with the native package manager. The final
+scriptlet accepts only that protected boundary and an empty mutable-state
+inventory. It removes the boundary and the exact empty vendor drop-in directory
+after RPM payload removal. Any substituted unit, residual runtime state or
+unexpected directory content fails closed for operator review.
+
+The package-executed `%postun` wrapper invokes the digest-bound durable helper
+with the exact private `rpm-postun-v1` mode. It deliberately does not query the
+RPM database from inside the running RPM transaction, where nested queries are
+backend- and version-dependent. Its authority is the exact PREUN package
+identity, ownership, payload and barrier attestation, followed by the reviewed
+POSTUN wrapper's exact helper path, metadata and bytes. The no-argument operator
+replay runs outside the RPM transaction and is the only mode that requires the
+canonical `rpm -q syswarden` absence proof with empty stderr.
+
+If RPM reports a final `%postun` failure after the package record has already
+been removed, the protected replay helper remains on disk. Confirm that
+`LC_ALL=C rpm -q syswarden` returns exactly `package syswarden is not installed`,
+then verify the helper before executing it:
+
+```bash
+sudo stat -Lc '%u:%g:%a:%h:%s' -- \
+  /var/lib/.syswarden-rhelpo-postun-recovery-v1
+# Expected: 0:0:700:1:9843
+sudo sha256sum -- /var/lib/.syswarden-rhelpo-postun-recovery-v1
+# Expected SHA-256: 64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c
+sudo /bin/sh /var/lib/.syswarden-rhelpo-postun-recovery-v1
+```
+
+The helper refuses an installed SysWarden RPM, altered authorization state,
+unexpected residue, or modified directory metadata. Before the erase-ready
+marker is durably consumed, a failure retains both the helper and marker. After
+marker consumption, a late helper-removal failure may retain only the exact
+helper; the same no-argument replay then verifies that the package and every
+product residue are absent before removing that terminal helper.
 
 Do not combine this profile with the first RHEL image extension in one image.
 They represent different ownership models.

@@ -680,7 +680,7 @@ jobs:
           test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
           qualification_root_directories=(aggregate bound go127-evidence native-release-evidence native-signing packages raw status)
-          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
+          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/candidate-update native-release-evidence/candidate-update/node01 native-release-evidence/candidate-update/verification native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
           qualification_raw_files=(
             nftables-raw.json
             package-lifecycle-amd64.json
@@ -727,6 +727,12 @@ jobs:
                 --packages "${QUALIFICATION_ROOT}/packages/candidate" \
                 --manifest "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
                 --signature "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig"
+            cmp -- \
+              "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
+              "${QUALIFICATION_ROOT}/native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json"
+            cmp -- \
+              "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig" \
+              "${QUALIFICATION_ROOT}/native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json.sig"
           fi
           (
             cd "${QUALIFICATION_ROOT}"
@@ -1300,7 +1306,7 @@ jobs:
           test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
           qualification_root_directories=(aggregate bound go127-evidence native-release-evidence native-signing packages raw status)
-          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
+          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/candidate-update native-release-evidence/candidate-update/node01 native-release-evidence/candidate-update/verification native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
           qualification_raw_files=(
             nftables-raw.json
             package-lifecycle-amd64.json
@@ -1347,6 +1353,12 @@ jobs:
                 --packages "${QUALIFICATION_ROOT}/packages/candidate" \
                 --manifest "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
                 --signature "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig"
+            cmp -- \
+              "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
+              "${QUALIFICATION_ROOT}/native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json"
+            cmp -- \
+              "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig" \
+              "${QUALIFICATION_ROOT}/native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json.sig"
           fi
           (
             cd "${QUALIFICATION_ROOT}"
@@ -1645,6 +1657,7 @@ jobs:
             release_payload/assets/*
 
       - name: Verify Private Draft Assets Before Publication
+        id: draft_snapshot
         if: ${{ env.ACT != 'true' && steps.existing.outputs.public != 'true' }}
         shell: bash
         env:
@@ -1653,13 +1666,45 @@ jobs:
           RELEASE_TAG: ${{ needs.validate-and-stage.outputs.release_tag }}
         run: |
           set -euo pipefail
-          metadata="$(gh release view "${RELEASE_TAG}" --json tagName,isDraft,isPrerelease,body)"
-          if [[ "$(jq -r '.tagName' <<< "${metadata}")" != "${RELEASE_TAG}" || \
-                "$(jq -r '.isDraft' <<< "${metadata}")" != "true" || \
-                "$(jq -r '.isPrerelease' <<< "${metadata}")" != "false" ]]; then
+          validate_draft_metadata() {
+            jq -e --arg tag "${RELEASE_TAG}" '
+              type == "object" and
+              (.id | type == "number" and . > 0 and floor == .) and
+              .tag_name == $tag and .name == $tag and
+              .draft == true and .prerelease == false and
+              (.body | type == "string") and
+              (.assets | type == "array" and length > 0) and
+              ([.assets[].name] | unique | length) == (.assets | length) and
+              all(.assets[];
+                (.id | type == "number" and . > 0 and floor == .) and
+                (.name | type == "string" and test("^[A-Za-z0-9._-]+$")) and
+                (.size | type == "number" and . > 0 and floor == .) and
+                (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")) and
+                .state == "uploaded"
+              )
+            ' >/dev/null
+          }
+          draft_snapshot_sha256() {
+            jq -cS '
+              {
+                id,
+                tag_name,
+                name,
+                draft,
+                prerelease,
+                body,
+                assets: (.assets | map({id, name, size, digest, state}) | sort_by(.name))
+              }
+            ' | sha256sum | awk '{print $1}'
+          }
+
+          metadata="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          if ! validate_draft_metadata <<< "${metadata}"; then
             echo "ERROR: private draft metadata is inconsistent." >&2
             exit 1
           fi
+          snapshot_before="$(draft_snapshot_sha256 <<< "${metadata}")"
           jq -j '.body' <<< "${metadata}" > draft_release_notes.md
           cmp --silent release_payload/release_notes.md draft_release_notes.md
           mkdir draft_release_assets
@@ -1677,6 +1722,38 @@ jobs:
             "${GITHUB_REPOSITORY}" \
             "${GITHUB_REPOSITORY}/.github/workflows/release-manager.yml" \
             "${RELEASE_SHA}"
+
+          metadata_after="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          if ! validate_draft_metadata <<< "${metadata_after}"; then
+            echo "ERROR: private draft metadata changed while assets were validated." >&2
+            exit 1
+          fi
+          snapshot_after="$(draft_snapshot_sha256 <<< "${metadata_after}")"
+          if [[ ! "${snapshot_before}" =~ ^[0-9a-f]{64}$ || \
+                "${snapshot_after}" != "${snapshot_before}" ]]; then
+            echo "ERROR: private draft identity, notes, or asset snapshot changed during validation." >&2
+            exit 1
+          fi
+          remote_asset_count="$(jq -r '.assets | length' <<< "${metadata_after}")"
+          local_asset_count="$(find -P draft_release_assets -mindepth 1 -maxdepth 1 -type f | wc -l)"
+          if [[ "${remote_asset_count}" -ne "${local_asset_count}" ]]; then
+            echo "ERROR: private draft asset count changed during validation." >&2
+            exit 1
+          fi
+          while IFS=$'\t' read -r asset_name asset_size asset_digest; do
+            asset_path="draft_release_assets/${asset_name}"
+            test -f "${asset_path}"
+            test ! -L "${asset_path}"
+            if [[ "$(stat -c '%s' "${asset_path}")" != "${asset_size}" || \
+                  "sha256:$(sha256sum "${asset_path}" | awk '{print $1}')" != "${asset_digest}" ]]; then
+              echo "ERROR: private draft asset ${asset_name} does not match its immutable API identity." >&2
+              exit 1
+            fi
+          done < <(jq -r '.assets | sort_by(.name)[] | [.name, (.size | tostring), .digest] | @tsv' \
+            <<< "${metadata_after}")
+          printf 'release_id=%s\nsnapshot_sha256=%s\n' \
+            "$(jq -r '.id' <<< "${metadata_after}")" "${snapshot_after}" >> "${GITHUB_OUTPUT}"
 
       - name: Require Immutable Release Tag Ruleset Before Publication
         if: ${{ env.ACT != 'true' }}
@@ -1778,6 +1855,8 @@ jobs:
         if: ${{ env.ACT != 'true' }}
         shell: bash
         env:
+          EXPECTED_DRAFT_RELEASE_ID: ${{ steps.draft_snapshot.outputs.release_id }}
+          EXPECTED_DRAFT_SNAPSHOT_SHA256: ${{ steps.draft_snapshot.outputs.snapshot_sha256 }}
           EXISTING_PUBLIC: ${{ steps.existing.outputs.public }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
@@ -1838,6 +1917,56 @@ jobs:
             echo "${phase} remote tag ${RELEASE_TAG} resolves exactly to ${RELEASE_SHA}."
           }
 
+          revalidate_exact_draft_snapshot() {
+            local metadata=""
+            local snapshot_sha256=""
+            if [[ ! "${EXPECTED_DRAFT_RELEASE_ID}" =~ ^[1-9][0-9]*$ || \
+                  ! "${EXPECTED_DRAFT_SNAPSHOT_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "ERROR: validated private draft identity is missing or malformed; refusing publication." >&2
+              return 1
+            fi
+            if ! metadata="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"; then
+              echo "ERROR: pre-publication private draft lookup failed; refusing publication." >&2
+              return 1
+            fi
+            if ! jq -e --arg tag "${RELEASE_TAG}" \
+              --argjson release_id "${EXPECTED_DRAFT_RELEASE_ID}" '
+                type == "object" and .id == $release_id and
+                .tag_name == $tag and .name == $tag and
+                .draft == true and .prerelease == false and
+                (.body | type == "string") and
+                (.assets | type == "array" and length > 0) and
+                ([.assets[].name] | unique | length) == (.assets | length) and
+                all(.assets[];
+                  (.id | type == "number" and . > 0 and floor == .) and
+                  (.name | type == "string" and test("^[A-Za-z0-9._-]+$")) and
+                  (.size | type == "number" and . > 0 and floor == .) and
+                  (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")) and
+                  .state == "uploaded"
+                )
+              ' <<< "${metadata}" >/dev/null; then
+              echo "ERROR: private draft identity or shape changed after validation; refusing publication." >&2
+              return 1
+            fi
+            snapshot_sha256="$(jq -cS '
+              {
+                id,
+                tag_name,
+                name,
+                draft,
+                prerelease,
+                body,
+                assets: (.assets | map({id, name, size, digest, state}) | sort_by(.name))
+              }
+            ' <<< "${metadata}" | sha256sum | awk '{print $1}')"
+            if [[ "${snapshot_sha256}" != "${EXPECTED_DRAFT_SNAPSHOT_SHA256}" ]]; then
+              echo "ERROR: private draft identity, notes, asset IDs, count, sizes, or digests changed after validation; refusing publication." >&2
+              return 1
+            fi
+            echo "Pre-publication private draft snapshot remains exactly ${snapshot_sha256}."
+          }
+
           if [[ "${EXISTING_PUBLIC}" == "true" ]]; then
             revalidate_remote_release_tag "idempotent-public"
             echo "Existing public release ${RELEASE_TAG} remains bound to ${RELEASE_SHA}; no publication mutation was attempted."
@@ -1849,7 +1978,11 @@ jobs:
           fi
 
           revalidate_remote_release_tag "pre-publication"
-          gh release edit "${RELEASE_TAG}" --draft=false --latest
+          revalidate_exact_draft_snapshot
+          jq -cn '{draft:false, make_latest:"true"}' | \
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/releases/${EXPECTED_DRAFT_RELEASE_ID}" \
+              --input - >/dev/null
           revalidate_remote_release_tag "post-publication"
 
       - name: Verify Published Release Assets

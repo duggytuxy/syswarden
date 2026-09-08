@@ -61,10 +61,11 @@ remains mandatory on the exact GitHub candidate or merged SHA.
 | `package.yml` | Validators, reproducible AMD64 builds, three package files, metadata, inventory and checksums in the pinned build environment | Unique successful `main` run and immutable GitHub package artifact identity |
 | `go-127-evaluation.yml` | Pinned Go 1.27 toolchain identity, functional, vet, race and dual JSON contract checks with candidate-bound evidence | GitHub runner identity and immutable evaluation artifact identity |
 | `native-package-signing.yml` | Signature policy, two-phase bootstrap, signing-bundle, distinct-identity, family-secret isolation, offline-verifier and workflow contract tests | Protected signing environment, approved deployment, native RPM, APK and DEB signing keys, reviewed bootstrap evidence, policy promotion, signer image and immutable phase 2 signed evidence |
-| `native-release-evidence.yml` | HA v2, native capability and performance evidence validators with candidate-bound manifest rehearsal | Protected native-evidence environment, dedicated ephemeral AMD64 runner, real pre-staged observations, GitHub attestation and immutable artifact identity |
+| `candidate-update-bundle.yml` | Candidate descriptor, exact inventory, signed updater-manifest and no-publication contract tests | Protected qualification environment, approved deployment, updater signing key, exact qualified native-signing artifact, GitHub attestation and immutable candidate artifact identity |
+| `native-release-evidence.yml` | HA v2, native capability and performance evidence validators with candidate-bound manifest rehearsal | Exact protected `syswarden-release-qualification` environment, dedicated ephemeral AMD64 runner, four approved host-key variables, real pre-staged observations, GitHub attestation and immutable artifact identity |
 | `scorecard.yml` | Workflow and policy contract tests | GitHub repository posture, Scorecard service result and SARIF publication |
 | `compliance.yml` | Workflow and policy contract tests | Plumber service execution, GitHub OIDC result and remote score publication |
-| `release-qualification.yml` | Optional native lifecycle, kernel and evidence-schema rehearsal when matching hardware and inputs exist | Protected environment review, ephemeral runner identity, authoritative run and artifact IDs, sealing and protected signing secret |
+| `release-qualification.yml` | Optional native lifecycle, kernel and evidence-schema rehearsal when matching hardware and inputs exist | Protected environment review, ephemeral runner identity, authoritative run and artifact IDs, hosted sealing and exact reuse of the protected candidate updater material |
 | `release-manager.yml` | Static release gates, version and signature checks, asset inventory and non-mutating negative tests | Ruleset revalidation, protected dispatch, tag creation, production approval and public Release publication |
 
 ## Candidate-bound Act event
@@ -243,6 +244,16 @@ environment, tool version, start time, end time, exit code and log SHA-256. It
 must also record every produced file path, size and SHA-256. A missing log or
 output makes the rehearsal incomplete.
 
+The protected native-evidence run reuses the exact
+`syswarden-release-qualification` environment and validates its single owner
+reviewer, main-only deployment policy and disabled administrator bypass before
+processing evidence. Define these four variables on that environment before
+dispatching the run: `NODE02_SSH_HOST_KEY_SHA256`,
+`NODE03_SSH_HOST_KEY_SHA256`, `NODE04_SSH_HOST_KEY_SHA256` and
+`NODE05_SSH_HOST_KEY_SHA256`. Populate them from the independently approved
+operator inventory. Do not hardcode their values in source, workflow inputs or
+staged evidence.
+
 ## GitHub-only gates
 
 The following controls cannot be replaced by a local run:
@@ -295,6 +306,15 @@ Then merge a separate non-versioning policy promotion, rebuild packages from
 the new exact `main` SHA and run `qualified-policy`. No bootstrap package or
 observation may be reused. Official native campaigns and release qualification
 consume only the phase 2 bundle and its provenance-selected key identities.
+
+Before the NODE01 migration campaign, run the protected candidate update
+workflow once for the exact untagged `main` SHA and the unique phase 2 native
+signing artifact. It creates a signed, non-public qualification bundle without
+creating a tag or Release. Download that immutable artifact for the offline
+NODE01 campaign. The native-evidence workflow must resolve the same unique run
+and artifact by ID, verify its GitHub attestation, descriptor, complete file
+inventory, checksums and updater signature, and bind both NODE01 candidate
+observations to it before accepting their evidence.
 
 After qualification succeeds, create the exact inspected candidate version
 locally as an annotated SSH- or GPG-signed tag whose peeled commit is the exact

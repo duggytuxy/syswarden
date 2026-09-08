@@ -27,8 +27,99 @@ RPM_TOOL = Path("/usr/bin/rpm")
 MAX_RPM_BYTES = 256 * 1024 * 1024
 MAX_QUERY_BYTES = 4 * 1024 * 1024
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+PACKAGE_VERSION = "4.10.0"
 PACKAGE_RELEASE = "1.rhelpo"
+PRODUCT_EXECUTABLE = re.compile(
+    r"(?:/opt/syswarden/bin/)?syswarden-(?:cli|core|tui)(?![A-Za-z0-9_.-])"
+)
+PRODUCT_PATH_ASSIGNMENT = re.compile(
+    r"(?m)^[ \t]*(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*=.*"
+    r"(?:/opt/syswarden(?:/bin)?|syswarden-(?:cli|core|tui)(?![A-Za-z0-9_.-]))"
+)
+PRODUCT_COMMAND = re.compile(
+    r"(?m)(?:^|[\n;|&()]|\b(?:then|do))[ \t]*"
+    r"(?:(?:command|exec|nohup|sudo)[ \t]+)?"
+    r"(?:env(?:[ \t]+(?:-[^ \t]+|[A-Za-z_][A-Za-z0-9_]*=[^ \t]+))*[ \t]+)?"
+    r"(?:/opt/syswarden/bin/)?syswarden-(?:cli|core|tui)(?=$|[ \t;|&)])"
+)
+PRODUCT_CASE_ARM = re.compile(
+    r"(?m)^[ \t]*(?:/opt/syswarden/bin/syswarden-(?:cli|core|tui))"
+    r"(?:\|/opt/syswarden/bin/syswarden-(?:cli|core|tui))*\)"
+)
+UNREVIEWED_SCRIPT_TAGS = (
+    "PREINFLAGS",
+    "POSTINFLAGS",
+    "PREUNFLAGS",
+    "POSTUNFLAGS",
+    "PRETRANS",
+    "PRETRANSFLAGS",
+    "PRETRANSPROG",
+    "POSTTRANS",
+    "POSTTRANSFLAGS",
+    "POSTTRANSPROG",
+    "PREUNTRANS",
+    "PREUNTRANSFLAGS",
+    "PREUNTRANSPROG",
+    "POSTUNTRANS",
+    "POSTUNTRANSFLAGS",
+    "POSTUNTRANSPROG",
+    "VERIFYSCRIPT",
+    "VERIFYSCRIPTFLAGS",
+    "VERIFYSCRIPTPROG",
+    "TRIGGERCONDS",
+    "TRIGGERFLAGS",
+    "TRIGGERINDEX",
+    "TRIGGERNAME",
+    "TRIGGERSCRIPTFLAGS",
+    "TRIGGERSCRIPTPROG",
+    "TRIGGERSCRIPTS",
+    "TRIGGERTYPE",
+    "TRIGGERVERSION",
+    "FILETRIGGERCONDS",
+    "FILETRIGGERFLAGS",
+    "FILETRIGGERINDEX",
+    "FILETRIGGERNAME",
+    "FILETRIGGERPRIORITIES",
+    "FILETRIGGERSCRIPTFLAGS",
+    "FILETRIGGERSCRIPTPROG",
+    "FILETRIGGERSCRIPTS",
+    "FILETRIGGERTYPE",
+    "FILETRIGGERVERSION",
+    "TRANSFILETRIGGERCONDS",
+    "TRANSFILETRIGGERFLAGS",
+    "TRANSFILETRIGGERINDEX",
+    "TRANSFILETRIGGERNAME",
+    "TRANSFILETRIGGERPRIORITIES",
+    "TRANSFILETRIGGERSCRIPTFLAGS",
+    "TRANSFILETRIGGERSCRIPTPROG",
+    "TRANSFILETRIGGERSCRIPTS",
+    "TRANSFILETRIGGERTYPE",
+    "TRANSFILETRIGGERVERSION",
+    "POLICIES",
+    "POLICYFLAGS",
+    "POLICYNAMES",
+    "POLICYTYPES",
+    "POLICYTYPESINDEXES",
+    "SYSUSERS",
+)
+SHARED_PAYLOAD_RECORDS = {
+    "/opt/syswarden/bin/syswarden-cli": ("-rwxr-x---", ""),
+    "/opt/syswarden/bin/syswarden-core": ("-rwxr-x---", ""),
+    "/opt/syswarden/bin/syswarden-tui": ("-rwxr-x---", ""),
+    "/opt/syswarden/signatures.json": ("-rw-r-----", ""),
+    "/usr/local/bin/syswarden": (
+        "lrwxrwxrwx",
+        "/opt/syswarden/bin/syswarden-cli",
+    ),
+    "/usr/local/bin/syswarden-tui": (
+        "lrwxrwxrwx",
+        "/opt/syswarden/bin/syswarden-tui",
+    ),
+    "/usr/share/bash-completion/completions/syswarden": ("-rw-r--r--", ""),
+    "/usr/share/doc/syswarden": ("drwxr-xr-x", ""),
+    "/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt": ("-rw-r--r--", ""),
+    "/usr/share/doc/syswarden/LICENSE.txt": ("-rw-r--r--", ""),
+}
 
 
 def fail(message: str) -> None:
@@ -209,10 +300,72 @@ def parse_file_inventory(raw: str) -> dict[str, tuple[str, str, str, str, str, s
     return records
 
 
+def validate_file_security_metadata(
+    records: dict[str, tuple[str, str, str, str, str, str]], raw: str
+) -> None:
+    security_records: dict[str, tuple[str, str, str]] = {}
+    for number, line in enumerate(raw.splitlines(), start=1):
+        fields = line.split("\t")
+        if len(fields) != 4:
+            fail(f"RPM file security metadata line {number} is malformed")
+        path, capabilities, context, flags = fields
+        if path in security_records or path not in records:
+            fail(f"RPM file security metadata line {number} is unsafe")
+        security_records[path] = (capabilities, context, flags)
+    if set(security_records) != set(records):
+        fail("RPM file security metadata inventory is incomplete")
+    for path, (capabilities, context, flags) in security_records.items():
+        expected_flags = "0"
+        if path in {
+            "/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt",
+            "/usr/share/doc/syswarden/LICENSE.txt",
+            "/usr/share/doc/syswarden/rhel-package-owned-profile.json",
+        }:
+            expected_flags = "2"
+        if (
+            capabilities != "(none)"
+            or context != "(none)"
+            or flags != expected_flags
+        ):
+            fail(f"RPM file security metadata mismatch for {path}")
+
+
 def expected_permissions(entry: dict[str, Any]) -> str:
     mode = int(entry["mode"], 8)
     kind = stat.S_IFDIR if entry["type"] == "directory" else stat.S_IFREG
     return stat.filemode(kind | mode)
+
+
+def validate_shared_payload(
+    records: dict[str, tuple[str, str, str, str, str, str]],
+    profile_paths: set[str],
+) -> None:
+    for path, (expected_mode, expected_target) in SHARED_PAYLOAD_RECORDS.items():
+        actual = records.get(path)
+        if actual is None:
+            fail(f"RPM is missing shared package payload path {path}")
+        permissions, user, group, target, digest, link_count = actual
+        if (
+            permissions != expected_mode
+            or user != "root"
+            or group != "root"
+            or target != expected_target
+            or link_count != "1"
+        ):
+            fail(
+                f"RPM shared payload metadata mismatch for {path}: "
+                f"{(permissions, user, group, target, digest, link_count)!r}"
+            )
+        if expected_mode.startswith("-"):
+            if SHA256.fullmatch(digest) is None:
+                fail(f"RPM shared payload digest is not SHA-256 for {path}")
+        elif digest not in {"", "(none)"}:
+            fail(f"RPM shared non-file payload contains an unexpected digest for {path}")
+
+    expected_paths = profile_paths | set(SHARED_PAYLOAD_RECORDS)
+    unexpected = sorted(set(records) - expected_paths)
+    if unexpected:
+        fail(f"RHEL RPM contains undeclared package-owned path {unexpected[0]}")
 
 
 def validate_payload(
@@ -256,41 +409,48 @@ def validate_payload(
     }
     if forbidden & set(records):
         fail("RHEL RPM unexpectedly packages OpenRC service files")
-    integration_roots = (
-        "/usr/lib/systemd/system",
-        "/usr/lib/systemd/system-preset",
-    )
-    integration_prefixes = (
-        "/usr/lib/systemd/system/",
-        "/usr/lib/systemd/system-preset/",
-    )
-    protected_state_prefixes = (
-        "/etc/syswarden/",
-        "/var/lib/syswarden/",
-        "/var/log/syswarden/",
-    )
-    for path, record in records.items():
-        permissions, user, group, target, _, link_count = record
-        if path in integration_roots:
-            if (
-                permissions != "drwxr-xr-x"
-                or user != "root"
-                or group != "root"
-                or target
-                or link_count != "1"
-            ):
-                fail(f"RHEL RPM contains an unsafe integration parent {path}")
-            continue
-        if path not in expected_paths and (
-            path.startswith(integration_prefixes)
-            or path.startswith("/etc/init.d/syswarden")
-            or path.startswith(protected_state_prefixes)
-        ):
-            fail(f"RHEL RPM contains an undeclared package-owned path {path}")
+    validate_shared_payload(records, expected_paths)
 
 
 def normalize_scriptlet(value: str) -> str:
     return value.rstrip("\n")
+
+
+def validate_no_product_binary_execution(scriptlet: str) -> None:
+    """Allow passive payload attestation but reject supported execution forms."""
+    if not PRODUCT_EXECUTABLE.search(scriptlet):
+        return
+    if PRODUCT_PATH_ASSIGNMENT.search(scriptlet):
+        fail("RPM scriptlet assigns a SysWarden executable or product binary path")
+    command_source = PRODUCT_CASE_ARM.sub("", scriptlet)
+    if PRODUCT_COMMAND.search(command_source):
+        fail("RPM scriptlet executes a SysWarden product binary")
+    for unsafe in (
+        r"(?m)(?:^|[;|&() \t])(?:eval|source)(?:[ \t]|$)",
+        r"(?m)(?:^|[;|&() \t])\.(?:[ \t]+)(?!\.)",
+        r"(?m)(?:^|[;|&() \t])(?:/bin/)?(?:ba|da|k|z)?sh[ \t]+-c(?:[ \t]|$)",
+        r"(?m)(?:^|[;|&() \t])(?:xargs|find)[ \t].*(?:-exec|syswarden-)",
+    ):
+        if re.search(unsafe, scriptlet):
+            fail("RPM scriptlet contains an indirect product-binary execution primitive")
+
+
+def validate_no_unreviewed_script_sections(package: Path) -> None:
+    query = "".join(
+        f"{tag}=%|{tag}?{{present}}:{{absent}}|\\n"
+        for tag in UNREVIEWED_SCRIPT_TAGS
+    )
+    actual = rpm_query(package, query)
+    expected = "".join(f"{tag}=absent\n" for tag in UNREVIEWED_SCRIPT_TAGS)
+    if actual == expected:
+        return
+    actual_lines = set(actual.splitlines())
+    present = [
+        tag for tag in UNREVIEWED_SCRIPT_TAGS if f"{tag}=present" in actual_lines
+    ]
+    if present:
+        fail(f"RPM contains unreviewed script or trigger tag {present[0]}")
+    fail("RPM unreviewed script and trigger inventory is malformed")
 
 
 def validate_scriptlets(package: Path, profile: dict[str, Any]) -> None:
@@ -322,11 +482,10 @@ def validate_scriptlets(package: Path, profile: dict[str, Any]) -> None:
             fail(f"RPM {lifecycle_name} bytes do not match the reviewed source")
         if interpreter != "/bin/sh":
             fail(f"RPM {lifecycle_name} interpreter is not /bin/sh")
+        validate_no_product_binary_execution(actual)
         combined.append(actual)
     scriptlets = "\n".join(combined)
     for forbidden in (
-        "/opt/syswarden/bin",
-        "syswarden-cli",
         "firewall-cmd",
         "firewalld.service",
         "nftables.service",
@@ -337,6 +496,7 @@ def validate_scriptlets(package: Path, profile: dict[str, Any]) -> None:
     ):
         if forbidden in scriptlets:
             fail(f"RPM scriptlets contain forbidden token {forbidden!r}")
+    validate_no_unreviewed_script_sections(package)
 
 
 def validate_dependencies(package: Path) -> None:
@@ -345,6 +505,23 @@ def validate_dependencies(package: Path) -> None:
         fail("RPM profile dependencies do not include systemd and nftables")
     if "firewalld" in requirements:
         fail("RPM profile must not force installation of a firewall frontend")
+
+
+def validate_package_identity(metadata: list[str], filename: str) -> str:
+    if len(metadata) != 6:
+        fail("RPM identity metadata is malformed")
+    name, epoch, version, package_release, architecture, digest_algorithm = metadata
+    expected_filename = f"syswarden-{PACKAGE_VERSION}-{PACKAGE_RELEASE}.x86_64.rpm"
+    if (
+        name != "syswarden"
+        or epoch != "0"
+        or version != PACKAGE_VERSION
+        or package_release != PACKAGE_RELEASE
+        or architecture != "x86_64"
+        or filename != expected_filename
+    ):
+        fail("RPM identity does not match the RHEL package-owned profile")
+    return digest_algorithm
 
 
 def verify(package: Path, expected_sha256: str) -> None:
@@ -386,20 +563,9 @@ def verify(package: Path, expected_sha256: str) -> None:
             os.close(descriptor)
         metadata = rpm_query(
             snapshot,
-            "%{NAME}\n%{VERSION}\n%{RELEASE}\n%{ARCH}\n%{FILEDIGESTALGO}\n",
+            "%{NAME}\n%{EPOCHNUM}\n%{VERSION}\n%{RELEASE}\n%{ARCH}\n%{FILEDIGESTALGO}\n",
         ).splitlines()
-        if len(metadata) != 5:
-            fail("RPM identity metadata is malformed")
-        name, version, package_release, architecture, digest_algorithm = metadata
-        expected_filename = f"syswarden-{version}-{PACKAGE_RELEASE}.x86_64.rpm"
-        if (
-            name != "syswarden"
-            or VERSION.fullmatch(version) is None
-            or package_release != PACKAGE_RELEASE
-            or architecture != "x86_64"
-            or package.name != expected_filename
-        ):
-            fail("RPM identity does not match the RHEL package-owned profile")
+        digest_algorithm = validate_package_identity(metadata, package.name)
         records = parse_file_inventory(
             rpm_query(
                 snapshot,
@@ -410,6 +576,13 @@ def verify(package: Path, expected_sha256: str) -> None:
         if not isinstance(entries, list):
             fail("inventory entries are invalid")
         validate_payload(entries, records, digest_algorithm)
+        validate_file_security_metadata(
+            records,
+            rpm_query(
+                snapshot,
+                "[%{FILENAMES}\\t%{FILECAPS}\\t%{FILECONTEXTS}\\t%{FILEFLAGS}\\n]",
+            ),
+        )
         validate_scriptlets(snapshot, profile)
         validate_dependencies(snapshot)
         snapshot_data, _ = regular_bytes(snapshot, MAX_RPM_BYTES, "RPM snapshot")

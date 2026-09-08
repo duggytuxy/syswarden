@@ -44,6 +44,10 @@ jobs:
       native_signing_artifact_id: ${{ steps.native_candidate.outputs.artifact_id }}
       native_signing_artifact_name: ${{ steps.native_candidate.outputs.artifact_name }}
       native_signing_run_id: ${{ steps.native_candidate.outputs.run_id }}
+      candidate_update_artifact_digest: ${{ steps.candidate_update.outputs.artifact_digest }}
+      candidate_update_artifact_id: ${{ steps.candidate_update.outputs.artifact_id }}
+      candidate_update_artifact_name: ${{ steps.candidate_update.outputs.artifact_name }}
+      candidate_update_run_id: ${{ steps.candidate_update.outputs.run_id }}
       native_evidence_artifact_digest: ${{ steps.native_evidence.outputs.artifact_digest }}
       native_evidence_artifact_id: ${{ steps.native_evidence.outputs.artifact_id }}
       native_evidence_artifact_name: ${{ steps.native_evidence.outputs.artifact_name }}
@@ -303,6 +307,7 @@ jobs:
           candidate_packages="${artifact_root}/packages/candidate"
           unsigned_packages="${qualification_root}/unsigned-packages"
           native_signing="${artifact_root}/native-signing"
+          candidate_update="${qualification_root}/candidate-update-source"
           native_release_evidence="${artifact_root}/native-release-evidence"
           go127_evidence="${artifact_root}/go127-evidence"
           previous_packages="${artifact_root}/packages/previous"
@@ -318,6 +323,7 @@ jobs:
             "${candidate_packages}" \
             "${unsigned_packages}" \
             "${native_signing}" \
+            "${candidate_update}" \
             "${native_release_evidence}" \
             "${go127_evidence}" \
             "${previous_packages}" \
@@ -356,6 +362,7 @@ jobs:
             printf 'CANDIDATE_PACKAGES_DIR=%s\n' "${candidate_packages}"
             printf 'UNSIGNED_PACKAGES_DIR=%s\n' "${unsigned_packages}"
             printf 'NATIVE_SIGNING_DIR=%s\n' "${native_signing}"
+            printf 'CANDIDATE_UPDATE_SOURCE_DIR=%s\n' "${candidate_update}"
             printf 'NATIVE_RELEASE_EVIDENCE_DIR=%s\n' "${native_release_evidence}"
             printf 'GO127_EVIDENCE_DIR=%s\n' "${go127_evidence}"
             printf 'PREVIOUS_PACKAGES_DIR=%s\n' "${previous_packages}"
@@ -373,6 +380,7 @@ jobs:
             printf 'candidate_packages_dir=%s\n' "${candidate_packages}"
             printf 'unsigned_packages_dir=%s\n' "${unsigned_packages}"
             printf 'native_signing_dir=%s\n' "${native_signing}"
+            printf 'candidate_update_source_dir=%s\n' "${candidate_update}"
             printf 'native_release_evidence_dir=%s\n' "${native_release_evidence}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -743,6 +751,224 @@ jobs:
             sha256sum --check --strict SHA256SUMS.txt
           )
 
+      - name: Resolve Unique Protected Candidate Update Bundle
+        id: candidate_update
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          runs_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/candidate-update-bundle.yml/runs" \
+            -f event=workflow_dispatch -f branch=main \
+            -f head_sha="${RELEASE_SHA}" -f per_page=100)"
+          matches="$(jq --arg sha "${RELEASE_SHA}" '[
+            .[] | .workflow_runs[]? | select(
+              .head_sha == $sha and .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .path == ".github/workflows/candidate-update-bundle.yml" and
+              .run_attempt == 1 and .status == "completed" and
+              .conclusion == "success"
+            )
+          ]' <<< "${runs_json}")"
+          if [[ "$(jq 'length' <<< "${matches}")" != "1" ]]; then
+            echo "ERROR: expected exactly one protected candidate update run for main/${RELEASE_SHA}." >&2
+            exit 1
+          fi
+          run_id="$(jq -er '.[0].id | tostring' <<< "${matches}")"
+          artifact_name="syswarden-candidate-update-bundle-${version}-${run_id}-1-${RELEASE_SHA}"
+          artifacts_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" -f per_page=100)"
+          if [[ "$(jq '[.[] | .artifacts[]?] | length' <<< "${artifacts_json}")" != "1" ]]; then
+            echo "ERROR: candidate update run must expose exactly one artifact." >&2
+            exit 1
+          fi
+          artifact="$(jq --arg name "${artifact_name}" --arg sha "${RELEASE_SHA}" \
+            --argjson run "${run_id}" '[.[] | .artifacts[]? | select(
+              .name == $name and .workflow_run.id == $run and
+              .workflow_run.head_sha == $sha)]' <<< "${artifacts_json}")"
+          artifact_id="$(jq -r '.[0].id | tostring // ""' <<< "${artifact}")"
+          artifact_digest="$(jq -r '.[0].digest // ""' <<< "${artifact}")"
+          if [[ "$(jq 'length' <<< "${artifact}")" != "1" || \
+                ! "${run_id}" =~ ^[1-9][0-9]*$ || \
+                ! "${artifact_id}" =~ ^[1-9][0-9]*$ || \
+                ! "${artifact_digest}" =~ ^sha256:[0-9a-f]{64}$ || \
+                "$(jq -r '.[0].expired' <<< "${artifact}")" != "false" || \
+                ! "$(jq -r '.[0].size_in_bytes | tostring' <<< "${artifact}")" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: candidate update artifact is absent, expired, empty, ambiguous, or malformed." >&2
+            exit 1
+          fi
+          printf 'run_id=%s\nartifact_id=%s\nartifact_name=%s\nartifact_digest=%s\n' \
+            "${run_id}" "${artifact_id}" "${artifact_name}" "${artifact_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download Exact Candidate Update Bundle by Artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.candidate_update.outputs.artifact_id }}
+          path: ${{ steps.workspace.outputs.candidate_update_source_dir }}
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.candidate_update.outputs.run_id }}
+
+      - name: Independently Verify Protected Candidate Update Bundle
+        id: candidate_update_verify
+        shell: bash
+        env:
+          CANDIDATE_UPDATE_ARTIFACT_DIGEST: ${{ steps.candidate_update.outputs.artifact_digest }}
+          CANDIDATE_UPDATE_ARTIFACT_ID: ${{ steps.candidate_update.outputs.artifact_id }}
+          CANDIDATE_UPDATE_ARTIFACT_NAME: ${{ steps.candidate_update.outputs.artifact_name }}
+          CANDIDATE_UPDATE_RUN_ID: ${{ steps.candidate_update.outputs.run_id }}
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_ARTIFACT_DIGEST: ${{ steps.native_candidate.outputs.artifact_digest }}
+          NATIVE_ARTIFACT_ID: ${{ steps.native_candidate.outputs.artifact_id }}
+          NATIVE_ARTIFACT_NAME: ${{ steps.native_candidate.outputs.artifact_name }}
+          NATIVE_RUN_ID: ${{ steps.native_candidate.outputs.run_id }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          deb_name="syswarden_${version}_amd64.deb"
+          descriptor="${CANDIDATE_UPDATE_SOURCE_DIR}/CANDIDATE_UPDATE_BUNDLE.json"
+          checksums="${CANDIDATE_UPDATE_SOURCE_DIR}/CANDIDATE_UPDATE_SHA256SUMS.txt"
+          manifest="${CANDIDATE_UPDATE_SOURCE_DIR}/node01/syswarden-update-manifest-v1.json"
+          signature="${manifest}.sig"
+          deb="${CANDIDATE_UPDATE_SOURCE_DIR}/node01/${deb_name}"
+          deb_signature="${CANDIDATE_UPDATE_SOURCE_DIR}/verification/${deb_name}.asc"
+          producer_attestation="${CANDIDATE_UPDATE_SOURCE_DIR}/verification/producer-attestation.jsonl"
+          expected=(
+            CANDIDATE_UPDATE_BUNDLE.json
+            CANDIDATE_UPDATE_SHA256SUMS.txt
+            node01/syswarden-update-manifest-v1.json
+            node01/syswarden-update-manifest-v1.json.sig
+            "node01/${deb_name}"
+            verification/producer-attestation.jsonl
+            "verification/${deb_name}.asc"
+          )
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          mapfile -t actual < <(find -P "${CANDIDATE_UPDATE_SOURCE_DIR}" -type f -printf '%P\n' | LC_ALL=C sort)
+          test "${actual[*]}" = "${expected_sorted[*]}"
+          mapfile -t directories < <(find -P "${CANDIDATE_UPDATE_SOURCE_DIR}" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
+          test "${directories[*]}" = "node01 verification"
+          while IFS= read -r -d '' entry; do
+            test ! -L "${entry}"
+            test "$(stat -c '%u' "${entry}")" = "$(id -u)"
+            if [[ -f "${entry}" ]]; then
+              test "$(stat -c '%h' "${entry}")" = "1"
+              test -s "${entry}"
+              test "$(stat -c '%s' "${entry}")" -le 268435456
+            elif [[ ! -d "${entry}" ]]; then
+              echo "ERROR: candidate update download contains a special entry." >&2
+              exit 1
+            fi
+          done < <(find -P "${CANDIDATE_UPDATE_SOURCE_DIR}" -mindepth 1 -print0)
+          mapfile -t checksum_paths < <(awk '{print $2}' "${checksums}" | sed 's/^\*//' | LC_ALL=C sort)
+          expected_checksum_paths=(
+            CANDIDATE_UPDATE_BUNDLE.json
+            node01/syswarden-update-manifest-v1.json
+            node01/syswarden-update-manifest-v1.json.sig
+            "node01/${deb_name}"
+            verification/producer-attestation.jsonl
+            "verification/${deb_name}.asc"
+          )
+          mapfile -t expected_checksum_paths_sorted < <(printf '%s\n' "${expected_checksum_paths[@]}" | LC_ALL=C sort)
+          test "${checksum_paths[*]}" = "${expected_checksum_paths_sorted[*]}"
+          (cd "${CANDIDATE_UPDATE_SOURCE_DIR}" && \
+            sha256sum --check --strict CANDIDATE_UPDATE_SHA256SUMS.txt)
+          descriptor_sha256="$(sha256sum "${descriptor}" | awk '{print $1}')"
+          manifest_sha256="$(sha256sum "${manifest}" | awk '{print $1}')"
+          manifest_signature_sha256="$(sha256sum "${signature}" | awk '{print $1}')"
+          detached_signature_sha256="$(sha256sum "${deb_signature}" | awk '{print $1}')"
+          producer_attestation_sha256="$(sha256sum "${producer_attestation}" | awk '{print $1}')"
+          bundle_identity="github:${GITHUB_REPOSITORY}:candidate-update:${RELEASE_TAG}:${RELEASE_SHA}:${CANDIDATE_UPDATE_RUN_ID}:1"
+          jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg release_tag "${RELEASE_TAG}" --arg release_sha "${RELEASE_SHA}" \
+            --arg workflow_sha "${RELEASE_SHA}" --arg bundle_identity "${bundle_identity}" \
+            --arg native_name "${NATIVE_ARTIFACT_NAME}" \
+            --arg native_digest "${NATIVE_ARTIFACT_DIGEST}" \
+            --argjson candidate_run "${CANDIDATE_UPDATE_RUN_ID}" \
+            --argjson native_run "${NATIVE_RUN_ID}" \
+            --argjson native_id "${NATIVE_ARTIFACT_ID}" '
+              (keys | sort) == (["attestation","detached_deb_signature","manifest","node01_bundle","packages","producer","profile","public_release","release_qualified","release_sha","release_tag","repository","schema_version","source","status"] | sort) and
+              .schema_version == 1 and
+              .profile == "syswarden-candidate-update-bundle/v1" and
+              .status == "candidate-signed-not-release-qualified" and
+              .repository == $repository and .release_tag == $release_tag and
+              .release_sha == $release_sha and .public_release == false and
+              .release_qualified == false and
+              .producer == {workflow:".github/workflows/candidate-update-bundle.yml",workflow_sha:$workflow_sha,run_id:$candidate_run,run_attempt:1,runner_environment:"github-hosted"} and
+              .source == {native_signing_workflow:".github/workflows/native-package-signing.yml",native_signing_run_id:$native_run,native_signing_artifact_id:$native_id,native_signing_artifact_name:$native_name,native_signing_artifact_digest:$native_digest} and
+              .node01_bundle.identity == $bundle_identity and
+              .node01_bundle.directory == "node01" and
+              .node01_bundle.exact_file_count == 3 and
+              (.node01_bundle.files | length) == 3 and
+              .attestation == {bundle_path:"verification/producer-attestation.jsonl",mechanism:"github-artifact-attestation",predicate_type:"https://slsa.dev/provenance/v1",subject:"CANDIDATE_UPDATE_BUNDLE.json"}
+            ' "${descriptor}" >/dev/null
+          python3 - "${descriptor}" "${CANDIDATE_UPDATE_SOURCE_DIR}" \
+            "${NATIVE_SIGNING_DIR}/evidence/NATIVE_SIGNING_PROVENANCE.json" <<'PY'
+          import hashlib, json, pathlib, sys
+          descriptor = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          root = pathlib.Path(sys.argv[2])
+          provenance = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8"))
+          def record(relative):
+              data = (root / relative).read_bytes()
+              return {"path": relative, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+          version = descriptor["release_tag"].removeprefix("v")
+          deb_name = f"syswarden_{version}_amd64.deb"
+          packages = sorted(provenance["packages"]["signed"], key=lambda item: item["name"])
+          if descriptor["packages"] != packages:
+              raise SystemExit("candidate package provenance differs from protected native signing")
+          manifest = json.loads((root / "node01/syswarden-update-manifest-v1.json").read_text(encoding="utf-8"))
+          if descriptor["manifest"] != {
+              "key_id": manifest["key_id"],
+              "document": record("node01/syswarden-update-manifest-v1.json"),
+              "signature": record("node01/syswarden-update-manifest-v1.json.sig"),
+          }:
+              raise SystemExit("candidate manifest records are invalid")
+          expected_node_files = sorted([
+              record(f"node01/{deb_name}"),
+              record("node01/syswarden-update-manifest-v1.json"),
+              record("node01/syswarden-update-manifest-v1.json.sig"),
+          ], key=lambda item: item["path"])
+          if descriptor["node01_bundle"]["files"] != expected_node_files:
+              raise SystemExit("candidate NODE01 inventory records are invalid")
+          if descriptor["detached_deb_signature"] != record(f"verification/{deb_name}.asc"):
+              raise SystemExit("candidate detached DEB signature record is invalid")
+          deb_record = next(item for item in packages if item["name"] == deb_name)
+          if record(f"node01/{deb_name}")["sha256"] != deb_record["sha256"] or record(f"node01/{deb_name}")["size"] != deb_record["size"]:
+              raise SystemExit("candidate NODE01 package differs from native signing provenance")
+          PY
+          attestation_json="$(mktemp "${QUALIFICATION_ROOT}/candidate-update-attestation.XXXXXXXXXX.json")"
+          gh attestation verify "${descriptor}" \
+            --bundle "${producer_attestation}" --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/candidate-update-bundle.yml" \
+            --signer-digest "${RELEASE_SHA}" --source-digest "${RELEASE_SHA}" \
+            --source-ref "refs/heads/main" --deny-self-hosted-runners --format json \
+            > "${attestation_json}"
+          jq -e --arg sha256 "${descriptor_sha256}" '
+            length == 1 and
+            .[0].verificationResult.statement.predicateType == "https://slsa.dev/provenance/v1" and
+            ([.[0].verificationResult.statement.subject[] |
+              select(.name == "CANDIDATE_UPDATE_BUNDLE.json" and .digest.sha256 == $sha256)] | length) == 1
+          ' "${attestation_json}" >/dev/null
+          rm -f -- "${attestation_json}"
+          env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY GOFLAGS=-mod=readonly \
+            go run ./scripts/ci/update_manifest.go verify \
+              --repository "${GITHUB_WORKSPACE}" --tag "${RELEASE_TAG}" \
+              --packages "${NATIVE_SIGNING_DIR}/packages" \
+              --manifest "${manifest}" --signature "${signature}"
+          cmp -- "${deb}" "${NATIVE_SIGNING_DIR}/packages/${deb_name}"
+          cmp -- "${deb_signature}" "${NATIVE_SIGNING_DIR}/packages/${deb_name}.asc"
+          printf 'verified=true\ndescriptor_sha256=%s\nbundle_identity=%s\nmanifest_sha256=%s\nmanifest_signature_sha256=%s\ndetached_signature_sha256=%s\nproducer_attestation_sha256=%s\n' \
+            "${descriptor_sha256}" "${bundle_identity}" "${manifest_sha256}" \
+            "${manifest_signature_sha256}" "${detached_signature_sha256}" \
+            "${producer_attestation_sha256}" >> "${GITHUB_OUTPUT}"
+
       - name: Resolve Unique Protected Native Release Evidence
         id: native_evidence
         shell: bash
@@ -790,6 +1016,16 @@ jobs:
       - name: Revalidate Candidate-Bound Native Release Evidence
         shell: bash
         env:
+          CANDIDATE_UPDATE_ARTIFACT_DIGEST: ${{ steps.candidate_update.outputs.artifact_digest }}
+          CANDIDATE_UPDATE_ARTIFACT_ID: ${{ steps.candidate_update.outputs.artifact_id }}
+          CANDIDATE_UPDATE_ARTIFACT_NAME: ${{ steps.candidate_update.outputs.artifact_name }}
+          CANDIDATE_UPDATE_BUNDLE_IDENTITY: ${{ steps.candidate_update_verify.outputs.bundle_identity }}
+          CANDIDATE_UPDATE_DESCRIPTOR_SHA256: ${{ steps.candidate_update_verify.outputs.descriptor_sha256 }}
+          CANDIDATE_UPDATE_MANIFEST_SHA256: ${{ steps.candidate_update_verify.outputs.manifest_sha256 }}
+          CANDIDATE_UPDATE_MANIFEST_SIGNATURE_SHA256: ${{ steps.candidate_update_verify.outputs.manifest_signature_sha256 }}
+          CANDIDATE_UPDATE_DEB_SIGNATURE_SHA256: ${{ steps.candidate_update_verify.outputs.detached_signature_sha256 }}
+          CANDIDATE_UPDATE_PRODUCER_ATTESTATION_SHA256: ${{ steps.candidate_update_verify.outputs.producer_attestation_sha256 }}
+          CANDIDATE_UPDATE_RUN_ID: ${{ steps.candidate_update.outputs.run_id }}
           EVIDENCE_ARTIFACT_DIGEST: ${{ steps.native_evidence.outputs.artifact_digest }}
           EVIDENCE_ARTIFACT_ID: ${{ steps.native_evidence.outputs.artifact_id }}
           EVIDENCE_RUN_ID: ${{ steps.native_evidence.outputs.run_id }}
@@ -941,6 +1177,38 @@ jobs:
             --output "${temporary}/NODE01_MIGRATION_VERDICT.json"
           cmp -- "${temporary}/NODE01_MIGRATION_VERDICT.json" \
             "${NATIVE_RELEASE_EVIDENCE_DIR}/node01-migration/VERDICT.json"
+          jq -e \
+            --arg release_tag "${RELEASE_TAG}" --arg release_sha "${RELEASE_SHA}" \
+            --arg bundle_identity "${CANDIDATE_UPDATE_BUNDLE_IDENTITY}" \
+            --arg descriptor_sha256 "${CANDIDATE_UPDATE_DESCRIPTOR_SHA256}" \
+            --arg producer_attestation_sha256 "${CANDIDATE_UPDATE_PRODUCER_ATTESTATION_SHA256}" \
+            --arg manifest_sha256 "${CANDIDATE_UPDATE_MANIFEST_SHA256}" \
+            --arg manifest_signature_sha256 "${CANDIDATE_UPDATE_MANIFEST_SIGNATURE_SHA256}" \
+            --arg package_name "${deb_package_name}" \
+            --arg package_sha256 "${deb_package_sha256}" \
+            --argjson package_size "${deb_package_size}" \
+            --arg detached_signature_sha256 "${CANDIDATE_UPDATE_DEB_SIGNATURE_SHA256}" '
+              [.scenarios[].verified_manifests[] |
+                select(.release_tag == $release_tag)] as $candidate_manifests |
+              ($candidate_manifests | length) == 2 and
+              all($candidate_manifests[];
+                .producer_commit_sha == $release_sha and
+                .manifest_contains_producer_commit == false and
+                .manifest_signature_verified == true and
+                .manifest_package_digest_verified == true and
+                .detached_package_signature_verified == true and
+                .offline_mode_confirmed == true and
+                .fallback_used == false and .network_requests == 0 and
+                .installation_channel == "offline-qualification-bundle" and
+                .qualification_bundle_identity == $bundle_identity and
+                .qualification_bundle_descriptor_sha256 == $descriptor_sha256 and
+                .qualification_bundle_producer_attestation_sha256 == $producer_attestation_sha256 and
+                .manifest_sha256 == $manifest_sha256 and
+                .manifest_signature_sha256 == $manifest_signature_sha256 and
+                .package_name == $package_name and
+                .package_sha256 == $package_sha256 and .package_size == $package_size and
+                .detached_package_signature_sha256 == $detached_signature_sha256)
+            ' "${NATIVE_RELEASE_EVIDENCE_DIR}/node01-migration/EVIDENCE.json" >/dev/null
           python3 - "${NATIVE_RELEASE_EVIDENCE_DIR}/native-lifecycle/RAW_EVIDENCE.tar" "${temporary}/native-lifecycle" <<'PY'
           import pathlib, tarfile, sys
           archive, root = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
@@ -1004,8 +1272,31 @@ jobs:
             --node03-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node03' "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
             --node04-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node04' "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
             --node05-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node05' "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")"
-          gh attestation verify "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json" \
-            --repo "${GITHUB_REPOSITORY}" >/dev/null
+          native_attestation_result="${temporary}/native-release-evidence-attestation.json"
+          native_manifest_sha256="$(sha256sum \
+            "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json" | \
+            awk '{print $1}')"
+          gh attestation verify \
+            "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow \
+              "${GITHUB_REPOSITORY}/.github/workflows/native-release-evidence.yml" \
+            --signer-digest "${RELEASE_SHA}" \
+            --source-digest "${RELEASE_SHA}" \
+            --source-ref "refs/heads/main" \
+            --digest-alg sha256 \
+            --format json > "${native_attestation_result}"
+          jq -e --arg sha256 "${native_manifest_sha256}" '
+            length == 1 and
+            .[0].verificationResult.statement.predicateType ==
+              "https://slsa.dev/provenance/v1" and
+            ([.[0].verificationResult.statement.subject[] |
+              select(
+                .name == "NATIVE_RELEASE_EVIDENCE_MANIFEST.json" and
+                .digest.sha256 == $sha256
+              )] | length) == 1
+          ' "${native_attestation_result}" >/dev/null
+          rm -f -- "${native_attestation_result}"
           python3 - "${NATIVE_RELEASE_EVIDENCE_DIR}" <<'PY'
           import hashlib, json, pathlib, sys
           root = pathlib.Path(sys.argv[1])
@@ -1016,6 +1307,19 @@ jobs:
           if manifest.get("files") != actual:
               raise SystemExit("native evidence manifest inventory or digest mismatch")
           PY
+          candidate_update_files=(
+            CANDIDATE_UPDATE_BUNDLE.json
+            CANDIDATE_UPDATE_SHA256SUMS.txt
+            node01/syswarden-update-manifest-v1.json
+            node01/syswarden-update-manifest-v1.json.sig
+            "node01/syswarden_${RELEASE_TAG#v}_amd64.deb"
+            verification/producer-attestation.jsonl
+            "verification/syswarden_${RELEASE_TAG#v}_amd64.deb.asc"
+          )
+          for relative in "${candidate_update_files[@]}"; do
+            cmp -- "${CANDIDATE_UPDATE_SOURCE_DIR}/${relative}" \
+              "${NATIVE_RELEASE_EVIDENCE_DIR}/candidate-update/${relative}"
+          done
           ha_contract="$(sha256sum scripts/ci/ha_v2_native_contract_v4.10.0.json | awk '{print $1}')"
           capability_contract="$(sha256sum scripts/ci/native_capability_contract_v4.10.0.json | awk '{print $1}')"
           performance_contract="$(sha256sum scripts/ci/performance_contract_v4.10.0.json | awk '{print $1}')"
@@ -1034,10 +1338,17 @@ jobs:
             --arg signing_provenance_sha256 "${signing_provenance_sha256}" \
             --arg rhel_signing_provenance_sha256 "${rhel_signing_provenance_sha256}" \
             --arg signature_policy_sha256 "${signature_policy_sha256}" \
+            --arg candidate_artifact_name "${CANDIDATE_UPDATE_ARTIFACT_NAME}" \
+            --arg candidate_artifact_digest "${CANDIDATE_UPDATE_ARTIFACT_DIGEST}" \
+            --arg candidate_descriptor_sha256 "${CANDIDATE_UPDATE_DESCRIPTOR_SHA256}" \
+            --arg candidate_bundle_identity "${CANDIDATE_UPDATE_BUNDLE_IDENTITY}" \
+            --arg candidate_attestation_sha256 "${CANDIDATE_UPDATE_PRODUCER_ATTESTATION_SHA256}" \
+            --argjson candidate_run_id "${CANDIDATE_UPDATE_RUN_ID}" \
+            --argjson candidate_artifact_id "${CANDIDATE_UPDATE_ARTIFACT_ID}" \
             --argjson selected_keys "${attested_native_identities}" \
             --argjson rhel_package "${attested_rhel_package}" '
-            (keys | sort) == ["contracts","files","native_signing","release_sha","release_tag","repository","run_attempt","run_id","schema_version","trusted_host_keys"] and
-            .schema_version == 2 and .repository == $repository and .release_tag == $release_tag and
+            (keys | sort) == ["candidate_update","contracts","files","native_signing","release_sha","release_tag","repository","run_attempt","run_id","schema_version","trusted_host_keys"] and
+            .schema_version == 3 and .repository == $repository and .release_tag == $release_tag and
             .release_sha == $release_sha and .run_id == $run_id and .run_attempt == 1 and
             (.trusted_host_keys | keys | sort) == ["node02","node03","node04","node05"] and
             (.trusted_host_keys.node02 | test("^SHA256:[A-Za-z0-9+/]{43}$")) and
@@ -1062,6 +1373,16 @@ jobs:
               },
               selected_keys:$selected_keys,
               status:"native-signatures-verified-not-release-qualified"
+            } and
+            .candidate_update == {
+              workflow:"candidate-update-bundle.yml",
+              run_id:$candidate_run_id,
+              artifact_id:$candidate_artifact_id,
+              artifact_name:$candidate_artifact_name,
+              artifact_digest:$candidate_artifact_digest,
+              descriptor_sha256:$candidate_descriptor_sha256,
+              node01_bundle_identity:$candidate_bundle_identity,
+              producer_attestation_sha256:$candidate_attestation_sha256
             } and
             .contracts == {ha_v2:$ha_contract,native_capability:$capability_contract,performance:$performance_contract,source_allocation:$source_allocation_contract,node01_migration:$node01_contract,native_lifecycle:$lifecycle_contract}
           ' "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json" >/dev/null
@@ -1635,6 +1956,13 @@ jobs:
             "native-signing/rhel-package-owned/packages/syswarden-${candidate_version}-1.rhelpo.x86_64.rpm"
             "native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json"
             "native-release-evidence/QUALIFICATION_BINDING.json"
+            "native-release-evidence/candidate-update/CANDIDATE_UPDATE_BUNDLE.json"
+            "native-release-evidence/candidate-update/CANDIDATE_UPDATE_SHA256SUMS.txt"
+            "native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json"
+            "native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json.sig"
+            "native-release-evidence/candidate-update/node01/syswarden_${candidate_version}_amd64.deb"
+            "native-release-evidence/candidate-update/verification/producer-attestation.jsonl"
+            "native-release-evidence/candidate-update/verification/syswarden_${candidate_version}_amd64.deb.asc"
             "native-release-evidence/ha-v2/HA_V2_NATIVE_EVIDENCE.json"
             "native-release-evidence/ha-v2/HA_V2_NATIVE_VERDICT.json"
             "native-release-evidence/native-capability/AGGREGATE.json"
@@ -1693,6 +2021,9 @@ jobs:
             native-signing/rhel-package-owned/evidence
             native-signing/rhel-package-owned/packages
             native-release-evidence
+            native-release-evidence/candidate-update
+            native-release-evidence/candidate-update/node01
+            native-release-evidence/candidate-update/verification
             native-release-evidence/ha-v2
             native-release-evidence/ha-v2/raw
             native-release-evidence/native-capability
@@ -2270,20 +2601,26 @@ jobs:
           [[ -O "${signing_root}" ]]
           test "$(stat -c '%a' "${signing_root}")" = "700"
           unsigned_root="${signing_root}/unsigned-evidence"
+          native_evidence_source_dir="${signing_root}/native-evidence-source"
           package_source_dir="${signing_root}/package-main-source"
           signing_tool_dir="${signing_root}/signing-tool"
           install -d -m 0700 \
             "${unsigned_root}" \
+            "${native_evidence_source_dir}" \
             "${package_source_dir}" \
             "${signing_tool_dir}"
           {
             printf 'HOSTED_SIGNING_ROOT=%s\n' "${signing_root}"
+            printf 'HOSTED_NATIVE_EVIDENCE_SOURCE_DIR=%s\n' \
+              "${native_evidence_source_dir}"
             printf 'UNSIGNED_EVIDENCE_ROOT=%s\n' "${unsigned_root}"
             printf 'PACKAGE_MAIN_SOURCE_DIR=%s\n' "${package_source_dir}"
             printf 'SIGNING_TOOL_DIR=%s\n' "${signing_tool_dir}"
           } >> "${GITHUB_ENV}"
           {
             printf 'unsigned_root=%s\n' "${unsigned_root}"
+            printf 'native_evidence_source_dir=%s\n' \
+              "${native_evidence_source_dir}"
             printf 'package_source_dir=%s\n' "${package_source_dir}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -2347,6 +2684,244 @@ jobs:
           artifact-ids: ${{ steps.unsigned_artifact.outputs.artifact_id }}
           path: ${{ steps.signing_workspace.outputs.unsigned_root }}
           merge-multiple: true
+
+      - name: Independently Resolve Native Evidence for Hosted Seal
+        id: hosted_native_evidence
+        shell: bash
+        env:
+          CLAIMED_ARTIFACT_DIGEST: ${{ needs.qualify-release.outputs.native_evidence_artifact_digest }}
+          CLAIMED_ARTIFACT_ID: ${{ needs.qualify-release.outputs.native_evidence_artifact_id }}
+          CLAIMED_ARTIFACT_NAME: ${{ needs.qualify-release.outputs.native_evidence_artifact_name }}
+          CLAIMED_RUN_ID: ${{ needs.qualify-release.outputs.native_evidence_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
+                "${RELEASE_TAG}" != "v4.10.0" ]]; then
+            echo "ERROR: hosted native-evidence resolution context is invalid." >&2
+            exit 1
+          fi
+          runs_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/native-release-evidence.yml/runs" \
+            -f event=workflow_dispatch -f branch=main \
+            -f head_sha="${RELEASE_SHA}" -f per_page=100)"
+          if ! jq -e '
+            type == "array" and length > 0 and
+            all(.[]; type == "object" and (.workflow_runs | type == "array"))
+          ' <<< "${runs_json}" >/dev/null; then
+            echo "ERROR: hosted native-evidence run query returned an invalid shape." >&2
+            exit 1
+          fi
+          matches="$(jq --arg sha "${RELEASE_SHA}" '[
+            .[] | .workflow_runs[]? | select(
+              .head_sha == $sha and .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .path == ".github/workflows/native-release-evidence.yml" and
+              .run_attempt == 1 and .status == "completed" and
+              .conclusion == "success"
+            )
+          ]' <<< "${runs_json}")"
+          if [[ "$(jq 'length' <<< "${matches}")" != "1" ]]; then
+            echo "ERROR: hosted seal expected exactly one successful attempt-1 native-evidence run for main/${RELEASE_SHA}." >&2
+            exit 1
+          fi
+          run_id="$(jq -er '.[0].id | tostring' <<< "${matches}")"
+          if [[ ! "${run_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: hosted native-evidence run ID is invalid." >&2
+            exit 1
+          fi
+
+          artifact_name="syswarden-native-evidence-${RELEASE_TAG}-${RELEASE_SHA}"
+          artifacts_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+            -f per_page=100)"
+          if ! jq -e '
+            type == "array" and length > 0 and
+            all(.[]; type == "object" and (.artifacts | type == "array"))
+          ' <<< "${artifacts_json}" >/dev/null; then
+            echo "ERROR: hosted native-evidence artifact query returned an invalid shape." >&2
+            exit 1
+          fi
+          if [[ "$(jq '[.[] | .artifacts[]?] | length' <<< "${artifacts_json}")" != "1" ]]; then
+            echo "ERROR: exact native-evidence run must expose exactly one artifact." >&2
+            exit 1
+          fi
+          artifact="$(jq --arg name "${artifact_name}" \
+            --arg sha "${RELEASE_SHA}" --argjson run_id "${run_id}" '[
+              .[] | .artifacts[]? | select(
+                .name == $name and .workflow_run.id == $run_id and
+                .workflow_run.head_sha == $sha
+              )
+            ]' <<< "${artifacts_json}")"
+          if [[ "$(jq 'length' <<< "${artifact}")" != "1" ]]; then
+            echo "ERROR: exact native-evidence artifact is absent or ambiguous." >&2
+            exit 1
+          fi
+          artifact_id="$(jq -er '.[0].id | tostring' <<< "${artifact}")"
+          artifact_digest="$(jq -er '.[0].digest' <<< "${artifact}")"
+          if [[ ! "${artifact_id}" =~ ^[1-9][0-9]*$ || \
+                ! "${artifact_digest}" =~ ^sha256:[0-9a-f]{64}$ || \
+                "$(jq -r '.[0].expired' <<< "${artifact}")" != "false" || \
+                ! "$(jq -r '.[0].size_in_bytes | tostring' <<< "${artifact}")" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: exact native-evidence artifact is expired, empty, or malformed." >&2
+            exit 1
+          fi
+          if [[ "${CLAIMED_RUN_ID}" != "${run_id}" || \
+                "${CLAIMED_ARTIFACT_ID}" != "${artifact_id}" || \
+                "${CLAIMED_ARTIFACT_NAME}" != "${artifact_name}" || \
+                "${CLAIMED_ARTIFACT_DIGEST}" != "${artifact_digest}" ]]; then
+            echo "ERROR: self-hosted native-evidence claims differ from the independently resolved GitHub identities." >&2
+            exit 1
+          fi
+          printf 'run_id=%s\nartifact_id=%s\nartifact_name=%s\nartifact_digest=%s\n' \
+            "${run_id}" "${artifact_id}" "${artifact_name}" "${artifact_digest}" \
+            >> "${GITHUB_OUTPUT}"
+
+      - name: Download Independently Resolved Native Evidence for Hosted Seal
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.hosted_native_evidence.outputs.artifact_id }}
+          path: ${{ steps.signing_workspace.outputs.native_evidence_source_dir }}
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.hosted_native_evidence.outputs.run_id }}
+
+      - name: Revalidate Native Evidence Provenance on Hosted Seal
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.hosted_native_evidence.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ steps.hosted_native_evidence.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ steps.hosted_native_evidence.outputs.artifact_name }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RUN_ID: ${{ steps.hosted_native_evidence.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          source_root="${HOSTED_NATIVE_EVIDENCE_SOURCE_DIR}"
+          copied_root="${UNSIGNED_EVIDENCE_ROOT}/native-release-evidence"
+          for root in "${source_root}" "${copied_root}"; do
+            test -d "${root}"
+            test ! -L "${root}"
+            while IFS= read -r -d '' entry; do
+              if [[ (-d "${entry}" || -f "${entry}") && ! -L "${entry}" ]]; then
+                continue
+              fi
+              echo "ERROR: hosted native-evidence comparison found an unsafe filesystem entry." >&2
+              exit 1
+            done < <(find -P "${root}" -mindepth 1 -print0)
+          done
+
+          artifact_json="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          if ! jq -e \
+            --arg name "${ARTIFACT_NAME}" \
+            --arg digest "${ARTIFACT_DIGEST}" \
+            --arg sha "${RELEASE_SHA}" \
+            --argjson artifact_id "${ARTIFACT_ID}" \
+            --argjson run_id "${RUN_ID}" '
+              .id == $artifact_id and .name == $name and
+              .digest == $digest and .expired == false and
+              (.size_in_bytes | type == "number" and . > 0 and floor == .) and
+              .workflow_run.id == $run_id and .workflow_run.head_sha == $sha
+            ' <<< "${artifact_json}" >/dev/null; then
+            echo "ERROR: native-evidence artifact identity changed before hosted sealing." >&2
+            exit 1
+          fi
+
+          native_manifest="${source_root}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json"
+          native_manifest_sha256="$(sha256sum "${native_manifest}" | awk '{print $1}')"
+          attestation_result="${HOSTED_SIGNING_ROOT}/native-release-evidence-attestation.json"
+          gh attestation verify "${native_manifest}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow \
+              "${GITHUB_REPOSITORY}/.github/workflows/native-release-evidence.yml" \
+            --signer-digest "${RELEASE_SHA}" \
+            --source-digest "${RELEASE_SHA}" \
+            --source-ref "refs/heads/main" \
+            --digest-alg sha256 \
+            --format json > "${attestation_result}"
+          jq -e --arg sha256 "${native_manifest_sha256}" '
+            length == 1 and
+            .[0].verificationResult.statement.predicateType ==
+              "https://slsa.dev/provenance/v1" and
+            ([.[0].verificationResult.statement.subject[] |
+              select(
+                .name == "NATIVE_RELEASE_EVIDENCE_MANIFEST.json" and
+                .digest.sha256 == $sha256
+              )] | length) == 1
+          ' "${attestation_result}" >/dev/null
+          rm -f -- "${attestation_result}"
+
+          python3 - "${source_root}" "${copied_root}" \
+            "${GITHUB_REPOSITORY}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${RUN_ID}" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          source = pathlib.Path(sys.argv[1])
+          copied = pathlib.Path(sys.argv[2])
+
+          def reject_duplicate_pairs(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise SystemExit(f"duplicate native manifest key: {key}")
+                  result[key] = value
+              return result
+
+          manifest_path = source / "NATIVE_RELEASE_EVIDENCE_MANIFEST.json"
+          manifest = json.loads(
+              manifest_path.read_text(encoding="utf-8"),
+              object_pairs_hook=reject_duplicate_pairs,
+          )
+          if (
+              manifest.get("schema_version") != 3
+              or manifest.get("repository") != sys.argv[3]
+              or manifest.get("release_tag") != sys.argv[4]
+              or manifest.get("release_sha") != sys.argv[5]
+              or manifest.get("run_id") != int(sys.argv[6])
+              or manifest.get("run_attempt") != 1
+          ):
+              raise SystemExit("native evidence manifest is not bound to the hosted run identity")
+
+          def records(root, excluded=()):
+              excluded_set = set(excluded)
+              result = {}
+              for path in sorted(item for item in root.rglob("*") if item.is_file()):
+                  relative = path.relative_to(root).as_posix()
+                  if relative in excluded_set:
+                      continue
+                  payload = path.read_bytes()
+                  result[relative] = {
+                      "path": relative,
+                      "sha256": hashlib.sha256(payload).hexdigest(),
+                      "size": len(payload),
+                  }
+              return result
+
+          source_payload = records(source, {"NATIVE_RELEASE_EVIDENCE_MANIFEST.json"})
+          if manifest.get("files") != [source_payload[name] for name in sorted(source_payload)]:
+              raise SystemExit("native evidence manifest inventory or digest mismatch")
+          source_all = records(source)
+          copied_all = records(copied, {"QUALIFICATION_BINDING.json"})
+          if source_all != copied_all:
+              raise SystemExit("unsigned qualification native evidence differs from exact producer artifact")
+          source_directories = sorted(
+              path.relative_to(source).as_posix()
+              for path in source.rglob("*") if path.is_dir()
+          )
+          copied_directories = sorted(
+              path.relative_to(copied).as_posix()
+              for path in copied.rglob("*") if path.is_dir()
+          )
+          if source_directories != copied_directories:
+              raise SystemExit("unsigned qualification native evidence directory inventory differs")
+          PY
 
       - name: Resolve Exact Package Main Artifact for Hosted Signing
         id: hosted_candidate
@@ -2439,10 +3014,10 @@ jobs:
           EXPECTED_NATIVE_ARTIFACT_ID: ${{ needs.qualify-release.outputs.native_signing_artifact_id }}
           EXPECTED_NATIVE_ARTIFACT_NAME: ${{ needs.qualify-release.outputs.native_signing_artifact_name }}
           EXPECTED_NATIVE_RUN_ID: ${{ needs.qualify-release.outputs.native_signing_run_id }}
-          EXPECTED_NATIVE_EVIDENCE_ARTIFACT_DIGEST: ${{ needs.qualify-release.outputs.native_evidence_artifact_digest }}
-          EXPECTED_NATIVE_EVIDENCE_ARTIFACT_ID: ${{ needs.qualify-release.outputs.native_evidence_artifact_id }}
-          EXPECTED_NATIVE_EVIDENCE_ARTIFACT_NAME: ${{ needs.qualify-release.outputs.native_evidence_artifact_name }}
-          EXPECTED_NATIVE_EVIDENCE_RUN_ID: ${{ needs.qualify-release.outputs.native_evidence_run_id }}
+          EXPECTED_NATIVE_EVIDENCE_ARTIFACT_DIGEST: ${{ steps.hosted_native_evidence.outputs.artifact_digest }}
+          EXPECTED_NATIVE_EVIDENCE_ARTIFACT_ID: ${{ steps.hosted_native_evidence.outputs.artifact_id }}
+          EXPECTED_NATIVE_EVIDENCE_ARTIFACT_NAME: ${{ steps.hosted_native_evidence.outputs.artifact_name }}
+          EXPECTED_NATIVE_EVIDENCE_RUN_ID: ${{ steps.hosted_native_evidence.outputs.run_id }}
           EXPECTED_GO127_ARTIFACT_DIGEST: ${{ needs.qualify-release.outputs.go127_artifact_digest }}
           EXPECTED_GO127_ARTIFACT_ID: ${{ needs.qualify-release.outputs.go127_artifact_id }}
           EXPECTED_GO127_ARTIFACT_NAME: ${{ needs.qualify-release.outputs.go127_artifact_name }}
@@ -2490,6 +3065,13 @@ jobs:
             "native-signing/rhel-package-owned/packages/syswarden-${candidate_version}-1.rhelpo.x86_64.rpm"
             "native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json"
             "native-release-evidence/QUALIFICATION_BINDING.json"
+            "native-release-evidence/candidate-update/CANDIDATE_UPDATE_BUNDLE.json"
+            "native-release-evidence/candidate-update/CANDIDATE_UPDATE_SHA256SUMS.txt"
+            "native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json"
+            "native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json.sig"
+            "native-release-evidence/candidate-update/node01/syswarden_${candidate_version}_amd64.deb"
+            "native-release-evidence/candidate-update/verification/producer-attestation.jsonl"
+            "native-release-evidence/candidate-update/verification/syswarden_${candidate_version}_amd64.deb.asc"
             "native-release-evidence/ha-v2/HA_V2_NATIVE_EVIDENCE.json"
             "native-release-evidence/ha-v2/HA_V2_NATIVE_VERDICT.json"
             "native-release-evidence/native-capability/AGGREGATE.json"
@@ -2548,6 +3130,9 @@ jobs:
             native-signing/rhel-package-owned/evidence
             native-signing/rhel-package-owned/packages
             native-release-evidence
+            native-release-evidence/candidate-update
+            native-release-evidence/candidate-update/node01
+            native-release-evidence/candidate-update/verification
             native-release-evidence/ha-v2
             native-release-evidence/ha-v2/raw
             native-release-evidence/native-capability
@@ -2841,7 +3426,7 @@ jobs:
             printf 'verified=true\n'
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Build and Test Signed Update Manifest Tool
+      - name: Build and Test Candidate Update Manifest Verifier
         id: hosted_manifest_tool
         if: ${{ steps.update_contract.outputs.required == 'true' }}
         shell: bash
@@ -2869,7 +3454,7 @@ jobs:
           [[ "${tool_sha256}" =~ ^[0-9a-f]{64}$ ]]
           printf 'sha256=%s\n' "${tool_sha256}" >> "${GITHUB_OUTPUT}"
 
-      - name: Revalidate Hosted Signing Tool Before Secret Exposure
+      - name: Revalidate Hosted Candidate Manifest Verifier
         id: verified_hosted_manifest_tool
         if: ${{ steps.hosted_manifest_tool.outcome == 'success' }}
         shell: bash
@@ -2887,59 +3472,159 @@ jobs:
           actual_tool_sha256="${actual_tool_sha256%% *}"
           if [[ ! "${EXPECTED_MANIFEST_TOOL_SHA256}" =~ ^[0-9a-f]{64}$ || \
                 "${actual_tool_sha256}" != "${EXPECTED_MANIFEST_TOOL_SHA256}" ]]; then
-            echo "ERROR: hosted signing tool changed after its validated build." >&2
+            echo "ERROR: hosted manifest verifier changed after its validated build." >&2
             exit 1
           fi
           echo "verified=true" >> "${GITHUB_OUTPUT}"
 
-      - name: Generate and Verify Signed Update Manifest
-        id: signed_update
+      - name: Revalidate Attested Candidate Update Before Final Seal
+        id: hosted_candidate_update
         if: >-
           ${{ needs.qualify-release.outputs.signed_update_required == 'true' &&
               steps.update_contract.outputs.verified == 'true' &&
               steps.verified_hosted_manifest_tool.outputs.verified == 'true' }}
         shell: bash
         env:
+          CANDIDATE_ARTIFACT_DIGEST: ${{ needs.qualify-release.outputs.candidate_update_artifact_digest }}
+          CANDIDATE_ARTIFACT_ID: ${{ needs.qualify-release.outputs.candidate_update_artifact_id }}
+          CANDIDATE_ARTIFACT_NAME: ${{ needs.qualify-release.outputs.candidate_update_artifact_name }}
+          CANDIDATE_RUN_ID: ${{ needs.qualify-release.outputs.candidate_update_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_ARTIFACT_DIGEST: ${{ needs.qualify-release.outputs.native_signing_artifact_digest }}
+          NATIVE_ARTIFACT_ID: ${{ needs.qualify-release.outputs.native_signing_artifact_id }}
+          NATIVE_ARTIFACT_NAME: ${{ needs.qualify-release.outputs.native_signing_artifact_name }}
+          NATIVE_RUN_ID: ${{ needs.qualify-release.outputs.native_signing_run_id }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY: ${{ secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          candidate_root="${UNSIGNED_EVIDENCE_ROOT}/native-release-evidence/candidate-update"
+          descriptor="${candidate_root}/CANDIDATE_UPDATE_BUNDLE.json"
+          checksums="${candidate_root}/CANDIDATE_UPDATE_SHA256SUMS.txt"
+          manifest="${candidate_root}/node01/syswarden-update-manifest-v1.json"
+          signature="${manifest}.sig"
+          deb_name="syswarden_${version}_amd64.deb"
+          deb="${candidate_root}/node01/${deb_name}"
+          deb_signature="${candidate_root}/verification/${deb_name}.asc"
+          producer_attestation="${candidate_root}/verification/producer-attestation.jsonl"
+          expected=(
+            CANDIDATE_UPDATE_BUNDLE.json
+            CANDIDATE_UPDATE_SHA256SUMS.txt
+            node01/syswarden-update-manifest-v1.json
+            node01/syswarden-update-manifest-v1.json.sig
+            "node01/${deb_name}"
+            verification/producer-attestation.jsonl
+            "verification/${deb_name}.asc"
+          )
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          mapfile -t actual < <(find -P "${candidate_root}" -type f -printf '%P\n' | LC_ALL=C sort)
+          test "${actual[*]}" = "${expected_sorted[*]}"
+          mapfile -t directories < <(find -P "${candidate_root}" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
+          test "${directories[*]}" = "node01 verification"
+          test "$(wc -l < "${producer_attestation}")" -eq 1
+          (cd "${candidate_root}" && sha256sum --check --strict CANDIDATE_UPDATE_SHA256SUMS.txt)
+          descriptor_sha256="$(sha256sum "${descriptor}" | awk '{print $1}')"
+          producer_attestation_sha256="$(sha256sum "${producer_attestation}" | awk '{print $1}')"
+          bundle_identity="github:${GITHUB_REPOSITORY}:candidate-update:${RELEASE_TAG}:${RELEASE_SHA}:${CANDIDATE_RUN_ID}:1"
+          jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg release_tag "${RELEASE_TAG}" --arg release_sha "${RELEASE_SHA}" \
+            --arg bundle_identity "${bundle_identity}" \
+            --arg candidate_name "${CANDIDATE_ARTIFACT_NAME}" \
+            --arg candidate_digest "${CANDIDATE_ARTIFACT_DIGEST}" \
+            --arg descriptor_sha256 "${descriptor_sha256}" \
+            --arg producer_attestation_sha256 "${producer_attestation_sha256}" \
+            --argjson candidate_run "${CANDIDATE_RUN_ID}" \
+            --argjson candidate_id "${CANDIDATE_ARTIFACT_ID}" '
+              .repository == $repository and .release_tag == $release_tag and
+              .release_sha == $release_sha and
+              .candidate_update == {
+                workflow:"candidate-update-bundle.yml",run_id:$candidate_run,
+                artifact_id:$candidate_id,artifact_name:$candidate_name,
+                artifact_digest:$candidate_digest,descriptor_sha256:$descriptor_sha256,
+                node01_bundle_identity:$bundle_identity,
+                producer_attestation_sha256:$producer_attestation_sha256
+              }
+            ' "${UNSIGNED_EVIDENCE_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json" >/dev/null
+          jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg release_tag "${RELEASE_TAG}" --arg release_sha "${RELEASE_SHA}" \
+            --arg bundle_identity "${bundle_identity}" \
+            --arg native_name "${NATIVE_ARTIFACT_NAME}" \
+            --arg native_digest "${NATIVE_ARTIFACT_DIGEST}" \
+            --argjson candidate_run "${CANDIDATE_RUN_ID}" \
+            --argjson native_run "${NATIVE_RUN_ID}" \
+            --argjson native_id "${NATIVE_ARTIFACT_ID}" '
+              .schema_version == 1 and
+              .profile == "syswarden-candidate-update-bundle/v1" and
+              .status == "candidate-signed-not-release-qualified" and
+              .repository == $repository and .release_tag == $release_tag and
+              .release_sha == $release_sha and .public_release == false and
+              .release_qualified == false and
+              .producer == {workflow:".github/workflows/candidate-update-bundle.yml",workflow_sha:$release_sha,run_id:$candidate_run,run_attempt:1,runner_environment:"github-hosted"} and
+              .source == {native_signing_workflow:".github/workflows/native-package-signing.yml",native_signing_run_id:$native_run,native_signing_artifact_id:$native_id,native_signing_artifact_name:$native_name,native_signing_artifact_digest:$native_digest} and
+              .node01_bundle.identity == $bundle_identity and
+              .node01_bundle.exact_file_count == 3 and
+              .attestation.bundle_path == "verification/producer-attestation.jsonl"
+            ' "${descriptor}" >/dev/null
+          attestation_result="${HOSTED_SIGNING_ROOT}/candidate-update-attestation.json"
+          gh attestation verify "${descriptor}" \
+            --bundle "${producer_attestation}" --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/candidate-update-bundle.yml" \
+            --signer-digest "${RELEASE_SHA}" --source-digest "${RELEASE_SHA}" \
+            --source-ref "refs/heads/main" --deny-self-hosted-runners --format json \
+            > "${attestation_result}"
+          jq -e --arg sha256 "${descriptor_sha256}" '
+            length == 1 and
+            ([.[0].verificationResult.statement.subject[] |
+              select(.name == "CANDIDATE_UPDATE_BUNDLE.json" and .digest.sha256 == $sha256)] | length) == 1
+          ' "${attestation_result}" >/dev/null
+          rm -f -- "${attestation_result}"
+          manifest_tool="${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY "${manifest_tool}" verify \
+            --repository "${GITHUB_WORKSPACE}" --tag "${RELEASE_TAG}" \
+            --packages "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate" \
+            --manifest "${manifest}" --signature "${signature}"
+          cmp -- "${deb}" "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate/${deb_name}"
+          cmp -- "${deb_signature}" \
+            "${UNSIGNED_EVIDENCE_ROOT}/native-signing/packages/${deb_name}.asc"
+          printf 'verified=true\nmanifest=%s\nsignature=%s\n' \
+            "${manifest}" "${signature}" >> "${GITHUB_OUTPUT}"
+
+      - name: Reuse and Verify Exact Candidate Update Manifest
+        id: signed_update
+        if: >-
+          ${{ needs.qualify-release.outputs.signed_update_required == 'true' &&
+              steps.update_contract.outputs.verified == 'true' &&
+              steps.verified_hosted_manifest_tool.outputs.verified == 'true' &&
+              steps.hosted_candidate_update.outputs.verified == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           umask 077
           manifest_dir="${UNSIGNED_EVIDENCE_ROOT}/update"
           manifest_path="${manifest_dir}/syswarden-update-manifest-v1.json"
           signature_path="${manifest_path}.sig"
-          signing_complete=false
-          clear_signing_material() {
-            unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
-            if [[ "${signing_complete}" != "true" ]]; then
-              rm -f -- "${manifest_path}" "${signature_path}"
-              rmdir -- "${manifest_dir}" 2>/dev/null || true
-            fi
-          }
-          trap clear_signing_material EXIT HUP INT TERM
-          if [[ -z "${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}" ]]; then
-            echo "ERROR: the protected Ed25519 release-signing secret is required." >&2
-            exit 1
-          fi
+          install -d -m 0700 "${manifest_dir}"
           manifest_tool="${SIGNING_TOOL_DIR}/syswarden-update-manifest"
           test -f "${manifest_tool}"
           test ! -L "${manifest_tool}"
           test -x "${manifest_tool}"
-          "${manifest_tool}" generate \
-            --repository "${GITHUB_WORKSPACE}" \
-            --tag "${RELEASE_TAG}" \
-            --packages "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate" \
-            --output "${manifest_dir}"
-          unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
-          env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY \
-            "${manifest_tool}" verify \
+          install -m 0600 -- \
+            "${{ steps.hosted_candidate_update.outputs.manifest }}" "${manifest_path}"
+          install -m 0600 -- \
+            "${{ steps.hosted_candidate_update.outputs.signature }}" "${signature_path}"
+          cmp -- "${{ steps.hosted_candidate_update.outputs.manifest }}" "${manifest_path}"
+          cmp -- "${{ steps.hosted_candidate_update.outputs.signature }}" "${signature_path}"
+          env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY "${manifest_tool}" verify \
               --repository "${GITHUB_WORKSPACE}" \
               --tag "${RELEASE_TAG}" \
               --packages "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate" \
               --manifest "${manifest_path}" \
               --signature "${signature_path}"
-          signing_complete=true
-          trap - EXIT HUP INT TERM
 
       - name: Seal Exact Qualification Evidence Inventory
         id: final_inventory
@@ -2990,6 +3675,13 @@ jobs:
             "native-signing/rhel-package-owned/packages/syswarden-${candidate_version}-1.rhelpo.x86_64.rpm"
             "native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json"
             "native-release-evidence/QUALIFICATION_BINDING.json"
+            "native-release-evidence/candidate-update/CANDIDATE_UPDATE_BUNDLE.json"
+            "native-release-evidence/candidate-update/CANDIDATE_UPDATE_SHA256SUMS.txt"
+            "native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json"
+            "native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json.sig"
+            "native-release-evidence/candidate-update/node01/syswarden_${candidate_version}_amd64.deb"
+            "native-release-evidence/candidate-update/verification/producer-attestation.jsonl"
+            "native-release-evidence/candidate-update/verification/syswarden_${candidate_version}_amd64.deb.asc"
             "native-release-evidence/ha-v2/HA_V2_NATIVE_EVIDENCE.json"
             "native-release-evidence/ha-v2/HA_V2_NATIVE_VERDICT.json"
             "native-release-evidence/native-capability/AGGREGATE.json"
@@ -3048,6 +3740,9 @@ jobs:
             native-signing/rhel-package-owned/evidence
             native-signing/rhel-package-owned/packages
             native-release-evidence
+            native-release-evidence/candidate-update
+            native-release-evidence/candidate-update/node01
+            native-release-evidence/candidate-update/verification
             native-release-evidence/ha-v2
             native-release-evidence/ha-v2/raw
             native-release-evidence/native-capability

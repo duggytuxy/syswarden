@@ -18,9 +18,12 @@ from typing import Any, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONTRACT = ROOT / "scripts/ci/native_lifecycle_contract_v4.10.0.json"
-CONTRACT_SHA256 = "9fe39c5d1529a809e0e76e1db3601af2596c4d30d5aeeb80898104de464da7ad"
+CONTRACT_SHA256 = "4948a3dab989c7537755862d882f3589400ed01d984c2e22dce56fc680a81230"
 OBSERVATION_SCHEMA = "syswarden-native-package-lifecycle-observation/v1"
 VERDICT_SCHEMA = "syswarden-native-package-lifecycle-verdict/v1"
+RHEL_PACKAGE_OWNED_ROLLBACK_EVIDENCE_SCHEMA = (
+    "syswarden-rhel-package-owned-rollback-vendor-absence/v1"
+)
 REPOSITORY = "duggytuxy/syswarden"
 TARGET_RELEASE = "v4.10.0"
 BASELINE_RELEASE = "v4.04.3"
@@ -116,8 +119,56 @@ RHEL_PACKAGE_OWNED_SCENARIO_CHECKS = {
         "first_real_boot_observed",
         "first_real_boot_services_activated",
         "first_real_boot_firewall_activated",
-    ]
+    ],
+    "clean-cycle-uninstall-purge": [
+        "package_owned_units_removed",
+        "package_owned_dropin_removed",
+        "package_owned_preset_removed",
+        "package_owned_profile_removed",
+        "package_owned_enablement_removed",
+        "erase_ready_boundary_consumed",
+    ],
+    "candidate-upgrade-v4043-v4100": [
+        "legacy_systemd_units_migrated",
+        "package_owned_units_authoritative",
+        "package_owned_profile_attested",
+    ],
+    "verified-rollback-v4100-v4043": [
+        "standard_systemd_units_authoritative",
+        "package_owned_vendor_payload_absent",
+    ],
+    "candidate-reupgrade-v4043-v4100": [
+        "legacy_systemd_units_migrated",
+        "package_owned_units_authoritative",
+        "package_owned_profile_attested",
+    ],
+    "candidate-final-uninstall-purge": [
+        "package_owned_units_removed",
+        "package_owned_dropin_removed",
+        "package_owned_preset_removed",
+        "package_owned_profile_removed",
+        "package_owned_enablement_removed",
+        "erase_ready_boundary_consumed",
+    ],
 }
+RHEL_PACKAGE_OWNED_ROLLBACK_ABSENCE_PATHS = (
+    "/var/lib/.syswarden-rhelpo-erase-ready-v1",
+    "/var/lib/.syswarden-rhelpo-erase-ready-v1.new",
+    "/var/lib/.syswarden-rhelpo-preset-pending-v1",
+    "/var/lib/.syswarden-rhelpo-preset-pending-v1.new",
+    "/var/lib/.syswarden-rhelpo-postun-recovery-v1",
+    "/var/lib/.syswarden-rhelpo-postun-recovery-v1.new",
+    "/usr/lib/systemd/system/syswarden-core.service",
+    "/usr/lib/systemd/system/syswarden-firewall.service",
+    "/usr/lib/systemd/system/syswarden-firewall.service.d",
+    "/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf",
+    "/usr/lib/systemd/system-preset/90-syswarden-rhel-image.preset",
+    "/usr/libexec/syswarden",
+    "/usr/libexec/syswarden/rhelpo-postun-recovery-v1",
+    "/usr/share/doc/syswarden/rhel-package-owned-profile.json",
+    "/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration",
+    "/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service.syswarden-rhelpo-migration",
+)
 EXPECTED_PROFILE_SCENARIO_CHECKS = {
     "RPM-A9-RHELPO": RHEL_PACKAGE_OWNED_SCENARIO_CHECKS,
     "RPM-A10-RHELPO": RHEL_PACKAGE_OWNED_SCENARIO_CHECKS,
@@ -382,7 +433,7 @@ def _raw_artifact(
     reference: str,
     expected_sha256: object,
     maximum: int,
-) -> None:
+) -> dict[str, Any]:
     digest = _string(expected_sha256, SHA256, f"raw evidence digest {reference}")
     path = artifact_root.joinpath(*PurePosixPath(reference).parts)
     _safe_root(artifact_root / PurePosixPath(reference).parts[0], "profile artifact directory")
@@ -394,9 +445,10 @@ def _raw_artifact(
     if resolved_root not in resolved.parents:
         raise LifecycleEvidenceError(f"raw evidence escaped its root: {reference}")
     wire = _regular_bytes(path, maximum, f"raw evidence {reference}")
-    _decode_json(wire, f"raw evidence {reference}")
+    document = _decode_json(wire, f"raw evidence {reference}")
     if hashlib.sha256(wire).hexdigest() != digest:
         raise LifecycleEvidenceError(f"raw evidence digest mismatch: {reference}")
+    return document
 
 
 def _inventory_sha256(records: dict[str, str]) -> str:
@@ -432,6 +484,7 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> tuple[dict[str, Any], str]:
             "scenarios",
             "scenario_package_verifications",
             "profile_scenario_checks",
+            "rhel_package_owned_rollback_absence_paths",
             "zero_residue_paths",
         },
         "native lifecycle contract",
@@ -453,6 +506,11 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> tuple[dict[str, Any], str]:
         raise LifecycleEvidenceError("native lifecycle package trust is not exact")
     if document["profile_scenario_checks"] != EXPECTED_PROFILE_SCENARIO_CHECKS:
         raise LifecycleEvidenceError("profile-specific lifecycle checks are not exact")
+    rollback_paths = document["rhel_package_owned_rollback_absence_paths"]
+    if tuple(rollback_paths) != RHEL_PACKAGE_OWNED_ROLLBACK_ABSENCE_PATHS:
+        raise LifecycleEvidenceError(
+            "RHEL package-owned rollback absence path inventory is not exact"
+        )
     limits = _exact(
         document["limits"],
         {
@@ -525,11 +583,15 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> tuple[dict[str, Any], str]:
     residue = document["zero_residue_paths"]
     if (
         type(residue) is not list
-        or len(residue) != 36
+        or len(residue) != 54
         or len(set(residue)) != len(residue)
         or any(type(path_value) is not str or not path_value.startswith("/") for path_value in residue)
     ):
         raise LifecycleEvidenceError("zero residue path inventory is invalid")
+    if not set(rollback_paths).issubset(set(residue)):
+        raise LifecycleEvidenceError(
+            "RHEL package-owned rollback paths escape the zero-residue inventory"
+        )
     return document, digest
 
 
@@ -545,7 +607,7 @@ def _add_reference(
     artifact_root: Path,
     resolved_root: Path,
     label: str,
-) -> None:
+) -> dict[str, Any]:
     reference = _reference(
         value["evidence_ref"],
         profile_id,
@@ -555,7 +617,7 @@ def _add_reference(
     digest = _string(value["evidence_sha256"], SHA256, f"{label} evidence digest")
     if reference in records or digest in records.values():
         raise LifecycleEvidenceError("raw evidence reference or digest is reused")
-    _raw_artifact(
+    document = _raw_artifact(
         artifact_root,
         resolved_root,
         reference,
@@ -563,6 +625,74 @@ def _add_reference(
         contract["limits"]["maximum_raw_evidence_bytes"],
     )
     records[reference] = digest
+    return document
+
+
+def _validate_rhel_package_owned_rollback_evidence(
+    value: object,
+    profile_id: str,
+    scenario_observed_at: str,
+    contract: dict[str, Any],
+) -> None:
+    evidence = _exact(
+        value,
+        {
+            "schema",
+            "profile_id",
+            "scenario_id",
+            "candidate_release",
+            "installed_release",
+            "package_variant",
+            "observation_origin",
+            "observed_at",
+            "probe",
+            "checked_path_count",
+            "present_path_count",
+            "path_inventory",
+        },
+        "RHEL package-owned rollback raw evidence",
+    )
+    expected_paths = contract["rhel_package_owned_rollback_absence_paths"]
+    if (
+        evidence["schema"] != RHEL_PACKAGE_OWNED_ROLLBACK_EVIDENCE_SCHEMA
+        or evidence["profile_id"] != profile_id
+        or evidence["scenario_id"] != "verified-rollback-v4100-v4043"
+        or evidence["candidate_release"] != TARGET_RELEASE
+        or evidence["installed_release"] != BASELINE_RELEASE
+        or evidence["package_variant"] != "rhel-package-owned"
+        or evidence["observation_origin"] != "real-native-host"
+        or evidence["observed_at"] != scenario_observed_at
+        or evidence["probe"] != "lstat-no-follow"
+        or type(evidence["checked_path_count"]) is not int
+        or evidence["checked_path_count"] != len(expected_paths)
+        or type(evidence["present_path_count"]) is not int
+        or evidence["present_path_count"] != 0
+    ):
+        raise LifecycleEvidenceError(
+            "RHEL package-owned rollback raw evidence identity is invalid"
+        )
+    _timestamp(evidence["observed_at"], "RHEL package-owned rollback observation")
+    inventory = evidence["path_inventory"]
+    if type(inventory) is not list or len(inventory) != len(expected_paths):
+        raise LifecycleEvidenceError(
+            "RHEL package-owned rollback path inventory is not exact"
+        )
+    observed_paths: list[str] = []
+    for index, raw in enumerate(inventory):
+        item = _exact(
+            raw,
+            {"path", "state", "errno"},
+            f"RHEL package-owned rollback path {index + 1}",
+        )
+        if item["state"] != "absent" or item["errno"] != "ENOENT":
+            raise LifecycleEvidenceError(
+                "RHEL package-owned rollback vendor payload remains"
+            )
+        observed_paths.append(item["path"])
+    if observed_paths != expected_paths:
+        raise LifecycleEvidenceError(
+            "RHEL package-owned rollback path inventory is not exact"
+        )
 
 
 def _validate_host(
@@ -1035,7 +1165,7 @@ def _validate_scenarios(
                 raise LifecycleEvidenceError(
                     f"package was not reverified before install: {scenario['id']}"
                 )
-        _add_reference(
+        raw_evidence = _add_reference(
             records,
             scenario,
             profile["id"],
@@ -1044,6 +1174,16 @@ def _validate_scenarios(
             resolved_root,
             f"scenario {scenario['id']}",
         )
+        if (
+            profile["package_variant"] == "rhel-package-owned"
+            and scenario["id"] == "verified-rollback-v4100-v4043"
+        ):
+            _validate_rhel_package_owned_rollback_evidence(
+                raw_evidence,
+                profile["id"],
+                scenario["observed_at"],
+                contract,
+            )
         scenarios.append(scenario)
     return scenarios
 

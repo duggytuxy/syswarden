@@ -1,0 +1,707 @@
+name: SysWarden Protected Candidate Update Bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact pre-tag candidate version
+        required: true
+        type: string
+      release_sha:
+        description: Exact full commit SHA on main
+        required: true
+        type: string
+      native_signing_run_id:
+        description: Exact successful protected native-signing run ID
+        required: true
+        type: string
+      native_signing_artifact_id:
+        description: Exact immutable protected native-signing artifact ID
+        required: true
+        type: string
+      authorization:
+        description: Enter SIGN-CANDIDATE-UPDATE-NO-PUBLISH
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  LANG: C
+  LC_ALL: C
+  TZ: UTC
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: syswarden-candidate-update-bundle-v4100
+  cancel-in-progress: false
+
+jobs:
+  produce-candidate-update:
+    name: Sign Exact Pre-Qualification Updater Bundle Without Publishing
+    environment:
+      name: syswarden-release-qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Validate Protected Manual Candidate Context
+        shell: bash
+        env:
+          AUTHORIZATION: ${{ inputs.authorization }}
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          EVENT_REF_TYPE: ${{ github.ref_type }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          NATIVE_ARTIFACT_ID: ${{ inputs.native_signing_artifact_id }}
+          NATIVE_RUN_ID: ${{ inputs.native_signing_run_id }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUNNER_ARCH_CONTEXT: ${{ runner.arch }}
+          RUNNER_ENVIRONMENT_CONTEXT: ${{ runner.environment }}
+          RUNNER_OS_CONTEXT: ${{ runner.os }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" != "workflow_dispatch" || \
+                "${EVENT_REF_TYPE}" != "branch" || \
+                "${EVENT_REF_NAME}" != "main" || \
+                "${EVENT_REF}" != "refs/heads/main" || \
+                "${EVENT_SHA}" != "${RELEASE_SHA}" || \
+                "${WORKFLOW_SHA}" != "${RELEASE_SHA}" || \
+                "${EVENT_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${EVENT_TRIGGERING_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${RUN_ATTEMPT}" != "1" || \
+                "${RUNNER_ENVIRONMENT_CONTEXT}" != "github-hosted" || \
+                "${RUNNER_OS_CONTEXT}" != "Linux" || \
+                "${RUNNER_ARCH_CONTEXT}" != "X64" ]]; then
+            echo "ERROR: candidate updater signing requires one owner-dispatched exact-main GitHub-hosted run." >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" != "v4.10.0" || \
+                ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
+                "${AUTHORIZATION}" != "SIGN-CANDIDATE-UPDATE-NO-PUBLISH" ]]; then
+            echo "ERROR: candidate updater inputs or no-publication authorization are invalid." >&2
+            exit 1
+          fi
+          for identifier in "${NATIVE_RUN_ID}" "${NATIVE_ARTIFACT_ID}"; do
+            [[ "${identifier}" =~ ^[1-9][0-9]*$ ]] || {
+              echo "ERROR: native-signing run and artifact IDs must be positive integers." >&2
+              exit 1
+            }
+          done
+
+      - name: Validate Protected Qualification Environment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          environment_json="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-qualification")"
+          required_boolean() {
+            local field=${1:?field is required}
+            jq -er --arg field "${field}" '
+              .deployment_branch_policy[$field] |
+              if type == "boolean" then tostring
+              else error("deployment_branch_policy." + $field + " must be boolean") end
+            ' <<< "${environment_json}"
+          }
+          top_level_boolean() {
+            local field=${1:?field is required}
+            jq -er --arg field "${field}" '
+              .[$field] |
+              if type == "boolean" then tostring
+              else error($field + " must be boolean") end
+            ' <<< "${environment_json}"
+          }
+          reviewer_rule_count="$(jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' <<< "${environment_json}")"
+          reviewer_entry_count="$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "${environment_json}")"
+          owner_reviewer_count="$(jq --arg owner "${REPOSITORY_OWNER}" '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]? | select(.type == "User" and .reviewer.login == $owner)] | length' <<< "${environment_json}")"
+          prevent_self_review="$(jq -er '[.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | if length == 1 and .[0] == false then "false" else error("reviewer rule must allow owner approval") end' <<< "${environment_json}")"
+          if [[ "$(jq -r '.name // ""' <<< "${environment_json}")" != "syswarden-release-qualification" || \
+                "${reviewer_rule_count}" != "1" || \
+                "${reviewer_entry_count}" != "1" || \
+                "${owner_reviewer_count}" != "1" || \
+                "${prevent_self_review}" != "false" || \
+                "$(jq '[.protection_rules[]? | select(.type == "branch_policy")] | length' <<< "${environment_json}")" != "1" || \
+                "$(jq '[.protection_rules[]?] | length' <<< "${environment_json}")" != "2" || \
+                "$(required_boolean protected_branches)" != "false" || \
+                "$(required_boolean custom_branch_policies)" != "true" || \
+                "$(top_level_boolean can_admins_bypass)" != "false" ]]; then
+            echo "ERROR: candidate signing environment protection is not the exact reviewed main-only contract." >&2
+            exit 1
+          fi
+          policies_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-qualification/deployment-branch-policies" \
+            -f per_page=100)"
+          if [[ "$(jq -r '.[0].total_count' <<< "${policies_json}")" != "1" || \
+                "$(jq '[.[] | .branch_policies[]?] | length' <<< "${policies_json}")" != "1" || \
+                "$(jq '[.[] | .branch_policies[]? | select(.name == "main" and .type == "branch")] | length' <<< "${policies_json}")" != "1" ]]; then
+            echo "ERROR: candidate signing environment must allow only the main branch." >&2
+            exit 1
+          fi
+
+      - name: Checkout Exact Candidate Source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+
+      - name: Set Up Pinned Go for Candidate Manifest
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Validate Exact Untagged Candidate Source
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${RELEASE_SHA}"
+          test "$(git rev-parse --verify 'origin/main^{commit}')" = "${RELEASE_SHA}"
+          test "$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")" = "${RELEASE_TAG}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "ERROR: candidate updater cannot be produced after the release tag exists." >&2
+            exit 1
+          fi
+          remote_error="${RUNNER_TEMP%/}/candidate-update-tag-query.err"
+          set +e
+          remote_tag="$(git ls-remote --exit-code --refs origin \
+            "refs/tags/${RELEASE_TAG}" 2> "${remote_error}")"
+          remote_rc=$?
+          set -e
+          if [[ "${remote_rc}" -eq 0 && -n "${remote_tag}" ]]; then
+            echo "ERROR: candidate updater cannot be produced after the remote release tag exists." >&2
+            exit 1
+          fi
+          if [[ "${remote_rc}" -ne 2 || -n "${remote_tag}" ]]; then
+            echo "ERROR: remote candidate-tag absence could not be proven." >&2
+            exit 1
+          fi
+          rm -f -- "${remote_error}"
+
+      - name: Enforce One Successful Candidate Producer Per Commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          runs_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/candidate-update-bundle.yml/runs" \
+            -f event=workflow_dispatch -f branch=main \
+            -f head_sha="${RELEASE_SHA}" -f per_page=100)"
+          successful_prior_runs="$(jq --arg sha "${RELEASE_SHA}" \
+            --argjson current "${GITHUB_RUN_ID}" '[
+              .[] | .workflow_runs[]? | select(
+                .id != $current and .head_sha == $sha and
+                .head_branch == "main" and .event == "workflow_dispatch" and
+                .path == ".github/workflows/candidate-update-bundle.yml" and
+                .run_attempt == 1 and .status == "completed" and
+                .conclusion == "success"
+              )
+            ] | length' <<< "${runs_json}")"
+          if [[ "${successful_prior_runs}" != "0" ]]; then
+            echo "ERROR: this exact commit already has a successful candidate update producer." >&2
+            exit 1
+          fi
+
+      - name: Create Private Candidate Workspace
+        id: workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          candidate_root="$(mktemp -d "${RUNNER_TEMP%/}/syswarden-candidate-update.XXXXXX")"
+          native_dir="${candidate_root}/native-signing"
+          tool_dir="${candidate_root}/tool"
+          update_dir="${candidate_root}/update"
+          bundle_root="${candidate_root}/bundle"
+          install -d -m 0700 \
+            "${native_dir}" "${tool_dir}" "${update_dir}" \
+            "${bundle_root}" "${bundle_root}/node01" "${bundle_root}/verification"
+          {
+            printf 'CANDIDATE_ROOT=%s\n' "${candidate_root}"
+            printf 'NATIVE_SIGNING_DIR=%s\n' "${native_dir}"
+            printf 'MANIFEST_TOOL_DIR=%s\n' "${tool_dir}"
+            printf 'UPDATE_DIR=%s\n' "${update_dir}"
+            printf 'BUNDLE_ROOT=%s\n' "${bundle_root}"
+          } >> "${GITHUB_ENV}"
+          printf 'native_dir=%s\nbundle_root=%s\n' \
+            "${native_dir}" "${bundle_root}" >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve Exact Qualified Native Signing Bundle
+        id: native
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REQUESTED_ARTIFACT_ID: ${{ inputs.native_signing_artifact_id }}
+          REQUESTED_RUN_ID: ${{ inputs.native_signing_run_id }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          runs_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/native-package-signing.yml/runs" \
+            -f event=workflow_dispatch -f branch=main -f head_sha="${RELEASE_SHA}" -f per_page=100)"
+          matches="$(jq --arg sha "${RELEASE_SHA}" --argjson requested "${REQUESTED_RUN_ID}" '[.[] | .workflow_runs[]? | select(.id == $requested and .head_sha == $sha and .head_branch == "main" and .event == "workflow_dispatch" and .path == ".github/workflows/native-package-signing.yml" and .run_attempt == 1 and .status == "completed" and .conclusion == "success")]' <<< "${runs_json}")"
+          if [[ "$(jq 'length' <<< "${matches}")" != "1" ]]; then
+            echo "ERROR: requested native signing run is not one successful exact-main attempt." >&2
+            exit 1
+          fi
+          expected_name="syswarden-native-signed-packages-${version}-${REQUESTED_RUN_ID}-1-${RELEASE_SHA}"
+          artifacts="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${REQUESTED_RUN_ID}/artifacts" -f per_page=100)"
+          if [[ "$(jq '[.[] | .artifacts[]?] | length' <<< "${artifacts}")" != "1" ]]; then
+            echo "ERROR: native signing run must expose exactly one artifact." >&2
+            exit 1
+          fi
+          match="$(jq --arg name "${expected_name}" --arg sha "${RELEASE_SHA}" --argjson run "${REQUESTED_RUN_ID}" --argjson id "${REQUESTED_ARTIFACT_ID}" '[.[] | .artifacts[]? | select(.id == $id and .name == $name and .workflow_run.id == $run and .workflow_run.head_sha == $sha)]' <<< "${artifacts}")"
+          artifact_digest="$(jq -r '.[0].digest // ""' <<< "${match}")"
+          if [[ "$(jq 'length' <<< "${match}")" != "1" || \
+                "$(jq -r '.[0].expired' <<< "${match}")" != "false" || \
+                ! "$(jq -r '.[0].size_in_bytes | tostring' <<< "${match}")" =~ ^[1-9][0-9]*$ || \
+                ! "${artifact_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: requested native signing artifact is absent, ambiguous, expired, empty, or malformed." >&2
+            exit 1
+          fi
+          printf 'artifact_name=%s\nartifact_digest=%s\n' \
+            "${expected_name}" "${artifact_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download Exact Native Signing Bundle by Artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ inputs.native_signing_artifact_id }}
+          path: ${{ steps.workspace.outputs.native_dir }}
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.native_signing_run_id }}
+
+      - name: Verify Exact Qualified Native Package Source
+        shell: bash
+        env:
+          NATIVE_ARTIFACT_DIGEST: ${{ steps.native.outputs.artifact_digest }}
+          NATIVE_ARTIFACT_ID: ${{ inputs.native_signing_artifact_id }}
+          NATIVE_ARTIFACT_NAME: ${{ steps.native.outputs.artifact_name }}
+          NATIVE_RUN_ID: ${{ inputs.native_signing_run_id }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py verify \
+            --bundle "${NATIVE_SIGNING_DIR}" --release "${RELEASE_TAG}" \
+            --release-sha "${RELEASE_SHA}"
+          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          provenance="${NATIVE_SIGNING_DIR}/evidence/NATIVE_SIGNING_PROVENANCE.json"
+          policy_sha256="$(sha256sum "${policy}" | awk '{print $1}')"
+          jq -e --arg repository "${GITHUB_REPOSITORY}" \
+            --arg release_sha "${RELEASE_SHA}" --arg release_tag "${RELEASE_TAG}" \
+            --arg policy_sha256 "${policy_sha256}" --arg artifact_name "${NATIVE_ARTIFACT_NAME}" \
+            --arg artifact_digest "${NATIVE_ARTIFACT_DIGEST}" \
+            --argjson run_id "${NATIVE_RUN_ID}" --argjson artifact_id "${NATIVE_ARTIFACT_ID}" '
+              .repository == $repository and
+              .status == "native-signatures-verified-not-release-qualified" and
+              .public_release == false and .release_qualified == false and
+              .source.release_sha == $release_sha and .source.release_tag == $release_tag and
+              .policy_sha256 == $policy_sha256 and
+              .signing_run.id == $run_id and .signing_run.attempt == 1 and
+              .signing_run.workflow == ".github/workflows/native-package-signing.yml" and
+              ($artifact_id > 0) and ($artifact_name | length > 0) and
+              ($artifact_digest | test("^sha256:[0-9a-f]{64}$"))
+            ' "${provenance}" >/dev/null
+          jq -e '
+            .status == "qualified" and .publishing == true and
+            .deb.implementation == "qualified" and
+            ([.rpm.trusted_keys[], .apk.trusted_keys[], .deb.trusted_keys[]] | length == 3)
+          ' "${policy}" >/dev/null
+
+      - name: Build and Test Candidate Manifest Tool
+        id: manifest_tool
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${RELEASE_SHA}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          GOFLAGS=-mod=readonly go test \
+            ./scripts/ci/update_manifest.go \
+            ./scripts/ci/update_manifest_test.go
+          GOFLAGS=-mod=readonly go build \
+            -o "${MANIFEST_TOOL_DIR}/syswarden-update-manifest" \
+            ./scripts/ci/update_manifest.go
+          chmod 0700 "${MANIFEST_TOOL_DIR}/syswarden-update-manifest"
+          tool_sha256="$(sha256sum "${MANIFEST_TOOL_DIR}/syswarden-update-manifest" | awk '{print $1}')"
+          [[ "${tool_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          test "$(stat -c '%u' "${MANIFEST_TOOL_DIR}/syswarden-update-manifest")" = "$(id -u)"
+          test "$(stat -c '%a' "${MANIFEST_TOOL_DIR}/syswarden-update-manifest")" = "700"
+          printf 'sha256=%s\n' "${tool_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Revalidate Candidate Manifest Tool Before Secret Exposure
+        id: verified_manifest_tool
+        shell: bash
+        env:
+          EXPECTED_TOOL_SHA256: ${{ steps.manifest_tool.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          manifest_tool="${MANIFEST_TOOL_DIR}/syswarden-update-manifest"
+          test -f "${manifest_tool}"
+          test ! -L "${manifest_tool}"
+          test -x "${manifest_tool}"
+          test "$(stat -c '%u' "${manifest_tool}")" = "$(id -u)"
+          test "$(stat -c '%a' "${manifest_tool}")" = "700"
+          actual_tool_sha256="$(sha256sum "${manifest_tool}" | awk '{print $1}')"
+          if [[ ! "${EXPECTED_TOOL_SHA256}" =~ ^[0-9a-f]{64}$ || \
+                "${actual_tool_sha256}" != "${EXPECTED_TOOL_SHA256}" ]]; then
+            echo "ERROR: candidate manifest tool changed after its validated build." >&2
+            exit 1
+          fi
+          printf 'verified=true\n' >> "${GITHUB_OUTPUT}"
+
+      - name: Generate and Verify Protected Candidate Manifest
+        id: signed_candidate
+        if: ${{ steps.verified_manifest_tool.outputs.verified == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY: ${{ secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          manifest_tool="${MANIFEST_TOOL_DIR}/syswarden-update-manifest"
+          manifest_path="${UPDATE_DIR}/syswarden-update-manifest-v1.json"
+          signature_path="${manifest_path}.sig"
+          signing_complete=false
+          clear_signing_material() {
+            unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
+            if [[ "${signing_complete}" != "true" ]]; then
+              rm -f -- "${manifest_path}" "${signature_path}"
+            fi
+          }
+          trap clear_signing_material EXIT HUP INT TERM
+          test -n "${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}"
+          "${manifest_tool}" generate \
+            --repository "${GITHUB_WORKSPACE}" --tag "${RELEASE_TAG}" \
+            --packages "${NATIVE_SIGNING_DIR}/packages" --output "${UPDATE_DIR}"
+          unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
+          env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY "${manifest_tool}" verify \
+            --repository "${GITHUB_WORKSPACE}" --tag "${RELEASE_TAG}" \
+            --packages "${NATIVE_SIGNING_DIR}/packages" \
+            --manifest "${manifest_path}" --signature "${signature_path}"
+          version="${RELEASE_TAG#v}"
+          install -m 0600 -- \
+            "${manifest_path}" "${signature_path}" \
+            "${NATIVE_SIGNING_DIR}/packages/syswarden_${version}_amd64.deb" \
+            "${BUNDLE_ROOT}/node01/"
+          install -m 0600 -- \
+            "${NATIVE_SIGNING_DIR}/packages/syswarden_${version}_amd64.deb.asc" \
+            "${BUNDLE_ROOT}/verification/"
+          signing_complete=true
+          trap - EXIT HUP INT TERM
+
+      - name: Seal Candidate Descriptor and Exact Inventory
+        id: bundle
+        shell: bash
+        env:
+          NATIVE_ARTIFACT_DIGEST: ${{ steps.native.outputs.artifact_digest }}
+          NATIVE_ARTIFACT_ID: ${{ inputs.native_signing_artifact_id }}
+          NATIVE_ARTIFACT_NAME: ${{ steps.native.outputs.artifact_name }}
+          NATIVE_RUN_ID: ${{ inputs.native_signing_run_id }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          descriptor="${BUNDLE_ROOT}/CANDIDATE_UPDATE_BUNDLE.json"
+          python3 - "${BUNDLE_ROOT}" "${NATIVE_SIGNING_DIR}/evidence/NATIVE_SIGNING_PROVENANCE.json" \
+            "${GITHUB_REPOSITORY}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${WORKFLOW_SHA}" \
+            "${GITHUB_RUN_ID}" "${NATIVE_RUN_ID}" "${NATIVE_ARTIFACT_ID}" \
+            "${NATIVE_ARTIFACT_NAME}" "${NATIVE_ARTIFACT_DIGEST}" <<'PY'
+          import hashlib, json, pathlib, sys
+
+          root = pathlib.Path(sys.argv[1])
+          provenance = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+          repository, release_tag, release_sha, workflow_sha = sys.argv[3:7]
+          run_id, native_run_id, native_artifact_id = map(int, sys.argv[7:10])
+          native_artifact_name, native_artifact_digest = sys.argv[10:12]
+          version = release_tag.removeprefix("v")
+
+          def record(relative: str) -> dict[str, object]:
+              path = root / relative
+              data = path.read_bytes()
+              if not data:
+                  raise SystemExit(f"empty candidate bundle file: {relative}")
+              return {"path": relative, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+
+          expected_names = {
+              f"syswarden-{version}-1.x86_64.rpm",
+              f"syswarden_{version}_amd64.deb",
+              f"syswarden_{version}_x86_64.apk",
+          }
+          packages = sorted(provenance["packages"]["signed"], key=lambda item: item["name"])
+          if {item["name"] for item in packages} != expected_names or len(packages) != 3:
+              raise SystemExit("protected signing provenance package inventory is not exact")
+          deb_record = next(item for item in packages if item["name"].endswith("_amd64.deb"))
+          identity = f"github:{repository}:candidate-update:{release_tag}:{release_sha}:{run_id}:1"
+          node_files = [
+              record(f"node01/syswarden_{version}_amd64.deb"),
+              record("node01/syswarden-update-manifest-v1.json"),
+              record("node01/syswarden-update-manifest-v1.json.sig"),
+          ]
+          detached_signature = record(f"verification/syswarden_{version}_amd64.deb.asc")
+          if node_files[0] != {
+              "path": f"node01/{deb_record['name']}",
+              "sha256": deb_record["sha256"],
+              "size": deb_record["size"],
+          }:
+              raise SystemExit("NODE01 package differs from protected native signing provenance")
+          manifest = json.loads((root / "node01/syswarden-update-manifest-v1.json").read_text(encoding="utf-8"))
+          descriptor = {
+              "schema_version": 1,
+              "profile": "syswarden-candidate-update-bundle/v1",
+              "status": "candidate-signed-not-release-qualified",
+              "repository": repository,
+              "release_tag": release_tag,
+              "release_sha": release_sha,
+              "public_release": False,
+              "release_qualified": False,
+              "producer": {
+                  "workflow": ".github/workflows/candidate-update-bundle.yml",
+                  "workflow_sha": workflow_sha,
+                  "run_id": run_id,
+                  "run_attempt": 1,
+                  "runner_environment": "github-hosted",
+              },
+              "source": {
+                  "native_signing_workflow": ".github/workflows/native-package-signing.yml",
+                  "native_signing_run_id": native_run_id,
+                  "native_signing_artifact_id": native_artifact_id,
+                  "native_signing_artifact_name": native_artifact_name,
+                  "native_signing_artifact_digest": native_artifact_digest,
+              },
+              "packages": packages,
+              "manifest": {
+                  "key_id": manifest["key_id"],
+                  "document": record("node01/syswarden-update-manifest-v1.json"),
+                  "signature": record("node01/syswarden-update-manifest-v1.json.sig"),
+              },
+              "node01_bundle": {
+                  "identity": identity,
+                  "directory": "node01",
+                  "exact_file_count": 3,
+                  "files": sorted(node_files, key=lambda item: item["path"]),
+              },
+              "detached_deb_signature": detached_signature,
+              "attestation": {
+                  "mechanism": "github-artifact-attestation",
+                  "predicate_type": "https://slsa.dev/provenance/v1",
+                  "subject": "CANDIDATE_UPDATE_BUNDLE.json",
+                  "bundle_path": "verification/producer-attestation.jsonl",
+              },
+          }
+          (root / "CANDIDATE_UPDATE_BUNDLE.json").write_text(
+              json.dumps(descriptor, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          expected=(
+            CANDIDATE_UPDATE_BUNDLE.json
+            "node01/syswarden_${RELEASE_TAG#v}_amd64.deb"
+            node01/syswarden-update-manifest-v1.json
+            node01/syswarden-update-manifest-v1.json.sig
+            "verification/syswarden_${RELEASE_TAG#v}_amd64.deb.asc"
+          )
+          mapfile -t sorted_expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          mapfile -t actual < <(find -P "${BUNDLE_ROOT}" -type f -printf '%P\n' | LC_ALL=C sort)
+          test "${actual[*]}" = "${sorted_expected[*]}"
+          mapfile -t directories < <(find -P "${BUNDLE_ROOT}" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
+          test "${directories[*]}" = "node01 verification"
+          while IFS= read -r -d '' entry; do
+            test ! -L "${entry}"
+            if [[ -f "${entry}" ]]; then
+              test "$(stat -c '%h' "${entry}")" = "1"
+              test -s "${entry}"
+              chmod 0600 "${entry}"
+            elif [[ -d "${entry}" ]]; then
+              chmod 0700 "${entry}"
+            else
+              exit 1
+            fi
+          done < <(find -P "${BUNDLE_ROOT}" -mindepth 1 -print0)
+          descriptor_sha256="$(sha256sum "${descriptor}" | awk '{print $1}')"
+          [[ "${descriptor_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          artifact_name="syswarden-candidate-update-bundle-${RELEASE_TAG#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
+          printf 'artifact_name=%s\nbundle_root=%s\ndescriptor=%s\ndescriptor_sha256=%s\n' \
+            "${artifact_name}" "${BUNDLE_ROOT}" "${descriptor}" "${descriptor_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest Candidate Bundle Descriptor
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.bundle.outputs.descriptor }}
+
+      - name: Capture and Verify Exact Candidate Producer Attestation
+        id: producer_attestation
+        shell: bash
+        env:
+          DESCRIPTOR_SHA256: ${{ steps.bundle.outputs.descriptor_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          download_dir="$(mktemp -d \
+            "${CANDIDATE_ROOT}/producer-attestation.XXXXXX")"
+          (
+            cd "${download_dir}"
+            gh attestation download "${BUNDLE_ROOT}/CANDIDATE_UPDATE_BUNDLE.json" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --predicate-type "https://slsa.dev/provenance/v1"
+          )
+          mapfile -t downloaded < <(find -P "${download_dir}" -maxdepth 1 -type f -printf '%f\n')
+          test "${#downloaded[@]}" -eq 1
+          expected_name="sha256:${DESCRIPTOR_SHA256}.jsonl"
+          test "${downloaded[0]}" = "${expected_name}"
+          source_bundle="${download_dir}/${expected_name}"
+          test -s "${source_bundle}"
+          test ! -L "${source_bundle}"
+          test "$(wc -l < "${source_bundle}")" -eq 1
+          verification_json="${download_dir}/verification.json"
+          gh attestation verify "${BUNDLE_ROOT}/CANDIDATE_UPDATE_BUNDLE.json" \
+            --bundle "${source_bundle}" --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/candidate-update-bundle.yml" \
+            --signer-digest "${RELEASE_SHA}" --source-digest "${RELEASE_SHA}" \
+            --source-ref "refs/heads/main" --deny-self-hosted-runners --format json \
+            > "${verification_json}"
+          jq -e --arg sha256 "${DESCRIPTOR_SHA256}" '
+            length == 1 and
+            .[0].verificationResult.statement.predicateType == "https://slsa.dev/provenance/v1" and
+            ([.[0].verificationResult.statement.subject[] |
+              select(.name == "CANDIDATE_UPDATE_BUNDLE.json" and .digest.sha256 == $sha256)] | length) == 1
+          ' "${verification_json}" >/dev/null
+          destination="${BUNDLE_ROOT}/verification/producer-attestation.jsonl"
+          install -m 0600 -- "${source_bundle}" "${destination}"
+          attestation_sha256="$(sha256sum "${destination}" | awk '{print $1}')"
+          [[ "${attestation_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          printf 'sha256=%s\n' "${attestation_sha256}" >> "${GITHUB_OUTPUT}"
+          rm -rf -- "${download_dir}"
+
+      - name: Finalize Exact Candidate Update Artifact Inventory
+        shell: bash
+        env:
+          ATTESTATION_SHA256: ${{ steps.producer_attestation.outputs.sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "${ATTESTATION_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "${BUNDLE_ROOT}/verification/producer-attestation.jsonl" | awk '{print $1}')" = \
+            "${ATTESTATION_SHA256}"
+          checksummed=(
+            CANDIDATE_UPDATE_BUNDLE.json
+            "node01/syswarden_${RELEASE_TAG#v}_amd64.deb"
+            node01/syswarden-update-manifest-v1.json
+            node01/syswarden-update-manifest-v1.json.sig
+            verification/producer-attestation.jsonl
+            "verification/syswarden_${RELEASE_TAG#v}_amd64.deb.asc"
+          )
+          mapfile -t sorted_checksummed < <(printf '%s\n' "${checksummed[@]}" | LC_ALL=C sort)
+          (
+            cd "${BUNDLE_ROOT}"
+            sha256sum "${sorted_checksummed[@]}" > CANDIDATE_UPDATE_SHA256SUMS.txt
+            sha256sum --check --strict CANDIDATE_UPDATE_SHA256SUMS.txt
+          )
+          expected=("${checksummed[@]}" CANDIDATE_UPDATE_SHA256SUMS.txt)
+          mapfile -t sorted_expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          mapfile -t actual < <(find -P "${BUNDLE_ROOT}" -type f -printf '%P\n' | LC_ALL=C sort)
+          test "${actual[*]}" = "${sorted_expected[*]}"
+          mapfile -t directories < <(find -P "${BUNDLE_ROOT}" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
+          test "${directories[*]}" = "node01 verification"
+          while IFS= read -r -d '' entry; do
+            test ! -L "${entry}"
+            if [[ -f "${entry}" ]]; then
+              test "$(stat -c '%h' "${entry}")" = "1"
+              test -s "${entry}"
+              chmod 0600 "${entry}"
+            elif [[ -d "${entry}" ]]; then
+              chmod 0700 "${entry}"
+            else
+              exit 1
+            fi
+          done < <(find -P "${BUNDLE_ROOT}" -mindepth 1 -print0)
+
+      - name: Upload Exact Candidate Update Artifact
+        id: candidate-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.bundle.outputs.artifact_name }}
+          path: ${{ steps.bundle.outputs.bundle_root }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Validate Uploaded Candidate Artifact Identity
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.candidate-upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.candidate-upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${ARTIFACT_DIGEST}" =~ ^[0-9a-f]{64}$ ]]
+
+      - name: Remove Ephemeral Candidate Signing Material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
+          if [[ -z "${CANDIDATE_ROOT:-}" ]]; then
+            exit 0
+          fi
+          case "${CANDIDATE_ROOT}" in
+            "${RUNNER_TEMP%/}"/syswarden-candidate-update.*) ;;
+            *) echo "ERROR: refusing unsafe candidate-signing cleanup path." >&2; exit 1 ;;
+          esac
+          test -d "${CANDIDATE_ROOT}"
+          test ! -L "${CANDIDATE_ROOT}"
+          [[ -O "${CANDIDATE_ROOT}" ]]
+          chmod -R u+rwX "${CANDIDATE_ROOT}"
+          rm -rf -- "${CANDIDATE_ROOT}"
+          test ! -e "${CANDIDATE_ROOT}"
+
+  candidate-update-bundle:
+    name: Candidate Update Bundle
+    needs: [produce-candidate-update]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce protected candidate bundle result
+        shell: bash
+        env:
+          PRODUCER_RESULT: ${{ needs.produce-candidate-update.result }}
+        run: |
+          set -euo pipefail
+          test "${PRODUCER_RESULT}" = "success"
