@@ -442,6 +442,13 @@ initialize_rpm_chroot() {
     chmod 0755 "${root}/usr/bin/systemctl"
     : > "${root}/dev/null"
     chmod 0666 "${root}/dev/null"
+    if [ "${RPM_ROOT_MODE}" = sudo ]; then
+        # Keep the outer workspace owned by the invoking user for cleanup, but
+        # make every chroot entry match the root-owned RHEL filesystem it models.
+        chroot_admin find "${root}" -mindepth 1 \
+            -exec chown -h 0:0 -- '{}' +
+        [[ "$(chroot_admin stat -c '%u:%g' -- "${root}/etc")" == 0:0 ]]
+    fi
 }
 
 initialize_rpm_chroot "${CLEAN_CHROOT_ROOT}"
@@ -464,6 +471,30 @@ run_in_chroot() {
     unshare -Ur chroot "${root}" "$@"
 }
 
+chroot_path_is_regular() {
+    local root="$1"
+    local path="$2"
+    chroot_admin test -f "${root}${path}" &&
+        ! chroot_admin test -L "${root}${path}"
+}
+
+chroot_path_is_directory() {
+    local root="$1"
+    local path="$2"
+    chroot_admin test -d "${root}${path}" &&
+        ! chroot_admin test -L "${root}${path}"
+}
+
+assert_chroot_path_absent() {
+    local root="$1"
+    local path="$2"
+    if chroot_admin test -e "${root}${path}" || \
+       chroot_admin test -L "${root}${path}"; then
+        printf 'Unexpected chroot residue remains: %s\n' "${path}" >&2
+        return 1
+    fi
+}
+
 assert_exact_chroot_regular_file() {
     local root="$1"
     local path="$2"
@@ -473,7 +504,7 @@ assert_exact_chroot_regular_file() {
     local label="$6"
     local metadata
     local actual_digest
-    if [[ ! -f "${root}${path}" || -L "${root}${path}" ]]; then
+    if ! chroot_path_is_regular "${root}" "${path}"; then
         printf '%s is not a regular non-symlink file: %s\n' "${label}" "${path}" >&2
         return 1
     fi
@@ -534,7 +565,7 @@ assert_exact_initial_enablement() {
     local link
     for unit in syswarden-firewall.service syswarden-core.service; do
         link="/etc/systemd/system/multi-user.target.wants/${unit}"
-        [[ -L "${root}${link}" ]] || {
+        chroot_admin test -L "${root}${link}" || {
             printf 'Expected vendor enablement symlink is absent: %s\n' "${link}" >&2
             return 1
         }
@@ -556,7 +587,7 @@ assert_exact_preset_invocation_count() {
     local expected_count="$2"
     local log=/var/lib/syswarden-scriptlet-test/systemctl.log
     local metadata
-    if [[ ! -f "${root}${log}" || -L "${root}${log}" ]]; then
+    if ! chroot_path_is_regular "${root}" "${log}"; then
         printf 'systemctl test log is not a regular non-symlink file: %s\n' "${log}" >&2
         return 1
     fi
@@ -625,32 +656,34 @@ expect_rhel_upgrade_refusal() {
 
 assert_rhel_authority() {
     local root="$1"
-    [[ ! -e "${root}/etc/systemd/system/syswarden-core.service" ]]
-    [[ ! -L "${root}/etc/systemd/system/syswarden-core.service" ]]
-    [[ ! -e "${root}/etc/systemd/system/syswarden-firewall.service" ]]
-    [[ ! -L "${root}/etc/systemd/system/syswarden-firewall.service" ]]
-    [[ -f "${root}/usr/lib/systemd/system/syswarden-core.service" ]]
-    [[ -f "${root}/usr/lib/systemd/system/syswarden-firewall.service" ]]
+    assert_chroot_path_absent "${root}" /etc/systemd/system/syswarden-core.service
+    assert_chroot_path_absent "${root}" /etc/systemd/system/syswarden-firewall.service
+    chroot_path_is_regular "${root}" /usr/lib/systemd/system/syswarden-core.service
+    chroot_path_is_regular "${root}" /usr/lib/systemd/system/syswarden-firewall.service
     for unit in syswarden-core.service syswarden-firewall.service; do
-        local link="${root}/etc/systemd/system/multi-user.target.wants/${unit}"
-        if [ -e "${link}" ] || [ -L "${link}" ]; then
-            [[ "$(readlink "${link}")" == "/usr/lib/systemd/system/${unit}" ]]
+        local link="/etc/systemd/system/multi-user.target.wants/${unit}"
+        if chroot_admin test -e "${root}${link}" || \
+           chroot_admin test -L "${root}${link}"; then
+            [[ "$(chroot_admin readlink "${root}${link}")" == \
+                "/usr/lib/systemd/system/${unit}" ]]
         fi
     done
 }
 
 assert_standard_authority() {
     local root="$1"
-    [[ -f "${root}/etc/systemd/system/syswarden-core.service" ]]
-    [[ -f "${root}/etc/systemd/system/syswarden-firewall.service" ]]
-    [[ "$(stat -c '%a' "${root}/etc/systemd/system/syswarden-core.service")" == 600 ]]
-    [[ "$(stat -c '%a' "${root}/etc/systemd/system/syswarden-firewall.service")" == 600 ]]
-    [[ "$(readlink "${root}/etc/systemd/system/multi-user.target.wants/syswarden-core.service")" == \
+    chroot_path_is_regular "${root}" /etc/systemd/system/syswarden-core.service
+    chroot_path_is_regular "${root}" /etc/systemd/system/syswarden-firewall.service
+    [[ "$(chroot_admin stat -c '%a' "${root}/etc/systemd/system/syswarden-core.service")" == \
+        600 ]]
+    [[ "$(chroot_admin stat -c '%a' "${root}/etc/systemd/system/syswarden-firewall.service")" == \
+        600 ]]
+    [[ "$(chroot_admin readlink "${root}/etc/systemd/system/multi-user.target.wants/syswarden-core.service")" == \
         ../syswarden-core.service ]]
-    [[ "$(readlink "${root}/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service")" == \
+    [[ "$(chroot_admin readlink "${root}/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service")" == \
         ../syswarden-firewall.service ]]
-    [[ ! -e "${root}/usr/lib/systemd/system/syswarden-core.service" ]]
-    [[ ! -e "${root}/usr/lib/systemd/system/syswarden-firewall.service" ]]
+    assert_chroot_path_absent "${root}" /usr/lib/systemd/system/syswarden-core.service
+    assert_chroot_path_absent "${root}" /usr/lib/systemd/system/syswarden-firewall.service
 }
 
 prepare_exact_erase_state() {
@@ -727,10 +760,11 @@ assert_final_absence() {
         var/lib/.syswarden-rhelpo-postun-recovery-v1 \
         var/lib/.syswarden-rhelpo-postun-recovery-v1.new \
         var/log/syswarden; do
-        if [ -e "${root}/${removed_path}" ] || [ -L "${root}/${removed_path}" ]; then
-            printf 'Offline RPM removal retained package-owned state: /%s\n' "${removed_path}" >&2
+        assert_chroot_path_absent "${root}" "/${removed_path}" || {
+            printf 'Offline RPM removal retained package-owned state: /%s\n' \
+                "${removed_path}" >&2
             exit 1
-        fi
+        }
     done
 }
 
@@ -751,8 +785,9 @@ reset_after_test_noscripts_erase() {
         var/lib/syswarden/ui \
         var/lib/syswarden \
         var/log/syswarden; do
-        if [ -e "${root}/${directory}" ] || [ -L "${root}/${directory}" ]; then
-            [[ -d "${root}/${directory}" && ! -L "${root}/${directory}" ]]
+        if chroot_admin test -e "${root}/${directory}" || \
+           chroot_admin test -L "${root}/${directory}"; then
+            chroot_path_is_directory "${root}" "/${directory}"
             chroot_admin rmdir -- "${root}/${directory}"
         fi
     done
@@ -796,7 +831,8 @@ for payload_root in \
     relative_escape="$(realpath --relative-to="$(dirname -- "${payload_path}")" "${escape_directory}")"
     chroot_admin ln -s -- "${relative_escape}" "${payload_path}"
     expect_clean_install_refusal "a symlinked /${payload_root} payload root"
-    cmp -s "${TEST_WORKSPACE}/payload-root-sentinel" "${escape_directory}/sentinel"
+    chroot_admin cmp -s \
+        "${TEST_WORKSPACE}/payload-root-sentinel" "${escape_directory}/sentinel"
     [[ "$(chroot_admin find "${escape_directory}" -mindepth 1 -maxdepth 1 -printf '%f\n')" == sentinel ]]
     chroot_admin rm -f -- "${payload_path}"
     chroot_admin rm -f -- "${escape_directory}/sentinel"
@@ -821,7 +857,8 @@ for dedicated_root_and_mode in \
     chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/dedicated-sentinel" \
         "${dedicated_path}/sentinel"
     expect_clean_install_refusal "a pre-existing dedicated /${dedicated_root} directory"
-    cmp -s "${TEST_WORKSPACE}/dedicated-sentinel" "${dedicated_path}/sentinel"
+    chroot_admin cmp -s \
+        "${TEST_WORKSPACE}/dedicated-sentinel" "${dedicated_path}/sentinel"
     chroot_admin rm -f -- "${dedicated_path}/sentinel"
     chroot_admin rmdir -- "${dedicated_path}"
 done
@@ -836,7 +873,7 @@ chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/systemd-sentinel" \
 systemd_escape_relative="$(realpath --relative-to="${CLEAN_CHROOT_ROOT}/etc" "${systemd_escape}")"
 chroot_admin ln -s -- "${systemd_escape_relative}" "${CLEAN_CHROOT_ROOT}/etc/systemd"
 expect_clean_install_refusal 'a symlinked /etc/systemd ancestor'
-cmp -s "${TEST_WORKSPACE}/systemd-sentinel" "${systemd_escape}/sentinel"
+chroot_admin cmp -s "${TEST_WORKSPACE}/systemd-sentinel" "${systemd_escape}/sentinel"
 [[ "$(chroot_admin find "${systemd_escape}" -mindepth 1 -maxdepth 1 -printf '%f\n')" == sentinel ]]
 chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/etc/systemd"
 chroot_admin rm -f -- "${systemd_escape}/sentinel"
@@ -856,7 +893,7 @@ wants_escape_relative="$(realpath --relative-to="${CLEAN_CHROOT_ROOT}/etc/system
 chroot_admin ln -s -- "${wants_escape_relative}" \
     "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants"
 expect_clean_install_refusal 'a symlinked systemd wants directory'
-cmp -s "${TEST_WORKSPACE}/wants-sentinel" "${wants_escape}/sentinel"
+chroot_admin cmp -s "${TEST_WORKSPACE}/wants-sentinel" "${wants_escape}/sentinel"
 [[ "$(chroot_admin find "${wants_escape}" -mindepth 1 -maxdepth 1 -printf '%f\n')" == sentinel ]]
 chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants"
 chroot_admin rm -f -- "${wants_escape}/sentinel"
@@ -870,7 +907,7 @@ printf '%s\n' '# unowned completion' > "${TEST_WORKSPACE}/unowned-completion"
 chroot_admin install -m 0644 -- "${TEST_WORKSPACE}/unowned-completion" \
     "${CLEAN_CHROOT_ROOT}/usr/share/bash-completion/completions/syswarden"
 expect_clean_install_refusal 'an unowned regular payload collision'
-cmp -s "${TEST_WORKSPACE}/unowned-completion" \
+chroot_admin cmp -s "${TEST_WORKSPACE}/unowned-completion" \
     "${CLEAN_CHROOT_ROOT}/usr/share/bash-completion/completions/syswarden"
 chroot_admin rm -f -- \
     "${CLEAN_CHROOT_ROOT}/usr/share/bash-completion/completions/syswarden"
@@ -885,7 +922,7 @@ chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/usr/local/bin/syswarden"
 
 # Clean RHEL package-owned install and final purge. A direct rpm erase must be
 # refused until the exact CLI-produced barriers and empty skeleton exist.
-install -d -m 0750 "${CLEAN_CHROOT_ROOT}/var/lib/syswarden"
+chroot_admin install -d -m 0750 "${CLEAN_CHROOT_ROOT}/var/lib/syswarden"
 printf '%s\n' 'blocked' > "${TEST_WORKSPACE}/blocked"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/blocked" \
     "${CLEAN_CHROOT_ROOT}/var/lib/syswarden/removal-in-progress-v1"
@@ -912,7 +949,7 @@ for removal_barrier in \
     chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/${removal_barrier}"
 done
 chroot_admin rmdir -- "${CLEAN_CHROOT_ROOT}/var/lib/syswarden"
-install -d -m 0755 "${CLEAN_CHROOT_ROOT}/etc/systemd/system"
+chroot_admin install -d -m 0755 "${CLEAN_CHROOT_ROOT}/etc/systemd/system"
 chroot_admin ln -s -- /tmp/attacker \
     "${CLEAN_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
 chroot_admin ln -s -- /tmp/attacker \
@@ -925,7 +962,8 @@ fi
 chroot_admin rm -f -- \
     "${CLEAN_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service" \
     "${CLEAN_CHROOT_ROOT}/etc/systemd/system/syswarden-firewall.service"
-install -d -m 0755 "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants"
+chroot_admin install -d -m 0755 \
+    "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants"
 chroot_admin ln -s -- /tmp/attacker \
     "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service"
 if rpm_at_root "${CLEAN_CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
@@ -966,9 +1004,9 @@ for preset_mode in fail partial-success; do
     # transport status as proof.
     assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.0-1.rhelpo.x86_64
     for link in \
-        "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service" \
-        "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service"; do
-        [[ ! -e "${link}" && ! -L "${link}" ]]
+        /etc/systemd/system/multi-user.target.wants/syswarden-core.service \
+        /etc/systemd/system/multi-user.target.wants/syswarden-firewall.service; do
+        assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" "${link}"
     done
     assert_exact_preset_marker "${CLEAN_CHROOT_ROOT}"
     assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 1
@@ -979,9 +1017,9 @@ for preset_mode in fail partial-success; do
     assert_exact_initial_enablement "${CLEAN_CHROOT_ROOT}"
     assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 2
     for marker in \
-        "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" \
-        "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"; do
-        [[ ! -e "${marker}" && ! -L "${marker}" ]]
+        /var/lib/.syswarden-rhelpo-preset-pending-v1 \
+        /var/lib/.syswarden-rhelpo-preset-pending-v1.new; do
+        assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" "${marker}"
     done
     rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
     chroot_admin rm -f -- \
@@ -1007,9 +1045,9 @@ assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
 assert_exact_initial_enablement "${CLEAN_CHROOT_ROOT}"
 assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 2
 for marker in \
-    "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" \
-    "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"; do
-    [[ ! -e "${marker}" && ! -L "${marker}" ]]
+    /var/lib/.syswarden-rhelpo-preset-pending-v1 \
+    /var/lib/.syswarden-rhelpo-preset-pending-v1.new; do
+    assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" "${marker}"
 done
 rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
 chroot_admin rm -f -- \
@@ -1035,7 +1073,8 @@ if run_in_chroot "${CLEAN_CHROOT_ROOT}" /bin/sh \
     printf '%s\n' 'Post-uninstall recovery accepted an invalid internal mode argument.' >&2
     exit 1
 fi
-[[ -f "${operator_recovery_helper}" ]]
+chroot_path_is_regular "${CLEAN_CHROOT_ROOT}" \
+    /var/lib/.syswarden-rhelpo-postun-recovery-v1
 chroot_admin rm -f -- "${operator_recovery_helper}"
 chroot_admin ln -- "${CLEAN_CHROOT_ROOT}/opt/syswarden/bin/syswarden-cli" \
     "${CLEAN_CHROOT_ROOT}/opt/syswarden/bin/syswarden-cli.hardlink"
@@ -1051,8 +1090,8 @@ chroot_admin ln -s -- /usr/lib/systemd/system/syswarden-core.service \
 rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
     "${PACKAGE_PATH}"
 assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
-[[ ! -e "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration" && \
-   ! -L "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration" ]]
+assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" \
+    /etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration
 printf '%s' 'tampered' > "${TEST_WORKSPACE}/preset-pending-invalid-prefix"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-pending-invalid-prefix" \
     "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
@@ -1079,14 +1118,17 @@ chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-pending-prefix" \
 rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
     "${PACKAGE_PATH}"
 assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
-[[ ! -e "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new" ]]
+assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" \
+    /var/lib/.syswarden-rhelpo-preset-pending-v1.new
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-pending.new" \
     "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
 rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
     "${PACKAGE_PATH}"
 assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
-[[ ! -e "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" ]]
-[[ ! -e "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new" ]]
+assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" \
+    /var/lib/.syswarden-rhelpo-preset-pending-v1
+assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" \
+    /var/lib/.syswarden-rhelpo-preset-pending-v1.new
 if rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1; then
     printf '%s\n' 'RHEL package-owned RPM erased without the CLI authorization barriers.' >&2
     exit 1
@@ -1100,7 +1142,7 @@ chroot_admin ln -- "${outside_sentinel}" "${CLEAN_CHROOT_ROOT}/opt/syswarden/unt
 chroot_admin mkfifo -m 0600 "${CLEAN_CHROOT_ROOT}/opt/syswarden/untrusted-fifo"
 prepare_exact_erase_state "${CLEAN_CHROOT_ROOT}"
 prepare_exact_erase_state "${CLEAN_CHROOT_ROOT}"
-cmp -s "${TEST_WORKSPACE}/outside-sentinel" "${outside_sentinel}"
+chroot_admin cmp -s "${TEST_WORKSPACE}/outside-sentinel" "${outside_sentinel}"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/blocked" \
     "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-removal-finalizing-v1"
 if rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1; then
@@ -1118,7 +1160,7 @@ if rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1; then
 fi
 assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.0-1.rhelpo.x86_64
 chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
-install -d -m 0755 "${CLEAN_CHROOT_ROOT}/run/systemd/system"
+chroot_admin install -d -m 0755 "${CLEAN_CHROOT_ROOT}/run/systemd/system"
 for service_state in failed activating unknown; do
     printf '%s\n' "${service_state}" > "${TEST_WORKSPACE}/active-state"
     chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/active-state" \
@@ -1203,8 +1245,8 @@ chroot_admin ln -s -- /usr/lib/systemd/system/syswarden-core.service \
 rpm_at_root "${CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
     "${PACKAGE_PATH}"
 assert_rhel_authority "${CHROOT_ROOT}"
-[[ ! -e "${CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration" && \
-   ! -L "${CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration" ]]
+assert_chroot_path_absent "${CHROOT_ROOT}" \
+    /etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration
 
 # A retry after an interrupted POSTIN may see exact legacy units even though
 # the installed identity is already RHELPO. It must complete deterministically.
@@ -1343,11 +1385,12 @@ if run_exact_postun_recovery "${CHROOT_ROOT}" >/dev/null 2>&1; then
     printf '%s\n' 'Operator recovery accepted a missing erase-ready barrier.' >&2
     exit 1
 fi
-[[ -f "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-postun-recovery-v1" ]]
-[[ -f "${CHROOT_ROOT}/var/lib/syswarden/removal-in-progress-v1" ]]
+chroot_path_is_regular "${CHROOT_ROOT}" \
+    /var/lib/.syswarden-rhelpo-postun-recovery-v1
+chroot_path_is_regular "${CHROOT_ROOT}" /var/lib/syswarden/removal-in-progress-v1
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/rhelpo-erase-ready-v1" \
     "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-erase-ready-v1"
-install -d -m 0755 "${CHROOT_ROOT}/etc/cron.d"
+chroot_admin install -d -m 0755 "${CHROOT_ROOT}/etc/cron.d"
 printf '%s\n' residue > "${TEST_WORKSPACE}/standalone-residue"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/standalone-residue" \
     "${CHROOT_ROOT}/etc/cron.d/syswarden"
@@ -1355,8 +1398,9 @@ if run_exact_postun_recovery "${CHROOT_ROOT}" >/dev/null 2>&1; then
     printf '%s\n' 'Post-uninstall recovery consumed authorization with standalone residue.' >&2
     exit 1
 fi
-[[ -f "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-postun-recovery-v1" ]]
-[[ -f "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-erase-ready-v1" ]]
+chroot_path_is_regular "${CHROOT_ROOT}" \
+    /var/lib/.syswarden-rhelpo-postun-recovery-v1
+chroot_path_is_regular "${CHROOT_ROOT}" /var/lib/.syswarden-rhelpo-erase-ready-v1
 chroot_admin rm -f -- "${CHROOT_ROOT}/etc/cron.d/syswarden"
 printf '%s\n' fail > "${TEST_WORKSPACE}/fail-global-sync-once"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/fail-global-sync-once" \
@@ -1365,8 +1409,9 @@ if run_exact_postun_recovery "${CHROOT_ROOT}" >/dev/null 2>&1; then
     printf '%s\n' 'Injected post-uninstall durability barrier failure unexpectedly succeeded.' >&2
     exit 1
 fi
-[[ -f "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-postun-recovery-v1" ]]
-[[ -f "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-erase-ready-v1" ]]
+chroot_path_is_regular "${CHROOT_ROOT}" \
+    /var/lib/.syswarden-rhelpo-postun-recovery-v1
+chroot_path_is_regular "${CHROOT_ROOT}" /var/lib/.syswarden-rhelpo-erase-ready-v1
 run_exact_postun_recovery "${CHROOT_ROOT}"
 assert_final_absence "${CHROOT_ROOT}"
 
@@ -1389,8 +1434,7 @@ for removed_recovery_path in \
     /var/lib/.syswarden-rhelpo-erase-ready-v1.new \
     /var/lib/syswarden/removal-in-progress-v1 \
     /var/lib/syswarden/removal-in-progress-v1.new; do
-    [[ ! -e "${CHROOT_ROOT}${removed_recovery_path}" && \
-       ! -L "${CHROOT_ROOT}${removed_recovery_path}" ]]
+    assert_chroot_path_absent "${CHROOT_ROOT}" "${removed_recovery_path}"
 done
 if rpm_at_root "${CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
     "${PACKAGE_PATH}" >/dev/null 2>&1; then
