@@ -236,7 +236,25 @@ jobs:
           test ! -L "${source_root}"
           test "$(stat -c '%u' "${source_root}")" = "$(id -u)"
           test "$(stat -c '%a' "${source_root}")" = "700"
-          for directory in ha-v2 ha-v2/raw native-capability performance node01-migration node01-migration/artifacts native-lifecycle native-lifecycle/artifacts native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages source-allocation source-allocation/raw source-allocation/raw/allocation-campaign-01 source-allocation/raw/allocation-campaign-02 source-allocation/raw/allocation-campaign-03; do
+          native_feed_contract="${GITHUB_WORKSPACE}/scripts/ci/native_feed_contract_v4.10.0.json"
+          mapfile -t native_feed_raw_inventory < <(jq -er '.raw_evidence.inventory[]' "${native_feed_contract}")
+          test "${#native_feed_raw_inventory[@]}" -eq 110
+          mapfile -t native_feed_raw_directories < <(
+            python3 - "${native_feed_contract}" <<'PY'
+          import json
+          import pathlib
+          import sys
+          document = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          directories = {"native-feed/raw"}
+          for relative in document["raw_evidence"]["inventory"]:
+              parent = pathlib.PurePosixPath(relative).parent
+              while str(parent) != ".":
+                  directories.add("native-feed/raw/" + parent.as_posix())
+                  parent = parent.parent
+          print("\n".join(sorted(directories)))
+          PY
+          )
+          for directory in ha-v2 ha-v2/raw native-capability native-feed performance node01-migration node01-migration/artifacts native-lifecycle native-lifecycle/artifacts native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages source-allocation source-allocation/raw source-allocation/raw/allocation-campaign-01 source-allocation/raw/allocation-campaign-02 source-allocation/raw/allocation-campaign-03 "${native_feed_raw_directories[@]}"; do
             path="${source_root}/${directory}"
             test -d "${path}"; test ! -L "${path}"
             test "$(stat -c '%u' "${path}")" = "$(id -u)"
@@ -244,7 +262,10 @@ jobs:
           done
           output_root="$(mktemp -d "${RUNNER_TEMP%/}/native-release-evidence.XXXXXXXXXX")"
           chmod 0700 "${output_root}"
-          mkdir -m 0700 "${output_root}/candidate-update" "${output_root}/candidate-update/node01" "${output_root}/candidate-update/verification" "${output_root}/ha-v2" "${output_root}/native-capability" "${output_root}/performance" "${output_root}/node01-migration" "${output_root}/native-lifecycle" "${output_root}/source-allocation"
+          mkdir -m 0700 "${output_root}/candidate-update" "${output_root}/candidate-update/node01" "${output_root}/candidate-update/verification" "${output_root}/ha-v2" "${output_root}/native-capability" "${output_root}/native-feed" "${output_root}/performance" "${output_root}/node01-migration" "${output_root}/native-lifecycle" "${output_root}/source-allocation"
+          for directory in "${native_feed_raw_directories[@]}"; do
+            mkdir -m 0700 -p "${output_root}/${directory}"
+          done
           mkdir -m 0700 "${output_root}/source-allocation/raw" \
             "${output_root}/source-allocation/raw/allocation-campaign-01" \
             "${output_root}/source-allocation/raw/allocation-campaign-02" \
@@ -259,7 +280,10 @@ jobs:
             test -s "${path}"
           }
           raw_names=(node01-attestation.json node02-attestation.json asymmetric-partition.json crash-head-recovery.json crash-wal-recovery.json heartbeat-monotonic-receipt-timeout.json instance-lease-exclusion.json normal-replication-ack-checkpoint.json partition-fence-split-brain.json rejoin-explicit.json rolling-rollback.json rolling-upgrade.json)
-          expected_source=(ha-v2/HA_V2_NATIVE_EVIDENCE.json native-capability/APK-324.json native-capability/DEB-13.json native-capability/DEB-U2604.json native-capability/RPM-A10.json native-capability/RPM-A9-RHELPO.json native-capability/RPM-A10-RHELPO.json performance/ADAPTER_CONFIG.json performance/EVIDENCE.json)
+          expected_source=(ha-v2/HA_V2_NATIVE_EVIDENCE.json native-capability/APK-324.json native-capability/DEB-13.json native-capability/DEB-U2604.json native-capability/RPM-A10.json native-capability/RPM-A9-RHELPO.json native-capability/RPM-A10-RHELPO.json native-feed/EVIDENCE.json native-feed/VERDICT.json native-feed/raw/SHA256SUMS performance/ADAPTER_CONFIG.json performance/EVIDENCE.json)
+          for relative in "${native_feed_raw_inventory[@]}"; do
+            expected_source+=("native-feed/raw/${relative}")
+          done
           candidate_version="${RELEASE_TAG#v}"
           native_signing_files=(
             native-signing/SIGNED_ARTIFACT_SHA256SUMS.txt
@@ -651,6 +675,46 @@ jobs:
           deb_signer_fingerprint="$(jq -er '.deb.fingerprint' <<< "${attested_native_identities}")"
           rpm_signer_fingerprint="$(jq -er '.rpm.fingerprint' <<< "${attested_native_identities}")"
           apk_public_key_sha256="$(jq -er '.apk.public_key_sha256' <<< "${attested_native_identities}")"
+          require_input native-feed/EVIDENCE.json
+          require_input native-feed/VERDICT.json
+          require_input native-feed/raw/SHA256SUMS
+          install -m 0600 -- "${source_root}/native-feed/raw/SHA256SUMS" \
+            "${output_root}/native-feed/raw/SHA256SUMS"
+          for relative in "${native_feed_raw_inventory[@]}"; do
+            source_path="${source_root}/native-feed/raw/${relative}"
+            target_path="${output_root}/native-feed/raw/${relative}"
+            test -f "${source_path}"; test ! -L "${source_path}"
+            test "$(stat -c '%u' "${source_path}")" = "$(id -u)"
+            test "$(stat -c '%a' "${source_path}")" = "600"
+            test "$(stat -c '%h' "${source_path}")" = "1"
+            install -m 0600 -- "${source_path}" "${target_path}"
+          done
+          deb_key_id="$(jq -er '.deb_signature.key.id' "${signing_provenance}")"
+          deb_signature_date="$(jq -er '.deb_signature.as_of' "${signing_provenance}")"
+          feed_verify_root="$(mktemp -d "${RUNNER_TEMP%/}/native-feed-verify.XXXXXXXXXX")"
+          chmod 0700 "${feed_verify_root}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_feed_evidence.py assemble \
+            --contract "${native_feed_contract}" \
+            --raw-root "${output_root}/native-feed/raw" \
+            --candidate-sha "${RELEASE_SHA}" \
+            --deb-package "${signing_validation_root}/packages/${deb_package_name}" \
+            --deb-signature "${signing_validation_root}/packages/${deb_package_name}.asc" \
+            --signature-policy "${GITHUB_WORKSPACE}/scripts/ci/native_package_signature_policy_v4100.json" \
+            --deb-key-id "${deb_key_id}" \
+            --deb-signature-date "${deb_signature_date}" \
+            --node02-ssh-host-key-sha256 "${NODE02_SSH_HOST_KEY_SHA256}" \
+            --output-evidence "${feed_verify_root}/EVIDENCE.json" \
+            --output-verdict "${feed_verify_root}/VERDICT.json"
+          cmp -- "${feed_verify_root}/EVIDENCE.json" \
+            "${source_root}/native-feed/EVIDENCE.json"
+          cmp -- "${feed_verify_root}/VERDICT.json" \
+            "${source_root}/native-feed/VERDICT.json"
+          install -m 0600 -- "${feed_verify_root}/EVIDENCE.json" \
+            "${output_root}/native-feed/EVIDENCE.json"
+          install -m 0600 -- "${feed_verify_root}/VERDICT.json" \
+            "${output_root}/native-feed/VERDICT.json"
+          rm -f -- "${feed_verify_root}/EVIDENCE.json" "${feed_verify_root}/VERDICT.json"
+          rmdir -- "${feed_verify_root}"
           lifecycle_verdict="${output_root}/native-lifecycle/VERDICT.json"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_lifecycle_evidence.py \
             --candidate-commit "${RELEASE_SHA}" \
@@ -874,7 +938,7 @@ jobs:
           records = []
           for path in sorted(p for p in root.rglob('*') if p.is_file()):
               records.append({"path": path.relative_to(root).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size})
-          manifest = {"schema_version": 3, "repository": sys.argv[2], "release_tag": sys.argv[3], "release_sha": sys.argv[4], "run_id": int(sys.argv[5]), "run_attempt": 1, "contracts": {"ha_v2": hashlib.sha256(pathlib.Path('scripts/ci/ha_v2_native_contract_v4.10.0.json').read_bytes()).hexdigest(), "native_capability": hashlib.sha256(pathlib.Path('scripts/ci/native_capability_contract_v4.10.0.json').read_bytes()).hexdigest(), "performance": hashlib.sha256(pathlib.Path('scripts/ci/performance_contract_v4.10.0.json').read_bytes()).hexdigest(), "source_allocation": hashlib.sha256(pathlib.Path('scripts/ci/source_allocation_contract_v4.10.0.json').read_bytes()).hexdigest(), "node01_migration": hashlib.sha256(pathlib.Path('scripts/ci/node01_migration_contract_v4.10.0.json').read_bytes()).hexdigest(), "native_lifecycle": hashlib.sha256(pathlib.Path('scripts/ci/native_lifecycle_contract_v4.10.0.json').read_bytes()).hexdigest()}, "native_signing": {"policy_sha256": provenance["policy_sha256"], "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(), "selected_keys": {"rpm": provenance["rpm_signature"]["key"], "apk": provenance["apk_signature"]["key"], "deb": provenance["deb_signature"]["key"]}, "status": provenance["status"], "rhel_package_owned": {"package": rhel_provenance["packages"]["signed"], "provenance_sha256": hashlib.sha256(rhel_provenance_bytes).hexdigest(), "selected_rpm_key": rhel_provenance["rpm_signature"]["key"], "status": rhel_provenance["status"], "updater_manifest_included": rhel_provenance["updater_manifest_included"]}}, "candidate_update": {"workflow": "candidate-update-bundle.yml", "run_id": int(sys.argv[12]), "artifact_id": int(sys.argv[13]), "artifact_name": sys.argv[14], "artifact_digest": sys.argv[15], "descriptor_sha256": sys.argv[16], "node01_bundle_identity": sys.argv[17]}, "trusted_host_keys": {"node02": sys.argv[6], "node03": sys.argv[7], "node04": sys.argv[8], "node05": sys.argv[9]}, "files": records}
+          manifest = {"schema_version": 3, "repository": sys.argv[2], "release_tag": sys.argv[3], "release_sha": sys.argv[4], "run_id": int(sys.argv[5]), "run_attempt": 1, "contracts": {"ha_v2": hashlib.sha256(pathlib.Path('scripts/ci/ha_v2_native_contract_v4.10.0.json').read_bytes()).hexdigest(), "native_capability": hashlib.sha256(pathlib.Path('scripts/ci/native_capability_contract_v4.10.0.json').read_bytes()).hexdigest(), "native_feed": hashlib.sha256(pathlib.Path('scripts/ci/native_feed_contract_v4.10.0.json').read_bytes()).hexdigest(), "performance": hashlib.sha256(pathlib.Path('scripts/ci/performance_contract_v4.10.0.json').read_bytes()).hexdigest(), "source_allocation": hashlib.sha256(pathlib.Path('scripts/ci/source_allocation_contract_v4.10.0.json').read_bytes()).hexdigest(), "node01_migration": hashlib.sha256(pathlib.Path('scripts/ci/node01_migration_contract_v4.10.0.json').read_bytes()).hexdigest(), "native_lifecycle": hashlib.sha256(pathlib.Path('scripts/ci/native_lifecycle_contract_v4.10.0.json').read_bytes()).hexdigest()}, "native_signing": {"policy_sha256": provenance["policy_sha256"], "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(), "selected_keys": {"rpm": provenance["rpm_signature"]["key"], "apk": provenance["apk_signature"]["key"], "deb": provenance["deb_signature"]["key"]}, "status": provenance["status"], "rhel_package_owned": {"package": rhel_provenance["packages"]["signed"], "provenance_sha256": hashlib.sha256(rhel_provenance_bytes).hexdigest(), "selected_rpm_key": rhel_provenance["rpm_signature"]["key"], "status": rhel_provenance["status"], "updater_manifest_included": rhel_provenance["updater_manifest_included"]}}, "candidate_update": {"workflow": "candidate-update-bundle.yml", "run_id": int(sys.argv[12]), "artifact_id": int(sys.argv[13]), "artifact_name": sys.argv[14], "artifact_digest": sys.argv[15], "descriptor_sha256": sys.argv[16], "node01_bundle_identity": sys.argv[17]}, "trusted_host_keys": {"node02": sys.argv[6], "node03": sys.argv[7], "node04": sys.argv[8], "node05": sys.argv[9]}, "files": records}
           manifest["candidate_update"]["producer_attestation_sha256"] = sys.argv[18]
           (root / 'NATIVE_RELEASE_EVIDENCE_MANIFEST.json').write_text(json.dumps(manifest, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
           PY

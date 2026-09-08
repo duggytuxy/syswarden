@@ -2471,6 +2471,7 @@ exit 64
                 "native-release-evidence/ha-v2 "
                 "native-release-evidence/ha-v2/raw "
                 "native-release-evidence/native-capability "
+                "native-release-evidence/native-feed "
                 "native-release-evidence/native-lifecycle "
                 "native-release-evidence/node01-migration "
                 "native-release-evidence/performance",
@@ -2538,6 +2539,67 @@ exit 64
                 section,
             )
             self.assertIn("go run ./scripts/ci/update_manifest.go verify", section)
+            self.assertIn("native_feed_evidence.py", section)
+            self.assertIn(
+                'native-release-evidence/native-feed/EVIDENCE.json', section
+            )
+            self.assertIn(
+                'native-release-evidence/native-feed/VERDICT.json', section
+            )
+            self.assertIn(
+                'native_feed_raw_root="${QUALIFICATION_ROOT}/native-release-evidence/native-feed/raw"',
+                section,
+            )
+            self.assertIn(
+                "'.raw_evidence.inventory[]'", section
+            )
+            self.assertIn(
+                'test "${#native_feed_raw_inventory[@]}" -eq 110', section
+            )
+            self.assertIn(
+                'qualification_all_directories+=("${native_feed_raw_directories[@]}")',
+                section,
+            )
+            self.assertIn(
+                'chmod 0700 -- "${directory}"', section
+            )
+            self.assertIn(
+                'chmod 0600 -- "${file}"', section
+            )
+            self.assertIn(
+                "native_feed_evidence.py assemble", section
+            )
+            self.assertIn(
+                '--raw-root "${native_feed_raw_root}"', section
+            )
+            self.assertIn(
+                '--deb-package "${QUALIFICATION_ROOT}/native-signing/packages/${deb_package_name}"',
+                section,
+            )
+            self.assertIn(
+                '--deb-signature "${QUALIFICATION_ROOT}/native-signing/packages/${deb_package_name}.asc"',
+                section,
+            )
+            self.assertIn(
+                '--signature-policy "${GITHUB_WORKSPACE}/scripts/ci/native_package_signature_policy_v4100.json"',
+                section,
+            )
+            self.assertIn('--deb-key-id "${deb_key_id}"', section)
+            self.assertIn('--deb-signature-date "${deb_signature_date}"', section)
+            self.assertIn(
+                'cmp -- "${feed_verify_root}/EVIDENCE.json"', section
+            )
+            self.assertIn(
+                'cmp -- "${feed_verify_root}/VERDICT.json"', section
+            )
+            self.assertLess(
+                section.index("native_package_signing_bundle.py verify"),
+                section.index("native_feed_evidence.py"),
+            )
+            self.assertLess(
+                section.index("native_feed_evidence.py"),
+                section.index('cmp -- "${feed_verify_root}/EVIDENCE.json"'),
+            )
             self.assertIn(
                 '--manifest "${QUALIFICATION_ROOT}/update/'
                 'syswarden-update-manifest-v1.json"',

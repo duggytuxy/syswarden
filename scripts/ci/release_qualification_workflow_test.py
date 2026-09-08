@@ -1637,6 +1637,10 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "native_lifecycle_contract_v4.10.0.json",
             "native-lifecycle/RAW_EVIDENCE.tar",
             "native-lifecycle/VERDICT.json",
+            "native_feed_evidence.py",
+            "native_feed_contract_v4.10.0.json",
+            "native-feed/EVIDENCE.json",
+            "native-feed/VERDICT.json",
             'gh attestation verify \\\n  "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json"',
             '"${GITHUB_REPOSITORY}/.github/workflows/native-release-evidence.yml"',
             '--signer-digest "${RELEASE_SHA}"',
@@ -1703,6 +1707,77 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertIn(
             "source_allocation:$source_allocation_contract", gate
         )
+        self.assertIn("native_feed:$native_feed_contract", gate)
+
+    def test_native_feed_evidence_is_signing_bound_and_exactly_sealed(self) -> None:
+        gate_name = "Revalidate Candidate-Bound Native Release Evidence"
+        gate = workflow_step_script(self.workflow, gate_name)
+        for contract in (
+            'deb_package_name="$(jq -er \'.deb.name\' <<< "${attested_standard_packages}")"',
+            'deb_package_sha256="$(jq -er \'.deb.sha256\' <<< "${attested_standard_packages}")"',
+            'deb_package_size="$(jq -er \'.deb.size\' <<< "${attested_standard_packages}")"',
+            'deb_signer_fingerprint="$(jq -er \'.deb.fingerprint\'',
+            'native_feed_raw_root="${NATIVE_RELEASE_EVIDENCE_DIR}/native-feed/raw"',
+            "native_feed_evidence.py assemble",
+            '--raw-root "${native_feed_raw_root}"',
+            '--deb-package "${NATIVE_SIGNING_DIR}/packages/${deb_package_name}"',
+            '--deb-signature "${NATIVE_SIGNING_DIR}/packages/${deb_package_name}.asc"',
+            '--signature-policy "${GITHUB_WORKSPACE}/scripts/ci/native_package_signature_policy_v4100.json"',
+            '--deb-key-id "${deb_key_id}"',
+            '--deb-signature-date "${deb_signature_date}"',
+            '--node02-ssh-host-key-sha256 "$(jq -er \'.trusted_host_keys.node02\'',
+            '--output-evidence "${feed_verify_root}/EVIDENCE.json"',
+            '--output-verdict "${feed_verify_root}/VERDICT.json"',
+            'cmp -- "${feed_verify_root}/EVIDENCE.json"',
+            'cmp -- "${feed_verify_root}/VERDICT.json"',
+            '"${NATIVE_RELEASE_EVIDENCE_DIR}/native-feed/EVIDENCE.json"',
+            '"${NATIVE_RELEASE_EVIDENCE_DIR}/native-feed/VERDICT.json"',
+            'native_feed_contract="$(sha256sum scripts/ci/native_feed_contract_v4.10.0.json',
+            '--arg native_feed_contract "${native_feed_contract}"',
+            'native_feed:$native_feed_contract',
+        ):
+            self.assertIn(contract, gate)
+        self.assertLess(
+            gate.index('attested_standard_packages="$(jq'),
+            gate.index("native_feed_evidence.py"),
+        )
+        self.assertLess(
+            gate.index("native_feed_evidence.py"),
+            gate.index('cmp -- "${feed_verify_root}/EVIDENCE.json"'),
+        )
+        self.assertLess(
+            self.workflow.index("Verify and Bind Exact Native Signing Bundle"),
+            self.workflow.index(gate_name),
+        )
+
+        files = (
+            "native-release-evidence/native-feed/EVIDENCE.json",
+            "native-release-evidence/native-feed/VERDICT.json",
+        )
+        for step_name in (
+            "Seal Exact Unsigned Qualification Evidence Inventory",
+            "Require Successful Qualification Before Release Signing",
+            "Seal Exact Qualification Evidence Inventory",
+        ):
+            step = workflow_step_script(self.workflow, step_name)
+            for path in files:
+                self.assertEqual(step.count(path), 1, (step_name, path))
+            self.assertIn(
+                'native-release-evidence/native-feed/raw/SHA256SUMS', step
+            )
+            self.assertIn("'.raw_evidence.inventory[]'", step)
+            self.assertIn(
+                'test "${#native_feed_raw_inventory[@]}" -eq 110', step
+            )
+            self.assertIn(
+                'native_feed_raw_directories=("native-release-evidence/native-feed/raw")',
+                step,
+            )
+            self.assertRegex(
+                step,
+                r"(?m)^\s+native-release-evidence/native-feed\s*$",
+                step_name,
+            )
 
     def test_hosted_seal_redownloads_and_exactly_attests_native_evidence(self) -> None:
         hosted = workflow_job(self.workflow, "seal-release")

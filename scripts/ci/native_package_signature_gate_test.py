@@ -804,6 +804,108 @@ class NativePackageSignatureGateTests(unittest.TestCase):
         self.assertEqual(document["signature"]["name"], self.signature.name)
         self.assertEqual(document["signature"]["created_at"], "2026-09-03T12:00:00Z")
 
+    def test_deb_raw_gpgv_channels_are_private_exact_and_exclusive(self) -> None:
+        arguments = self.deb_arguments()
+        logger = b"gpgv: Good signature from test fixture\n"
+        original = self.gpgv.read_text(encoding="ascii")
+        self.gpgv.write_text(
+            original.removesuffix("\n")
+            + f"\nprintf '%s\\n' '{logger.decode('ascii').strip()}' >&2\n",
+            encoding="ascii",
+        )
+        status_output = self.root / "gpgv.status"
+        logger_output = self.root / "gpgv.logger"
+
+        self.assertEqual(
+            gate.main(
+                arguments
+                + (
+                    "--gpgv-status-output",
+                    str(status_output),
+                    "--gpgv-logger-output",
+                    str(logger_output),
+                )
+            ),
+            0,
+        )
+        self.assertIn(
+            f"[GNUPG:] VALIDSIG {self.deb_fingerprint} ".encode("ascii"),
+            status_output.read_bytes(),
+        )
+        self.assertEqual(logger_output.read_bytes(), logger)
+        self.assertEqual(status_output.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(logger_output.stat().st_mode & 0o777, 0o600)
+
+        self.assertEqual(
+            gate.main(
+                arguments
+                + (
+                    "--gpgv-status-output",
+                    str(status_output),
+                    "--gpgv-logger-output",
+                    str(logger_output),
+                )
+            ),
+            1,
+        )
+
+    def test_deb_incomplete_raw_gpgv_pair_fails_before_verifier_execution(self) -> None:
+        arguments = self.deb_arguments()
+        marker = self.root / "gpgv-executed"
+        original = self.gpgv.read_text(encoding="ascii")
+        self.gpgv.write_text(
+            original.replace("set -eu\n", f"set -eu\n: > '{marker}'\n"),
+            encoding="ascii",
+        )
+
+        self.assertEqual(
+            gate.main(
+                arguments
+                + ("--gpgv-status-output", str(self.root / "gpgv.status"))
+            ),
+            1,
+        )
+        self.assertFalse(marker.exists())
+
+    def test_deb_raw_gpgv_channels_reject_symlink_and_insecure_parent(self) -> None:
+        arguments = self.deb_arguments()
+        target = self.root / "target"
+        target.write_bytes(b"must remain unchanged\n")
+        status_link = self.root / "gpgv.status"
+        status_link.symlink_to(target)
+        logger_output = self.root / "gpgv.logger"
+        self.assertEqual(
+            gate.main(
+                arguments
+                + (
+                    "--gpgv-status-output",
+                    str(status_link),
+                    "--gpgv-logger-output",
+                    str(logger_output),
+                )
+            ),
+            1,
+        )
+        self.assertEqual(target.read_bytes(), b"must remain unchanged\n")
+        self.assertFalse(logger_output.exists())
+
+        insecure = self.root / "insecure"
+        insecure.mkdir(mode=0o777)
+        insecure.chmod(0o777)
+        self.assertEqual(
+            gate.main(
+                arguments
+                + (
+                    "--gpgv-status-output",
+                    str(insecure / "gpgv.status"),
+                    "--gpgv-logger-output",
+                    str(insecure / "gpgv.logger"),
+                )
+            ),
+            1,
+        )
+        self.assertEqual(list(insecure.iterdir()), [])
+
     def test_deb_unsigned_bad_or_wrong_key_signature_fails_closed(self) -> None:
         arguments = self.deb_arguments()
         self.signature.write_bytes(b"")

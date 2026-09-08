@@ -23,8 +23,10 @@ Use ``osint_tls_qualification_lab.sh`` to exercise the real installed
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import http.server
 import os
+import re
 import ssl
 import stat
 import sys
@@ -120,14 +122,25 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
     server_version = "SysWardenOSINTQualificationFixture/1"
     sys_version = ""
 
+    @staticmethod
+    def _log_field(value: str, maximum: int = 512) -> str:
+        if len(value) > maximum or re.search(r"[^\x20-\x7e]", value):
+            return "invalid"
+        return value
+
     def log_message(self, format_string: str, *args: object) -> None:
         del format_string
         sys.stderr.write(
-            "fixture client=%s host=%s path=%s status=%s\n"
+            "fixture timestamp=%s mode=%s client=%s host=%s path=%s "
+            "user_agent=%s tls=%s status=%s\n"
             % (
-                self.client_address[0],
-                self.headers.get("Host", ""),
-                urlsplit(self.path).path,
+                dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                getattr(self, "fixture_mode", "unavailable"),
+                self._log_field(self.client_address[0]),
+                self._log_field(self.headers.get("Host", "")),
+                self._log_field(urlsplit(self.path).path),
+                self._log_field(self.headers.get("User-Agent", "")),
+                self._log_field(self.connection.version() or "unavailable"),
                 args[1] if len(args) > 1 else "unknown",
             )
         )
@@ -146,7 +159,9 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
             status_code, body = fixture_response(host, path, mode)
         except (OSError, ValueError) as error:
             sys.stderr.write(f"fixture mode error: {error}\n")
+            mode = "unavailable"
             status_code, body = 503, b"fixture mode unavailable\n"
+        self.fixture_mode = mode
         self.send_response(status_code)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

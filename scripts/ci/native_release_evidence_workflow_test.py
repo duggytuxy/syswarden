@@ -286,6 +286,50 @@ class NativeReleaseEvidenceWorkflowTests(unittest.TestCase):
             ),
         )
 
+    def test_native_feed_evidence_is_node02_bound_and_sealed(self) -> None:
+        for contract in (
+            "native-feed/EVIDENCE.json",
+            "native-feed/VERDICT.json",
+            "native_feed_contract_v4.10.0.json",
+            "native_feed_evidence.py",
+            'require_input native-feed/EVIDENCE.json',
+            'require_input native-feed/raw/SHA256SUMS',
+            "'.raw_evidence.inventory[]'",
+            'test "${#native_feed_raw_inventory[@]}" -eq 110',
+            "native_feed_evidence.py assemble",
+            '--raw-root "${output_root}/native-feed/raw"',
+            '--candidate-sha "${RELEASE_SHA}"',
+            '--deb-package "${signing_validation_root}/packages/${deb_package_name}"',
+            '--deb-signature "${signing_validation_root}/packages/${deb_package_name}.asc"',
+            '--signature-policy "${GITHUB_WORKSPACE}/scripts/ci/native_package_signature_policy_v4100.json"',
+            '--deb-key-id "${deb_key_id}"',
+            '--deb-signature-date "${deb_signature_date}"',
+            '--node02-ssh-host-key-sha256 "${NODE02_SSH_HOST_KEY_SHA256}"',
+            '--output-evidence "${feed_verify_root}/EVIDENCE.json"',
+            '--output-verdict "${feed_verify_root}/VERDICT.json"',
+            'cmp -- "${feed_verify_root}/EVIDENCE.json"',
+            'cmp -- "${feed_verify_root}/VERDICT.json"',
+            '"native_feed": hashlib.sha256(pathlib.Path(\'scripts/ci/native_feed_contract_v4.10.0.json\').read_bytes()).hexdigest()',
+        ):
+            self.assertIn(contract, self.workflow)
+        self.assertEqual(self.workflow.count("native_feed_evidence.py"), 1)
+        feed_stage = self.workflow.split(
+            "require_input native-feed/EVIDENCE.json", 1
+        )[1].split("lifecycle_verdict=", 1)[0]
+        self.assertNotIn("NODE03_SSH_HOST_KEY_SHA256", feed_stage)
+        self.assertNotIn("NODE04_SSH_HOST_KEY_SHA256", feed_stage)
+        self.assertNotIn("NODE05_SSH_HOST_KEY_SHA256", feed_stage)
+
+    def test_package_gate_runs_fixture_and_evidence_contract_tests(self) -> None:
+        package_workflow = (ROOT / ".github/workflows/package.yml").read_text(
+            encoding="utf-8"
+        )
+        test_step = package_workflow.split(
+            "      - name: Test Package and Release Validators\n", 1
+        )[1].split("      - name:", 1)[0]
+        self.assertIn("scripts/ci/native_feed_evidence_test.py", test_step)
+        self.assertIn("scripts/ci/osint_tls_fixture_test.py", test_step)
+
     def test_candidate_update_is_downloaded_attested_and_bound_to_node01(self) -> None:
         for contract in (
             "actions: read",

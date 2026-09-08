@@ -1041,10 +1041,15 @@ jobs:
               exit 1
             fi
             if [[ -f "${entry}" ]]; then
-              [[ "$(stat -c '%h' -- "${entry}")" == 1 && -s "${entry}" ]] || {
-                echo "ERROR: downloaded native evidence file is empty or multiply linked." >&2
+              [[ "$(stat -c '%h' -- "${entry}")" == 1 ]] || {
+                echo "ERROR: downloaded native evidence file is multiply linked." >&2
                 exit 1
               }
+              if [[ "${entry}" != "${NATIVE_RELEASE_EVIDENCE_DIR}/native-feed/raw/"* && \
+                    ! -s "${entry}" ]]; then
+                echo "ERROR: downloaded native evidence file is unexpectedly empty." >&2
+                exit 1
+              fi
             elif [[ ! -d "${entry}" ]]; then
               echo "ERROR: downloaded native evidence contains a special entry." >&2
               exit 1
@@ -1166,6 +1171,36 @@ jobs:
           rhel_rpm_package_size="$(jq -er '.size' <<< "${attested_rhel_package}")"
           test "${rhel_rpm_package_name}" != "${rpm_package_name}"
           test "${rhel_rpm_package_sha256}" != "${rpm_package_sha256}"
+          native_feed_raw_root="${NATIVE_RELEASE_EVIDENCE_DIR}/native-feed/raw"
+          while IFS= read -r -d '' directory; do
+            chmod 0700 -- "${directory}"
+          done < <(find -P "${native_feed_raw_root}" -type d -print0)
+          while IFS= read -r -d '' file; do
+            chmod 0600 -- "${file}"
+          done < <(find -P "${native_feed_raw_root}" -type f -print0)
+          deb_key_id="$(jq -er '.deb_signature.key.id' "${signing_provenance}")"
+          deb_signature_date="$(jq -er '.deb_signature.as_of' "${signing_provenance}")"
+          feed_verify_root="$(mktemp -d "${RUNNER_TEMP%/}/native-feed-verify.XXXXXXXXXX")"
+          chmod 0700 "${feed_verify_root}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_feed_evidence.py assemble \
+            --contract "${GITHUB_WORKSPACE}/scripts/ci/native_feed_contract_v4.10.0.json" \
+            --raw-root "${native_feed_raw_root}" \
+            --candidate-sha "${RELEASE_SHA}" \
+            --deb-package "${NATIVE_SIGNING_DIR}/packages/${deb_package_name}" \
+            --deb-signature "${NATIVE_SIGNING_DIR}/packages/${deb_package_name}.asc" \
+            --signature-policy "${GITHUB_WORKSPACE}/scripts/ci/native_package_signature_policy_v4100.json" \
+            --deb-key-id "${deb_key_id}" \
+            --deb-signature-date "${deb_signature_date}" \
+            --node02-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node02' \
+              "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
+            --output-evidence "${feed_verify_root}/EVIDENCE.json" \
+            --output-verdict "${feed_verify_root}/VERDICT.json"
+          cmp -- "${feed_verify_root}/EVIDENCE.json" \
+            "${NATIVE_RELEASE_EVIDENCE_DIR}/native-feed/EVIDENCE.json"
+          cmp -- "${feed_verify_root}/VERDICT.json" \
+            "${NATIVE_RELEASE_EVIDENCE_DIR}/native-feed/VERDICT.json"
+          rm -f -- "${feed_verify_root}/EVIDENCE.json" "${feed_verify_root}/VERDICT.json"
+          rmdir -- "${feed_verify_root}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/node01_migration_evidence.py validate \
             --evidence "${NATIVE_RELEASE_EVIDENCE_DIR}/node01-migration/EVIDENCE.json" \
             --artifact-root "${temporary}/node01-migration/artifacts" \
@@ -1322,6 +1357,7 @@ jobs:
           done
           ha_contract="$(sha256sum scripts/ci/ha_v2_native_contract_v4.10.0.json | awk '{print $1}')"
           capability_contract="$(sha256sum scripts/ci/native_capability_contract_v4.10.0.json | awk '{print $1}')"
+          native_feed_contract="$(sha256sum scripts/ci/native_feed_contract_v4.10.0.json | awk '{print $1}')"
           performance_contract="$(sha256sum scripts/ci/performance_contract_v4.10.0.json | awk '{print $1}')"
           source_allocation_contract="$(sha256sum scripts/ci/source_allocation_contract_v4.10.0.json | awk '{print $1}')"
           node01_contract="$(sha256sum scripts/ci/node01_migration_contract_v4.10.0.json | awk '{print $1}')"
@@ -1332,6 +1368,7 @@ jobs:
           jq -e --arg repository "${GITHUB_REPOSITORY}" --arg release_tag "${RELEASE_TAG}" \
             --arg release_sha "${RELEASE_SHA}" --argjson run_id "${EVIDENCE_RUN_ID}" \
             --arg ha_contract "${ha_contract}" --arg capability_contract "${capability_contract}" \
+            --arg native_feed_contract "${native_feed_contract}" \
             --arg performance_contract "${performance_contract}" \
             --arg source_allocation_contract "${source_allocation_contract}" \
             --arg node01_contract "${node01_contract}" --arg lifecycle_contract "${lifecycle_contract}" \
@@ -1384,7 +1421,7 @@ jobs:
               node01_bundle_identity:$candidate_bundle_identity,
               producer_attestation_sha256:$candidate_attestation_sha256
             } and
-            .contracts == {ha_v2:$ha_contract,native_capability:$capability_contract,performance:$performance_contract,source_allocation:$source_allocation_contract,node01_migration:$node01_contract,native_lifecycle:$lifecycle_contract}
+            .contracts == {ha_v2:$ha_contract,native_capability:$capability_contract,native_feed:$native_feed_contract,performance:$performance_contract,source_allocation:$source_allocation_contract,node01_migration:$node01_contract,native_lifecycle:$lifecycle_contract}
           ' "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json" >/dev/null
           jq -n -S --arg repository "${GITHUB_REPOSITORY}" --arg release_tag "${RELEASE_TAG}" \
             --arg release_sha "${RELEASE_SHA}" --arg artifact_digest "${EVIDENCE_ARTIFACT_DIGEST}" \
@@ -1935,6 +1972,8 @@ jobs:
             "native-release-evidence/node01-migration/VERDICT.json"
             "native-release-evidence/native-lifecycle/RAW_EVIDENCE.tar"
             "native-release-evidence/native-lifecycle/VERDICT.json"
+            "native-release-evidence/native-feed/EVIDENCE.json"
+            "native-release-evidence/native-feed/VERDICT.json"
             "native-signing/SIGNED_ARTIFACT_SHA256SUMS.txt"
             "native-signing/evidence/APK_NATIVE_VERIFICATION.json"
             "native-signing/evidence/DEB_NATIVE_VERIFICATION.json"
@@ -2000,6 +2039,25 @@ jobs:
             "raw/package-lifecycle-raw.json"
             "status/qualification-exit-codes.json"
           )
+          mapfile -t native_feed_raw_inventory < <(
+            jq -er '.raw_evidence.inventory[]' \
+              scripts/ci/native_feed_contract_v4.10.0.json
+          )
+          test "${#native_feed_raw_inventory[@]}" -eq 110
+          expected+=("native-release-evidence/native-feed/raw/SHA256SUMS")
+          native_feed_raw_directories=("native-release-evidence/native-feed/raw")
+          for relative in "${native_feed_raw_inventory[@]}"; do
+            expected+=("native-release-evidence/native-feed/raw/${relative}")
+            IFS=/ read -r -a components <<< "${relative}"
+            current="native-release-evidence/native-feed/raw"
+            for ((index = 0; index < ${#components[@]} - 1; index++)); do
+              current+="/${components[index]}"
+              native_feed_raw_directories+=("${current}")
+            done
+          done
+          mapfile -t native_feed_raw_directories < <(
+            printf '%s\n' "${native_feed_raw_directories[@]}" | LC_ALL=C sort -u
+          )
           for name in node01-attestation node02-attestation asymmetric-partition crash-head-recovery crash-wal-recovery heartbeat-monotonic-receipt-timeout instance-lease-exclusion normal-replication-ack-checkpoint partition-fence-split-brain rejoin-explicit rolling-rollback rolling-upgrade; do
             expected+=("native-release-evidence/ha-v2/raw/${name}.json")
           done
@@ -2029,6 +2087,7 @@ jobs:
             native-release-evidence/native-capability
             native-release-evidence/node01-migration
             native-release-evidence/native-lifecycle
+            native-release-evidence/native-feed
             native-release-evidence/performance
             native-release-evidence/source-allocation
             native-release-evidence/source-allocation/raw
@@ -2041,6 +2100,7 @@ jobs:
             raw
             status
           )
+          expected_directories+=("${native_feed_raw_directories[@]}")
           mapfile -t sorted_expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
           mapfile -t actual_before_manifest < <(
             find -P "${ARTIFACT_ROOT}" -type f -printf '%P\n' | LC_ALL=C sort
@@ -2070,9 +2130,11 @@ jobs:
             exit 1
           done < <(find -P "${ARTIFACT_ROOT}" -mindepth 1 -print0)
           for relative in "${sorted_expected[@]}"; do
-            test -s "${ARTIFACT_ROOT}/${relative}"
             test -f "${ARTIFACT_ROOT}/${relative}"
             test ! -L "${ARTIFACT_ROOT}/${relative}"
+            if [[ "${relative}" != native-release-evidence/native-feed/raw/* ]]; then
+              test -s "${ARTIFACT_ROOT}/${relative}"
+            fi
           done
           chmod -R go-rwx "${ARTIFACT_ROOT}"
           (
@@ -3044,6 +3106,8 @@ jobs:
             "native-release-evidence/node01-migration/VERDICT.json"
             "native-release-evidence/native-lifecycle/RAW_EVIDENCE.tar"
             "native-release-evidence/native-lifecycle/VERDICT.json"
+            "native-release-evidence/native-feed/EVIDENCE.json"
+            "native-release-evidence/native-feed/VERDICT.json"
             "native-signing/SIGNED_ARTIFACT_SHA256SUMS.txt"
             "native-signing/evidence/APK_NATIVE_VERIFICATION.json"
             "native-signing/evidence/DEB_NATIVE_VERIFICATION.json"
@@ -3109,6 +3173,25 @@ jobs:
             "raw/package-lifecycle-raw.json"
             "status/qualification-exit-codes.json"
           )
+          mapfile -t native_feed_raw_inventory < <(
+            jq -er '.raw_evidence.inventory[]' \
+              scripts/ci/native_feed_contract_v4.10.0.json
+          )
+          test "${#native_feed_raw_inventory[@]}" -eq 110
+          expected_unsigned_files+=("native-release-evidence/native-feed/raw/SHA256SUMS")
+          native_feed_raw_directories=("native-release-evidence/native-feed/raw")
+          for relative in "${native_feed_raw_inventory[@]}"; do
+            expected_unsigned_files+=("native-release-evidence/native-feed/raw/${relative}")
+            IFS=/ read -r -a components <<< "${relative}"
+            current="native-release-evidence/native-feed/raw"
+            for ((index = 0; index < ${#components[@]} - 1; index++)); do
+              current+="/${components[index]}"
+              native_feed_raw_directories+=("${current}")
+            done
+          done
+          mapfile -t native_feed_raw_directories < <(
+            printf '%s\n' "${native_feed_raw_directories[@]}" | LC_ALL=C sort -u
+          )
           for name in node01-attestation node02-attestation asymmetric-partition crash-head-recovery crash-wal-recovery heartbeat-monotonic-receipt-timeout instance-lease-exclusion normal-replication-ack-checkpoint partition-fence-split-brain rejoin-explicit rolling-rollback rolling-upgrade; do
             expected_unsigned_files+=("native-release-evidence/ha-v2/raw/${name}.json")
           done
@@ -3138,6 +3221,7 @@ jobs:
             native-release-evidence/native-capability
             native-release-evidence/node01-migration
             native-release-evidence/native-lifecycle
+            native-release-evidence/native-feed
             native-release-evidence/performance
             native-release-evidence/source-allocation
             native-release-evidence/source-allocation/raw
@@ -3150,6 +3234,7 @@ jobs:
             raw
             status
           )
+          expected_unsigned_directories+=("${native_feed_raw_directories[@]}")
           mapfile -t sorted_expected_unsigned < <(
             printf '%s\n' "${expected_unsigned_files[@]}" | LC_ALL=C sort
           )
@@ -3654,6 +3739,8 @@ jobs:
             "native-release-evidence/node01-migration/VERDICT.json"
             "native-release-evidence/native-lifecycle/RAW_EVIDENCE.tar"
             "native-release-evidence/native-lifecycle/VERDICT.json"
+            "native-release-evidence/native-feed/EVIDENCE.json"
+            "native-release-evidence/native-feed/VERDICT.json"
             "native-signing/SIGNED_ARTIFACT_SHA256SUMS.txt"
             "native-signing/evidence/APK_NATIVE_VERIFICATION.json"
             "native-signing/evidence/DEB_NATIVE_VERIFICATION.json"
@@ -3719,6 +3806,25 @@ jobs:
             "raw/package-lifecycle-raw.json"
             "status/qualification-exit-codes.json"
           )
+          mapfile -t native_feed_raw_inventory < <(
+            jq -er '.raw_evidence.inventory[]' \
+              scripts/ci/native_feed_contract_v4.10.0.json
+          )
+          test "${#native_feed_raw_inventory[@]}" -eq 110
+          expected+=("native-release-evidence/native-feed/raw/SHA256SUMS")
+          native_feed_raw_directories=("native-release-evidence/native-feed/raw")
+          for relative in "${native_feed_raw_inventory[@]}"; do
+            expected+=("native-release-evidence/native-feed/raw/${relative}")
+            IFS=/ read -r -a components <<< "${relative}"
+            current="native-release-evidence/native-feed/raw"
+            for ((index = 0; index < ${#components[@]} - 1; index++)); do
+              current+="/${components[index]}"
+              native_feed_raw_directories+=("${current}")
+            done
+          done
+          mapfile -t native_feed_raw_directories < <(
+            printf '%s\n' "${native_feed_raw_directories[@]}" | LC_ALL=C sort -u
+          )
           for name in node01-attestation node02-attestation asymmetric-partition crash-head-recovery crash-wal-recovery heartbeat-monotonic-receipt-timeout instance-lease-exclusion normal-replication-ack-checkpoint partition-fence-split-brain rejoin-explicit rolling-rollback rolling-upgrade; do
             expected+=("native-release-evidence/ha-v2/raw/${name}.json")
           done
@@ -3748,6 +3854,7 @@ jobs:
             native-release-evidence/native-capability
             native-release-evidence/node01-migration
             native-release-evidence/native-lifecycle
+            native-release-evidence/native-feed
             native-release-evidence/performance
             native-release-evidence/source-allocation
             native-release-evidence/source-allocation/raw
@@ -3760,6 +3867,7 @@ jobs:
             raw
             status
           )
+          expected_directories+=("${native_feed_raw_directories[@]}")
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
             expected+=(
               "update/syswarden-update-manifest-v1.json"
@@ -3800,9 +3908,11 @@ jobs:
             exit 1
           done < <(find -P "${UNSIGNED_EVIDENCE_ROOT}" -mindepth 1 -print0)
           for relative in "${sorted_expected[@]}"; do
-            test -s "${UNSIGNED_EVIDENCE_ROOT}/${relative}"
             test -f "${UNSIGNED_EVIDENCE_ROOT}/${relative}"
             test ! -L "${UNSIGNED_EVIDENCE_ROOT}/${relative}"
+            if [[ "${relative}" != native-release-evidence/native-feed/raw/* ]]; then
+              test -s "${UNSIGNED_EVIDENCE_ROOT}/${relative}"
+            fi
           done
           chmod -R go-rwx "${UNSIGNED_EVIDENCE_ROOT}"
           (
