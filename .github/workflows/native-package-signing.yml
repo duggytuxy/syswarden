@@ -72,6 +72,59 @@ jobs:
       contents: read
 
     steps:
+      - name: Validate Exact Native Signing Environment Protection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          environment_name="syswarden-native-package-signing-v4100"
+          environment_json="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/environments/${environment_name}")"
+          required_boolean() {
+            local field=${1:?field is required}
+            jq -er --arg field "${field}" '
+              .deployment_branch_policy[$field] |
+              if type == "boolean" then tostring
+              else error("deployment_branch_policy." + $field + " must be boolean") end
+            ' <<< "${environment_json}"
+          }
+          top_level_boolean() {
+            local field=${1:?field is required}
+            jq -er --arg field "${field}" '
+              .[$field] |
+              if type == "boolean" then tostring
+              else error($field + " must be boolean") end
+            ' <<< "${environment_json}"
+          }
+          reviewer_rule_count="$(jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' <<< "${environment_json}")"
+          reviewer_entry_count="$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "${environment_json}")"
+          owner_reviewer_count="$(jq --arg owner "${REPOSITORY_OWNER}" '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]? | select(.type == "User" and .reviewer.login == $owner)] | length' <<< "${environment_json}")"
+          prevent_self_review="$(jq -er '[.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | if length == 1 and .[0] == false then "false" else error("reviewer rule must allow owner approval") end' <<< "${environment_json}")"
+          if [[ "$(jq -r '.name // ""' <<< "${environment_json}")" != "${environment_name}" || \
+                "${reviewer_rule_count}" != "1" || \
+                "${reviewer_entry_count}" != "1" || \
+                "${owner_reviewer_count}" != "1" || \
+                "${prevent_self_review}" != "false" || \
+                "$(jq '[.protection_rules[]? | select(.type == "branch_policy")] | length' <<< "${environment_json}")" != "1" || \
+                "$(jq '[.protection_rules[]?] | length' <<< "${environment_json}")" != "2" || \
+                "$(required_boolean protected_branches)" != "false" || \
+                "$(required_boolean custom_branch_policies)" != "true" || \
+                "$(top_level_boolean can_admins_bypass)" != "false" ]]; then
+            echo "ERROR: native signing requires the exact reviewed main-only protected environment." >&2
+            exit 1
+          fi
+          policies_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/environments/${environment_name}/deployment-branch-policies" \
+            -f per_page=100)"
+          if [[ "$(jq -r '.[0].total_count' <<< "${policies_json}")" != "1" || \
+                "$(jq '[.[] | .branch_policies[]?] | length' <<< "${policies_json}")" != "1" || \
+                "$(jq '[.[] | .branch_policies[]? | select(.name == "main" and .type == "branch")] | length' <<< "${policies_json}")" != "1" ]]; then
+            echo "ERROR: native signing environment must allow only the main branch." >&2
+            exit 1
+          fi
+
       - name: Validate Protected Manual Context
         shell: bash
         env:

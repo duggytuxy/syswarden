@@ -33,8 +33,10 @@
 - **Native package-signing foundation:** Add explicit non-publishing bootstrap
   and qualified-policy paths for RPM OpenPGP signatures, APK RSA256 signatures
   and detached DEB OpenPGP signatures. Seal the selected key identities into
-  immutable bundle provenance and isolate each family's protected secrets and
-  cleanup.
+  immutable bundle provenance, isolate each family's protected secrets and
+  cleanup, and fail closed if the dedicated signing environment no longer has
+  the exact owner review, main-only branch policy or administrator-bypass
+  protection required by the release contract.
 - **Package-owned RHEL 9+ profile:** Add a separate opt-in RPM profile where
   the package owns flat systemd assets, presets and scriptlets while Go remains
   runtime-only. The profile does not configure firewalld, change SELinux

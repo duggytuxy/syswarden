@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +40,31 @@ def literal_run_blocks(workflow: str) -> list[str]:
             index += 1
         blocks.append("\n".join(body))
     return blocks
+
+
+def named_literal_run_block(workflow: str, step_name: str) -> str:
+    lines = workflow.splitlines()
+    marker = f"      - name: {step_name}"
+    try:
+        index = lines.index(marker) + 1
+    except ValueError as exc:
+        raise AssertionError(f"workflow step not found: {step_name}") from exc
+    while index < len(lines) and not re.match(r"^        run:\s*\|\s*$", lines[index]):
+        if lines[index].startswith("      - name:"):
+            raise AssertionError(f"workflow step has no literal run block: {step_name}")
+        index += 1
+    if index == len(lines):
+        raise AssertionError(f"workflow step has no literal run block: {step_name}")
+    indentation = len(lines[index]) - len(lines[index].lstrip())
+    body: list[str] = []
+    index += 1
+    while index < len(lines):
+        candidate = lines[index]
+        if candidate.strip() and len(candidate) - len(candidate.lstrip()) <= indentation:
+            break
+        body.append(candidate)
+        index += 1
+    return textwrap.dedent("\n".join(body))
 
 
 class NativePackageSigningWorkflowTests(unittest.TestCase):
@@ -67,6 +96,177 @@ class NativePackageSigningWorkflowTests(unittest.TestCase):
         )
         for deterministic_environment in ("LANG: C", "LC_ALL: C", "TZ: UTC"):
             self.assertIn(deterministic_environment, self.workflow)
+
+    def test_exact_environment_contract_is_attested_before_checkout_or_secrets(self) -> None:
+        gate_name = "Validate Exact Native Signing Environment Protection"
+        gate = self.workflow.index(f"      - name: {gate_name}")
+        first_step = self.workflow.index("      - name:", self.workflow.index("    steps:"))
+        checkout = self.workflow.index("      - name: Checkout Exact Candidate Source")
+        first_secret = self.workflow.index("${{ secrets.")
+        self.assertEqual(gate, first_step)
+        self.assertLess(gate, checkout)
+        self.assertLess(gate, first_secret)
+        for contract in (
+            'environment_name="syswarden-native-package-signing-v4100"',
+            'reviewer_rule_count="$(jq',
+            'reviewer_entry_count="$(jq',
+            'owner_reviewer_count="$(jq',
+            'prevent_self_review="$(jq',
+            '"${reviewer_rule_count}" != "1"',
+            '"${reviewer_entry_count}" != "1"',
+            '"${owner_reviewer_count}" != "1"',
+            '"${prevent_self_review}" != "false"',
+            '$(required_boolean protected_branches)" != "false"',
+            '$(required_boolean custom_branch_policies)" != "true"',
+            '$(top_level_boolean can_admins_bypass)" != "false"',
+            "deployment-branch-policies",
+            '.name == "main" and .type == "branch"',
+        ):
+            self.assertIn(contract, self.workflow)
+
+    def test_environment_gate_accepts_only_the_exact_reviewed_contract(self) -> None:
+        gate = named_literal_run_block(
+            self.workflow, "Validate Exact Native Signing Environment Protection"
+        )
+        valid_environment = {
+            "name": "syswarden-native-package-signing-v4100",
+            "can_admins_bypass": False,
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "prevent_self_review": False,
+                    "reviewers": [
+                        {
+                            "type": "User",
+                            "reviewer": {"login": "duggytuxy"},
+                        }
+                    ],
+                },
+                {"type": "branch_policy"},
+            ],
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            },
+        }
+        valid_policies = {
+            "total_count": 1,
+            "branch_policies": [{"name": "main", "type": "branch"}],
+        }
+
+        def run_gate(
+            environment: dict[str, Any], policies: dict[str, Any]
+        ) -> subprocess.CompletedProcess[str]:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                environment_path = root / "environment.json"
+                policies_path = root / "policies.json"
+                environment_path.write_text(json.dumps(environment), encoding="utf-8")
+                policies_path.write_text(json.dumps(policies), encoding="utf-8")
+                gh = root / "gh"
+                gh.write_text(
+                    """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+environment_endpoint = (
+    "repos/duggytuxy/syswarden/environments/"
+    "syswarden-native-package-signing-v4100"
+)
+policy_endpoint = environment_endpoint + "/deployment-branch-policies"
+endpoints = [argument for argument in sys.argv[1:] if argument.startswith("repos/")]
+if endpoints == [environment_endpoint]:
+    document = json.loads(Path(os.environ["TEST_ENVIRONMENT_JSON"]).read_text())
+elif endpoints == [policy_endpoint] and "--paginate" in sys.argv and "--slurp" in sys.argv:
+    document = [json.loads(Path(os.environ["TEST_POLICIES_JSON"]).read_text())]
+else:
+    raise SystemExit("unexpected gh api request: " + repr(sys.argv[1:]))
+print(json.dumps(document, separators=(",", ":")))
+""",
+                    encoding="utf-8",
+                )
+                gh.chmod(0o700)
+                environment_variables = os.environ.copy()
+                environment_variables.update(
+                    {
+                        "GH_TOKEN": "test-token",
+                        "GITHUB_REPOSITORY": "duggytuxy/syswarden",
+                        "PATH": f"{root}:{environment_variables['PATH']}",
+                        "REPOSITORY_OWNER": "duggytuxy",
+                        "TEST_ENVIRONMENT_JSON": str(environment_path),
+                        "TEST_POLICIES_JSON": str(policies_path),
+                    }
+                )
+                return subprocess.run(
+                    ["bash", "-c", gate],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=environment_variables,
+                )
+
+        result = run_gate(valid_environment, valid_policies)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        mutations: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+        def mutated_environment() -> dict[str, Any]:
+            return json.loads(json.dumps(valid_environment))
+
+        def mutated_policies() -> dict[str, Any]:
+            return json.loads(json.dumps(valid_policies))
+
+        environment = mutated_environment()
+        environment["name"] = "syswarden-release-qualification"
+        mutations.append(("wrong environment name", environment, mutated_policies()))
+
+        environment = mutated_environment()
+        environment["can_admins_bypass"] = True
+        mutations.append(("administrator bypass", environment, mutated_policies()))
+
+        environment = mutated_environment()
+        environment["protection_rules"][0]["prevent_self_review"] = True
+        mutations.append(("self review forbidden", environment, mutated_policies()))
+
+        environment = mutated_environment()
+        environment["protection_rules"][0]["reviewers"][0]["reviewer"][
+            "login"
+        ] = "other"
+        mutations.append(("reviewer is not owner", environment, mutated_policies()))
+
+        environment = mutated_environment()
+        environment["protection_rules"][0]["reviewers"].append(
+            {"type": "User", "reviewer": {"login": "other"}}
+        )
+        mutations.append(("multiple reviewers", environment, mutated_policies()))
+
+        environment = mutated_environment()
+        environment["deployment_branch_policy"]["protected_branches"] = True
+        mutations.append(("protected branches enabled", environment, mutated_policies()))
+
+        environment = mutated_environment()
+        environment["deployment_branch_policy"]["custom_branch_policies"] = False
+        mutations.append(("custom policies disabled", environment, mutated_policies()))
+
+        policies = mutated_policies()
+        policies["branch_policies"][0]["name"] = "release/*"
+        mutations.append(("non-main policy", mutated_environment(), policies))
+
+        policies = mutated_policies()
+        policies["branch_policies"][0]["type"] = "tag"
+        mutations.append(("tag policy", mutated_environment(), policies))
+
+        policies = mutated_policies()
+        policies["total_count"] = 2
+        policies["branch_policies"].append({"name": "release/*", "type": "branch"})
+        mutations.append(("multiple policies", mutated_environment(), policies))
+
+        for label, environment, policies in mutations:
+            with self.subTest(mutation=label):
+                result = run_gate(environment, policies)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_permissions_cannot_publish_or_attest(self) -> None:
         self.assertGreaterEqual(self.workflow.count("contents: read"), 2)
