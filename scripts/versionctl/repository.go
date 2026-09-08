@@ -57,6 +57,13 @@ const (
 	approvedChangelogFollowupSubject       = "Security : attest native signing environment protection (#157)"
 	approvedChangelogFollowupBaseHash      = "04102be314ebbbbd06073caf86dc3cda7d690defbf0b8f014ad7714dc6c4b73c"
 	approvedChangelogFollowupCandidateHash = "7aafe544ad7f6a9ec678fc722992f83f0088632ff7dd0c33bbf54ca4537f8902"
+
+	approvedChangelogFollowupPR161Commit        = "06aaf5cffd5892b228be71fc27a6ed50888c2687"
+	approvedChangelogFollowupPR161Parent        = "360e8189c812e26f47b1beffd3d5dc86d188a449"
+	approvedChangelogFollowupPR161Version       = "v4.10.0"
+	approvedChangelogFollowupPR161Subject       = "Fix : sign the exact APK control stream (#161)"
+	approvedChangelogFollowupPR161BaseHash      = "7aafe544ad7f6a9ec678fc722992f83f0088632ff7dd0c33bbf54ca4537f8902"
+	approvedChangelogFollowupPR161CandidateHash = "637597c8343dfcefb1562088ebd483a0c334529118be6e393a2cadea340ac281"
 )
 
 type changelogResetPolicy struct {
@@ -110,6 +117,23 @@ var approvedChangelogFollowup = changelogFollowupPolicy{
 	Subject:         approvedChangelogFollowupSubject,
 	BaseSHA256:      approvedChangelogFollowupBaseHash,
 	CandidateSHA256: approvedChangelogFollowupCandidateHash,
+}
+
+// approvedChangelogFollowupPR161 is a single-use exception for the exact
+// PR161 APK control-stream correction. It extends no general permission to
+// edit an active release changelog after its version transition.
+var approvedChangelogFollowupPR161 = changelogFollowupPolicy{
+	CommitSHA:       approvedChangelogFollowupPR161Commit,
+	ParentSHA:       approvedChangelogFollowupPR161Parent,
+	Version:         approvedChangelogFollowupPR161Version,
+	Subject:         approvedChangelogFollowupPR161Subject,
+	BaseSHA256:      approvedChangelogFollowupPR161BaseHash,
+	CandidateSHA256: approvedChangelogFollowupPR161CandidateHash,
+}
+
+var approvedChangelogFollowups = []changelogFollowupPolicy{
+	approvedChangelogFollowup,
+	approvedChangelogFollowupPR161,
 }
 
 type snapshot map[string][]byte
@@ -423,6 +447,48 @@ func validateChangelogFollowupException(
 		return errors.New("approved changelog follow-up candidate digest does not match")
 	}
 	return nil
+}
+
+func validateChangelogFollowupExceptions(
+	policies []changelogFollowupPolicy,
+	commitSHA, parentSHA string,
+	parentVersion, currentVersion Version,
+	message string,
+	base, candidate []byte,
+) error {
+	if len(policies) == 0 {
+		return errors.New("no approved changelog follow-up policies are configured")
+	}
+
+	matching := -1
+	identities := make(map[string]struct{}, len(policies))
+	for index, policy := range policies {
+		if !fullGitSHA.MatchString(policy.CommitSHA) || !fullGitSHA.MatchString(policy.ParentSHA) {
+			return errors.New("approved changelog follow-up policy contains an invalid Git identity")
+		}
+		identity := policy.CommitSHA + "\x00" + policy.ParentSHA
+		if _, exists := identities[identity]; exists {
+			return errors.New("approved changelog follow-up policies contain a duplicate Git identity")
+		}
+		identities[identity] = struct{}{}
+		if commitSHA == policy.CommitSHA && parentSHA == policy.ParentSHA {
+			matching = index
+		}
+	}
+	if matching < 0 {
+		return errors.New("commit and parent do not match an approved changelog follow-up")
+	}
+
+	return validateChangelogFollowupException(
+		policies[matching],
+		commitSHA,
+		parentSHA,
+		parentVersion,
+		currentVersion,
+		message,
+		base,
+		candidate,
+	)
 }
 
 func commitMessageSubject(message string) string {
