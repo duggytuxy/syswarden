@@ -500,16 +500,18 @@ func TestSyncHAContextCancellationStopsRetries_SW_HA_002(t *testing.T) {
 }
 
 func TestSyncHARequestTimeoutIsBounded_SW_HA_002(t *testing.T) {
-	server := newLoopbackTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		<-request.Context().Done()
+	releaseHandler := make(chan struct{})
+	server := newLoopbackTLSServer(t, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-releaseHandler
 	}))
 	defer server.Close()
+	defer close(releaseHandler)
 	host, port := splitTestServerAddress(t, server.Listener.Addr().String())
 	options := testHASyncOptions(t, server.Client())
 	options.requestTimeout = 25 * time.Millisecond
 	started := time.Now()
 	err := syncHAPeers(context.Background(), &config.Config{HAEnabled: true, HAPeerIP: host, HAPeerPort: port, HAToken: "shared-secret"}, options)
-	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("bounded timeout error = %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {

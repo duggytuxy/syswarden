@@ -113,6 +113,19 @@ func validateReleaseFixtureWithRewritePolicy(repo, tag string, policy changelogR
 	return stdout.String() + stderr.String(), err
 }
 
+func validateReleaseFixtureWithFollowupPolicy(repo, tag string, policy changelogFollowupPolicy) (string, error) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	app := application{
+		git:                   realGit{},
+		out:                   stdout,
+		getenv:                os.Getenv,
+		releaseFollowupPolicy: &policy,
+	}
+	err := app.run([]string{"validate-release", "--repo", repo, "--tag", tag}, stderr)
+	return stdout.String() + stderr.String(), err
+}
+
 func TestValidateReleaseAcceptsEveryBumpWithDirectAndFollowupTags(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -248,6 +261,53 @@ func TestValidateReleasePreservesSingleUseDigestBoundV4033Rewrite(t *testing.T) 
 				t.Fatalf("reused rewrite error = %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateReleaseAcceptsOnlyTheInjectedDigestBoundFollowup(t *testing.T) {
+	repo := newReleaseHistoryRepository(t, "v4.03.3")
+	writeReleaseTransition(t, repo, "v4.10.0")
+	commitReleaseFixture(t, repo, "Major : prepare release")
+
+	base := readTestRepoFile(t, repo, changelogPath)
+	candidate := bytes.Replace(
+		base,
+		[]byte("Validate the version contract"),
+		[]byte("Attest the native signing environment"),
+		1,
+	)
+	if bytes.Equal(base, candidate) {
+		t.Fatal("test fixture did not change the active changelog block")
+	}
+	writeReleaseTestFile(t, repo, changelogPath, candidate)
+	const subject = "Security : attest native signing environment protection (#157)"
+	commitReleaseFixture(t, repo, subject)
+	commitSHA := strings.TrimSpace(string(runTestGit(t, repo, "rev-parse", "HEAD")))
+	parentSHA := strings.TrimSpace(string(runTestGit(t, repo, "rev-parse", "HEAD^")))
+	policy := changelogFollowupPolicy{
+		CommitSHA:       commitSHA,
+		ParentSHA:       parentSHA,
+		Version:         "v4.10.0",
+		Subject:         subject,
+		BaseSHA256:      fmt.Sprintf("%x", sha256.Sum256(base)),
+		CandidateSHA256: fmt.Sprintf("%x", sha256.Sum256(candidate)),
+	}
+
+	writeReleaseTestFile(t, repo, "qualification.txt", []byte("qualified\n"))
+	commitReleaseFixture(t, repo, "Qualification : preserve the sealed changelog")
+	tagReleaseFixture(t, repo, "v4.10.0")
+
+	before := string(runTestGit(t, repo, "status", "--porcelain=v1"))
+	output, err := validateReleaseFixtureWithFollowupPolicy(repo, "v4.10.0", policy)
+	if err != nil {
+		t.Fatalf("validate approved follow-up: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "2 non-versioning follow-up commit(s)") {
+		t.Fatalf("unexpected validation output: %s", output)
+	}
+	after := string(runTestGit(t, repo, "status", "--porcelain=v1"))
+	if before != after || after != "" {
+		t.Fatalf("validate-release changed repository status: before=%q after=%q", before, after)
 	}
 }
 

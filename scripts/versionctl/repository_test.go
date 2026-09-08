@@ -94,6 +94,96 @@ func TestChangelogHistoryRewriteIsSingleUseAndDigestBound(t *testing.T) {
 	}
 }
 
+func TestChangelogFollowupExceptionIsSingleUseAndFullyBound(t *testing.T) {
+	t.Parallel()
+	base := validChangelog("v4.10.0")
+	candidate := bytes.Replace(base, []byte("Validate the version contract"), []byte("Attest the native signing environment"), 1)
+	version, _ := parseVersion("v4.10.0")
+	const (
+		commit  = "1111111111111111111111111111111111111111"
+		parent  = "2222222222222222222222222222222222222222"
+		subject = "Security : attest native signing environment protection (#157)"
+	)
+	policy := changelogFollowupPolicy{
+		CommitSHA:       commit,
+		ParentSHA:       parent,
+		Version:         version.String(),
+		Subject:         subject,
+		BaseSHA256:      fmt.Sprintf("%x", sha256.Sum256(base)),
+		CandidateSHA256: fmt.Sprintf("%x", sha256.Sum256(candidate)),
+	}
+	validate := func(policy changelogFollowupPolicy, commitSHA, parentSHA string, parentVersion, currentVersion Version, message string, before, after []byte) error {
+		return validateChangelogFollowupException(policy, commitSHA, parentSHA, parentVersion, currentVersion, message, before, after)
+	}
+	if err := validate(policy, commit, parent, version, version, subject+"\n\nAudited body.\n", base, candidate); err != nil {
+		t.Fatalf("exact follow-up rejected: %v", err)
+	}
+
+	otherVersion, _ := parseVersion("v4.10.1")
+	mutatedBase := append([]byte(nil), base...)
+	mutatedBase[len(mutatedBase)-1] ^= 1
+	mutatedCandidate := append([]byte(nil), candidate...)
+	mutatedCandidate[len(mutatedCandidate)-1] ^= 1
+	tests := []struct {
+		name           string
+		policy         changelogFollowupPolicy
+		commitSHA      string
+		parentSHA      string
+		parentVersion  Version
+		currentVersion Version
+		message        string
+		base           []byte
+		candidate      []byte
+	}{
+		{name: "different commit", policy: policy, commitSHA: strings.Repeat("3", 40), parentSHA: parent, parentVersion: version, currentVersion: version, message: subject, base: base, candidate: candidate},
+		{name: "different parent", policy: policy, commitSHA: commit, parentSHA: strings.Repeat("3", 40), parentVersion: version, currentVersion: version, message: subject, base: base, candidate: candidate},
+		{name: "different parent version", policy: policy, commitSHA: commit, parentSHA: parent, parentVersion: otherVersion, currentVersion: version, message: subject, base: base, candidate: candidate},
+		{name: "different current version", policy: policy, commitSHA: commit, parentSHA: parent, parentVersion: version, currentVersion: otherVersion, message: subject, base: base, candidate: candidate},
+		{name: "different subject", policy: policy, commitSHA: commit, parentSHA: parent, parentVersion: version, currentVersion: version, message: subject + " ", base: base, candidate: candidate},
+		{name: "different baseline bytes", policy: policy, commitSHA: commit, parentSHA: parent, parentVersion: version, currentVersion: version, message: subject, base: mutatedBase, candidate: candidate},
+		{name: "different candidate bytes", policy: policy, commitSHA: commit, parentSHA: parent, parentVersion: version, currentVersion: version, message: subject, base: base, candidate: mutatedCandidate},
+		{name: "unchanged changelog", policy: policy, commitSHA: commit, parentSHA: parent, parentVersion: version, currentVersion: version, message: subject, base: base, candidate: base},
+	}
+	malformedPolicy := policy
+	malformedPolicy.CommitSHA = "HEAD"
+	tests = append(tests, struct {
+		name           string
+		policy         changelogFollowupPolicy
+		commitSHA      string
+		parentSHA      string
+		parentVersion  Version
+		currentVersion Version
+		message        string
+		base           []byte
+		candidate      []byte
+	}{name: "malformed policy identity", policy: malformedPolicy, commitSHA: commit, parentSHA: parent, parentVersion: version, currentVersion: version, message: subject, base: base, candidate: candidate})
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validate(test.policy, test.commitSHA, test.parentSHA, test.parentVersion, test.currentVersion, test.message, test.base, test.candidate); err == nil {
+				t.Fatal("mutated follow-up was accepted")
+			}
+		})
+	}
+}
+
+func TestApprovedChangelogFollowupRemainsBoundToPR157(t *testing.T) {
+	t.Parallel()
+	want := changelogFollowupPolicy{
+		CommitSHA:       "41471a95dd7dc50173aed849126ba4a7e62563aa",
+		ParentSHA:       "44e43fa4186ebbf4dfd1b281b17c4d0c55f426dc",
+		Version:         "v4.10.0",
+		Subject:         "Security : attest native signing environment protection (#157)",
+		BaseSHA256:      "04102be314ebbbbd06073caf86dc3cda7d690defbf0b8f014ad7714dc6c4b73c",
+		CandidateSHA256: "7aafe544ad7f6a9ec678fc722992f83f0088632ff7dd0c33bbf54ca4537f8902",
+	}
+	if approvedChangelogFollowup != want {
+		t.Fatalf("approved PR157 follow-up policy = %#v, want %#v", approvedChangelogFollowup, want)
+	}
+}
+
 func fixtureSnapshot(version string) snapshot {
 	contents := make(snapshot, len(versionTargets))
 	for _, item := range versionTargets {

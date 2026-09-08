@@ -50,6 +50,13 @@ const (
 	approvedChangelogRewriteTo          = "v4.03.3"
 	approvedChangelogRewriteBaseHash    = "f978c898c30b0d40a476c09c91fc4b6d13648bc4e9298fb117593cf6e9a4d53f"
 	approvedChangelogRewriteHistoryHash = "77189b49b1c78c745f6b8d351c9837e4d7bed1bc281daec0a87249a8e6d341fa"
+
+	approvedChangelogFollowupCommit        = "41471a95dd7dc50173aed849126ba4a7e62563aa"
+	approvedChangelogFollowupParent        = "44e43fa4186ebbf4dfd1b281b17c4d0c55f426dc"
+	approvedChangelogFollowupVersion       = "v4.10.0"
+	approvedChangelogFollowupSubject       = "Security : attest native signing environment protection (#157)"
+	approvedChangelogFollowupBaseHash      = "04102be314ebbbbd06073caf86dc3cda7d690defbf0b8f014ad7714dc6c4b73c"
+	approvedChangelogFollowupCandidateHash = "7aafe544ad7f6a9ec678fc722992f83f0088632ff7dd0c33bbf54ca4537f8902"
 )
 
 type changelogResetPolicy struct {
@@ -81,6 +88,28 @@ var approvedChangelogRewrite = changelogRewritePolicy{
 	To:            approvedChangelogRewriteTo,
 	BaseSHA256:    approvedChangelogRewriteBaseHash,
 	HistorySHA256: approvedChangelogRewriteHistoryHash,
+}
+
+type changelogFollowupPolicy struct {
+	CommitSHA       string
+	ParentSHA       string
+	Version         string
+	Subject         string
+	BaseSHA256      string
+	CandidateSHA256 string
+}
+
+// approvedChangelogFollowup is a single-use exception for the exact PR157
+// v4.10.0 changelog update. The commit, its parent, the unchanged version,
+// exact subject, and both byte streams are sealed so this cannot authorize a
+// different commit or become a reusable same-version changelog path.
+var approvedChangelogFollowup = changelogFollowupPolicy{
+	CommitSHA:       approvedChangelogFollowupCommit,
+	ParentSHA:       approvedChangelogFollowupParent,
+	Version:         approvedChangelogFollowupVersion,
+	Subject:         approvedChangelogFollowupSubject,
+	BaseSHA256:      approvedChangelogFollowupBaseHash,
+	CandidateSHA256: approvedChangelogFollowupCandidateHash,
 }
 
 type snapshot map[string][]byte
@@ -363,6 +392,46 @@ func validateChangelogHistoryTransitionWithPolicies(
 	return nil
 }
 
+func validateChangelogFollowupException(
+	policy changelogFollowupPolicy,
+	commitSHA, parentSHA string,
+	parentVersion, currentVersion Version,
+	message string,
+	base, candidate []byte,
+) error {
+	if !fullGitSHA.MatchString(policy.CommitSHA) || !fullGitSHA.MatchString(policy.ParentSHA) {
+		return errors.New("approved changelog follow-up policy contains an invalid Git identity")
+	}
+	if commitSHA != policy.CommitSHA || parentSHA != policy.ParentSHA {
+		return errors.New("commit and parent do not match the approved changelog follow-up")
+	}
+	if parentVersion.String() != policy.Version || currentVersion.String() != policy.Version {
+		return errors.New("version does not match the approved changelog follow-up")
+	}
+	if commitMessageSubject(message) != policy.Subject {
+		return errors.New("commit subject does not match the approved changelog follow-up")
+	}
+	if bytes.Equal(base, candidate) {
+		return errors.New("approved changelog follow-up requires a changed changelog")
+	}
+	baseDigest := sha256.Sum256(base)
+	if hex.EncodeToString(baseDigest[:]) != policy.BaseSHA256 {
+		return errors.New("approved changelog follow-up baseline digest does not match")
+	}
+	candidateDigest := sha256.Sum256(candidate)
+	if hex.EncodeToString(candidateDigest[:]) != policy.CandidateSHA256 {
+		return errors.New("approved changelog follow-up candidate digest does not match")
+	}
+	return nil
+}
+
+func commitMessageSubject(message string) string {
+	if end := strings.IndexAny(message, "\r\n"); end >= 0 {
+		return message[:end]
+	}
+	return message
+}
+
 func readAndValidateChangelog(repo string, expected Version) error {
 	data, err := readRepoFile(repo, changelogPath)
 	if err != nil {
@@ -512,6 +581,7 @@ type gitClient interface {
 	tagMatchesHead(repo, tag string) (bool, error)
 	commitParents(repo, ref string) ([]string, error)
 	commitMessage(repo, ref string) (string, error)
+	resolveCommit(repo, ref string) (string, error)
 	lockPath(repo string) (string, error)
 	capturePrepareState(repo, expectedHead string) (gitPrepareState, error)
 	verifyPrepareState(repo string, expected gitPrepareState) error
@@ -585,24 +655,33 @@ func (realGit) tagMatchesHead(repo, tag string) (bool, error) {
 	if _, err := parseVersion(tag); err != nil {
 		return false, err
 	}
-	resolve := func(ref string) (string, error) {
-		// #nosec G204 -- Git is the fixed executable and ref is selected only from HEAD or the canonical version tag validated above.
-		command := exec.Command("git", "-C", repo, "rev-parse", "--verify", ref+"^{commit}")
-		output, err := command.Output()
-		if err != nil {
-			return "", fmt.Errorf("resolve Git ref %s: %w", ref, err)
-		}
-		return strings.TrimSpace(string(output)), nil
-	}
-	head, err := resolve("HEAD")
+	git := realGit{}
+	head, err := git.resolveCommit(repo, "HEAD")
 	if err != nil {
 		return false, err
 	}
-	tagCommit, err := resolve("refs/tags/" + tag)
+	tagCommit, err := git.resolveCommit(repo, "refs/tags/"+tag)
 	if err != nil {
 		return false, err
 	}
 	return head == tagCommit, nil
+}
+
+func (realGit) resolveCommit(repo, ref string) (string, error) {
+	if err := validateGitRef(ref); err != nil {
+		return "", err
+	}
+	// #nosec G204 -- Git is fixed and ref is validated above; exec.Command does not invoke a shell.
+	command := exec.Command("git", "-C", repo, "rev-parse", "--verify", ref+"^{commit}")
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve Git ref %s: %w", ref, err)
+	}
+	commit := strings.TrimSpace(string(output))
+	if !fullGitSHA.MatchString(commit) {
+		return "", fmt.Errorf("Git ref %s did not resolve to one full lowercase commit SHA", ref)
+	}
+	return commit, nil
 }
 
 func (realGit) commitParents(repo, ref string) ([]string, error) {
