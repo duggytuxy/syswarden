@@ -12,11 +12,12 @@ import (
 )
 
 type application struct {
-	git                  gitClient
-	out                  io.Writer
-	getenv               func(string) string
-	releaseResetPolicy   *changelogResetPolicy
-	releaseRewritePolicy *changelogRewritePolicy
+	git                   gitClient
+	out                   io.Writer
+	getenv                func(string) string
+	releaseResetPolicy    *changelogResetPolicy
+	releaseRewritePolicy  *changelogRewritePolicy
+	releaseFollowupPolicy *changelogFollowupPolicy
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
@@ -123,11 +124,14 @@ func (app application) runValidateRelease(args []string, stderr io.Writer) error
 		return errors.New("worktree changelog.md does not match HEAD")
 	}
 
-	currentRef := "HEAD"
+	currentRef, err := app.git.resolveCommit(repo, "HEAD")
+	if err != nil {
+		return err
+	}
 	currentVersion := headVersion
 	currentChangelog := headChangelog
 	followups := 0
-	seen := map[string]bool{}
+	seen := map[string]bool{currentRef: true}
 	for {
 		parents, err := app.git.commitParents(repo, currentRef)
 		if err != nil {
@@ -177,7 +181,22 @@ func (app application) runValidateRelease(args []string, stderr io.Writer) error
 				return fmt.Errorf("release follow-up %s uses %s but preserves version %s", currentRef, bump, currentVersion)
 			}
 			if !bytes.Equal(currentChangelog, parentChangelog) {
-				return fmt.Errorf("non-versioning release follow-up %s changed changelog.md", currentRef)
+				followupPolicy := approvedChangelogFollowup
+				if app.releaseFollowupPolicy != nil {
+					followupPolicy = *app.releaseFollowupPolicy
+				}
+				if err := validateChangelogFollowupException(
+					followupPolicy,
+					currentRef,
+					parentRef,
+					parentVersion,
+					currentVersion,
+					message,
+					parentChangelog,
+					currentChangelog,
+				); err != nil {
+					return fmt.Errorf("non-versioning release follow-up %s changed changelog.md: %w", currentRef, err)
+				}
 			}
 			currentRef = parentRef
 			currentVersion = parentVersion

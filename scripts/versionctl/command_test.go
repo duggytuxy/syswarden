@@ -56,6 +56,10 @@ func (git *fakeGit) commitMessage(_ string, _ string) (string, error) {
 	return "", errors.New("fake Git history is not configured")
 }
 
+func (git *fakeGit) resolveCommit(_ string, _ string) (string, error) {
+	return "", errors.New("fake Git history is not configured")
+}
+
 func (git *fakeGit) lockPath(_ string) (string, error) {
 	if git.lockErr != nil {
 		return "", git.lockErr
