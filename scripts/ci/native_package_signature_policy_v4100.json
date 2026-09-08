@@ -5,19 +5,52 @@
   "publishing": false,
   "rpm": {
     "mechanism": "rpm-openpgp",
-    "trusted_keys": []
+    "trusted_keys": [
+      {
+        "id": "rpm-prod-2026-01",
+        "public_key": "native-package-keys/rpm-prod-2026-01.asc",
+        "public_key_sha256": "e9c0ffd66f3e6a9addd2b7e347b84e8d92b34d1cc8e4f4f438d02eabe59c3874",
+        "fingerprint": "A4C140FCF5408DCDB1E9209F6BCC4D258C321050",
+        "valid_from": "2026-09-08",
+        "valid_until": "2028-09-07",
+        "revoked": false,
+        "supersedes": []
+      }
+    ]
   },
   "apk": {
     "mechanism": "apk-rsa256",
     "signer_image": "docker.io/alpinelinux/build-base@sha256:31d2a020ccd2058e6ab47940428bd0b7dc83e37b66880891f9ed903a12ea668b",
-    "trusted_keys": []
+    "trusted_keys": [
+      {
+        "id": "apk-prod-2026-01",
+        "public_key": "native-package-keys/apk-prod-2026-01.rsa.pub",
+        "public_key_sha256": "89d87c5d66ab184a379eb421deb5875d5fc699258ad7072edaed7c741f077869",
+        "fingerprint": "89d87c5d66ab184a379eb421deb5875d5fc699258ad7072edaed7c741f077869",
+        "valid_from": "2026-09-08",
+        "valid_until": "2028-09-07",
+        "revoked": false,
+        "supersedes": []
+      }
+    ]
   },
   "deb": {
     "channel": "github-release-assets",
     "decision": "detached-package-signature",
     "mechanism": "openpgp-detached",
     "signature_suffix": ".asc",
-    "trusted_keys": [],
+    "trusted_keys": [
+      {
+        "id": "deb-prod-2026-01",
+        "public_key": "native-package-keys/deb-prod-2026-01.asc",
+        "public_key_sha256": "7db8a9c4b1894cb7aef5b0f9f5c2b558d3526d121e19563e6f56dc28956fcf13",
+        "fingerprint": "2E40725EAD6A3AACB2FA31A577586532ABD300BF",
+        "valid_from": "2026-09-08",
+        "valid_until": "2028-09-07",
+        "revoked": false,
+        "supersedes": []
+      }
+    ],
     "implementation": "implemented-not-qualified"
   }
 }

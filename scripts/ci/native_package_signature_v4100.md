@@ -1,9 +1,10 @@
 # Native package signature foundation for v4.10.0
 
 Status: the protected signing foundation and fail-closed publication
-integration are implemented. Production keys, bootstrap evidence, policy
-promotion, normal native proof and publication approval remain pending. No
-workflow in this foundation creates a private key.
+integration are implemented. Three distinct candidate production public identities are
+enrolled under the non-publishing foundation policy. Bootstrap evidence,
+policy promotion, normal native proof and publication approval remain pending.
+No workflow in this foundation creates a private key.
 
 The offline gate binds one package byte stream to an exact release inventory
 before native verification. It accepts only an explicitly selected, currently
@@ -28,12 +29,26 @@ RPM verification uses a private temporary RPM database containing only that
 OpenPGP key. APK verification uses a private temporary key directory containing
 only the selected RSA public key. DEB verification uses isolated `gpgv` with a
 temporary keyring derived only from the selected OpenPGP public key. The
-repository policy intentionally contains no production key identity, so it
-cannot currently produce a positive verdict. The APK signer is pinned to the
+repository policy contains exactly one candidate production public identity per
+package family, but remains intentionally non-qualified and non-publishing until phase
+1 succeeds. The APK signer is pinned to the
 AMD64 manifest of the official Alpine Linux 3.24 build-base image at
 `docker.io/alpinelinux/build-base@sha256:31d2a020ccd2058e6ab47940428bd0b7dc83e37b66880891f9ed903a12ea668b`.
 It was reviewed as an offline runtime containing `abuild-sign`, `apk`, OpenSSL
 and `tar`; changing this identity requires a new review and qualification.
+
+The phase 1 trust inventory is exact:
+
+| Family | Policy ID | Full fingerprint | Public key SHA-256 | Validity |
+| --- | --- | --- | --- | --- |
+| RPM | `rpm-prod-2026-01` | `A4C140FCF5408DCDB1E9209F6BCC4D258C321050` | `e9c0ffd66f3e6a9addd2b7e347b84e8d92b34d1cc8e4f4f438d02eabe59c3874` | 2026-09-08 through 2028-09-07 |
+| APK | `apk-prod-2026-01` | `89d87c5d66ab184a379eb421deb5875d5fc699258ad7072edaed7c741f077869` | `89d87c5d66ab184a379eb421deb5875d5fc699258ad7072edaed7c741f077869` | 2026-09-08 through 2028-09-07 |
+| DEB | `deb-prod-2026-01` | `2E40725EAD6A3AACB2FA31A577586532ABD300BF` | `7db8a9c4b1894cb7aef5b0f9f5c2b558d3526d121e19563e6f56dc28956fcf13` | 2026-09-08 through 2028-09-07 |
+
+The RPM and DEB OpenPGP identities each use a 4096-bit certification primary
+key and a distinct 4096-bit signing subkey. The APK identity uses a distinct
+4096-bit RSA key. Private keys and passphrases are never distributed from this
+directory.
 
 ## Two-phase trust qualification
 
@@ -47,8 +62,9 @@ with purpose `qualification` and emits
 bootstrap evidence only. It cannot enter native lifecycle qualification,
 release qualification or publication.
 
-After independent review of the bootstrap evidence, phase 2 starts with a
-separate reviewed policy commit. That commit sets `status` to `qualified` and
+After a separate release-owner review of the bootstrap evidence, phase 2
+starts with a distinct reviewed policy commit. That commit sets `status` to
+`qualified` and
 `deb.implementation` to `qualified`. The `publishing` value remains a separate
 explicit release-owner decision and is never enabled during phase 1. Because
 the policy commit changes the source SHA, the unsigned package artifact and
@@ -288,9 +304,10 @@ sealed qualification inventory and byte-compares its RPM, APK, DEB and detached
 DEB signature before staging the public assets. With the current policy state,
 qualification fails before those assets can reach the publisher.
 
-Before qualification, the release owner must provide reviewed public keys,
-fingerprints, validity intervals and rotation lineage, configure protected
-secrets and approve a signer image digest. Real-host lanes must then prove RPM
+Before qualification, the release owner must review the enrolled fingerprints,
+validity intervals and empty initial rotation lineage, confirm the protected
+secrets, and execute the non-publishing bootstrap. Real-host lanes must then
+prove RPM
 verification on RHEL 9 and RHEL 10, APK verification on supported Alpine
 versions, DEB verification on supported Debian and Ubuntu versions, negative
 verdicts after package and signature tampering, key expiry and revocation

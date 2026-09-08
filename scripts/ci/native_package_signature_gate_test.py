@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
 import hashlib
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -318,12 +321,34 @@ class NativePackageSignatureGateTests(unittest.TestCase):
     def test_repository_foundation_policy_cannot_claim_qualification(self) -> None:
         policy = Path(gate.__file__).with_name("native_package_signature_policy_v4100.json")
         document = gate.load_json(policy, "repository policy")
-        gate.validate_policy(document, gate.parse_day("2026-09-03", "date"))
+        qualification_day = gate.parse_day("2026-09-08", "date")
+        gate.validate_policy(document, qualification_day)
         self.assertEqual(document["status"], "foundation-not-qualified")
         self.assertFalse(document["publishing"])
-        self.assertEqual(document["rpm"]["trusted_keys"], [])
-        self.assertEqual(document["apk"]["trusted_keys"], [])
-        self.assertEqual(document["deb"]["trusted_keys"], [])
+        expected_ids = {
+            "rpm": "rpm-prod-2026-01",
+            "apk": "apk-prod-2026-01",
+            "deb": "deb-prod-2026-01",
+        }
+        selected = {}
+        for family, identifier in expected_ids.items():
+            self.assertEqual(len(document[family]["trusted_keys"]), 1)
+            selected[family] = gate.select_key(
+                document, family, identifier, qualification_day
+            )
+            public_key = policy.parent / selected[family]["public_key"]
+            self.assertTrue(public_key.is_file())
+            self.assertEqual(
+                hashlib.sha256(public_key.read_bytes()).hexdigest(),
+                selected[family]["public_key_sha256"],
+            )
+        self.assertEqual(len({item["id"] for item in selected.values()}), 3)
+        self.assertEqual(
+            len({item["public_key_sha256"] for item in selected.values()}), 3
+        )
+        self.assertNotEqual(
+            selected["rpm"]["fingerprint"], selected["deb"]["fingerprint"]
+        )
         self.assertEqual(
             document["apk"]["signer_image"],
             "docker.io/alpinelinux/build-base@sha256:31d2a020ccd2058e6ab47940428bd0b7dc83e37b66880891f9ed903a12ea668b",
@@ -333,7 +358,103 @@ class NativePackageSignatureGateTests(unittest.TestCase):
         with self.assertRaisesRegex(
             gate.SignatureGateError, "publishing approval requires"
         ):
-            gate.validate_policy(document, gate.parse_day("2026-09-03", "date"))
+            gate.validate_policy(document, qualification_day)
+
+    @unittest.skipUnless(
+        shutil.which("gpg") and shutil.which("openssl"),
+        "GnuPG and OpenSSL are required for committed trust-root inspection",
+    )
+    def test_repository_enrolled_public_keys_have_exact_native_identities(self) -> None:
+        policy_path = Path(gate.__file__).with_name(
+            "native_package_signature_policy_v4100.json"
+        )
+        document = gate.load_json(policy_path, "repository policy")
+        qualification_day = gate.parse_day("2026-09-08", "date")
+        gate.validate_policy(document, qualification_day)
+        expected = {
+            "rpm": (
+                "rpm-prod-2026-01",
+                "A4C140FCF5408DCDB1E9209F6BCC4D258C321050",
+                "1D1E2567D72F22C79B1BCC757A5D65288CF38540",
+            ),
+            "deb": (
+                "deb-prod-2026-01",
+                "2E40725EAD6A3AACB2FA31A577586532ABD300BF",
+                "55CB5FAB53F3CE23062375C46A95806156B5ED91",
+            ),
+        }
+        for family, (identifier, primary, signer) in expected.items():
+            selected = gate.select_key(
+                document, family, identifier, qualification_day
+            )
+            public_key = policy_path.parent / selected["public_key"]
+            with tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary)
+                home.chmod(0o700)
+                result = subprocess.run(
+                    [
+                        shutil.which("gpg") or "gpg",
+                        "--batch",
+                        "--no-options",
+                        "--homedir",
+                        str(home),
+                        "--with-colons",
+                        "--import-options",
+                        "show-only",
+                        "--dry-run",
+                        "--import",
+                        str(public_key),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env={"LC_ALL": "C", "PATH": str(Path(shutil.which("gpg") or "gpg").parent)},
+                )
+            records = [line.split(":") for line in result.stdout.splitlines()]
+            key_records = [record for record in records if record[0] in {"pub", "sub"}]
+            fingerprints = [record[9] for record in records if record[0] == "fpr"]
+            self.assertEqual(len(key_records), 2)
+            self.assertEqual(fingerprints, [primary, signer])
+            self.assertTrue(all(record[2:4] == ["4096", "1"] for record in key_records))
+            self.assertIn("s", key_records[1][11].lower())
+            self.assertEqual(
+                dt.datetime.fromtimestamp(
+                    int(key_records[1][5]), tz=dt.timezone.utc
+                ).date(),
+                dt.date(2026, 9, 8),
+            )
+            self.assertEqual(
+                dt.datetime.fromtimestamp(
+                    int(key_records[1][6]), tz=dt.timezone.utc
+                ).date(),
+                dt.date(2028, 9, 7),
+            )
+
+        apk = gate.select_key(
+            document, "apk", "apk-prod-2026-01", qualification_day
+        )
+        apk_key = policy_path.parent / apk["public_key"]
+        result = subprocess.run(
+            [
+                shutil.which("openssl") or "openssl",
+                "pkey",
+                "-pubin",
+                "-in",
+                str(apk_key),
+                "-text_pub",
+                "-noout",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={
+                "LC_ALL": "C",
+                "PATH": str(Path(shutil.which("openssl") or "openssl").parent),
+            },
+        )
+        self.assertIn("Public-Key: (4096 bit)", result.stdout)
 
     def test_qualified_policy_requires_a_canonical_committed_signer_image(self) -> None:
         document = self.document()
