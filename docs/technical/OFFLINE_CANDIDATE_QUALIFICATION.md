@@ -21,6 +21,18 @@ The normalized evidence invocation is exactly
 
 ## Bundle contract
 
+The protected `candidate-update-bundle.yml` workflow produces one non-public
+artifact for the exact untagged `main` SHA and the exact qualified native
+signing artifact. Its root contains the canonical descriptor, checksum file,
+the `node01/` qualification bundle and the `verification/` material needed to
+verify the producer attestation and detached DEB signature. The workflow does
+not create a tag or GitHub Release. The protected native-evidence and release
+qualification workflows must independently resolve the same immutable
+artifact by run and artifact ID and revalidate it before accepting evidence.
+
+Only the exact host subdirectory is passed to `syswarden update`. For NODE01,
+that directory is `node01/` and has the three-file contract below.
+
 The bundle path must be canonical and absolute. Every path component is opened
 from the filesystem root through descriptor-rooted traversal and symbolic-link
 components are rejected. The final directory must be owned by the effective

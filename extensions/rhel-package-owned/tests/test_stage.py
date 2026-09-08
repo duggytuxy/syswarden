@@ -89,7 +89,7 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         entries = self.inventory["entries"]
         self.assertEqual(self.inventory["schema_version"], 2)
         self.assertEqual(self.inventory["profile"], "rhel-package-owned-runtime/v2")
-        self.assertEqual(len(entries), 19)
+        self.assertEqual(len(entries), 20)
         self.assertEqual([entry["role"] for entry in entries], list(stage_contract.EXPECTED_ROLES))
         self.assertEqual(
             set(entries[0]),
@@ -145,8 +145,8 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
             self.assertEqual(manifest["schema_version"], 1)
             self.assertEqual(manifest["profile"], "rhel-package-owned-runtime/v2")
             self.assertEqual(manifest["status"], "staged-not-installed")
-            self.assertEqual(manifest["managed_entry_count"], 19)
-            self.assertEqual(manifest["rpm_payload_entry_count"], 13)
+            self.assertEqual(manifest["managed_entry_count"], 20)
+            self.assertEqual(manifest["rpm_payload_entry_count"], 14)
             self.assertEqual(
                 manifest["inventory_sha256"], hashlib.sha256(INVENTORY.read_bytes()).hexdigest()
             )
@@ -305,13 +305,14 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
                 "mutual_exclusion": "same-rpm-name",
             },
         )
-        scriptlets = "\n".join(
+        scriptlet_sources = [
             (EXTENSION_ROOT / relative).read_text(encoding="utf-8")
             for relative in self.profile["rpm"]["lifecycle"].values()
-        )
+        ]
+        for scriptlet in scriptlet_sources:
+            verify_contract.validate_no_product_binary_execution(scriptlet)
+        scriptlets = "\n".join(scriptlet_sources)
         for forbidden in (
-            "/opt/syswarden/bin",
-            "syswarden-cli",
             "firewall-cmd",
             "firewalld.service",
             "nftables.service",
@@ -331,9 +332,21 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         self.assertIn("/usr/bin/systemctl preset", post_install)
         self.assertNotIn("systemctl start", post_install)
         self.assertNotIn("--now", pre_uninstall)
-        self.assertIn("/usr/bin/systemctl disable", pre_uninstall)
-        self.assertIn("if [ -d /run/systemd/system ]", pre_uninstall)
-        self.assertIn("/usr/bin/systemctl stop", pre_uninstall)
+        self.assertIn(".syswarden-rhelpo-erase-ready-v1", pre_uninstall)
+        self.assertIn("/usr/bin/timeout 15 /usr/bin/rpm", pre_uninstall)
+        self.assertNotIn("/usr/bin/systemctl disable", pre_uninstall)
+        self.assertNotIn("/usr/bin/systemctl stop", pre_uninstall)
+        readme = (EXTENSION_ROOT / "README.md").read_text(encoding="utf-8")
+        qualification = (EXTENSION_ROOT / "NATIVE_QUALIFICATION_V4.10.0.md").read_text(
+            encoding="utf-8"
+        )
+        for document in (readme, qualification):
+            self.assertIn("/var/lib/.syswarden-rhelpo-postun-recovery-v1", document)
+            self.assertIn("0:0:700:1:9843", document)
+            self.assertIn(
+                "64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c",
+                document,
+            )
         preset = (REPOSITORY_ROOT / "src/init/systemd/90-syswarden-rhel-image.preset").read_text(
             encoding="utf-8"
         )
@@ -444,9 +457,7 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
             self.assertFalse(output.exists())
 
     def test_verifier_accepts_exact_payload_and_rejects_tampering(self) -> None:
-        records: dict[str, tuple[str, str, str, str, str, str]] = {
-            "/opt/syswarden/bin/syswarden-core": ("-rwxr-x---", "root", "root", "", "1" * 64, "1")
-        }
+        records: dict[str, tuple[str, str, str, str, str, str]] = {}
         for entry in self.inventory["entries"]:
             if entry["rpm_ownership"] != "payload":
                 continue
@@ -459,7 +470,32 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
                 entry["sha256"] or "",
                 "1",
             )
+        for path, (permissions, target) in verify_contract.SHARED_PAYLOAD_RECORDS.items():
+            digest = "1" * 64 if permissions.startswith("-") else ""
+            records[path] = (permissions, "root", "root", target, digest, "1")
         verify_contract.validate_payload(self.inventory["entries"], records, "8")
+        security_lines = []
+        for path in records:
+            flags = "0"
+            if path in {
+                "/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt",
+                "/usr/share/doc/syswarden/LICENSE.txt",
+                "/usr/share/doc/syswarden/rhel-package-owned-profile.json",
+            }:
+                flags = "2"
+            security_lines.append(f"{path}\t(none)\t(none)\t{flags}\n")
+        security_metadata = "".join(security_lines)
+        verify_contract.validate_file_security_metadata(records, security_metadata)
+        for substituted in (
+            security_metadata.replace("\t(none)\t", "\tcap_net_admin=ep\t", 1),
+            security_metadata.replace("\t(none)\t0\n", "\tsystem_u:object_r:bin_t:s0\t0\n", 1),
+            security_metadata.replace("\t0\n", "\t64\n", 1),
+        ):
+            with self.assertRaisesRegex(
+                verify_contract.VerificationError,
+                "file security metadata mismatch",
+            ):
+                verify_contract.validate_file_security_metadata(records, substituted)
         unit = "/usr/lib/systemd/system/syswarden-core.service"
         original = records[unit]
         records[unit] = ("-rw-rw-rw-", *original[1:])
@@ -498,7 +534,7 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
             "1",
         )
         with self.assertRaisesRegex(
-            verify_contract.VerificationError, "unsafe integration parent"
+            verify_contract.VerificationError, "undeclared package-owned path"
         ):
             verify_contract.validate_payload(self.inventory["entries"], records, "8")
 
@@ -530,6 +566,20 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         ):
             verify_contract.validate_payload(self.inventory["entries"], records, "8")
 
+        del records["/etc/syswarden/config/modules/99-user.toml"]
+        records["/etc/cron.d/unreviewed"] = (
+            "-rw-r--r--",
+            "root",
+            "root",
+            "",
+            "5" * 64,
+            "1",
+        )
+        with self.assertRaisesRegex(
+            verify_contract.VerificationError, "undeclared package-owned path"
+        ):
+            verify_contract.validate_payload(self.inventory["entries"], records, "8")
+
     def test_verifier_rejects_legacy_digest_algorithm_and_malformed_records(self) -> None:
         with self.assertRaisesRegex(verify_contract.VerificationError, "not SHA-256"):
             verify_contract.validate_payload(self.inventory["entries"], {}, "1")
@@ -537,6 +587,90 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
             verify_contract.parse_file_inventory("/path\t-rw-r--r--\troot\n")
         with self.assertRaisesRegex(verify_contract.VerificationError, "unsafe"):
             verify_contract.parse_file_inventory("/path\t-rw-r--r--\troot\troot\t\tabc\t1\n/path\t-rw-r--r--\troot\troot\t\tabc\t1\n")
+
+    def test_verifier_pins_exact_rhel_package_owned_nevra(self) -> None:
+        exact = ["syswarden", "0", "4.10.0", "1.rhelpo", "x86_64", "8"]
+        self.assertEqual(
+            verify_contract.validate_package_identity(
+                exact, "syswarden-4.10.0-1.rhelpo.x86_64.rpm"
+            ),
+            "8",
+        )
+        for metadata, filename in (
+            (
+                ["syswarden", "0", "4.10.1", "1.rhelpo", "x86_64", "8"],
+                "syswarden-4.10.1-1.rhelpo.x86_64.rpm",
+            ),
+            (
+                ["syswarden", "0", "4.10.0", "2.rhelpo", "x86_64", "8"],
+                "syswarden-4.10.0-2.rhelpo.x86_64.rpm",
+            ),
+            (exact, "syswarden-4.10.1-1.rhelpo.x86_64.rpm"),
+            (["syswarden", "1", "4.10.0", "1.rhelpo", "x86_64", "8"], "syswarden-4.10.0-1.rhelpo.x86_64.rpm"),
+        ):
+            with self.subTest(metadata=metadata, filename=filename), self.assertRaisesRegex(
+                verify_contract.VerificationError, "identity does not match"
+            ):
+                verify_contract.validate_package_identity(metadata, filename)
+
+    def test_verifier_allows_passive_product_attestation_but_rejects_execution(self) -> None:
+        verify_contract.validate_no_product_binary_execution(
+            (EXTENSION_ROOT / "scriptlets/pre-uninstall.sh").read_text(encoding="utf-8")
+        )
+        passive = """for entry in /opt/syswarden/bin/*; do
+case "$entry" in
+  /opt/syswarden/bin/syswarden-cli|/opt/syswarden/bin/syswarden-core) stat "$entry" ;;
+esac
+done
+"""
+        verify_contract.validate_no_product_binary_execution(passive)
+        adversarial = (
+            "/opt/syswarden/bin/syswarden-cli install\n",
+            "command /opt/syswarden/bin/syswarden-core\n",
+            "env MODE=test /opt/syswarden/bin/syswarden-tui\n",
+            "tool=/opt/syswarden/bin/syswarden-cli\n\"$tool\" install\n",
+            "root=/opt/syswarden/bin\ntool=syswarden-cli\n\"$root/$tool\"\n",
+            "eval '/opt/syswarden/bin/syswarden-cli install'\n",
+            "source /opt/syswarden/bin/syswarden-cli\n",
+            ". /opt/syswarden/bin/syswarden-cli\n",
+            "/bin/sh -c '/opt/syswarden/bin/syswarden-cli install'\n",
+            "find /tmp -exec /opt/syswarden/bin/syswarden-cli {} \\;\n",
+            "printf x | xargs /opt/syswarden/bin/syswarden-cli\n",
+        )
+        for scriptlet in adversarial:
+            with self.subTest(scriptlet=scriptlet), self.assertRaises(
+                verify_contract.VerificationError
+            ):
+                verify_contract.validate_no_product_binary_execution(scriptlet)
+
+    def test_verifier_rejects_every_unreviewed_rpm_script_or_trigger_tag(self) -> None:
+        package = Path("candidate.rpm")
+        absent = "".join(
+            f"{tag}=absent\n" for tag in verify_contract.UNREVIEWED_SCRIPT_TAGS
+        )
+        with mock.patch.object(verify_contract, "rpm_query", return_value=absent):
+            verify_contract.validate_no_unreviewed_script_sections(package)
+
+        for forbidden_tag in verify_contract.UNREVIEWED_SCRIPT_TAGS:
+            response = "".join(
+                f"{tag}={'present' if tag == forbidden_tag else 'absent'}\n"
+                for tag in verify_contract.UNREVIEWED_SCRIPT_TAGS
+            )
+            with self.subTest(tag=forbidden_tag), mock.patch.object(
+                verify_contract, "rpm_query", return_value=response
+            ), self.assertRaisesRegex(
+                verify_contract.VerificationError,
+                f"unreviewed script or trigger tag {forbidden_tag}",
+            ):
+                verify_contract.validate_no_unreviewed_script_sections(package)
+
+        with mock.patch.object(
+            verify_contract, "rpm_query", return_value="PRETRANS=absent\n"
+        ), self.assertRaisesRegex(
+            verify_contract.VerificationError,
+            "inventory is malformed",
+        ):
+            verify_contract.validate_no_unreviewed_script_sections(package)
 
     def test_verifier_rejects_symlinked_and_hardlinked_rpm_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

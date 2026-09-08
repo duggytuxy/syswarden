@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shlex
 import stat
 import subprocess
@@ -1795,25 +1796,34 @@ class ReleaseGateTests(unittest.TestCase):
                     self.assert_generic_release_validation_contract(mutation)
 
     def test_qualification_signer_compiles_before_protected_secret_exposure(self) -> None:
-        workflow = (
+        qualification = (
             Path(__file__).resolve().parents[2]
             / ".github"
             / "workflows"
             / "release-qualification.yml"
         ).read_text(encoding="utf-8")
-        build = workflow.split(
-            "      - name: Build and Test Signed Update Manifest Tool\n", 1
+        candidate = (
+            Path(__file__).resolve().parents[2]
+            / ".github"
+            / "workflows"
+            / "candidate-update-bundle.yml"
+        ).read_text(encoding="utf-8")
+        build = candidate.split(
+            "      - name: Build and Test Candidate Manifest Tool\n", 1
         )[1].split("      - name:", 1)[0]
-        signer = workflow.split(
-            "      - name: Generate and Verify Signed Update Manifest\n", 1
+        revalidate = candidate.split(
+            "      - name: Revalidate Candidate Manifest Tool Before Secret Exposure\n", 1
         )[1].split("      - name:", 1)[0]
-        self.assertIn(
-            "if: ${{ steps.update_contract.outputs.required == 'true' }}", build
-        )
+        signer = candidate.split(
+            "      - name: Generate and Verify Protected Candidate Manifest\n", 1
+        )[1].split("      - name:", 1)[0]
         self.assertIn("GOFLAGS=-mod=readonly go build", build)
         self.assertIn("update_manifest_test.go", build)
-        self.assertIn('"${SIGNING_TOOL_DIR}/syswarden-update-manifest"', build)
+        self.assertIn('"${MANIFEST_TOOL_DIR}/syswarden-update-manifest"', build)
         self.assertNotIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", build)
+        self.assertIn("EXPECTED_TOOL_SHA256", revalidate)
+        self.assertIn("actual_tool_sha256", revalidate)
+        self.assertNotIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", revalidate)
         self.assertIn(
             "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY: "
             "${{ secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY }}",
@@ -1829,26 +1839,52 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertNotIn('echo "${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}', signer)
         self.assertNotIn("printf '%s' \"${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}", signer)
         self.assertEqual(
-            workflow.count("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"), 1
+            candidate.count("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"), 1
         )
-        self.assertIn('"update/syswarden-update-manifest-v1.json"', workflow)
-        self.assertIn('"update/syswarden-update-manifest-v1.json.sig"', workflow)
+        self.assertEqual(
+            qualification.count("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"), 0
+        )
+        self.assertIn("Reuse and Verify Exact Candidate Update Manifest", qualification)
+        reuse = qualification.split(
+            "      - name: Reuse and Verify Exact Candidate Update Manifest\n", 1
+        )[1].split("      - name:", 1)[0]
+        self.assertEqual(reuse.count("cmp --"), 2)
+        self.assertIn("env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", reuse)
+        self.assertNotIn(" generate ", reuse)
+        self.assertIn('"update/syswarden-update-manifest-v1.json"', qualification)
+        self.assertIn('"update/syswarden-update-manifest-v1.json.sig"', qualification)
         self.assertLess(
-            workflow.index("Require Successful Qualification Before Release Signing"),
-            workflow.index("Generate and Verify Signed Update Manifest"),
+            candidate.index("Build and Test Candidate Manifest Tool"),
+            candidate.index("Revalidate Candidate Manifest Tool Before Secret Exposure"),
         )
         self.assertLess(
-            workflow.index("Generate and Verify Signed Update Manifest"),
-            workflow.index("Seal Exact Qualification Evidence Inventory"),
+            candidate.index("Revalidate Candidate Manifest Tool Before Secret Exposure"),
+            candidate.index("Generate and Verify Protected Candidate Manifest"),
         )
-        self.assertIn("qualification status ${failed_status}", workflow)
+        self.assertLess(
+            candidate.index("Generate and Verify Protected Candidate Manifest"),
+            candidate.index("Attest Candidate Bundle Descriptor"),
+        )
+        self.assertLess(
+            qualification.index("Require Successful Qualification Before Release Signing"),
+            qualification.index("Revalidate Attested Candidate Update Before Final Seal"),
+        )
+        self.assertLess(
+            qualification.index("Revalidate Attested Candidate Update Before Final Seal"),
+            qualification.index("Reuse and Verify Exact Candidate Update Manifest"),
+        )
+        self.assertLess(
+            qualification.index("Reuse and Verify Exact Candidate Update Manifest"),
+            qualification.index("Seal Exact Qualification Evidence Inventory"),
+        )
+        self.assertIn("qualification status ${failed_status}", qualification)
         self.assertIn(
             "refusing to sign because qualification status is not uniformly zero",
-            workflow,
+            qualification,
         )
         self.assertIn('rm -f -- "${manifest_path}" "${signature_path}"', signer)
         self.assertIn(
-            '"${update_dir}/syswarden-update-manifest-v1.json.sig"', workflow
+            '"${update_dir}/syswarden-update-manifest-v1.json.sig"', qualification
         )
 
     def test_release_manager_revalidates_signed_assets_and_preserves_v4028(self) -> None:
@@ -1871,6 +1907,25 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertIn("--update-manifest-dir", workflow)
         self.assertIn("Set Up Go for Signed Update Verification", workflow)
         self.assertNotIn("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", workflow)
+        for candidate_path in (
+            '"${QUALIFICATION_ROOT}/native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json"',
+            '"${QUALIFICATION_ROOT}/native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json.sig"',
+        ):
+            self.assertEqual(workflow.count(candidate_path), 2)
+        for candidate_directory in (
+            "native-release-evidence/candidate-update",
+            "native-release-evidence/candidate-update/node01",
+            "native-release-evidence/candidate-update/verification",
+        ):
+            self.assertEqual(
+                len(
+                    re.findall(
+                        rf"(?<![/A-Za-z0-9_.-]){re.escape(candidate_directory)}(?=[ )\n])",
+                        workflow,
+                    )
+                ),
+                2,
+            )
         self.assertEqual(
             workflow.count(
                 "([.previous_package_asset_ids[].name] | sort) == (["
@@ -1953,8 +2008,59 @@ class ReleaseGateTests(unittest.TestCase):
         )
 
     def run_publish_script(
-        self, remote_sequence: list[str], *, existing_public: str = "false"
+        self,
+        remote_sequence: list[str],
+        *,
+        existing_public: str = "false",
+        draft_metadata: dict[str, object] | None = None,
+        expected_draft_metadata: dict[str, object] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+        valid_draft: dict[str, object] = {
+            "id": 4242,
+            "tag_name": self.tag,
+            "name": self.tag,
+            "draft": True,
+            "prerelease": False,
+            "body": "exact release notes\n",
+            "assets": [
+                {
+                    "id": 9001,
+                    "name": "release-asset.bin",
+                    "size": 9,
+                    "digest": "sha256:" + "b" * 64,
+                    "state": "uploaded",
+                }
+            ],
+        }
+        served_draft = draft_metadata or valid_draft
+        expected_draft = expected_draft_metadata or valid_draft
+        canonical_snapshot = {
+            key: expected_draft[key]
+            for key in ("id", "tag_name", "name", "draft", "prerelease", "body")
+        }
+        expected_assets = expected_draft["assets"]
+        self.assertIsInstance(expected_assets, list)
+        canonical_snapshot["assets"] = sorted(
+            (
+                {
+                    key: asset[key]
+                    for key in ("id", "name", "size", "digest", "state")
+                }
+                for asset in expected_assets
+                if isinstance(asset, dict)
+            ),
+            key=lambda asset: str(asset["name"]),
+        )
+        snapshot_sha256 = hashlib.sha256(
+            (
+                json.dumps(
+                    canonical_snapshot,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+        ).hexdigest()
         fake_bin = self.root / "fake-bin"
         fake_bin.mkdir(exist_ok=True)
         state = self.root / "remote-state"
@@ -1994,10 +2100,22 @@ esac
         gh.write_text(
             """#!/usr/bin/env bash
 set -euo pipefail
-printf 'gh\\n' >> "${FAKE_LOG}"
-[[ "$#" -eq 5 ]]
-[[ "$1" == "release" && "$2" == "edit" ]]
-[[ "$3" == "${RELEASE_TAG}" && "$4" == "--draft=false" && "$5" == "--latest" ]]
+if [[ "$#" -eq 4 && "$1" == "api" && "$2" == "--method" && "$3" == "GET" ]]; then
+  [[ "$4" == "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" ]]
+  printf 'gh-get\\n' >> "${FAKE_LOG}"
+  printf '%s\\n' "${TEST_DRAFT_METADATA:?}"
+  exit 0
+fi
+if [[ "$#" -eq 6 && "$1" == "api" && "$2" == "--method" && "$3" == "PATCH" ]]; then
+  [[ "$4" == "repos/${GITHUB_REPOSITORY}/releases/${EXPECTED_DRAFT_RELEASE_ID}" ]]
+  [[ "$5" == "--input" && "$6" == "-" ]]
+  payload="$(cat)"
+  jq -e '. == {draft:false, make_latest:"true"}' <<< "${payload}" >/dev/null
+  printf 'gh-publish\\n' >> "${FAKE_LOG}"
+  exit 0
+fi
+echo "unexpected gh invocation: $*" >&2
+exit 64
 """,
             encoding="utf-8",
         )
@@ -2009,10 +2127,16 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                 "FAKE_LOG": str(log),
                 "FAKE_STATE": str(state),
                 "EXISTING_PUBLIC": existing_public,
+                "EXPECTED_DRAFT_RELEASE_ID": str(expected_draft["id"]),
+                "EXPECTED_DRAFT_SNAPSHOT_SHA256": snapshot_sha256,
+                "GITHUB_REPOSITORY": "duggytuxy/syswarden",
                 "PATH": f"{fake_bin}:{environment['PATH']}",
                 "RELEASE_SHA": "a" * 40,
                 "RELEASE_TAG": self.tag,
                 "REMOTE_SEQUENCE": ",".join(remote_sequence),
+                "TEST_DRAFT_METADATA": json.dumps(
+                    served_draft, separators=(",", ":")
+                ),
             }
         )
         result = subprocess.run(
@@ -2031,12 +2155,15 @@ printf 'gh\\n' >> "${FAKE_LOG}"
     def test_release_publication_rechecks_remote_tag_immediately_around_edit(self) -> None:
         script = self.publish_script()
         pre = 'revalidate_remote_release_tag "pre-publication"'
-        publish = 'gh release edit "${RELEASE_TAG}" --draft=false --latest'
+        draft = "revalidate_exact_draft_snapshot"
+        publish = 'gh api --method PATCH \\'
         post = 'revalidate_remote_release_tag "post-publication"'
         self.assertEqual(script.count("git ls-remote --exit-code origin"), 1)
         self.assertEqual(script.count(pre), 1)
         self.assertEqual(script.count(post), 1)
-        self.assertLess(script.index(pre), script.index(publish))
+        self.assertEqual(script.count(draft), 2)
+        self.assertLess(script.index(pre), script.rindex(draft))
+        self.assertLess(script.rindex(draft), script.index(publish))
         self.assertLess(script.index(publish), script.index(post))
         self.assertLess(
             script.index('if [[ "${EXISTING_PUBLIC}" == "true" ]]'),
@@ -2045,7 +2172,7 @@ printf 'gh\\n' >> "${FAKE_LOG}"
 
         success, command_order = self.run_publish_script(["annotated", "a" * 40])
         self.assertEqual(success.returncode, 0, success.stderr)
-        self.assertEqual(command_order, ["git", "gh", "git"])
+        self.assertEqual(command_order, ["git", "gh-get", "gh-publish", "git"])
 
     def test_release_publication_fails_closed_on_pre_publication_tag_move(self) -> None:
         mismatch, command_order = self.run_publish_script(["b" * 40])
@@ -2057,9 +2184,77 @@ printf 'gh\\n' >> "${FAKE_LOG}"
     def test_release_publication_reports_post_publication_tag_move(self) -> None:
         mismatch, command_order = self.run_publish_script(["a" * 40, "b" * 40])
         self.assertNotEqual(mismatch.returncode, 0)
-        self.assertEqual(command_order, ["git", "gh", "git"])
+        self.assertEqual(command_order, ["git", "gh-get", "gh-publish", "git"])
         self.assertIn("the release was made public", mismatch.stderr)
         self.assertIn("expected " + "a" * 40, mismatch.stderr)
+
+    def test_release_publication_fails_closed_on_draft_snapshot_change(self) -> None:
+        base: dict[str, object] = {
+            "id": 4242,
+            "tag_name": self.tag,
+            "name": self.tag,
+            "draft": True,
+            "prerelease": False,
+            "body": "exact release notes\n",
+            "assets": [
+                {
+                    "id": 9001,
+                    "name": "release-asset.bin",
+                    "size": 9,
+                    "digest": "sha256:" + "b" * 64,
+                    "state": "uploaded",
+                }
+            ],
+        }
+        mutations: list[tuple[str, dict[str, object]]] = []
+        for field, value in (
+            ("id", 4243),
+            ("tag_name", "v4.02.9"),
+            ("name", "changed-title"),
+            ("draft", False),
+            ("prerelease", True),
+            ("body", "changed notes\n"),
+        ):
+            changed = json.loads(json.dumps(base))
+            changed[field] = value
+            mutations.append((field, changed))
+        for field, value in (
+            ("id", 9002),
+            ("name", "replacement.bin"),
+            ("size", 10),
+            ("digest", "sha256:" + "c" * 64),
+            ("state", "new"),
+        ):
+            changed = json.loads(json.dumps(base))
+            assets = changed["assets"]
+            self.assertIsInstance(assets, list)
+            self.assertIsInstance(assets[0], dict)
+            assets[0][field] = value
+            mutations.append((f"asset {field}", changed))
+        changed = json.loads(json.dumps(base))
+        assets = changed["assets"]
+        self.assertIsInstance(assets, list)
+        assets.append(
+            {
+                "id": 9002,
+                "name": "extra.bin",
+                "size": 1,
+                "digest": "sha256:" + "c" * 64,
+                "state": "uploaded",
+            }
+        )
+        mutations.append(("asset count", changed))
+
+        for name, changed in mutations:
+            with self.subTest(mutation=name):
+                result, command_order = self.run_publish_script(
+                    ["a" * 40],
+                    draft_metadata=changed,
+                    expected_draft_metadata=base,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(command_order, ["git", "gh-get"])
+                self.assertIn("refusing publication", result.stderr)
 
     def test_existing_public_release_revalidates_tag_without_mutation(self) -> None:
         success, command_order = self.run_publish_script(

@@ -17,7 +17,7 @@ class NativeReleaseEvidenceWorkflowTests(unittest.TestCase):
     def test_protected_ephemeral_fixed_source_contract(self) -> None:
         for contract in (
             "runs-on: [self-hosted, linux, x64, syswarden-native-evidence]",
-            "environment: native-release-evidence",
+            "environment:\n      name: syswarden-release-qualification",
             'source_root="/var/lib/syswarden/native-release-evidence/${RELEASE_SHA}"',
             'test "${GITHUB_REF}" = "refs/heads/main"',
             'test "${GITHUB_SHA}" = "${RELEASE_SHA}"',
@@ -28,6 +28,69 @@ class NativeReleaseEvidenceWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(contract, self.workflow)
         self.assertNotIn("source_path:", self.workflow)
+
+    def test_native_evidence_reuses_and_revalidates_exact_protected_environment(self) -> None:
+        step = self.workflow.split(
+            "      - name: Validate Exact Native Evidence Environment Protection\n", 1
+        )[1].split("      - name:", 1)[0]
+        for contract in (
+            'environment_name="syswarden-release-qualification"',
+            '"repos/${GITHUB_REPOSITORY}/environments/${environment_name}"',
+            'reviewer_rule_count="$(jq',
+            'reviewer_entry_count="$(jq',
+            'owner_reviewer_count="$(jq',
+            'prevent_self_review="$(jq',
+            '"${reviewer_rule_count}" != "1"',
+            '"${reviewer_entry_count}" != "1"',
+            '"${owner_reviewer_count}" != "1"',
+            '"${prevent_self_review}" != "false"',
+            '$(required_boolean protected_branches)" != "false"',
+            '$(required_boolean custom_branch_policies)" != "true"',
+            '$(top_level_boolean can_admins_bypass)" != "false"',
+            "deployment-branch-policies",
+            '.name == "main" and .type == "branch"',
+        ):
+            self.assertIn(contract, step)
+        self.assertNotIn("secrets.", step)
+        self.assertNotIn(
+            "secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", self.workflow
+        )
+        self.assertNotIn("environment: native-release-evidence", self.workflow)
+
+    def test_environment_protection_static_mutations_are_rejected(self) -> None:
+        def assert_contract(workflow: str) -> None:
+            step = workflow.split(
+                "      - name: Validate Exact Native Evidence Environment Protection\n",
+                1,
+            )[1].split("      - name:", 1)[0]
+            self.assertIn(
+                '$(top_level_boolean can_admins_bypass)" != "false"', step
+            )
+            self.assertIn(
+                '$(required_boolean custom_branch_policies)" != "true"', step
+            )
+            self.assertIn('"${owner_reviewer_count}" != "1"', step)
+            self.assertIn(
+                '.name == "main" and .type == "branch"', step
+            )
+
+        for old, new in (
+            (
+                '$(top_level_boolean can_admins_bypass)" != "false"',
+                '$(top_level_boolean can_admins_bypass)" != "true"',
+            ),
+            (
+                '$(required_boolean custom_branch_policies)" != "true"',
+                '$(required_boolean custom_branch_policies)" != "false"',
+            ),
+            ('"${owner_reviewer_count}" != "1"', '"${owner_reviewer_count}" != "0"'),
+            (
+                '.name == "main" and .type == "branch"',
+                '.name == "*" and .type == "branch"',
+            ),
+        ):
+            with self.subTest(contract=old), self.assertRaises(AssertionError):
+                assert_contract(self.workflow.replace(old, new, 1))
 
     def test_candidate_bound_gates_and_one_artifact(self) -> None:
         for contract in (
@@ -173,7 +236,7 @@ class NativeReleaseEvidenceWorkflowTests(unittest.TestCase):
             '--apk-package-name "${apk_package_name}"',
             '--apk-package-sha256 "${apk_package_sha256}"',
             '--apk-package-size "${apk_package_size}"',
-            '"schema_version": 2',
+            '"schema_version": 3',
             '"native_signing": {"policy_sha256": provenance["policy_sha256"]',
             '"provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest()',
             '"selected_keys": {"rpm": provenance["rpm_signature"]["key"]',
@@ -221,6 +284,52 @@ class NativeReleaseEvidenceWorkflowTests(unittest.TestCase):
                 "native-signing/rhel-package-owned/packages/"
                 "syswarden-${candidate_version}-1.rhelpo.x86_64.rpm",
             ),
+        )
+
+    def test_candidate_update_is_downloaded_attested_and_bound_to_node01(self) -> None:
+        for contract in (
+            "actions: read",
+            "Resolve Unique Protected Candidate Update Bundle",
+            "actions/workflows/candidate-update-bundle.yml/runs",
+            '.path == ".github/workflows/candidate-update-bundle.yml"',
+            ".run_attempt == 1",
+            '.status == "completed"',
+            '.conclusion == "success"',
+            "candidate update run must expose exactly one artifact",
+            "artifact-ids: ${{ steps.candidate_update.outputs.artifact_id }}",
+            "run-id: ${{ steps.candidate_update.outputs.run_id }}",
+            "Create Private Candidate Verification Workspace",
+            "CANDIDATE_UPDATE_SHA256SUMS.txt",
+            'test "${candidate_update_actual[*]}" = "${candidate_update_expected_sorted[*]}"',
+            'test "${candidate_update_directories[*]}" = "node01 verification"',
+            "sha256sum --check --strict CANDIDATE_UPDATE_SHA256SUMS.txt",
+            'descriptor["profile"] == "syswarden-candidate-update-bundle/v1"',
+            '"native_signing_artifact_id"',
+            '"native_signing_artifact_digest"',
+            '"repos/${GITHUB_REPOSITORY}/actions/runs/${declared_native_run_id}"',
+            '.id == $id and .name == $name and .digest == $digest',
+            'gh attestation verify "${candidate_descriptor}"',
+            "--deny-self-hosted-runners",
+            'env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY GOFLAGS=-mod=readonly',
+            'cmp -- "${candidate_deb}"',
+            'qualification_bundle_identity == $bundle_identity',
+            'qualification_bundle_descriptor_sha256 == $descriptor_sha256',
+            'qualification_bundle_producer_attestation_sha256 == $producer_attestation_sha256',
+            'manifest_sha256 == $manifest_sha256',
+            'manifest_signature_sha256 == $manifest_signature_sha256',
+            'detached_package_signature_sha256 == $detached_signature_sha256',
+            '"candidate_update": {"workflow": "candidate-update-bundle.yml"',
+            '"producer_attestation_sha256"',
+            "Remove Downloaded Candidate Update Material",
+        ):
+            self.assertIn(contract, self.workflow)
+        self.assertEqual(self.workflow.count("actions/download-artifact@"), 1)
+        self.assertEqual(self.workflow.count("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"), 0)
+        self.assertNotIn("Generate and Verify Protected Candidate Manifest", self.workflow)
+        self.assertNotIn("source-allocation/raw/source-allocation/raw", self.workflow)
+        self.assertEqual(
+            self.workflow.count(".detached_package_signature_sha256 == $detached_signature_sha256"),
+            1,
         )
 
     def test_rhel_package_owned_campaigns_are_separate_and_fail_closed(self) -> None:

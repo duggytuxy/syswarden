@@ -185,6 +185,19 @@
       "role": "openrc-source"
     },
     {
+      "source": "extensions/rhel-package-owned/scriptlets/postun-recovery.sh",
+      "destination": "payload/usr/libexec/syswarden/rhelpo-postun-recovery-v1",
+      "type": "regular",
+      "mode": "0755",
+      "uid": 0,
+      "gid": 0,
+      "link_target": null,
+      "sha256": "64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c",
+      "rpm_ownership": "payload",
+      "rpm_package": "syswarden",
+      "role": "rpm-postun-recovery"
+    },
+    {
       "source": "extensions/rhel-package-owned/scriptlets/pre-install.sh",
       "destination": "rpm-scriptlets/pre-install.sh",
       "type": "regular",
@@ -192,7 +205,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "a8526424935fc34c177e5e1ff2f2e93991ae2ee29281f1de958b686efa05ce0d",
+      "sha256": "9f90be32aed896cad7a57b72888359dbfc9e34cb0d031b85bcaf0e6954890340",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-pre-install"
@@ -205,7 +218,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "2697141e11f3b33b07d6052d92dcac2bc0decdfe046bc6442b7023c6fdb2b11d",
+      "sha256": "0839690d77013c2d7ed1fa9b6242e9390200fdc8fed6a8ec2e6c0a1daf7125c7",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-post-install"
@@ -218,7 +231,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "2ab77cbbd8324814f560719f3de3503092612624bb57f050e769ddaa41da6923",
+      "sha256": "a328d09a4e6ae5899365bad10a7f2b1a2a1d2a8aa675b2e35e03d5b720208bb5",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-pre-uninstall"
@@ -231,7 +244,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "2bf1d33a5d96a6adee2b72c3b29ac5f5c169452aa3f435027ddaa625d10f1fd5",
+      "sha256": "20b7ec25a9f834a83d900291f5f642d09b919f7f4ca69152db87307973a8ea88",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-post-uninstall"

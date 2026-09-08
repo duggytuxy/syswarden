@@ -433,6 +433,71 @@ esac
         return result, output.read_text(encoding="utf-8") if output.exists() else ""
 
 
+def run_hosted_native_evidence_resolver(
+    script: str,
+    runs: list[dict[str, object]],
+    artifacts: list[dict[str, object]],
+    *,
+    claimed_overrides: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        binary = root / "bin"
+        binary.mkdir()
+        gh = binary / "gh"
+        gh.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"actions/workflows/native-release-evidence.yml/runs"*)
+    printf '%s\n' "${TEST_RUNS_JSON:?}"
+    ;;
+  *"/actions/runs/456/artifacts"*)
+    printf '%s\n' "${TEST_ARTIFACTS_JSON:?}"
+    ;;
+  *) exit 64 ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        gh.chmod(0o700)
+        output = root / "output"
+        release_sha = "a" * 40
+        artifact_name = f"syswarden-native-evidence-v4.10.0-{release_sha}"
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "CLAIMED_ARTIFACT_DIGEST": "sha256:" + "b" * 64,
+                "CLAIMED_ARTIFACT_ID": "789",
+                "CLAIMED_ARTIFACT_NAME": artifact_name,
+                "CLAIMED_RUN_ID": "456",
+                "GITHUB_OUTPUT": str(output),
+                "GITHUB_REPOSITORY": "duggytuxy/syswarden",
+                "PATH": f"{binary}{os.pathsep}{environment['PATH']}",
+                "RELEASE_SHA": release_sha,
+                "RELEASE_TAG": "v4.10.0",
+                "TEST_RUNS_JSON": json.dumps(
+                    [{"workflow_runs": runs}], separators=(",", ":")
+                ),
+                "TEST_ARTIFACTS_JSON": json.dumps(
+                    [{"artifacts": artifacts}], separators=(",", ":")
+                ),
+            }
+        )
+        if claimed_overrides is not None:
+            environment.update(claimed_overrides)
+        result = subprocess.run(
+            ["/bin/bash", "-c", script],
+            cwd=REPOSITORY,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result, output.read_text(encoding="utf-8") if output.exists() else ""
+
+
 class ReleaseQualificationWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -506,17 +571,17 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "- ${{ 'syswarden-release-lab' }}",
         ):
             self.assertIn(label, qualify)
-        self.assertNotIn("environment:", qualify)
+        self.assertNotRegex(qualify, r"(?m)^    environment(?:\s*:|$)")
         self.assertNotIn("${{ secrets.", qualify)
-        self.assertNotIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", qualify)
+        self.assertNotIn("Generate and Verify Protected Candidate Manifest", qualify)
         self.assertIn("needs: qualify-release", hosted)
         self.assertIn("runs-on: ubuntu-24.04\n", hosted)
-        self.assertNotIn("self-hosted", hosted)
+        self.assertNotRegex(hosted, r"(?m)^    runs-on:.*self-hosted")
         self.assertIn(
             "environment:\n      name: syswarden-release-qualification",
             hosted,
         )
-        self.assertEqual(hosted.count("${{ secrets."), 1)
+        self.assertEqual(hosted.count("${{ secrets."), 0)
         self.assertEqual(self.workflow.count("    environment:\n"), 1)
         self.assertEqual(self.workflow.count("- self-hosted"), 1)
 
@@ -908,6 +973,87 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 failed, _ = run_native_signing_resolver(script, runs, artifacts)
                 self.assertNotEqual(failed.returncode, 0)
 
+    def test_hosted_native_evidence_resolution_is_independent_and_fail_closed(
+        self,
+    ) -> None:
+        script = workflow_step_script(
+            self.workflow, "Independently Resolve Native Evidence for Hosted Seal"
+        )
+        release_sha = "a" * 40
+        artifact_name = f"syswarden-native-evidence-v4.10.0-{release_sha}"
+        run: dict[str, object] = {
+            "id": 456,
+            "path": ".github/workflows/native-release-evidence.yml",
+            "head_sha": release_sha,
+            "head_branch": "main",
+            "event": "workflow_dispatch",
+            "run_attempt": 1,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        artifact: dict[str, object] = {
+            "id": 789,
+            "name": artifact_name,
+            "expired": False,
+            "size_in_bytes": 4096,
+            "digest": "sha256:" + "b" * 64,
+            "workflow_run": {"id": 456, "head_sha": release_sha},
+        }
+        result, output = run_hosted_native_evidence_resolver(
+            script, [run], [artifact]
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            output,
+            "run_id=456\n"
+            "artifact_id=789\n"
+            f"artifact_name={artifact_name}\n"
+            f"artifact_digest=sha256:{'b' * 64}\n",
+        )
+
+        invalid_responses = (
+            ([run, run], [artifact]),
+            ([{**run, "path": ".github/workflows/other.yml"}], [artifact]),
+            ([{**run, "head_sha": "c" * 40}], [artifact]),
+            ([{**run, "head_branch": "feature"}], [artifact]),
+            ([{**run, "event": "push"}], [artifact]),
+            ([{**run, "run_attempt": 2}], [artifact]),
+            ([{**run, "status": "in_progress"}], [artifact]),
+            ([{**run, "conclusion": "failure"}], [artifact]),
+            ([run], [artifact, {**artifact, "id": 790}]),
+            ([run], [{**artifact, "name": "replacement"}]),
+            ([run], [{**artifact, "expired": True}]),
+            ([run], [{**artifact, "size_in_bytes": 0}]),
+            ([run], [{**artifact, "digest": ""}]),
+            ([run], [{**artifact, "workflow_run": {"id": 455, "head_sha": release_sha}}]),
+            ([run], [{**artifact, "workflow_run": {"id": 456, "head_sha": "c" * 40}}]),
+        )
+        for runs, artifacts in invalid_responses:
+            with self.subTest(runs=runs, artifacts=artifacts):
+                failed, _ = run_hosted_native_evidence_resolver(
+                    script, runs, artifacts
+                )
+                self.assertNotEqual(failed.returncode, 0)
+
+        for claim, value in (
+            ("CLAIMED_RUN_ID", "455"),
+            ("CLAIMED_ARTIFACT_ID", "790"),
+            ("CLAIMED_ARTIFACT_NAME", "replacement"),
+            ("CLAIMED_ARTIFACT_DIGEST", "sha256:" + "c" * 64),
+        ):
+            with self.subTest(claim=claim):
+                failed, _ = run_hosted_native_evidence_resolver(
+                    script,
+                    [run],
+                    [artifact],
+                    claimed_overrides={claim: value},
+                )
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn(
+                    "claims differ from the independently resolved GitHub identities",
+                    failed.stderr,
+                )
+
     def test_unsigned_artifact_is_resolved_by_exact_run_bound_identity(self) -> None:
         script = workflow_step_script(
             self.workflow, "Resolve Exact Unsigned Qualification Artifact"
@@ -964,11 +1110,12 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
 
-    def test_hosted_package_byte_gate_precedes_the_only_secret_reference(self) -> None:
+    def test_hosted_package_byte_gate_precedes_candidate_reuse_without_secrets(self) -> None:
         gate_name = "Require Successful Qualification Before Release Signing"
         gate = workflow_step_script(self.workflow, gate_name)
-        signing_name = "Generate and Verify Signed Update Manifest"
-        signing = workflow_step_script(self.workflow, signing_name)
+        verify_name = "Revalidate Attested Candidate Update Before Final Seal"
+        reuse_name = "Reuse and Verify Exact Candidate Update Manifest"
+        reuse = workflow_step_script(self.workflow, reuse_name)
         for contract in (
             "sha256sum --check --strict EVIDENCE_SHA256SUMS.txt",
             "expected_manifest_files",
@@ -985,13 +1132,19 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.assertIn(contract, gate)
         self.assertEqual(gate.count("verify-packages"), 2)
         self.assertNotIn("${{ secrets.", gate)
-        self.assertEqual(self.workflow.count("${{ secrets."), 1)
-        self.assertLess(self.workflow.index(gate_name), self.workflow.index(signing_name))
-        secret_index = self.workflow.index("${{ secrets.")
-        self.assertGreater(secret_index, self.workflow.index(gate_name))
-        self.assertIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", signing)
-        self.assertIn("env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", signing)
-        self.assertNotIn("set -x", signing)
+        self.assertEqual(self.workflow.count("${{ secrets."), 0)
+        self.assertLess(self.workflow.index(gate_name), self.workflow.index(verify_name))
+        self.assertLess(self.workflow.index(verify_name), self.workflow.index(reuse_name))
+        self.assertIn("env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", reuse)
+        self.assertEqual(reuse.count("cmp --"), 2)
+        self.assertNotIn("generate", reuse)
+        self.assertNotIn("set -x", reuse)
+        candidate = (
+            REPOSITORY / ".github" / "workflows" / "candidate-update-bundle.yml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            candidate.count("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"), 1
+        )
 
     def test_unsigned_and_final_artifact_names_and_inventories_are_exact(self) -> None:
         x64 = workflow_job(self.workflow, "qualify-release")
@@ -1037,19 +1190,96 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(contract, final_seal)
 
+    def test_candidate_update_inventory_is_exact_in_all_three_seals(self) -> None:
+        files = (
+            "native-release-evidence/candidate-update/CANDIDATE_UPDATE_BUNDLE.json",
+            "native-release-evidence/candidate-update/CANDIDATE_UPDATE_SHA256SUMS.txt",
+            "native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json",
+            "native-release-evidence/candidate-update/node01/syswarden-update-manifest-v1.json.sig",
+            "native-release-evidence/candidate-update/node01/syswarden_${candidate_version}_amd64.deb",
+            "native-release-evidence/candidate-update/verification/producer-attestation.jsonl",
+            "native-release-evidence/candidate-update/verification/syswarden_${candidate_version}_amd64.deb.asc",
+        )
+        directories = (
+            "native-release-evidence/candidate-update",
+            "native-release-evidence/candidate-update/node01",
+            "native-release-evidence/candidate-update/verification",
+        )
+        for step_name in (
+            "Seal Exact Unsigned Qualification Evidence Inventory",
+            "Require Successful Qualification Before Release Signing",
+            "Seal Exact Qualification Evidence Inventory",
+        ):
+            step = workflow_step_script(self.workflow, step_name)
+            for path in files:
+                self.assertIn(f'"{path}"', step, f"{step_name}: {path}")
+            for path in directories:
+                self.assertRegex(
+                    step,
+                    rf"(?m)^\s+{re.escape(path)}\s*$",
+                    f"{step_name}: {path}",
+                )
+
+    def test_candidate_update_is_independently_resolved_and_byte_revalidated(self) -> None:
+        resolve = workflow_step_script(
+            self.workflow, "Resolve Unique Protected Candidate Update Bundle"
+        )
+        verify = workflow_step_script(
+            self.workflow, "Independently Verify Protected Candidate Update Bundle"
+        )
+        native = workflow_step_script(
+            self.workflow, "Revalidate Candidate-Bound Native Release Evidence"
+        )
+        for contract in (
+            "actions/workflows/candidate-update-bundle.yml/runs",
+            '.path == ".github/workflows/candidate-update-bundle.yml"',
+            ".run_attempt == 1",
+            '.status == "completed"',
+            '.conclusion == "success"',
+            "candidate update run must expose exactly one artifact",
+            '^sha256:[0-9a-f]{64}$',
+        ):
+            self.assertIn(contract, resolve)
+        for contract in (
+            "CANDIDATE_UPDATE_SHA256SUMS.txt",
+            "sha256sum --check --strict CANDIDATE_UPDATE_SHA256SUMS.txt",
+            '.source == {native_signing_workflow:',
+            'gh attestation verify "${descriptor}"',
+            "--deny-self-hosted-runners",
+            "update_manifest.go verify",
+            'cmp -- "${deb}"',
+            'cmp -- "${deb_signature}"',
+            "producer_attestation_sha256",
+        ):
+            self.assertIn(contract, verify)
+        for contract in (
+            'qualification_bundle_identity == $bundle_identity',
+            'qualification_bundle_descriptor_sha256 == $descriptor_sha256',
+            'qualification_bundle_producer_attestation_sha256 == $producer_attestation_sha256',
+            'manifest_sha256 == $manifest_sha256',
+            'manifest_signature_sha256 == $manifest_signature_sha256',
+            'detached_package_signature_sha256 == $detached_signature_sha256',
+            'cmp -- "${CANDIDATE_UPDATE_SOURCE_DIR}/${relative}"',
+            '.schema_version == 3',
+        ):
+            self.assertIn(contract, native)
+        self.assertEqual(self.workflow.count("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"), 0)
+
     def test_hosted_signing_tool_is_built_tested_and_revalidated_from_checkout(self) -> None:
         hosted = workflow_job(self.workflow, "seal-release")
         checkout = hosted.index("Checkout Exact Hosted Signing Commit")
         byte_gate = hosted.index("Require Successful Qualification Before Release Signing")
-        build = hosted.index("Build and Test Signed Update Manifest Tool")
-        revalidate = hosted.index("Revalidate Hosted Signing Tool Before Secret Exposure")
-        sign = hosted.index("Generate and Verify Signed Update Manifest")
+        build = hosted.index("Build and Test Candidate Update Manifest Verifier")
+        revalidate = hosted.index("Revalidate Hosted Candidate Manifest Verifier")
+        verify = hosted.index("Revalidate Attested Candidate Update Before Final Seal")
+        reuse = hosted.index("Reuse and Verify Exact Candidate Update Manifest")
         self.assertLess(checkout, byte_gate)
         self.assertLess(byte_gate, build)
         self.assertLess(build, revalidate)
-        self.assertLess(revalidate, sign)
+        self.assertLess(revalidate, verify)
+        self.assertLess(verify, reuse)
         build_script = workflow_step_script(
-            self.workflow, "Build and Test Signed Update Manifest Tool"
+            self.workflow, "Build and Test Candidate Update Manifest Verifier"
         )
         self.assertIn("GOFLAGS=-mod=readonly go test", build_script)
         self.assertIn("GOFLAGS=-mod=readonly go build", build_script)
@@ -1057,7 +1287,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertEqual(build_script.count("git rev-parse --verify 'HEAD^{commit}'"), 2)
         self.assertEqual(build_script.count("git status --porcelain=v1"), 2)
         revalidate_script = workflow_step_script(
-            self.workflow, "Revalidate Hosted Signing Tool Before Secret Exposure"
+            self.workflow, "Revalidate Hosted Candidate Manifest Verifier"
         )
         self.assertIn("EXPECTED_MANIFEST_TOOL_SHA256", revalidate_script)
         self.assertIn("actual_tool_sha256", revalidate_script)
@@ -1407,7 +1637,14 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "native_lifecycle_contract_v4.10.0.json",
             "native-lifecycle/RAW_EVIDENCE.tar",
             "native-lifecycle/VERDICT.json",
-            "gh attestation verify",
+            'gh attestation verify \\\n  "${NATIVE_RELEASE_EVIDENCE_DIR}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json"',
+            '"${GITHUB_REPOSITORY}/.github/workflows/native-release-evidence.yml"',
+            '--signer-digest "${RELEASE_SHA}"',
+            '--source-digest "${RELEASE_SHA}"',
+            '--source-ref "refs/heads/main"',
+            "--digest-alg sha256",
+            ".verificationResult.statement.predicateType",
+            '.name == "NATIVE_RELEASE_EVIDENCE_MANIFEST.json"',
             "NATIVE_RELEASE_EVIDENCE_MANIFEST.json",
             "QUALIFICATION_BINDING.json",
         ):
@@ -1467,6 +1704,83 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "source_allocation:$source_allocation_contract", gate
         )
 
+    def test_hosted_seal_redownloads_and_exactly_attests_native_evidence(self) -> None:
+        hosted = workflow_job(self.workflow, "seal-release")
+        resolver_name = "Independently Resolve Native Evidence for Hosted Seal"
+        download_name = "Download Independently Resolved Native Evidence for Hosted Seal"
+        verify_name = "Revalidate Native Evidence Provenance on Hosted Seal"
+        resolver = workflow_step_script(self.workflow, resolver_name)
+        for contract in (
+            "actions/workflows/native-release-evidence.yml/runs",
+            '.path == ".github/workflows/native-release-evidence.yml"',
+            '.head_branch == "main"',
+            '.event == "workflow_dispatch"',
+            ".run_attempt == 1",
+            '.status == "completed"',
+            '.conclusion == "success"',
+            "actions/runs/${run_id}/artifacts",
+            '"${CLAIMED_RUN_ID}" != "${run_id}"',
+            '"${CLAIMED_ARTIFACT_ID}" != "${artifact_id}"',
+            '"${CLAIMED_ARTIFACT_DIGEST}" != "${artifact_digest}"',
+        ):
+            self.assertIn(contract, resolver)
+        download = workflow_step(self.workflow, download_name)
+        self.assertIn(
+            "artifact-ids: ${{ steps.hosted_native_evidence.outputs.artifact_id }}",
+            download,
+        )
+        self.assertIn(
+            "run-id: ${{ steps.hosted_native_evidence.outputs.run_id }}", download
+        )
+        self.assertNotIn("needs.qualify-release.outputs", download)
+
+        verify = workflow_step_script(self.workflow, verify_name)
+        for contract in (
+            "actions/artifacts/${ARTIFACT_ID}",
+            ".workflow_run.id == $run_id and .workflow_run.head_sha == $sha",
+            'gh attestation verify "${native_manifest}"',
+            '"${GITHUB_REPOSITORY}/.github/workflows/native-release-evidence.yml"',
+            '--signer-digest "${RELEASE_SHA}"',
+            '--source-digest "${RELEASE_SHA}"',
+            '--source-ref "refs/heads/main"',
+            "--digest-alg sha256",
+            "--format json",
+            ".verificationResult.statement.predicateType",
+            '.name == "NATIVE_RELEASE_EVIDENCE_MANIFEST.json"',
+            "source_all = records(source)",
+            'copied_all = records(copied, {"QUALIFICATION_BINDING.json"})',
+            "if source_all != copied_all:",
+            "native evidence manifest inventory or digest mismatch",
+        ):
+            self.assertIn(contract, verify)
+        self.assertNotIn("--deny-self-hosted-runners", verify)
+
+        hosted_gate = workflow_step(
+            self.workflow, "Require Successful Qualification Before Release Signing"
+        )
+        for output_name in (
+            "artifact_digest",
+            "artifact_id",
+            "artifact_name",
+            "run_id",
+        ):
+            self.assertIn(
+                "steps.hosted_native_evidence.outputs." + output_name, hosted_gate
+            )
+        self.assertNotIn(
+            "needs.qualify-release.outputs.native_evidence_", hosted_gate
+        )
+        positions = [
+            hosted.index(name)
+            for name in (
+                resolver_name,
+                download_name,
+                verify_name,
+                "Require Successful Qualification Before Release Signing",
+            )
+        ]
+        self.assertEqual(positions, sorted(positions))
+
     def test_native_rotation_selects_exact_bundle_attested_identities(self) -> None:
         gate = workflow_step_script(
             self.workflow, "Revalidate Candidate-Bound Native Release Evidence"
@@ -1501,7 +1815,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             'rhel_signing_provenance_sha256="$(sha256sum "${rhel_signing_provenance}"',
             '--argjson selected_keys "${attested_native_identities}"',
             '--argjson rhel_package "${attested_rhel_package}"',
-            '.schema_version == 2',
+            '.schema_version == 3',
             'node05-almalinux9.8.json',
             'node05-almalinux9.8-rhelpo.json',
             'node03-almalinux10.2-rhelpo.json',
@@ -1770,6 +2084,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.package_workflow, "Test Package and Release Validators"
         )
         for test_file in (
+            "scripts/ci/candidate_update_bundle_workflow_test.py",
+            "scripts/ci/native_lifecycle_evidence_test.py",
             "scripts/ci/native_performance_probe_test.py",
             "scripts/ci/native_release_evidence_workflow_test.py",
             "scripts/ci/package_qualification_matrix_test.py",
@@ -1939,10 +2255,14 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
     def test_hosted_gate_sign_seal_upload_cleanup_and_verdict_order_is_exact(self) -> None:
         hosted = workflow_job(self.workflow, "seal-release")
         ordered = (
+            "Independently Resolve Native Evidence for Hosted Seal",
+            "Download Independently Resolved Native Evidence for Hosted Seal",
+            "Revalidate Native Evidence Provenance on Hosted Seal",
             "Require Successful Qualification Before Release Signing",
-            "Build and Test Signed Update Manifest Tool",
-            "Revalidate Hosted Signing Tool Before Secret Exposure",
-            "Generate and Verify Signed Update Manifest",
+            "Build and Test Candidate Update Manifest Verifier",
+            "Revalidate Hosted Candidate Manifest Verifier",
+            "Revalidate Attested Candidate Update Before Final Seal",
+            "Reuse and Verify Exact Candidate Update Manifest",
             "Seal Exact Qualification Evidence Inventory",
             "Upload Exact Final Qualification Evidence",
             "Remove Ephemeral Signing Material",
@@ -2003,7 +2323,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             )
         x64 = workflow_job(self.workflow, "qualify-release")
         hosted = workflow_job(self.workflow, "seal-release")
-        self.assertNotIn("environment:", x64)
+        self.assertNotRegex(x64, r"(?m)^    environment(?:\s*:|$)")
         self.assertNotIn("${{ secrets.", x64)
         self.assertIn("runs-on: ubuntu-24.04\n", hosted)
         self.assertIn("needs: qualify-release", hosted)

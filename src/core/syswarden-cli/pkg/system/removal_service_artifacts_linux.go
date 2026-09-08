@@ -493,8 +493,16 @@ func RemovePreparedServiceArtifactsForRemoval() error {
 	if err := RequireRemovalTombstone(); err != nil {
 		return fmt.Errorf("service artifact removal requires the durable removal tombstone: %w", err)
 	}
+	rhelPackageOwned := false
+	if !IsAlpine() {
+		var err error
+		rhelPackageOwned, err = attestInstalledRHELPackageOwnedProfile()
+		if err != nil {
+			return fmt.Errorf("attest RHEL package-owned profile before service artifact removal: %w", err)
+		}
+	}
 	if err := ReattestFirewallStatePreparedForRemoval(); err != nil {
-		if IsAlpine() {
+		if IsAlpine() || rhelPackageOwned {
 			return fmt.Errorf("service artifact removal requires prepared firewall mutators: %w", err)
 		}
 		initialErr := err
@@ -528,6 +536,16 @@ func RemovePreparedServiceArtifactsForRemoval() error {
 		}
 		if err := removeExactFirewallRemovalFile("/etc/init.d/syswarden-firewall", openRCFirewallService, 0755); err != nil {
 			return err
+		}
+	} else if rhelPackageOwned {
+		if err := attestRHELPackageOwnedEnablementAbsentAt("/"); err != nil {
+			return err
+		}
+		present, err := attestInstalledRHELPackageOwnedProfile()
+		if err != nil || !present {
+			return errors.Join(
+				fmt.Errorf("RHEL package-owned payload changed while preserving it for RPM erase"), err,
+			)
 		}
 	} else {
 		host := productionPreparedSystemdServiceArtifactHost()

@@ -64,6 +64,7 @@ EXPECTED_ROLES = (
     "systemd-preset",
     "openrc-source",
     "openrc-source",
+    "rpm-postun-recovery",
     "rpm-pre-install",
     "rpm-post-install",
     "rpm-pre-uninstall",

@@ -65,13 +65,19 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
         path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
         return path
 
-    def raw(self, profile_id: str, name: str) -> tuple[str, str]:
+    def raw(
+        self,
+        profile_id: str,
+        name: str,
+        payload: dict[str, object] | None = None,
+    ) -> tuple[str, str]:
         reference = f"{profile_id}/raw/{name}.json"
         path = self.artifacts / reference
         path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         self.write_json(
             path,
-            {
+            payload
+            or {
                 "capture": name,
                 "origin": "real-native-host",
                 "profile_id": profile_id,
@@ -84,8 +90,14 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
         self.records[reference] = digest
         return reference, digest
 
-    def attach(self, value: dict[str, object], profile_id: str, name: str) -> None:
-        reference, digest = self.raw(profile_id, name)
+    def attach(
+        self,
+        value: dict[str, object],
+        profile_id: str,
+        name: str,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        reference, digest = self.raw(profile_id, name, payload)
         value["evidence_ref"] = reference
         value["evidence_sha256"] = digest
 
@@ -290,7 +302,37 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
             },
             "package_verifications": verifications,
         }
-        self.attach(item, profile_id, f"scenario-{index + 1:02d}")
+        raw_payload = None
+        if (
+            profile["package_variant"] == "rhel-package-owned"
+            and obligation["id"] == "verified-rollback-v4100-v4043"
+        ):
+            rollback_paths = self.contract[
+                "rhel_package_owned_rollback_absence_paths"
+            ]
+            raw_payload = {
+                "schema": evidence.RHEL_PACKAGE_OWNED_ROLLBACK_EVIDENCE_SCHEMA,
+                "profile_id": profile_id,
+                "scenario_id": "verified-rollback-v4100-v4043",
+                "candidate_release": evidence.TARGET_RELEASE,
+                "installed_release": evidence.BASELINE_RELEASE,
+                "package_variant": "rhel-package-owned",
+                "observation_origin": "real-native-host",
+                "observed_at": item["observed_at"],
+                "probe": "lstat-no-follow",
+                "checked_path_count": len(rollback_paths),
+                "present_path_count": 0,
+                "path_inventory": [
+                    {"path": path, "state": "absent", "errno": "ENOENT"}
+                    for path in rollback_paths
+                ],
+            }
+        self.attach(
+            item,
+            profile_id,
+            f"scenario-{index + 1:02d}",
+            raw_payload,
+        )
         return item
 
     def make_observation(self, profile: dict[str, object]) -> dict[str, object]:
@@ -698,6 +740,147 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
         changed.write_bytes(evidence.DEFAULT_CONTRACT.read_bytes() + b"\n")
         with self.assertRaisesRegex(evidence.LifecycleEvidenceError, "reviewed"):
             evidence.load_contract(changed)
+
+    def test_rhel_package_owned_payload_and_transition_proofs_are_mandatory(self) -> None:
+        vendor_paths = {
+            "/var/lib/syswarden/removal-in-progress-v1.new",
+            "/var/lib/.syswarden-removal-finalizing-v1.new",
+            "/var/lib/.syswarden-rhelpo-erase-ready-v1",
+            "/var/lib/.syswarden-rhelpo-erase-ready-v1.new",
+            "/var/lib/.syswarden-rhelpo-preset-pending-v1",
+            "/var/lib/.syswarden-rhelpo-preset-pending-v1.new",
+            "/var/lib/.syswarden-rhelpo-postun-recovery-v1",
+            "/var/lib/.syswarden-rhelpo-postun-recovery-v1.new",
+            "/usr/lib/systemd/system/syswarden-core.service",
+            "/usr/lib/systemd/system/syswarden-firewall.service",
+            "/usr/lib/systemd/system/syswarden-firewall.service.d",
+            "/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf",
+            "/usr/lib/systemd/system-preset/90-syswarden-rhel-image.preset",
+            "/usr/libexec/syswarden/rhelpo-postun-recovery-v1",
+            "/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration",
+            "/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service.syswarden-rhelpo-migration",
+        }
+        self.assertTrue(
+            vendor_paths.issubset(set(self.contract["zero_residue_paths"]))
+        )
+        for profile_id in ("RPM-A9-RHELPO", "RPM-A10-RHELPO"):
+            checks = self.contract["profile_scenario_checks"][profile_id]
+            self.assertEqual(
+                set(checks["candidate-upgrade-v4043-v4100"]),
+                {
+                    "legacy_systemd_units_migrated",
+                    "package_owned_units_authoritative",
+                    "package_owned_profile_attested",
+                },
+            )
+            self.assertEqual(
+                set(checks["candidate-reupgrade-v4043-v4100"]),
+                set(checks["candidate-upgrade-v4043-v4100"]),
+            )
+            self.assertEqual(
+                set(checks["verified-rollback-v4100-v4043"]),
+                {
+                    "standard_systemd_units_authoritative",
+                    "package_owned_vendor_payload_absent",
+                },
+            )
+            for scenario_id in (
+                "clean-cycle-uninstall-purge",
+                "candidate-final-uninstall-purge",
+            ):
+                self.assertEqual(
+                    set(checks[scenario_id]),
+                    {
+                        "package_owned_units_removed",
+                        "package_owned_dropin_removed",
+                        "package_owned_preset_removed",
+                        "package_owned_profile_removed",
+                        "package_owned_enablement_removed",
+                        "erase_ready_boundary_consumed",
+                    },
+                )
+
+    def test_rhel_rollback_vendor_absence_raw_proof_is_exact(self) -> None:
+        scenario_index = 8
+        for profile_index in (3, 4):
+            observation = self.observations[profile_index]
+            scenario = observation["scenarios"][scenario_index]
+            reference = scenario["evidence_ref"]
+            raw_path = self.artifacts / reference
+            original = raw_path.read_bytes()
+            raw_document = json.loads(original)
+            self.assertEqual(
+                [item["path"] for item in raw_document["path_inventory"]],
+                self.contract["rhel_package_owned_rollback_absence_paths"],
+            )
+            self.assertEqual(raw_document["present_path_count"], 0)
+
+            mutations = (
+                (
+                    "present vendor path",
+                    lambda value: value["path_inventory"][0].update(
+                        {"state": "present", "errno": "NONE"}
+                    ),
+                    "vendor payload remains",
+                ),
+                (
+                    "missing vendor path",
+                    lambda value: value["path_inventory"].pop(),
+                    "path inventory is not exact",
+                ),
+                (
+                    "extra vendor path",
+                    lambda value: value["path_inventory"].append(
+                        {
+                            "path": "/usr/lib/systemd/system/unexpected.service",
+                            "state": "absent",
+                            "errno": "ENOENT",
+                        }
+                    ),
+                    "path inventory is not exact",
+                ),
+                (
+                    "reordered vendor paths",
+                    lambda value: value["path_inventory"].reverse(),
+                    "path inventory is not exact",
+                ),
+                (
+                    "wrong profile binding",
+                    lambda value: value.update({"profile_id": "RPM-A9"}),
+                    "identity is invalid",
+                ),
+                (
+                    "wrong installed release",
+                    lambda value: value.update({"installed_release": "v4.04.2"}),
+                    "identity is invalid",
+                ),
+                (
+                    "boolean present count",
+                    lambda value: value.update({"present_path_count": False}),
+                    "identity is invalid",
+                ),
+                (
+                    "wrong scenario time",
+                    lambda value: value.update(
+                        {"observed_at": "2026-09-10T08:10:01Z"}
+                    ),
+                    "identity is invalid",
+                ),
+            )
+            for label, mutate, message in mutations:
+                with self.subTest(profile=profile_index, mutation=label):
+                    changed = copy.deepcopy(observation)
+                    changed_raw = copy.deepcopy(raw_document)
+                    mutate(changed_raw)
+                    self.write_json(raw_path, changed_raw)
+                    changed["scenarios"][scenario_index]["evidence_sha256"] = (
+                        hashlib.sha256(raw_path.read_bytes()).hexdigest()
+                    )
+                    self.assert_invalid(
+                        self.rewrite(profile_index, changed), message
+                    )
+                    raw_path.write_bytes(original)
+                    self.write_json(self.paths[profile_index], observation)
 
     def test_observation_cannot_self_qualify_or_enable_publication(self) -> None:
         for key, value in (
@@ -1201,6 +1384,28 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
                 checkpoint["observed_at"] = f"2026-09-07T17:00:{index + 1:02d}Z"
             for index, scenario in enumerate(observation["scenarios"]):
                 scenario["observed_at"] = f"2026-09-07T17:{index + 1:02d}:00Z"
+            if observation["host"]["package_variant"] == "rhel-package-owned":
+                rollback = observation["scenarios"][8]
+                raw_path = self.artifacts / rollback["evidence_ref"]
+                raw_document = json.loads(raw_path.read_bytes())
+                raw_document["observed_at"] = rollback["observed_at"]
+                self.write_json(raw_path, raw_document)
+                rollback["evidence_sha256"] = hashlib.sha256(
+                    raw_path.read_bytes()
+                ).hexdigest()
+                preceding_records = {
+                    item["evidence_ref"]: item["evidence_sha256"]
+                    for item in (
+                        [observation["host"]]
+                        + observation["packages"]
+                        + observation["checkpoints"]
+                        + observation["scenarios"]
+                        + [observation["final_state"]]
+                    )
+                }
+                observation["attestation"][
+                    "attested_evidence_inventory_sha256"
+                ] = evidence._inventory_sha256(preceding_records)
             self.write_json(path, observation)
         verdict = self.assemble()
         (bundle_root / "VERDICT.json").write_text(
@@ -1317,19 +1522,31 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
                     changed["scenarios"][scenario_index]["checks"][check] = False
                     self.assert_invalid(self.rewrite(0, changed), "check failed")
                     self.write_json(self.paths[0], self.observations[0])
+        scenario_indexes = {
+            scenario["id"]: index
+            for index, scenario in enumerate(self.contract["scenarios"])
+        }
         for profile_index in (3, 4):
-            for check in self.contract["profile_scenario_checks"][
-                self.observations[profile_index]["host"]["profile_id"]
-            ]["candidate-clean-install"]:
-                with self.subTest(profile=profile_index, check=check):
-                    changed = copy.deepcopy(self.observations[profile_index])
-                    changed["scenarios"][1]["checks"][check] = False
-                    self.assert_invalid(
-                        self.rewrite(profile_index, changed), "check failed"
-                    )
-                    self.write_json(
-                        self.paths[profile_index], self.observations[profile_index]
-                    )
+            profile_id = self.observations[profile_index]["host"]["profile_id"]
+            for scenario_id, checks in self.contract["profile_scenario_checks"][
+                profile_id
+            ].items():
+                scenario_index = scenario_indexes[scenario_id]
+                for check in checks:
+                    with self.subTest(
+                        profile=profile_index,
+                        scenario=scenario_id,
+                        check=check,
+                    ):
+                        changed = copy.deepcopy(self.observations[profile_index])
+                        changed["scenarios"][scenario_index]["checks"][check] = False
+                        self.assert_invalid(
+                            self.rewrite(profile_index, changed), "check failed"
+                        )
+                        self.write_json(
+                            self.paths[profile_index],
+                            self.observations[profile_index],
+                        )
 
     def test_rhel_package_owned_stages_offline_then_activates_on_first_boot(self) -> None:
         for profile_index in (3, 4):
