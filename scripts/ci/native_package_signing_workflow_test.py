@@ -626,11 +626,21 @@ print(json.dumps(document, separators=(",", ":")))
         self.assertIn("native_package_signing_bundle.py verify", self.workflow)
         self.assertIn("compression-level: 0", self.workflow)
 
-    def test_committed_policy_remains_fail_closed_without_real_keys(self) -> None:
-        policy = POLICY.read_text(encoding="utf-8")
-        self.assertIn('"status": "foundation-not-qualified"', policy)
-        self.assertIn('"publishing": false', policy)
-        self.assertGreaterEqual(policy.count('"trusted_keys": []'), 3)
+    def test_committed_policy_enrolls_one_key_per_family_but_remains_fail_closed(self) -> None:
+        policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        self.assertEqual(policy["status"], "foundation-not-qualified")
+        self.assertFalse(policy["publishing"])
+        self.assertEqual(policy["deb"]["implementation"], "implemented-not-qualified")
+        selected = []
+        for family in ("rpm", "apk", "deb"):
+            self.assertEqual(len(policy[family]["trusted_keys"]), 1)
+            selected.append(policy[family]["trusted_keys"][0])
+        self.assertEqual(len({item["id"] for item in selected}), 3)
+        self.assertEqual(len({item["public_key_sha256"] for item in selected}), 3)
+        self.assertNotEqual(
+            policy["rpm"]["trusted_keys"][0]["fingerprint"],
+            policy["deb"]["trusted_keys"][0]["fingerprint"],
+        )
 
 
 if __name__ == "__main__":
