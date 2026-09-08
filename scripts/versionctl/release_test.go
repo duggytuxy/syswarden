@@ -114,13 +114,17 @@ func validateReleaseFixtureWithRewritePolicy(repo, tag string, policy changelogR
 }
 
 func validateReleaseFixtureWithFollowupPolicy(repo, tag string, policy changelogFollowupPolicy) (string, error) {
+	return validateReleaseFixtureWithFollowupPolicies(repo, tag, []changelogFollowupPolicy{policy})
+}
+
+func validateReleaseFixtureWithFollowupPolicies(repo, tag string, policies []changelogFollowupPolicy) (string, error) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	app := application{
-		git:                   realGit{},
-		out:                   stdout,
-		getenv:                os.Getenv,
-		releaseFollowupPolicy: &policy,
+		git:                     realGit{},
+		out:                     stdout,
+		getenv:                  os.Getenv,
+		releaseFollowupPolicies: policies,
 	}
 	err := app.run([]string{"validate-release", "--repo", repo, "--tag", tag}, stderr)
 	return stdout.String() + stderr.String(), err
@@ -303,6 +307,58 @@ func TestValidateReleaseAcceptsOnlyTheInjectedDigestBoundFollowup(t *testing.T) 
 		t.Fatalf("validate approved follow-up: %v\n%s", err, output)
 	}
 	if !strings.Contains(output, "2 non-versioning follow-up commit(s)") {
+		t.Fatalf("unexpected validation output: %s", output)
+	}
+	after := string(runTestGit(t, repo, "status", "--porcelain=v1"))
+	if before != after || after != "" {
+		t.Fatalf("validate-release changed repository status: before=%q after=%q", before, after)
+	}
+}
+
+func TestValidateReleaseAcceptsTwoSequentialSealedFollowups(t *testing.T) {
+	repo := newReleaseHistoryRepository(t, "v4.03.3")
+	writeReleaseTransition(t, repo, "v4.10.0")
+	commitReleaseFixture(t, repo, "Major : prepare release")
+
+	commitFollowup := func(subject, oldText, newText string) changelogFollowupPolicy {
+		t.Helper()
+		base := readTestRepoFile(t, repo, changelogPath)
+		candidate := bytes.Replace(base, []byte(oldText), []byte(newText), 1)
+		if bytes.Equal(base, candidate) {
+			t.Fatalf("test fixture did not change %q", oldText)
+		}
+		writeReleaseTestFile(t, repo, changelogPath, candidate)
+		commitReleaseFixture(t, repo, subject)
+		return changelogFollowupPolicy{
+			CommitSHA:       strings.TrimSpace(string(runTestGit(t, repo, "rev-parse", "HEAD"))),
+			ParentSHA:       strings.TrimSpace(string(runTestGit(t, repo, "rev-parse", "HEAD^"))),
+			Version:         "v4.10.0",
+			Subject:         subject,
+			BaseSHA256:      fmt.Sprintf("%x", sha256.Sum256(base)),
+			CandidateSHA256: fmt.Sprintf("%x", sha256.Sum256(candidate)),
+		}
+	}
+	first := commitFollowup(
+		"Security : attest native signing environment protection (#157)",
+		"Validate the version contract",
+		"Attest the native signing environment",
+	)
+	second := commitFollowup(
+		"Fix : sign the exact APK control stream (#161)",
+		"Attest the native signing environment",
+		"Sign the exact APK control stream",
+	)
+
+	writeReleaseTestFile(t, repo, "qualification.txt", []byte("qualified\n"))
+	commitReleaseFixture(t, repo, "Qualification : preserve the sealed changelog")
+	tagReleaseFixture(t, repo, "v4.10.0")
+
+	before := string(runTestGit(t, repo, "status", "--porcelain=v1"))
+	output, err := validateReleaseFixtureWithFollowupPolicies(repo, "v4.10.0", []changelogFollowupPolicy{first, second})
+	if err != nil {
+		t.Fatalf("validate sequential approved follow-ups: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "3 non-versioning follow-up commit(s)") {
 		t.Fatalf("unexpected validation output: %s", output)
 	}
 	after := string(runTestGit(t, repo, "status", "--porcelain=v1"))

@@ -184,6 +184,80 @@ func TestApprovedChangelogFollowupRemainsBoundToPR157(t *testing.T) {
 	}
 }
 
+func TestApprovedChangelogFollowupRemainsBoundToPR161(t *testing.T) {
+	t.Parallel()
+	want := changelogFollowupPolicy{
+		CommitSHA:       "06aaf5cffd5892b228be71fc27a6ed50888c2687",
+		ParentSHA:       "360e8189c812e26f47b1beffd3d5dc86d188a449",
+		Version:         "v4.10.0",
+		Subject:         "Fix : sign the exact APK control stream (#161)",
+		BaseSHA256:      "7aafe544ad7f6a9ec678fc722992f83f0088632ff7dd0c33bbf54ca4537f8902",
+		CandidateSHA256: "637597c8343dfcefb1562088ebd483a0c334529118be6e393a2cadea340ac281",
+	}
+	if approvedChangelogFollowupPR161 != want {
+		t.Fatalf("approved PR161 follow-up policy = %#v, want %#v", approvedChangelogFollowupPR161, want)
+	}
+	if len(approvedChangelogFollowups) != 2 ||
+		approvedChangelogFollowups[0] != approvedChangelogFollowup ||
+		approvedChangelogFollowups[1] != approvedChangelogFollowupPR161 {
+		t.Fatalf("approved changelog follow-up inventory = %#v", approvedChangelogFollowups)
+	}
+}
+
+func TestChangelogFollowupExceptionsSelectExactlyOneSealedIdentity(t *testing.T) {
+	t.Parallel()
+	base := validChangelog("v4.10.0")
+	candidate := bytes.Replace(base, []byte("Validate the version contract"), []byte("Sign the exact APK control stream"), 1)
+	version, _ := parseVersion("v4.10.0")
+	target := changelogFollowupPolicy{
+		CommitSHA:       strings.Repeat("3", 40),
+		ParentSHA:       strings.Repeat("4", 40),
+		Version:         version.String(),
+		Subject:         "Fix : sign the exact APK control stream (#161)",
+		BaseSHA256:      fmt.Sprintf("%x", sha256.Sum256(base)),
+		CandidateSHA256: fmt.Sprintf("%x", sha256.Sum256(candidate)),
+	}
+	other := target
+	other.CommitSHA = strings.Repeat("1", 40)
+	other.ParentSHA = strings.Repeat("2", 40)
+	other.Subject = "Security : attest native signing environment protection (#157)"
+
+	validate := func(policies []changelogFollowupPolicy, commitSHA, parentSHA string) error {
+		return validateChangelogFollowupExceptions(
+			policies,
+			commitSHA,
+			parentSHA,
+			version,
+			version,
+			target.Subject,
+			base,
+			candidate,
+		)
+	}
+	if err := validate([]changelogFollowupPolicy{other, target}, target.CommitSHA, target.ParentSHA); err != nil {
+		t.Fatalf("second exact sealed policy was rejected: %v", err)
+	}
+	if err := validate(nil, target.CommitSHA, target.ParentSHA); err == nil {
+		t.Fatal("empty policy inventory was accepted")
+	}
+	if err := validate([]changelogFollowupPolicy{other}, target.CommitSHA, target.ParentSHA); err == nil {
+		t.Fatal("unapproved identity was accepted")
+	}
+	if err := validate([]changelogFollowupPolicy{target, target}, target.CommitSHA, target.ParentSHA); err == nil {
+		t.Fatal("duplicate policy identity was accepted")
+	}
+	malformed := other
+	malformed.CommitSHA = "HEAD"
+	if err := validate([]changelogFollowupPolicy{malformed, target}, target.CommitSHA, target.ParentSHA); err == nil {
+		t.Fatal("malformed unrelated policy was accepted")
+	}
+	mutated := target
+	mutated.CandidateSHA256 = strings.Repeat("0", 64)
+	if err := validate([]changelogFollowupPolicy{other, mutated}, target.CommitSHA, target.ParentSHA); err == nil {
+		t.Fatal("wrong candidate digest was accepted")
+	}
+}
+
 func fixtureSnapshot(version string) snapshot {
 	contents := make(snapshot, len(versionTargets))
 	for _, item := range versionTargets {

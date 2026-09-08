@@ -12,12 +12,12 @@ import (
 )
 
 type application struct {
-	git                   gitClient
-	out                   io.Writer
-	getenv                func(string) string
-	releaseResetPolicy    *changelogResetPolicy
-	releaseRewritePolicy  *changelogRewritePolicy
-	releaseFollowupPolicy *changelogFollowupPolicy
+	git                     gitClient
+	out                     io.Writer
+	getenv                  func(string) string
+	releaseResetPolicy      *changelogResetPolicy
+	releaseRewritePolicy    *changelogRewritePolicy
+	releaseFollowupPolicies []changelogFollowupPolicy
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
@@ -181,12 +181,12 @@ func (app application) runValidateRelease(args []string, stderr io.Writer) error
 				return fmt.Errorf("release follow-up %s uses %s but preserves version %s", currentRef, bump, currentVersion)
 			}
 			if !bytes.Equal(currentChangelog, parentChangelog) {
-				followupPolicy := approvedChangelogFollowup
-				if app.releaseFollowupPolicy != nil {
-					followupPolicy = *app.releaseFollowupPolicy
+				followupPolicies := approvedChangelogFollowups
+				if len(app.releaseFollowupPolicies) > 0 {
+					followupPolicies = app.releaseFollowupPolicies
 				}
-				if err := validateChangelogFollowupException(
-					followupPolicy,
+				if err := validateChangelogFollowupExceptions(
+					followupPolicies,
 					currentRef,
 					parentRef,
 					parentVersion,
