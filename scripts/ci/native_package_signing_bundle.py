@@ -47,6 +47,8 @@ MAX_PACKAGE_BYTES = 256 * 1024 * 1024
 MAX_JSON_BYTES = 128 * 1024
 MAX_MANIFEST_BYTES = 16 * 1024
 MAX_APK_SIGNATURE_PREFIX_BYTES = 1024 * 1024
+MAX_APK_CONTROL_TAR_BYTES = 16 * 1024 * 1024
+MAX_APK_SIGNED_CONTROL_BYTES = 32 * 1024 * 1024
 MAX_DEB_SIGNATURE_BYTES = signature_gate.MAX_DEB_SIGNATURE_BYTES
 
 
@@ -547,7 +549,7 @@ def validate_apk_signature_archive(
                 or member.linkname != ""
                 or member.uname not in {"", "root"}
                 or member.gname not in {"", "root"}
-                or member.pax_headers
+                or member.pax_headers != {"atime": "0", "ctime": "0"}
             ):
                 fail("APK signature archive entry is invalid")
             stream = archive.extractfile(member)
@@ -562,6 +564,107 @@ def validate_apk_signature_archive(
     except (tarfile.TarError, OSError, EOFError) as exc:
         raise SigningBundleError("APK signature prefix is not a valid tar archive") from exc
     return expected_name, signature
+
+
+def unsigned_apk_control_stream(package: bytes) -> bytes:
+    """Return the exact first gzip member from an unsigned APK v2 package."""
+
+    if len(package) < 20 or not package.startswith(b"\x1f\x8b\x08"):
+        fail("unsigned APK does not start with a gzip control stream")
+    try:
+        decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        control_tar = decompressor.decompress(
+            package, MAX_APK_CONTROL_TAR_BYTES + 1
+        )
+        if decompressor.unconsumed_tail or len(control_tar) > MAX_APK_CONTROL_TAR_BYTES:
+            fail("unsigned APK control archive exceeds its decompressed size bound")
+        control_tar += decompressor.flush()
+    except zlib.error as exc:
+        raise SigningBundleError(
+            "unsigned APK control stream is not valid gzip"
+        ) from exc
+    if (
+        not decompressor.eof
+        or decompressor.unconsumed_tail
+        or len(control_tar) > MAX_APK_CONTROL_TAR_BYTES
+        or not decompressor.unused_data.startswith(b"\x1f\x8b\x08")
+    ):
+        fail("unsigned APK must contain distinct control and data gzip streams")
+    control_size = len(package) - len(decompressor.unused_data)
+    if control_size <= 0 or control_size >= len(package):
+        fail("unsigned APK control stream boundary is invalid")
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(control_tar), mode="r:") as archive:
+            members = archive.getmembers()
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        raise SigningBundleError(
+            "unsigned APK control stream is not a valid tar archive"
+        ) from exc
+    names = [member.name for member in members]
+    if (
+        not members
+        or len(names) != len(set(names))
+        or names.count(".PKGINFO") != 1
+        or any(name.startswith(".SIGN.") for name in names)
+    ):
+        fail("unsigned APK control archive identity is invalid")
+    for member in members:
+        parts = Path(member.name).parts
+        if (
+            not member.isfile()
+            or member.issym()
+            or member.islnk()
+            or not parts
+            or Path(member.name).is_absolute()
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            fail("unsigned APK control archive contains an unsafe entry")
+    return package[:control_size]
+
+
+def apk_control_command(args: argparse.Namespace) -> None:
+    package = regular_bytes(
+        args.unsigned_package, MAX_PACKAGE_BYTES, "unsigned APK package"
+    )
+    write_exclusive(args.output, unsigned_apk_control_stream(package), 0o600)
+
+
+def apk_assemble_command(args: argparse.Namespace) -> None:
+    positive_integer(args.source_date_epoch, "source date epoch")
+    if (
+        Path(args.public_key_name).name != args.public_key_name
+        or re.fullmatch(r"[A-Za-z0-9._+-]+\.rsa\.pub", args.public_key_name)
+        is None
+    ):
+        fail("APK public key filename is invalid")
+    unsigned = regular_bytes(
+        args.unsigned_package, MAX_PACKAGE_BYTES, "unsigned APK package"
+    )
+    control = unsigned_apk_control_stream(unsigned)
+    signed_control = regular_bytes(
+        args.signed_control,
+        MAX_APK_SIGNED_CONTROL_BYTES,
+        "signed APK control stream",
+    )
+    if (
+        len(signed_control) <= len(control)
+        or not signed_control.endswith(control)
+    ):
+        fail("signed APK control stream did not preserve the exact unsigned control")
+    signature_prefix = signed_control[: -len(control)]
+    if len(signature_prefix) > MAX_APK_SIGNATURE_PREFIX_BYTES:
+        fail("APK signature prefix exceeds its compressed size bound")
+    validate_apk_signature_archive(
+        signature_prefix, args.public_key_name, args.source_date_epoch
+    )
+    signed_package = signature_prefix + unsigned
+    if (
+        len(signed_package) > MAX_PACKAGE_BYTES + MAX_APK_SIGNATURE_PREFIX_BYTES
+        or not signed_package.endswith(unsigned)
+    ):
+        fail("signed APK did not preserve the exact unsigned package suffix")
+    write_exclusive(args.output, signed_package, 0o600)
 
 
 def validate_rpm_proof(document: dict[str, Any]) -> None:
@@ -1515,6 +1618,17 @@ def main(argv: list[str] | None = None) -> int:
     rhel_inventory.add_argument("--release", required=True)
     rhel_inventory.add_argument("--output", required=True, type=Path)
 
+    apk_control = subparsers.add_parser("apk-control")
+    apk_control.add_argument("--unsigned-package", required=True, type=Path)
+    apk_control.add_argument("--output", required=True, type=Path)
+
+    apk_assemble = subparsers.add_parser("apk-assemble")
+    apk_assemble.add_argument("--unsigned-package", required=True, type=Path)
+    apk_assemble.add_argument("--signed-control", required=True, type=Path)
+    apk_assemble.add_argument("--public-key-name", required=True)
+    apk_assemble.add_argument("--source-date-epoch", required=True, type=int)
+    apk_assemble.add_argument("--output", required=True, type=Path)
+
     final = subparsers.add_parser("finalize")
     final.add_argument("--release", required=True)
     final.add_argument("--release-sha", required=True)
@@ -1561,6 +1675,10 @@ def main(argv: list[str] | None = None) -> int:
             inventory_command(args)
         elif args.command == "rhel-package-owned-inventory":
             rhel_inventory_command(args)
+        elif args.command == "apk-control":
+            apk_control_command(args)
+        elif args.command == "apk-assemble":
+            apk_assemble_command(args)
         elif args.command == "finalize":
             finalize(args)
         else:

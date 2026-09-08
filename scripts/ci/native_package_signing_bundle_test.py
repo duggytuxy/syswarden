@@ -7,9 +7,11 @@ import hashlib
 import gzip
 import io
 import json
+import os
 import tempfile
 import tarfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 try:
@@ -149,9 +151,17 @@ class NativePackageSigningBundleTests(unittest.TestCase):
 
     @staticmethod
     def tar_gzip_single(name: str, data: bytes, mtime: int) -> bytes:
-        return NativePackageSigningBundleTests.tar_gzip_members(
-            ((name, data),), mtime
-        )
+        tar_buffer = io.BytesIO()
+        with tarfile.open(
+            fileobj=tar_buffer, mode="w", format=tarfile.PAX_FORMAT
+        ) as archive:
+            member = tarfile.TarInfo(name)
+            member.mode = 0o644
+            member.mtime = mtime
+            member.size = len(data)
+            member.pax_headers = {"atime": "0", "ctime": "0"}
+            archive.addfile(member, io.BytesIO(data))
+        return gzip.compress(tar_buffer.getvalue(), mtime=0)
 
     @staticmethod
     def tar_gzip_members(
@@ -177,6 +187,164 @@ class NativePackageSigningBundleTests(unittest.TestCase):
             self.apk_fingerprint,
             self.apk_fingerprint,
         )
+
+    def apk_v2_unsigned(self) -> tuple[bytes, bytes]:
+        control = self.tar_gzip_members(
+            (
+                (".PKGINFO", b"pkgname = syswarden\npkgver = 4.10.0-r0\n"),
+                (".post-install", b"#!/bin/sh\nexit 0\n"),
+            ),
+            1780000000,
+        )
+        data = self.tar_gzip_members(
+            (("opt/syswarden/bin/syswarden-cli", b"binary-data\n"),),
+            1780000000,
+        )
+        return control + data, control
+
+    def test_apk_control_signing_layout_preserves_exact_unsigned_suffix(self) -> None:
+        unsigned, control = self.apk_v2_unsigned()
+        unsigned_path = self.root / "unsigned-layout.apk"
+        unsigned_path.write_bytes(unsigned)
+        control_path = self.root / "control.tar.gz"
+        bundle.apk_control_command(
+            Namespace(unsigned_package=unsigned_path, output=control_path)
+        )
+        self.assertEqual(control_path.read_bytes(), control)
+
+        signature_prefix = self.tar_gzip_single(
+            ".SIGN.RSA256.apk-public.rsa.pub", b"s" * 512, 1780000000
+        )
+        signed_control_path = self.root / "signed-control.tar.gz"
+        signed_control_path.write_bytes(signature_prefix + control)
+        output = self.root / "signed-layout.apk"
+        bundle.apk_assemble_command(
+            Namespace(
+                unsigned_package=unsigned_path,
+                signed_control=signed_control_path,
+                public_key_name="apk-public.rsa.pub",
+                source_date_epoch=1780000000,
+                output=output,
+            )
+        )
+        self.assertEqual(output.read_bytes(), signature_prefix + unsigned)
+
+    def test_apk_whole_package_signing_input_is_rejected(self) -> None:
+        unsigned, _ = self.apk_v2_unsigned()
+        unsigned_path = self.root / "unsigned-whole.apk"
+        unsigned_path.write_bytes(unsigned)
+        signature_prefix = self.tar_gzip_single(
+            ".SIGN.RSA256.apk-public.rsa.pub", b"s" * 512, 1780000000
+        )
+        incorrectly_signed = self.root / "incorrectly-signed-control.tar.gz"
+        incorrectly_signed.write_bytes(signature_prefix + unsigned)
+        with self.assertRaisesRegex(
+            bundle.SigningBundleError, "exact unsigned control"
+        ):
+            bundle.apk_assemble_command(
+                Namespace(
+                    unsigned_package=unsigned_path,
+                    signed_control=incorrectly_signed,
+                    public_key_name="apk-public.rsa.pub",
+                    source_date_epoch=1780000000,
+                    output=self.root / "must-not-exist.apk",
+                )
+            )
+
+    def test_apk_control_input_rejects_signed_or_single_stream_packages(self) -> None:
+        unsigned, control = self.apk_v2_unsigned()
+        signature_prefix = self.tar_gzip_single(
+            ".SIGN.RSA256.apk-public.rsa.pub", b"s" * 512, 1780000000
+        )
+        with self.assertRaisesRegex(
+            bundle.SigningBundleError, "control archive identity"
+        ):
+            bundle.unsigned_apk_control_stream(signature_prefix + unsigned)
+        with self.assertRaisesRegex(
+            bundle.SigningBundleError, "distinct control and data"
+        ):
+            bundle.unsigned_apk_control_stream(control)
+
+    def test_apk_assembly_rejects_wrong_signature_key_name(self) -> None:
+        unsigned, control = self.apk_v2_unsigned()
+        unsigned_path = self.root / "unsigned-key-name.apk"
+        unsigned_path.write_bytes(unsigned)
+        signed_control = self.root / "wrong-key-control.tar.gz"
+        signed_control.write_bytes(
+            self.tar_gzip_single(
+                ".SIGN.RSA256.other.rsa.pub", b"s" * 512, 1780000000
+            )
+            + control
+        )
+        with self.assertRaisesRegex(
+            bundle.SigningBundleError, "archive entry is invalid"
+        ):
+            bundle.apk_assemble_command(
+                Namespace(
+                    unsigned_package=unsigned_path,
+                    signed_control=signed_control,
+                    public_key_name="apk-public.rsa.pub",
+                    source_date_epoch=1780000000,
+                    output=self.root / "wrong-key-output.apk",
+                )
+            )
+
+    def test_apk_assembly_rejects_oversized_signature_prefix(self) -> None:
+        unsigned, control = self.apk_v2_unsigned()
+        unsigned_path = self.root / "unsigned-prefix-bound.apk"
+        unsigned_path.write_bytes(unsigned)
+        signed_control = self.root / "oversized-prefix-control.tar.gz"
+        signed_control.write_bytes(
+            b"x" * (bundle.MAX_APK_SIGNATURE_PREFIX_BYTES + 1) + control
+        )
+        with self.assertRaisesRegex(
+            bundle.SigningBundleError, "compressed size bound"
+        ):
+            bundle.apk_assemble_command(
+                Namespace(
+                    unsigned_package=unsigned_path,
+                    signed_control=signed_control,
+                    public_key_name="apk-public.rsa.pub",
+                    source_date_epoch=1780000000,
+                    output=self.root / "oversized-prefix-output.apk",
+                )
+            )
+
+    def test_apk_control_command_rejects_linked_inputs(self) -> None:
+        unsigned, _ = self.apk_v2_unsigned()
+        source = self.root / "linked-source.apk"
+        source.write_bytes(unsigned)
+        symbolic = self.root / "symbolic-source.apk"
+        symbolic.symlink_to(source)
+        with self.assertRaisesRegex(bundle.SigningBundleError, "regular file"):
+            bundle.apk_control_command(
+                Namespace(
+                    unsigned_package=symbolic,
+                    output=self.root / "symbolic-output.tar.gz",
+                )
+            )
+        symbolic.unlink()
+
+        hardlink = self.root / "hardlink-source.apk"
+        os.link(source, hardlink)
+        with self.assertRaisesRegex(bundle.SigningBundleError, "singly-linked"):
+            bundle.apk_control_command(
+                Namespace(
+                    unsigned_package=hardlink,
+                    output=self.root / "hardlink-output.tar.gz",
+                )
+            )
+
+    def test_apk_control_rejects_duplicate_pkginfo(self) -> None:
+        duplicated_control = self.tar_gzip_members(
+            ((".PKGINFO", b"first\n"), (".PKGINFO", b"second\n")),
+            1780000000,
+        )
+        data = self.tar_gzip_members((("opt/syswarden", b"data\n"),), 1780000000)
+        with self.assertRaisesRegex(
+            bundle.SigningBundleError, "control archive identity"
+        ):
+            bundle.unsigned_apk_control_stream(duplicated_control + data)
 
     def write_packages(self, directory: Path, content: dict[str, bytes]) -> None:
         named: dict[str, bytes] = {}
@@ -527,6 +695,20 @@ class NativePackageSigningBundleTests(unittest.TestCase):
         )
         self.replace_signed_apk(prefix + self.unsigned_data["apk"])
         self.assertEqual(bundle.main(self.finalize_arguments()), 1)
+
+    def test_apk_signature_pax_metadata_must_match_pinned_abuild(self) -> None:
+        prefix_without_pinned_metadata = self.tar_gzip_members(
+            ((".SIGN.RSA256.apk-public.rsa.pub", b"s" * 256),),
+            1780000000,
+        )
+        with self.assertRaisesRegex(
+            bundle.SigningBundleError, "archive entry is invalid"
+        ):
+            bundle.validate_apk_signature_archive(
+                prefix_without_pinned_metadata,
+                "native-package-keys/apk-public.rsa.pub",
+                1780000000,
+            )
 
     def test_apk_concatenated_signature_stream_fails_closed(self) -> None:
         valid_prefix = self.tar_gzip_single(

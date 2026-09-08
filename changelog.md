@@ -131,6 +131,10 @@
 - **Native signing identity separation:** Reject cross-family key ID and
   public-key digest reuse, reject a shared RPM and DEB OpenPGP fingerprint, and
   prevent bootstrap provenance from satisfying release qualification.
+- **APK control-stream signature binding:** Sign only the exact first
+  `control.tar.gz` member required by the Alpine APK v2 format, then require
+  the canonical RSA256 signature prefix and the complete unsigned package
+  suffix to remain byte-exact before native `apk verify` can pass.
 - **Webhook containment:** Bound attacker-controlled fields before encoding,
   forbid redirects and unsafe targets, redact credential-bearing endpoints and
   prevent recursive or unbounded delivery storms.
