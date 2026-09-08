@@ -330,6 +330,7 @@ initialize_rpm_chroot() {
     install -d -m 0755 \
         "${root}/bin" \
         "${root}/dev" \
+        "${root}/etc/rpm" \
         "${root}/run" \
         "${root}/tmp" \
         "${root}/usr/bin" \
@@ -400,6 +401,12 @@ initialize_rpm_chroot() {
         'exec /usr/bin/sync.real "$@"' > "${root}/usr/bin/sync"
     chmod 0755 "${root}/usr/bin/sync"
     cp -a /usr/lib/rpm "${root}/usr/lib/"
+    # Debian-family RPM uses a per-root database by default, while RHEL-family
+    # RPM uses /usr/lib/sysimage/rpm. Scriptlets query the database from inside
+    # this RHEL qualification chroot, so pin its test-only macro to the same
+    # path already passed to the outer RPM transaction.
+    printf '%s\n' '%_dbpath /usr/lib/sysimage/rpm' > "${root}/etc/rpm/macros"
+    chmod 0644 "${root}/etc/rpm/macros"
     # shellcheck disable=SC2016
     printf '%s\n' \
         '#!/bin/sh' \
@@ -457,14 +464,131 @@ run_in_chroot() {
     unshare -Ur chroot "${root}" "$@"
 }
 
+assert_exact_chroot_regular_file() {
+    local root="$1"
+    local path="$2"
+    local mode="$3"
+    local size="$4"
+    local expected_digest="$5"
+    local label="$6"
+    local metadata
+    local actual_digest
+    if [[ ! -f "${root}${path}" || -L "${root}${path}" ]]; then
+        printf '%s is not a regular non-symlink file: %s\n' "${label}" "${path}" >&2
+        return 1
+    fi
+    if ! metadata="$(run_in_chroot "${root}" /usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "${path}")"; then
+        printf 'Cannot attest %s metadata: %s\n' "${label}" "${path}" >&2
+        return 1
+    fi
+    if [[ "${metadata}" != "0:0:${mode}:1:${size}" ]]; then
+        printf 'Unexpected %s metadata for %s: %s\n' "${label}" "${path}" "${metadata}" >&2
+        return 1
+    fi
+    if ! actual_digest="$(run_in_chroot "${root}" /usr/bin/sha256sum -- "${path}" |
+        awk 'NF == 2 { print $1 }')"; then
+        printf 'Cannot attest %s content: %s\n' "${label}" "${path}" >&2
+        return 1
+    fi
+    if [[ "${actual_digest}" != "${expected_digest}" ]]; then
+        printf 'Unexpected %s digest for %s: %s\n' "${label}" "${path}" "${actual_digest}" >&2
+        return 1
+    fi
+}
+
+assert_exact_preset_marker() {
+    assert_exact_chroot_regular_file "$1" \
+        /var/lib/.syswarden-rhelpo-preset-pending-v1 \
+        600 35 \
+        862ed0191cbc87e5d7379296af67f418b0f27dec63738fa3a7ff9a9e67b1ce82 \
+        'RHEL package-owned preset recovery marker'
+}
+
+assert_exact_erase_ready_marker() {
+    assert_exact_chroot_regular_file "$1" \
+        /var/lib/.syswarden-rhelpo-erase-ready-v1 \
+        600 71 \
+        3c429337c31a5c397da09b2976dc6cb759d0ae44f986dc19aa4e25f47a2970c8 \
+        'RHEL package-owned erase-ready marker'
+}
+
+assert_exact_removal_tombstone() {
+    assert_exact_chroot_regular_file "$1" \
+        /var/lib/syswarden/removal-in-progress-v1 \
+        600 39 \
+        e1a0bbd8e3d90884bdaf9306233e6c2cfb5ab752c3065939139119982fed4514 \
+        'SysWarden removal tombstone'
+}
+
+assert_exact_postun_recovery_helper() {
+    assert_exact_chroot_regular_file "$1" \
+        /var/lib/.syswarden-rhelpo-postun-recovery-v1 \
+        700 9843 \
+        64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c \
+        'RHEL package-owned post-uninstall recovery helper'
+}
+
+assert_exact_initial_enablement() {
+    local root="$1"
+    local unit
+    local link
+    for unit in syswarden-firewall.service syswarden-core.service; do
+        link="/etc/systemd/system/multi-user.target.wants/${unit}"
+        [[ -L "${root}${link}" ]] || {
+            printf 'Expected vendor enablement symlink is absent: %s\n' "${link}" >&2
+            return 1
+        }
+        [[ "$(run_in_chroot "${root}" /usr/bin/stat -c '%u:%g:%h' -- "${link}")" == \
+            0:0:1 ]] || {
+            printf 'Vendor enablement symlink metadata is not exact: %s\n' "${link}" >&2
+            return 1
+        }
+        [[ "$(run_in_chroot "${root}" /usr/bin/readlink -- "${link}")" == \
+            "/usr/lib/systemd/system/${unit}" ]] || {
+            printf 'Vendor enablement symlink target is not exact: %s\n' "${link}" >&2
+            return 1
+        }
+    done
+}
+
+assert_exact_preset_invocation_count() {
+    local root="$1"
+    local expected_count="$2"
+    local log=/var/lib/syswarden-scriptlet-test/systemctl.log
+    local metadata
+    if [[ ! -f "${root}${log}" || -L "${root}${log}" ]]; then
+        printf 'systemctl test log is not a regular non-symlink file: %s\n' "${log}" >&2
+        return 1
+    fi
+    metadata="$(run_in_chroot "${root}" /usr/bin/stat -Lc '%u:%g:%a:%h' -- "${log}")"
+    [[ "${metadata}" == 0:0:600:1 ]] || {
+        printf 'systemctl test log metadata is not exact: %s\n' "${metadata}" >&2
+        return 1
+    }
+    # shellcheck disable=SC2016
+    if ! run_in_chroot "${root}" /usr/bin/awk -v expected_count="${expected_count}" '
+        $0 == "preset syswarden-firewall.service syswarden-core.service" { exact++ }
+        { total++ }
+        END { exit !(exact == expected_count && total == expected_count) }
+    ' "${log}"; then
+        printf 'systemctl test log does not contain exactly %s preset invocation(s).\n' \
+            "${expected_count}" >&2
+        return 1
+    fi
+}
+
 run_exact_postun_recovery() {
     local root="$1"
     local helper=/var/lib/.syswarden-rhelpo-postun-recovery-v1
-    [[ "$(run_in_chroot "${root}" /usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "${helper}")" == \
-        0:0:700:1:9843 ]] || return 1
-    [[ "$(run_in_chroot "${root}" /usr/bin/sha256sum -- "${helper}" | awk 'NF == 2 { print $1 }')" == \
-        64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c ]] || return 1
+    assert_exact_postun_recovery_helper "${root}" || return 1
     run_in_chroot "${root}" /bin/sh "${helper}"
+}
+
+assert_exact_postun_recovery_state() {
+    local root="$1"
+    assert_exact_postun_recovery_helper "${root}"
+    assert_exact_erase_ready_marker "${root}"
+    assert_exact_removal_tombstone "${root}"
 }
 
 assert_package_identity() {
@@ -635,6 +759,8 @@ reset_after_test_noscripts_erase() {
 }
 
 for root in "${CLEAN_CHROOT_ROOT}" "${CHROOT_ROOT}"; do
+    [[ "$(run_in_chroot "${root}" /usr/bin/rpm --eval '%{_dbpath}')" == \
+        /usr/lib/sysimage/rpm ]]
     rpm_at_root "${root}" --initdb
 done
 
@@ -831,23 +957,32 @@ for preset_mode in fail partial-success; do
     printf '%s\n' "${preset_mode}" > "${TEST_WORKSPACE}/preset-mode"
     chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-mode" \
         "${CLEAN_CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/preset-mode"
-    if rpm_at_root "${CLEAN_CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
-        "${PACKAGE_PATH}" >/dev/null 2>&1; then
-        printf 'RHEL package-owned RPM accepted incomplete preset mode %s.\n' "${preset_mode}" >&2
-        exit 1
-    fi
+    chroot_admin rm -f -- \
+        "${CLEAN_CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/systemctl.log"
+    rpm_at_root "${CLEAN_CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
+        "${PACKAGE_PATH}" >/dev/null 2>&1 || :
+    # RPM releases expose failed POSTIN scriptlets through different CLI
+    # statuses. Qualify the exact recoverable state instead of treating that
+    # transport status as proof.
+    assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.0-1.rhelpo.x86_64
     for link in \
         "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service" \
         "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service"; do
         [[ ! -e "${link}" && ! -L "${link}" ]]
     done
-    [[ -f "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" ]]
-    assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.0-1.rhelpo.x86_64
+    assert_exact_preset_marker "${CLEAN_CHROOT_ROOT}"
+    assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 1
     chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/preset-mode"
     rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
         "${PACKAGE_PATH}"
     assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
-    [[ ! -e "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" ]]
+    assert_exact_initial_enablement "${CLEAN_CHROOT_ROOT}"
+    assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 2
+    for marker in \
+        "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" \
+        "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"; do
+        [[ ! -e "${marker}" && ! -L "${marker}" ]]
+    done
     rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
     chroot_admin rm -f -- \
         "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service" \
@@ -858,17 +993,24 @@ chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/pre
 printf '%s\n' fail > "${TEST_WORKSPACE}/fail-global-sync-once"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/fail-global-sync-once" \
     "${CLEAN_CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/fail-global-sync-once"
-if rpm_at_root "${CLEAN_CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}" >/dev/null 2>&1; then
-    printf '%s\n' 'RHEL package-owned RPM ignored a preset durability barrier failure.' >&2
-    exit 1
-fi
+chroot_admin rm -f -- \
+    "${CLEAN_CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/systemctl.log"
+rpm_at_root "${CLEAN_CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
+    "${PACKAGE_PATH}" >/dev/null 2>&1 || :
 assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.0-1.rhelpo.x86_64
-[[ -f "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" ]]
+assert_exact_preset_marker "${CLEAN_CHROOT_ROOT}"
+assert_exact_initial_enablement "${CLEAN_CHROOT_ROOT}"
+assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 1
 rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
     "${PACKAGE_PATH}"
 assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
-[[ ! -e "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" ]]
+assert_exact_initial_enablement "${CLEAN_CHROOT_ROOT}"
+assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 2
+for marker in \
+    "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" \
+    "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"; do
+    [[ ! -e "${marker}" && ! -L "${marker}" ]]
+done
 rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
 chroot_admin rm -f -- \
     "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service" \
@@ -1177,17 +1319,16 @@ chroot_admin install -m 0700 -- "${TEST_WORKSPACE}/postun-recovery-prefix" \
 printf '%s\n' fail > "${TEST_WORKSPACE}/fail-rmdir-once"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/fail-rmdir-once" \
     "${CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/fail-rmdir-once"
-if rpm_at_root "${CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1; then
-    printf '%s\n' 'Injected post-uninstall directory failure unexpectedly succeeded.' >&2
-    exit 1
-fi
+rpm_at_root "${CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1 || \
+    :
 if rpm_at_root "${CHROOT_ROOT}" --query syswarden >/dev/null 2>&1; then
     printf '%s\n' 'Injected post-uninstall failure retained the package database record.' >&2
     exit 1
 fi
-[[ -f "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-postun-recovery-v1" ]]
-[[ -f "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-erase-ready-v1" ]]
-[[ -f "${CHROOT_ROOT}/var/lib/syswarden/removal-in-progress-v1" ]]
+# RPM 4.x and RPM 6 expose a failed POSTUN through different CLI statuses.
+# The package database transition and exact durable recovery artifacts are the
+# portable contract that operators rely on after either implementation.
+assert_exact_postun_recovery_state "${CHROOT_ROOT}"
 printf '%s\n' tampered | chroot_admin tee -a \
     "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-postun-recovery-v1" >/dev/null
 if run_exact_postun_recovery "${CHROOT_ROOT}" >/dev/null 2>&1; then
@@ -1236,16 +1377,21 @@ prepare_exact_erase_state "${CHROOT_ROOT}"
 printf '%s\n' fail > "${TEST_WORKSPACE}/fail-helper-remove-once"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/fail-helper-remove-once" \
     "${CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/fail-helper-remove-once"
-if rpm_at_root "${CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1; then
-    printf '%s\n' 'Injected late recovery helper removal failure unexpectedly succeeded.' >&2
-    exit 1
-fi
+rpm_at_root "${CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1 || :
 if rpm_at_root "${CHROOT_ROOT}" --query syswarden >/dev/null 2>&1; then
     printf '%s\n' 'Injected late recovery failure retained the package database record.' >&2
     exit 1
 fi
-[[ -f "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-postun-recovery-v1" ]]
-[[ ! -e "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-erase-ready-v1" ]]
+assert_exact_postun_recovery_helper "${CHROOT_ROOT}"
+for removed_recovery_path in \
+    /var/lib/.syswarden-rhelpo-postun-recovery-v1.new \
+    /var/lib/.syswarden-rhelpo-erase-ready-v1 \
+    /var/lib/.syswarden-rhelpo-erase-ready-v1.new \
+    /var/lib/syswarden/removal-in-progress-v1 \
+    /var/lib/syswarden/removal-in-progress-v1.new; do
+    [[ ! -e "${CHROOT_ROOT}${removed_recovery_path}" && \
+       ! -L "${CHROOT_ROOT}${removed_recovery_path}" ]]
+done
 if rpm_at_root "${CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
     "${PACKAGE_PATH}" >/dev/null 2>&1; then
     printf '%s\n' 'RHEL package-owned RPM accepted a stale post-uninstall recovery helper.' >&2
