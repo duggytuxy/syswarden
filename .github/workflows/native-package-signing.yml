@@ -627,6 +627,9 @@ jobs:
           APK_SIGNER_IMAGE: ${{ vars.SYSWARDEN_APK_SIGNER_IMAGE }}
         run: |
           set -euo pipefail
+          # Keep package setup independent of the optional Chrome repository.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+            /etc/apt/sources.list.d/google-chrome.sources
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gnupg rpm
           for tool in docker gpg gpgconf gpgv openssl rpm rpm2cpio rpmkeys rpmsign; do
