@@ -307,6 +307,14 @@ the new exact `main` SHA and run `qualified-policy`. No bootstrap package or
 observation may be reused. Official native campaigns and release qualification
 consume only the phase 2 bundle and its provenance-selected key identities.
 
+After independently reviewing that first phase 2 bundle, merge a distinct
+non-versioning release-owner decision that changes only `publishing` from false
+to true. This value makes the unchanged trust roots eligible for eventual
+publication but does not create a tag, Release or public asset. Because the
+decision changes the source SHA, rebuild the packages and repeat
+`qualified-policy` for that exact commit. Do not approve the candidate update
+workflow before this promotion and fresh signing proof are complete.
+
 Before the NODE01 migration campaign, run the protected candidate update
 workflow once for the exact untagged `main` SHA and the unique phase 2 native
 signing artifact. It creates a signed, non-public qualification bundle without

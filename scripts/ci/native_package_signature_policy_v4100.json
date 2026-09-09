@@ -2,7 +2,7 @@
   "schema_version": 1,
   "profile": "syswarden-native-package-signatures/v4.10.0",
   "status": "qualified",
-  "publishing": false,
+  "publishing": true,
   "rpm": {
     "mechanism": "rpm-openpgp",
     "trusted_keys": [

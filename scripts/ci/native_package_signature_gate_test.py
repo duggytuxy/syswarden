@@ -318,13 +318,13 @@ class NativePackageSignatureGateTests(unittest.TestCase):
         self.write_policy(self.bootstrap_document())
         self.assertEqual(gate.main(self.arguments("rpm", "rpm-2026")), 1)
 
-    def test_repository_qualified_policy_remains_non_publishing(self) -> None:
+    def test_repository_qualified_policy_is_approved_for_publishing(self) -> None:
         policy = Path(gate.__file__).with_name("native_package_signature_policy_v4100.json")
         document = gate.load_json(policy, "repository policy")
         qualification_day = gate.parse_day("2026-09-08", "date")
         gate.validate_policy(document, qualification_day)
         self.assertEqual(document["status"], "qualified")
-        self.assertFalse(document["publishing"])
+        self.assertTrue(document["publishing"])
         self.assertEqual(document["deb"]["implementation"], "qualified")
         expected_ids = {
             "rpm": "rpm-prod-2026-01",
@@ -1132,6 +1132,16 @@ class NativePackageSignatureGateTests(unittest.TestCase):
         arguments = list(self.arguments("rpm", "rpm-2026"))
         arguments.extend(("--purpose", "publishing"))
         self.assertEqual(gate.main(tuple(arguments)), 1)
+
+    def test_approved_policy_allows_publishing_verification(self) -> None:
+        document = self.document()
+        document["publishing"] = True
+        self.write_policy(document)
+        arguments = self.arguments("rpm", "rpm-2026") + (
+            "--purpose",
+            "publishing",
+        )
+        self.assertEqual(gate.main(arguments), 0)
 
     def test_verification_evidence_is_canonical_and_bound(self) -> None:
         evidence = self.root / "rpm-verification.json"
