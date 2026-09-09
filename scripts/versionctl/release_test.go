@@ -315,7 +315,7 @@ func TestValidateReleaseAcceptsOnlyTheInjectedDigestBoundFollowup(t *testing.T) 
 	}
 }
 
-func TestValidateReleaseAcceptsTwoSequentialSealedFollowups(t *testing.T) {
+func TestValidateReleaseAcceptsThreeSequentialSealedFollowups(t *testing.T) {
 	repo := newReleaseHistoryRepository(t, "v4.03.3")
 	writeReleaseTransition(t, repo, "v4.10.0")
 	commitReleaseFixture(t, repo, "Major : prepare release")
@@ -348,17 +348,22 @@ func TestValidateReleaseAcceptsTwoSequentialSealedFollowups(t *testing.T) {
 		"Attest the native signing environment",
 		"Sign the exact APK control stream",
 	)
+	third := commitFollowup(
+		"Docs : record v4.10.0 lifecycle and telemetry corrections (#167)",
+		"Sign the exact APK control stream",
+		"Record lifecycle and telemetry corrections",
+	)
 
 	writeReleaseTestFile(t, repo, "qualification.txt", []byte("qualified\n"))
 	commitReleaseFixture(t, repo, "Qualification : preserve the sealed changelog")
 	tagReleaseFixture(t, repo, "v4.10.0")
 
 	before := string(runTestGit(t, repo, "status", "--porcelain=v1"))
-	output, err := validateReleaseFixtureWithFollowupPolicies(repo, "v4.10.0", []changelogFollowupPolicy{first, second})
+	output, err := validateReleaseFixtureWithFollowupPolicies(repo, "v4.10.0", []changelogFollowupPolicy{first, second, third})
 	if err != nil {
 		t.Fatalf("validate sequential approved follow-ups: %v\n%s", err, output)
 	}
-	if !strings.Contains(output, "3 non-versioning follow-up commit(s)") {
+	if !strings.Contains(output, "4 non-versioning follow-up commit(s)") {
 		t.Fatalf("unexpected validation output: %s", output)
 	}
 	after := string(runTestGit(t, repo, "status", "--porcelain=v1"))

@@ -64,6 +64,13 @@ const (
 	approvedChangelogFollowupPR161Subject       = "Fix : sign the exact APK control stream (#161)"
 	approvedChangelogFollowupPR161BaseHash      = "7aafe544ad7f6a9ec678fc722992f83f0088632ff7dd0c33bbf54ca4537f8902"
 	approvedChangelogFollowupPR161CandidateHash = "637597c8343dfcefb1562088ebd483a0c334529118be6e393a2cadea340ac281"
+
+	approvedChangelogFollowupPR167Commit        = "95ab8d1ad185f6a6f7ad507bf194fbde9a6e28f0"
+	approvedChangelogFollowupPR167Parent        = "dd78da07ab0a20fd2e560403231740ba9ed396d7"
+	approvedChangelogFollowupPR167Version       = "v4.10.0"
+	approvedChangelogFollowupPR167Subject       = "Docs : record v4.10.0 lifecycle and telemetry corrections (#167)"
+	approvedChangelogFollowupPR167BaseHash      = "637597c8343dfcefb1562088ebd483a0c334529118be6e393a2cadea340ac281"
+	approvedChangelogFollowupPR167CandidateHash = "defc336ef48123c6ae936bda26b43a300c9a7b1ee2954f014468f44dd5d7f8d3"
 )
 
 type changelogResetPolicy struct {
@@ -131,9 +138,22 @@ var approvedChangelogFollowupPR161 = changelogFollowupPolicy{
 	CandidateSHA256: approvedChangelogFollowupPR161CandidateHash,
 }
 
+// approvedChangelogFollowupPR167 is a single-use exception for the exact
+// PR167 lifecycle and telemetry changelog correction. It extends no general
+// permission to edit an active release changelog after its version transition.
+var approvedChangelogFollowupPR167 = changelogFollowupPolicy{
+	CommitSHA:       approvedChangelogFollowupPR167Commit,
+	ParentSHA:       approvedChangelogFollowupPR167Parent,
+	Version:         approvedChangelogFollowupPR167Version,
+	Subject:         approvedChangelogFollowupPR167Subject,
+	BaseSHA256:      approvedChangelogFollowupPR167BaseHash,
+	CandidateSHA256: approvedChangelogFollowupPR167CandidateHash,
+}
+
 var approvedChangelogFollowups = []changelogFollowupPolicy{
 	approvedChangelogFollowup,
 	approvedChangelogFollowupPR161,
+	approvedChangelogFollowupPR167,
 }
 
 type snapshot map[string][]byte

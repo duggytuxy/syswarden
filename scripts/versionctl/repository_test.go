@@ -197,9 +197,25 @@ func TestApprovedChangelogFollowupRemainsBoundToPR161(t *testing.T) {
 	if approvedChangelogFollowupPR161 != want {
 		t.Fatalf("approved PR161 follow-up policy = %#v, want %#v", approvedChangelogFollowupPR161, want)
 	}
-	if len(approvedChangelogFollowups) != 2 ||
+}
+
+func TestApprovedChangelogFollowupRemainsBoundToPR167(t *testing.T) {
+	t.Parallel()
+	want := changelogFollowupPolicy{
+		CommitSHA:       "95ab8d1ad185f6a6f7ad507bf194fbde9a6e28f0",
+		ParentSHA:       "dd78da07ab0a20fd2e560403231740ba9ed396d7",
+		Version:         "v4.10.0",
+		Subject:         "Docs : record v4.10.0 lifecycle and telemetry corrections (#167)",
+		BaseSHA256:      "637597c8343dfcefb1562088ebd483a0c334529118be6e393a2cadea340ac281",
+		CandidateSHA256: "defc336ef48123c6ae936bda26b43a300c9a7b1ee2954f014468f44dd5d7f8d3",
+	}
+	if approvedChangelogFollowupPR167 != want {
+		t.Fatalf("approved PR167 follow-up policy = %#v, want %#v", approvedChangelogFollowupPR167, want)
+	}
+	if len(approvedChangelogFollowups) != 3 ||
 		approvedChangelogFollowups[0] != approvedChangelogFollowup ||
-		approvedChangelogFollowups[1] != approvedChangelogFollowupPR161 {
+		approvedChangelogFollowups[1] != approvedChangelogFollowupPR161 ||
+		approvedChangelogFollowups[2] != approvedChangelogFollowupPR167 {
 		t.Fatalf("approved changelog follow-up inventory = %#v", approvedChangelogFollowups)
 	}
 }
