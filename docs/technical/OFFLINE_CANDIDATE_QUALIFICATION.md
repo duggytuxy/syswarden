@@ -29,6 +29,13 @@ verify the producer attestation and detached DEB signature. The workflow does
 not create a tag or GitHub Release. The protected native-evidence and release
 qualification workflows must independently resolve the same immutable
 artifact by run and artifact ID and revalidate it before accepting evidence.
+Before it may use the updater signing key, the workflow requires the committed
+native package policy to be qualified and explicitly approved for future
+publishing. That approval only establishes eligibility. This workflow retains
+read-only repository permissions and cannot create a tag, Release or public
+asset. Requiring the decision before this bundle ensures that the package,
+candidate update, native evidence and final qualification all share one exact
+source SHA.
 
 Only the exact host subdirectory is passed to `syswarden update`. For NODE01,
 that directory is `node01/` and has the three-file contract below.

@@ -2,12 +2,12 @@
 
 Status: the protected signing foundation and fail-closed publication
 integration are implemented. Three distinct candidate production public identities are
-enrolled under the qualified, non-publishing policy. Phase 1 bootstrap
-qualification succeeded, and the exact immutable result recorded below is the
-foundation evidence for phase 2. The committed policy is now qualified and
-remains non-publishing. A distinct phase 2 `qualified-policy` run, normal native
-proof, supported-host lifecycle labs and explicit publication approval remain
-required before publishing may be enabled.
+enrolled under the qualified policy. Phase 1 bootstrap qualification and the
+first non-publishing phase 2 proof succeeded. The release owner has now approved
+these unchanged trust roots for eventual publication. This policy decision does
+not create a tag, a GitHub Release or a public asset. A fresh `qualified-policy`
+run for the exact approval commit, normal native proof, supported-host lifecycle
+labs and final release qualification remain required before publication.
 No workflow in this foundation creates a private key.
 
 The offline gate binds one package byte stream to an exact release inventory
@@ -34,10 +34,11 @@ OpenPGP key. APK verification uses a private temporary key directory containing
 only the selected RSA public key. DEB verification uses isolated `gpgv` with a
 temporary keyring derived only from the selected OpenPGP public key. The
 repository policy contains exactly one candidate production public identity per
-package family. Phase 1 has succeeded, and the separate reviewed phase 2 policy
-commit promotes only the policy status and DEB implementation while keeping
-publishing disabled. The protected `qualified-policy` run and its downstream
-proofs remain required. The APK signer is pinned to the
+package family. Phase 1 and the initial non-publishing phase 2 proof have
+succeeded. A separate reviewed policy decision now makes the unchanged trust
+roots eligible for eventual publication. The protected `qualified-policy` run
+must be repeated for this new exact commit, and its downstream proofs remain
+required. The APK signer is pinned to the
 AMD64 manifest of the official Alpine Linux 3.24 build-base image at
 `docker.io/alpinelinux/build-base@sha256:31d2a020ccd2058e6ab47940428bd0b7dc83e37b66880891f9ed903a12ea668b`.
 It was reviewed as an offline runtime containing `abuild-sign`, `apk`, OpenSSL
@@ -93,6 +94,25 @@ in the workflow and bundle verifier:
 | Signed artifact size | `63065295` bytes |
 | Signed artifact digest | `sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3` |
 | Foundation policy SHA-256 | `6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d` |
+
+The first phase 2 proof was independently reviewed before publication
+eligibility was approved:
+
+| Field | Exact value |
+| --- | --- |
+| Source SHA | `017fcbd7996102f025c9c1467cda67e2e2f8867d` |
+| Signing run | `34319794608`, attempt `1` |
+| Signed artifact ID | `10091742320` |
+| Signed artifact name | `syswarden-native-signed-packages-qualified-4.10.0-34319794608-1-017fcbd7996102f025c9c1467cda67e2e2f8867d` |
+| Signed artifact size | `63066907` bytes |
+| Signed artifact digest | `sha256:b7411d4e41a738bde48b3a7658b8379f1975a982a8ba842232b0af26f68c13fa` |
+| Qualified policy SHA-256 | `54a35116b1efd3449e1739067a3ff1a4800721675cf3e9953c6366831c1480b6` |
+| Independent verdict | PASS with no P0, P1 or P2 finding |
+
+This artifact proves the non-publishing policy state that authorized the next
+reviewed decision. It remains immutable evidence but cannot be reused after the
+source SHA changes. Packages and signatures must be regenerated from the exact
+publication-approval commit.
 
 The workflow accepts only a completed successful
 `workflow_dispatch` attempt 1 owned by the repository owner, with one unexpired
@@ -324,10 +344,11 @@ package is a new unqualified state and must not resume publishing.
 | Tampered evidence or bundle | Canonical evidence and complete artifact seal reject it | Canonical evidence and complete artifact seal reject it | Signature bytes, verification evidence and complete artifact seal reject it |
 
 Static and adversarial unit tests cover the fail-closed controls available in
-the committed qualified, non-publishing policy. This commit promotes policy
-status only. A protected `qualified-policy` run, real cryptographic fixtures and
-supported-host lifecycle labs remain mandatory before publication approval and
-release qualification.
+the committed qualified, publication-approved policy. This decision changes
+only publication eligibility and does not publish anything. A fresh protected
+`qualified-policy` run for the same exact source commit, real cryptographic
+fixtures, supported-host lifecycle labs and release qualification remain
+mandatory before any tag or public Release.
 
 ## Consumer contract
 
@@ -349,10 +370,10 @@ sets `publishing` to true through review, the public keys remain valid and
 non-revoked, all three native gates succeed with purpose `publishing`, and the
 DEB detached-signature lane is qualified. The release manager revalidates the
 sealed qualification inventory and byte-compares its RPM, APK, DEB and detached
-DEB signature before staging the public assets. With the current policy state,
-qualification may consume the protected `qualified-policy` run, but publication
-remains fail-closed while `publishing` is false and until the lifecycle labs and
-release qualification succeed.
+DEB signature before staging the public assets. The current policy authorizes
+future publication eligibility only. Publication remains fail-closed until the
+fresh exact-commit signing proof, lifecycle labs and release qualification all
+succeed.
 
 Before qualification, the release owner must review the enrolled fingerprints,
 validity intervals and empty initial rotation lineage, confirm the protected

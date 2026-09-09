@@ -838,10 +838,10 @@ print(json.dumps(payload, separators=(",", ":")))
         self.assertIn("native_package_signing_bundle.py verify", self.workflow)
         self.assertIn("compression-level: 0", self.workflow)
 
-    def test_committed_policy_is_qualified_but_remains_non_publishing(self) -> None:
+    def test_committed_policy_is_qualified_and_approved_for_publishing(self) -> None:
         policy = json.loads(POLICY.read_text(encoding="utf-8"))
         self.assertEqual(policy["status"], "qualified")
-        self.assertFalse(policy["publishing"])
+        self.assertTrue(policy["publishing"])
         self.assertEqual(policy["deb"]["implementation"], "qualified")
         selected = []
         for family in ("rpm", "apk", "deb"):

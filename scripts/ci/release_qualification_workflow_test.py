@@ -973,6 +973,19 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 failed, _ = run_native_signing_resolver(script, runs, artifacts)
                 self.assertNotEqual(failed.returncode, 0)
 
+        publication_gate = workflow_step_script(
+            self.workflow, "Verify and Bind Exact Native Signing Bundle"
+        )
+        self.assertIn(
+            'policy_document["status"] != "qualified" or '
+            'policy_document["publishing"] is not True',
+            publication_gate,
+        )
+        self.assertIn(
+            "native signature policy is not approved for release publication",
+            publication_gate,
+        )
+
     def test_hosted_native_evidence_resolution_is_independent_and_fail_closed(
         self,
     ) -> None:
