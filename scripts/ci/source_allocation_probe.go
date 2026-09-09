@@ -41,6 +41,7 @@ const (
 	maxRequestBytes  = 64 * 1024
 	maxFixtureBytes  = 64 * 1024
 	maxCatalogBytes  = 1024 * 1024
+	sandboxProbePath = "/syswarden-allocation-probe"
 )
 
 var (
@@ -275,6 +276,33 @@ func readBounded(path string, maximum int64, requiredMode os.FileMode) ([]byte, 
 	return raw, nil
 }
 
+func probeExecutable() (string, error) {
+	path, err := os.Executable()
+	if err == nil {
+		return path, nil
+	}
+	// The trusted nested launcher exposes no procfs. It executes this exact
+	// read-only bind mount, whose bytes are independently checked below and
+	// whose source descriptor remains checked by the producer before and after.
+	if !errors.Is(err, os.ErrNotExist) || len(os.Args) != 1 || os.Args[0] != sandboxProbePath ||
+		os.Getpid() != 2 || os.Getppid() != 1 {
+		return "", errors.New("probe executable is not the fixed isolated entrypoint")
+	}
+	if _, procErr := os.Lstat("/proc"); !errors.Is(procErr, os.ErrNotExist) {
+		return "", errors.New("isolated probe unexpectedly exposes procfs")
+	}
+	info, err := os.Lstat(sandboxProbePath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("isolated probe entrypoint is not a regular file")
+	}
+	var filesystem syscall.Statfs_t
+	// Linux statfs ST_RDONLY is bit zero; require the actual mount flag.
+	if err := syscall.Statfs(sandboxProbePath, &filesystem); err != nil || filesystem.Flags&1 == 0 {
+		return "", errors.New("isolated probe entrypoint is not mounted read-only")
+	}
+	return sandboxProbePath, nil
+}
+
 func readExecutable(path string, maximum int64) ([]byte, error) {
 	file, err := os.Open(path) // #nosec G304 -- opened executable identity is verified by fstat and SHA-256.
 	if err != nil {
@@ -413,7 +441,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "probe kernel architecture is not x86_64")
 		os.Exit(1)
 	}
-	executable, err := os.Executable()
+	executable, err := probeExecutable()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "resolve probe executable:", err)
 		os.Exit(1)

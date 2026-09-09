@@ -400,7 +400,15 @@ build checkouts live inside the evidence workspace and remain writable by the
 trusted producer; this is not represented as a read-only checkout guarantee.
 Every candidate and baseline probe runs inside a second minimal bubblewrap
 filesystem and separately unshared network. The producer runs a nested
-Unix-socket canary before any measured probe. The launcher fails if either
+Unix-socket canary before any measured probe. Nested sandboxes expose no
+`/proc`: the outer procfs has protected submounts that prevent mounting another
+procfs in a nested user namespace. The probe still has a separate PID namespace
+and executes the verified probe bound read-only at a fixed entrypoint. The
+probe requires that exact entrypoint, an absent procfs, isolated PID ancestry,
+and a kernel-confirmed read-only mount before checking its own file metadata
+and SHA-256. The producer retains and checks its original open descriptor
+before and after execution. The canary checks the absent procfs and PID ancestry as
+well as the hidden outer socket. The launcher fails if either
 namespace or canary cannot be established, or if post-execution raw-bundle
 validation fails.
 
