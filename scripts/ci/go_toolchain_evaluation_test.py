@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -228,6 +229,94 @@ class GoToolchainEvaluationTests(unittest.TestCase):
                 0,
                 f"run block {index} is not valid bash: {result.stderr}",
             )
+
+    def test_firewall_sandbox_is_enforced_before_functional_tests(self) -> None:
+        sandbox_name = "Prepare enforced firewall test sandbox"
+        self.assertLess(
+            self.workflow.index(sandbox_name),
+            self.workflow.index("Run Go 1.27 functional, race and vet gates"),
+        )
+        preparation = self.workflow.split(sandbox_name, 1)[1].split(
+            "      - name: Run Go 1.27 functional, race and vet gates", 1
+        )[0]
+        audit = (REPOSITORY / ".github/workflows/security-audit.yml").read_text(
+            encoding="utf-8"
+        )
+        start = '          test "$(bwrap --version)"'
+        end = '            echo "ERROR: Bubblewrap child retained usable capabilities."'
+        approved = audit[audit.index(start):audit.index(end)]
+        self.assertIn(approved, preparation)
+        self.assertIn("rpm bubblewrap=0.9.0-1ubuntu0.1", self.workflow)
+        self.assertIn('GOTOOLCHAIN=local CI=true "${CANDIDATE_GO}"', preparation)
+        self.assertIn(
+            "^Test(NftablesRulesGolden|BubblewrapFirewallGoldenTemporaryDirectoryContract)_SW_QA_001$",
+            preparation,
+        )
+        for bypass in ("sysctl -w", "aa-disable", "aa-complain", "|| true"):
+            self.assertNotIn(bypass, preparation)
+
+    def test_package_comparison_prepares_clean_exact_experimental_commit(self) -> None:
+        block = next(
+            block for block in self.run_blocks
+            if 'records="${RUNNER_TEMP}/go127-package-records.tsv"' in block
+        )
+        preparation = block.split('            PATH="$(dirname "${tool}"):', 1)[0]
+        preparation = textwrap.dedent(preparation) + "\ndone\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            runner = root / "runner"
+            runner.mkdir()
+            builder = source / "build_packages.sh"
+            original = "# go1.26.6 go1.26.6\n# Go 1.26.6 Go 1.26.6 Go 1.26.6\n"
+            builder.write_text(original, encoding="utf-8")
+            (source / "product-source.txt").write_text("unchanged product\n", encoding="utf-8")
+
+            def git(directory: Path, *arguments: str) -> str:
+                return subprocess.check_output(
+                    ["git", "-c", "core.fsmonitor=false", "-C", str(directory), *arguments],
+                    text=True, stderr=subprocess.PIPE,
+                ).strip()
+
+            git(source, "init", "--quiet")
+            git(source, "add", "build_packages.sh", "product-source.txt")
+            git(source, "-c", "user.name=Evaluation test", "-c",
+                "user.email=evaluation-test@syswarden.invalid", "-c",
+                "commit.gpgsign=false", "commit", "--quiet", "-m", "Fixture source")
+            original_commit = git(source, "rev-parse", "HEAD")
+            result = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", preparation],
+                env={
+                    **os.environ,
+                    "GITHUB_WORKSPACE": str(source), "RUNNER_TEMP": str(runner),
+                    "CANDIDATE_COMMIT": original_commit,
+                    "BASELINE_GO": "/unused/baseline/go", "CANDIDATE_GO": "/unused/candidate/go",
+                    "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.fsmonitor",
+                    "GIT_CONFIG_VALUE_0": "false",
+                },
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            baseline = runner / "go127-package-baseline"
+            candidate = runner / "go127-package-candidate"
+            for checkout in (source, baseline, candidate):
+                self.assertEqual(git(checkout, "status", "--porcelain"), "")
+                self.assertEqual((checkout / "product-source.txt").read_text(), "unchanged product\n")
+            self.assertEqual(git(source, "rev-parse", "HEAD"), original_commit)
+            self.assertEqual(git(baseline, "rev-parse", "HEAD"), original_commit)
+            self.assertEqual(git(candidate, "rev-parse", "HEAD^"), original_commit)
+            self.assertEqual(git(candidate, "diff", "--name-only", "HEAD^", "HEAD"), "build_packages.sh")
+            self.assertEqual(
+                git(candidate, "show", "-s", "--format=%cI", "HEAD"),
+                git(source, "show", "-s", "--format=%cI", "HEAD"),
+            )
+            self.assertEqual(builder.read_text(), original)
+            self.assertEqual(
+                (candidate / "build_packages.sh").read_text(),
+                original.replace("go1.26.6", "go1.27.1").replace("Go 1.26.6", "Go 1.27.1"),
+            )
+            self.assertEqual(result.stdout.count("Package comparison source:"), 2)
 
 
 class GoToolchainEvaluationGateTests(unittest.TestCase):

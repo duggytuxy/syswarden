@@ -83,7 +83,8 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
             /etc/apt/sources.list.d/google-chrome.sources
           sudo apt-get update
-          sudo apt-get install --yes rpm
+          sudo apt-get install --yes --no-install-recommends \
+            rpm bubblewrap=0.9.0-1ubuntu0.1
           gem install --no-document fpm -v 1.17.0
           tool_dir="${RUNNER_TEMP}/go127-tools"
           install -d -m 0700 "${tool_dir}"
@@ -93,6 +94,55 @@ jobs:
           GOTOOLCHAIN=local "${BASELINE_GO}" version -m "${tool_dir}/nfpm" | \
             grep -F $'mod\tgithub.com/goreleaser/nfpm/v2\tv2.47.0' >/dev/null
           printf 'PATH=%s:%s\n' "${tool_dir}" "${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Prepare enforced firewall test sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(bwrap --version)" = "bubblewrap 0.9.0"
+          command -v apparmor_parser >/dev/null
+          test -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = "1"
+          test ! -e /etc/apparmor.d/local/bwrap-userns-restrict
+          test ! -e /etc/apparmor.d/local/unpriv_bwrap
+
+          profile=".github/apparmor/bwrap-userns-restrict"
+          printf '%s  %s\n' \
+            'a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859' \
+            "${profile}" | sha256sum --check --strict
+          sudo apparmor_parser --replace --skip-cache "${profile}"
+          sudo grep -Fqx 'bwrap (enforce)' \
+            /sys/kernel/security/apparmor/profiles
+          sudo grep -Fqx 'unpriv_bwrap (enforce)' \
+            /sys/kernel/security/apparmor/profiles
+
+          sandbox_label="$(bwrap \
+            --ro-bind / / \
+            --dev /dev \
+            --proc /proc \
+            --tmpfs /tmp \
+            -- /bin/cat /proc/self/attr/current)"
+          test "${sandbox_label}" = "bwrap//&unpriv_bwrap (enforce)"
+
+          test -x /bin/mount
+          if bwrap \
+            --ro-bind / / \
+            --dev /dev \
+            --proc /proc \
+            --tmpfs /tmp \
+            --dir /tmp/mnt \
+            --uid 0 \
+            --gid 0 \
+            --cap-add ALL \
+            -- /bin/mount -t tmpfs none /tmp/mnt; then
+            echo "ERROR: Bubblewrap child retained usable capabilities." >&2
+            exit 1
+          fi
+
+          GOTOOLCHAIN=local CI=true "${CANDIDATE_GO}" \
+            -C src/core/syswarden-cli test -mod=readonly -count=1 \
+            -run '^Test(NftablesRulesGolden|BubblewrapFirewallGoldenTemporaryDirectoryContract)_SW_QA_001$' \
+            ./pkg/firewall
 
       - name: Run Go 1.27 functional, race and vet gates
         shell: bash
@@ -276,9 +326,26 @@ jobs:
           )
           PY
               test "$(git -C "${checkout}" diff --name-only)" = build_packages.sh
+              # Record the compiler-only experiment in its disposable clone.
+              # The package builder still requires a clean, exact source commit.
+              source_time="$(git -C "${checkout}" show -s --format=%cI HEAD)"
+              GIT_AUTHOR_DATE="${source_time}" GIT_COMMITTER_DATE="${source_time}" \
+                git -C "${checkout}" \
+                  -c user.name='SysWarden toolchain evaluation' \
+                  -c user.email='toolchain-evaluation@syswarden.invalid' \
+                  -c commit.gpgsign=false \
+                  commit --quiet --only \
+                  -m 'CI : isolate the Go 1.27 package experiment' -- build_packages.sh
+              test "$(git -C "${checkout}" rev-parse HEAD^)" = "${CANDIDATE_COMMIT}"
+              test "$(git -C "${checkout}" diff --name-only HEAD^ HEAD)" = build_packages.sh
             else
               test -z "$(git -C "${checkout}" status --short)"
             fi
+            test -z "$(git -C "${checkout}" status --short)"
+            printf 'Package comparison source: role=%s release_commit=%s build_commit=%s builder_sha256=%s\n' \
+              "${role}" "${CANDIDATE_COMMIT}" \
+              "$(git -C "${checkout}" rev-parse HEAD)" \
+              "$(sha256sum "${checkout}/build_packages.sh" | awk '{print $1}')"
             PATH="$(dirname "${tool}"):${PATH}" \
               GOTOOLCHAIN=local "${checkout}/build_packages.sh"
             source_tag="$(PATH="$(dirname "${tool}"):${PATH}" \
