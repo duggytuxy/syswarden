@@ -960,7 +960,7 @@ jobs:
           env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY GOFLAGS=-mod=readonly \
             go run ./scripts/ci/update_manifest.go verify \
               --repository "${GITHUB_WORKSPACE}" --tag "${RELEASE_TAG}" \
-              --packages "${NATIVE_SIGNING_DIR}/packages" \
+              --packages "${CANDIDATE_PACKAGES_DIR}" \
               --manifest "${manifest}" --signature "${signature}"
           cmp -- "${deb}" "${NATIVE_SIGNING_DIR}/packages/${deb_name}"
           cmp -- "${deb_signature}" "${NATIVE_SIGNING_DIR}/packages/${deb_name}.asc"

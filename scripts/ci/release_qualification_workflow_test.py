@@ -1260,11 +1260,13 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             'gh attestation verify "${descriptor}"',
             "--deny-self-hosted-runners",
             "update_manifest.go verify",
+            '--packages "${CANDIDATE_PACKAGES_DIR}"',
             'cmp -- "${deb}"',
             'cmp -- "${deb_signature}"',
             "producer_attestation_sha256",
         ):
             self.assertIn(contract, verify)
+        self.assertNotIn('--packages "${NATIVE_SIGNING_DIR}/packages"', verify)
         for contract in (
             'qualification_bundle_identity == $bundle_identity',
             'qualification_bundle_descriptor_sha256 == $descriptor_sha256',
