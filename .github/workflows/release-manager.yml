@@ -837,7 +837,7 @@ jobs:
             .native_signing_artifact_id > 0 and
             (.native_signing_artifact_name | type) == "string" and
             .native_signing_artifact_name ==
-              ("syswarden-native-signed-packages-" + ($release_tag | ltrimstr("v")) + "-" +
+              ("syswarden-native-signed-packages-qualified-" + ($release_tag | ltrimstr("v")) + "-" +
                (.native_signing_run_id | tostring) + "-1-" + $release_sha) and
             (.native_signing_artifact_digest | type) == "string" and
             (.native_signing_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
@@ -1513,7 +1513,7 @@ jobs:
             .native_signing_artifact_id > 0 and
             (.native_signing_artifact_name | type) == "string" and
             .native_signing_artifact_name ==
-              ("syswarden-native-signed-packages-" + ($release_tag | ltrimstr("v")) + "-" +
+              ("syswarden-native-signed-packages-qualified-" + ($release_tag | ltrimstr("v")) + "-" +
                (.native_signing_run_id | tostring) + "-1-" + $release_sha) and
             (.native_signing_artifact_digest | type) == "string" and
             (.native_signing_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and

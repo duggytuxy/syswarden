@@ -169,7 +169,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             ".run_attempt == 1",
             '.status == "completed"',
             '.conclusion == "success"',
-            'expected_name="syswarden-native-signed-packages-${version}-${REQUESTED_RUN_ID}-1-${RELEASE_SHA}"',
+            'expected_name="syswarden-native-signed-packages-qualified-${version}-${REQUESTED_RUN_ID}-1-${RELEASE_SHA}"',
             '"repos/${GITHUB_REPOSITORY}/actions/runs/${REQUESTED_RUN_ID}/artifacts"',
             "[.[] | .artifacts[]?] | length",
             '.id == $id and .name == $name',

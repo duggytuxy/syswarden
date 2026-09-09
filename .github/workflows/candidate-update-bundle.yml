@@ -269,7 +269,7 @@ jobs:
             echo "ERROR: requested native signing run is not one successful exact-main attempt." >&2
             exit 1
           fi
-          expected_name="syswarden-native-signed-packages-${version}-${REQUESTED_RUN_ID}-1-${RELEASE_SHA}"
+          expected_name="syswarden-native-signed-packages-qualified-${version}-${REQUESTED_RUN_ID}-1-${RELEASE_SHA}"
           artifacts="$(gh api --paginate --slurp --method GET \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${REQUESTED_RUN_ID}/artifacts" -f per_page=100)"
           if [[ "$(jq '[.[] | .artifacts[]?] | length' <<< "${artifacts}")" != "1" ]]; then

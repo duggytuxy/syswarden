@@ -925,7 +925,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.workflow, "Resolve Unique Protected Native Signing Bundle"
         )
         release_sha = "a" * 40
-        name = f"syswarden-native-signed-packages-4.10.0-456-1-{release_sha}"
+        name = f"syswarden-native-signed-packages-qualified-4.10.0-456-1-{release_sha}"
         run = {
             "id": 456,
             "path": ".github/workflows/native-package-signing.yml",

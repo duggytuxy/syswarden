@@ -524,7 +524,7 @@ jobs:
           }
           if set(descriptor) != expected_top:
               raise SystemExit("candidate descriptor top-level fields are not exact")
-          expected_native_name = f"syswarden-native-signed-packages-{version}-{provenance['signing_run']['id']}-1-{release_sha}"
+          expected_native_name = f"syswarden-native-signed-packages-qualified-{version}-{provenance['signing_run']['id']}-1-{release_sha}"
           if not (
               descriptor["schema_version"] == 1
               and descriptor["profile"] == "syswarden-candidate-update-bundle/v1"
@@ -596,7 +596,7 @@ jobs:
           test "$(jq -er '.source.native_signing_run_id | tostring' "${candidate_descriptor}")" = \
             "$(jq -er '.signing_run.id | tostring' "${signing_provenance}")"
           test "$(jq -er '.source.native_signing_artifact_name' "${candidate_descriptor}")" = \
-            "syswarden-native-signed-packages-${candidate_version}-$(jq -er '.signing_run.id' "${signing_provenance}")-1-${RELEASE_SHA}"
+            "syswarden-native-signed-packages-qualified-${candidate_version}-$(jq -er '.signing_run.id' "${signing_provenance}")-1-${RELEASE_SHA}"
           declared_native_run_id="$(jq -er '.source.native_signing_run_id | tostring' \
             "${candidate_descriptor}")"
           declared_native_artifact_id="$(jq -er '.source.native_signing_artifact_id | tostring' \

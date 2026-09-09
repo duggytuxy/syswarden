@@ -568,7 +568,7 @@ jobs:
             echo "ERROR: native package signing is not one completed successful attempt-1 run." >&2
             exit 1
           fi
-          artifact_name="syswarden-native-signed-packages-${version}-${run_id}-1-${RELEASE_SHA}"
+          artifact_name="syswarden-native-signed-packages-qualified-${version}-${run_id}-1-${RELEASE_SHA}"
           artifacts_json="$(gh api --paginate --slurp --method GET \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
             -f per_page=100)"
