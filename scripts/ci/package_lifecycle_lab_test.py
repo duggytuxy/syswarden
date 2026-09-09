@@ -165,6 +165,8 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
                     path_set.add(
                         package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH
                     )
+                if package_lifecycle_lab.parse_syswarden_version(version) >= (4, 10, 0):
+                    path_set.add(package_lifecycle_lab.SYSTEMD_ORDERING_RPM_DIRECTORY)
                 paths = sorted(path_set)
             filesystem: list[str] = []
             for path in paths:
@@ -1116,6 +1118,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             )
             if licensed:
                 path_set.add(package_lifecycle_lab.RPM_DOCUMENTATION_ROOT)
+            if package_lifecycle_lab.parse_syswarden_version(version) >= (4, 10, 0):
+                path_set.add(package_lifecycle_lab.SYSTEMD_ORDERING_RPM_DIRECTORY)
             if systemd_ordering:
                 path_set.add(
                     package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH
@@ -4731,6 +4735,37 @@ probe
                     ).returncode,
                     0,
                 )
+
+    def test_rpm_ordering_directory_ownership_is_version_bound(self) -> None:
+        def shell_inventory(filesystem):
+            return [
+                "\t".join(str(entry[key]) for key in ("path", "type", "mode", "uid", "gid", "value"))
+                for entry in filesystem
+            ]
+
+        directory = package_lifecycle_lab.SYSTEMD_ORDERING_RPM_DIRECTORY
+        for version in ("4.04.3", "4.10.0"):
+            paths, filesystem = self.exact_v404x_inventory("rpm", version, "candidate")
+            package_lifecycle_lab.validate_inventory_snapshot(
+                "rpm", paths, filesystem, role="candidate", version=version,
+                candidate_version=version,
+            )
+            result = self.run_embedded_inventory_contract(
+                "rpm", paths, shell_inventory(filesystem), role="candidate",
+                version=version, candidate_version=version,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            wrong_paths = sorted(set(paths) ^ {directory})
+            with self.assertRaises(package_lifecycle_lab.LifecycleLabError):
+                package_lifecycle_lab._validate_manager_paths(
+                    "rpm", wrong_paths, role="candidate", version=version,
+                    candidate_version=version,
+                )
+            result = self.run_embedded_inventory_contract(
+                "rpm", wrong_paths, role="candidate", version=version,
+                candidate_version=version,
+            )
+            self.assertNotEqual(result.returncode, 0)
 
     def test_systemd_ordering_runtime_attestation_is_version_bound(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT

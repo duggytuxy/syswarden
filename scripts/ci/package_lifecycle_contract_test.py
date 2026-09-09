@@ -1228,6 +1228,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
             self.assertEqual(
                 rpm_block.count("--directories /usr/share/doc/syswarden"), 1
             )
+            self.assertEqual(
+                rpm_block.count("--directories /usr/lib/systemd/system/syswarden-firewall.service.d"),
+                1,
+            )
         self.assertIn("prepare_rpm_scriptlet() {", workflow_script_preparation)
         self.assertIn("prepare_rpm_scriptlet() {", local)
         for source in (workflow_script_preparation, local):

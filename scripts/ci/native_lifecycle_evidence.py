@@ -18,11 +18,11 @@ from typing import Any, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONTRACT = ROOT / "scripts/ci/native_lifecycle_contract_v4.10.0.json"
-CONTRACT_SHA256 = "4948a3dab989c7537755862d882f3589400ed01d984c2e22dce56fc680a81230"
+CONTRACT_SHA256 = "6fdc20d732a2f9601eba4add202956bbb53aa62e14df65489ed9724f31da0f29"
 OBSERVATION_SCHEMA = "syswarden-native-package-lifecycle-observation/v1"
 VERDICT_SCHEMA = "syswarden-native-package-lifecycle-verdict/v1"
 RHEL_PACKAGE_OWNED_ROLLBACK_EVIDENCE_SCHEMA = (
-    "syswarden-rhel-package-owned-rollback-vendor-absence/v1"
+    "syswarden-rhel-package-owned-rollback-vendor-absence/v2"
 )
 REPOSITORY = "duggytuxy/syswarden"
 TARGET_RELEASE = "v4.10.0"
@@ -136,6 +136,7 @@ RHEL_PACKAGE_OWNED_SCENARIO_CHECKS = {
     "verified-rollback-v4100-v4043": [
         "standard_systemd_units_authoritative",
         "package_owned_vendor_payload_absent",
+        "standard_ordering_dropin_owned_and_intact",
     ],
     "candidate-reupgrade-v4043-v4100": [
         "legacy_systemd_units_migrated",
@@ -160,8 +161,6 @@ RHEL_PACKAGE_OWNED_ROLLBACK_ABSENCE_PATHS = (
     "/var/lib/.syswarden-rhelpo-postun-recovery-v1.new",
     "/usr/lib/systemd/system/syswarden-core.service",
     "/usr/lib/systemd/system/syswarden-firewall.service",
-    "/usr/lib/systemd/system/syswarden-firewall.service.d",
-    "/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf",
     "/usr/lib/systemd/system-preset/90-syswarden-rhel-image.preset",
     "/usr/libexec/syswarden",
     "/usr/libexec/syswarden/rhelpo-postun-recovery-v1",
@@ -169,6 +168,19 @@ RHEL_PACKAGE_OWNED_ROLLBACK_ABSENCE_PATHS = (
     "/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration",
     "/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service.syswarden-rhelpo-migration",
 )
+STANDARD_ROLLBACK_ORDERING = {
+    "directory": {
+        "path": "/usr/lib/systemd/system/syswarden-firewall.service.d",
+        "type": "directory", "mode": "0755", "uid": 0, "gid": 0,
+    },
+    "file": {
+        "path": "/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf",
+        "type": "regular", "mode": "0644", "uid": 0, "gid": 0,
+        "nlink": 1, "size": 43,
+        "sha256": "8c4b31f25436882197beec8c8bff5a7599389e564593bd7c353aa99ef3854483",
+        "rpm_owner": "syswarden-4.04.3-1.x86_64",
+    },
+}
 EXPECTED_PROFILE_SCENARIO_CHECKS = {
     "RPM-A9-RHELPO": RHEL_PACKAGE_OWNED_SCENARIO_CHECKS,
     "RPM-A10-RHELPO": RHEL_PACKAGE_OWNED_SCENARIO_CHECKS,
@@ -649,6 +661,7 @@ def _validate_rhel_package_owned_rollback_evidence(
             "checked_path_count",
             "present_path_count",
             "path_inventory",
+            "standard_ordering_dropin",
         },
         "RHEL package-owned rollback raw evidence",
     )
@@ -693,6 +706,15 @@ def _validate_rhel_package_owned_rollback_evidence(
         raise LifecycleEvidenceError(
             "RHEL package-owned rollback path inventory is not exact"
         )
+    ordering = _exact(
+        evidence["standard_ordering_dropin"], set(STANDARD_ROLLBACK_ORDERING),
+        "standard rollback ordering payload",
+    )
+    for name, expected in STANDARD_ROLLBACK_ORDERING.items():
+        observed = _exact(ordering[name], set(expected), "standard rollback ordering payload")
+        if any(type(observed[key]) is not type(value) or observed[key] != value
+               for key, value in expected.items()):
+            raise LifecycleEvidenceError("standard rollback ordering payload is not exact")
 
 
 def _validate_host(

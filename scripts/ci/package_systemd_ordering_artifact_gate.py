@@ -22,6 +22,7 @@ RELATIVE_PATH = (
     "10-syswarden-wireguard-ordering.conf"
 )
 ABSOLUTE_PATH = "/" + RELATIVE_PATH
+DIRECTORY_PATH = str(Path(ABSOLUTE_PATH).parent)
 RPM_QUERY_FORMAT = (
     "[%{FILENAMES}\\t%{FILEMODES:perms}\\t%{FILEUSERNAME}\\t"
     "%{FILEGROUPNAME}\\t%{FILESIZES}\\t%{FILEDIGESTS}\\n]"
@@ -198,12 +199,15 @@ def validate_rpm(package: Path, expected: bytes, contract: ContentContract) -> N
     if inventory.returncode != 0 or "\x00" in inventory.stdout or "\r" in inventory.stdout:
         raise OrderingArtifactError("cannot inspect the RPM ordering inventory")
     matches = []
+    directories = []
     for line in inventory.stdout.splitlines():
         fields = line.split("\t")
         if len(fields) != 6:
             raise OrderingArtifactError("RPM inventory record is malformed")
         if fields[0] == ABSOLUTE_PATH:
             matches.append(fields)
+        if fields[0] == DIRECTORY_PATH:
+            directories.append(fields)
     if len(matches) != 1:
         raise OrderingArtifactError("RPM ordering member count is not exactly one")
     path, permissions, owner, group, size, digest = matches[0]
@@ -216,6 +220,17 @@ def validate_rpm(package: Path, expected: bytes, contract: ContentContract) -> N
         or digest != contract.sha256
     ):
         raise OrderingArtifactError("RPM ordering member metadata is not exact")
+    if len(directories) != 1:
+        raise OrderingArtifactError("RPM ordering directory ownership is not exactly one")
+    _, permissions, owner, group, size, digest = directories[0]
+    if (
+        permissions != "drwxr-xr-x"
+        or owner != "root"
+        or group != "root"
+        or re.fullmatch(r"[0-9]+", size) is None
+        or digest != ""
+    ):
+        raise OrderingArtifactError("RPM ordering directory metadata is not exact")
 
     producer = subprocess.Popen(
         ["rpm2cpio", str(package)], stdout=subprocess.PIPE, stderr=subprocess.PIPE

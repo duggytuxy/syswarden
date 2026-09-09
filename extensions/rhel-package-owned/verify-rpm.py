@@ -117,6 +117,7 @@ SHARED_PAYLOAD_RECORDS = {
     ),
     "/usr/share/bash-completion/completions/syswarden": ("-rw-r--r--", ""),
     "/usr/share/doc/syswarden": ("drwxr-xr-x", ""),
+    "/usr/lib/systemd/system/syswarden-firewall.service.d": ("drwxr-xr-x", ""),
     "/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt": ("-rw-r--r--", ""),
     "/usr/share/doc/syswarden/LICENSE.txt": ("-rw-r--r--", ""),
 }

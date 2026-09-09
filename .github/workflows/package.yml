@@ -1201,6 +1201,8 @@ jobs:
             --after-install "${PACKAGE_RPM_SCRIPTS}/postinst.sh" \
             --before-remove "${PACKAGE_RPM_SCRIPTS}/prerm.sh" \
             --after-remove "${PACKAGE_RPM_SCRIPTS}/postrm.sh" \
+            --directories /usr/lib/systemd/system/syswarden-firewall.service.d \
+            --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-firewall.service.d" \
             --directories /usr/share/doc/syswarden \
             -C "${STAGING_AMD64}" .
 
@@ -1243,6 +1245,8 @@ jobs:
             --directories /var/lib/syswarden \
             --directories /var/lib/syswarden/ui \
             --directories /var/log/syswarden \
+            --directories /usr/lib/systemd/system/syswarden-firewall.service.d \
+            --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-firewall.service.d" \
             --rpm-attr "0750,root,root:/etc/syswarden" \
             --rpm-attr "0750,root,root:/etc/syswarden/config" \
             --rpm-attr "0750,root,root:/etc/syswarden/config/modules" \

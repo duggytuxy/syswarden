@@ -186,6 +186,7 @@ class OrderingArtifactGateTests(unittest.TestCase):
     def test_rpm_member_contract_is_exact(self) -> None:
         inventory = (
             f"{gate.ABSOLUTE_PATH}\t-rw-r--r--\troot\troot\t43\t{CONTRACT.sha256}\n"
+            f"{gate.DIRECTORY_PATH}\tdrwxr-xr-x\troot\troot\t0\t\n"
         )
         run_results = [
             subprocess.CompletedProcess([], 0, "8\n", ""),
@@ -205,6 +206,30 @@ class OrderingArtifactGateTests(unittest.TestCase):
             gate.subprocess, "Popen", return_value=Producer()
         ):
             gate.validate_rpm(self.root / "candidate.rpm", CONTENT, CONTRACT)
+
+    def test_rpm_requires_one_safe_owned_ordering_directory(self) -> None:
+        member = (
+            f"{gate.ABSOLUTE_PATH}\t-rw-r--r--\troot\troot\t43\t{CONTRACT.sha256}\n"
+        )
+        directory = f"{gate.DIRECTORY_PATH}\tdrwxr-xr-x\troot\troot\t0\t\n"
+        for record in (
+            "",
+            directory + directory,
+            directory.replace("drwxr-xr-x", "lrwxrwxrwx"),
+            directory.replace("drwxr-xr-x", "drwxrwxrwx"),
+            directory.replace("\troot\troot\t", "\toperator\troot\t"),
+            directory.replace("\t0\t\n", "\t0\t" + CONTRACT.sha256 + "\n"),
+        ):
+            with self.subTest(record=record), mock.patch.object(
+                gate.subprocess,
+                "run",
+                side_effect=(
+                    subprocess.CompletedProcess([], 0, "8\n", ""),
+                    subprocess.CompletedProcess([], 0, member + record, ""),
+                ),
+            ):
+                with self.assertRaisesRegex(gate.OrderingArtifactError, "ordering directory"):
+                    gate.validate_rpm(self.root / "candidate.rpm", CONTENT, CONTRACT)
 
     def test_rpm_rejects_non_sha256_or_ambiguous_inventory(self) -> None:
         bad_algorithm = subprocess.CompletedProcess([], 0, "1\n", "")

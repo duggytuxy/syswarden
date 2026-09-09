@@ -326,6 +326,7 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
                     {"path": path, "state": "absent", "errno": "ENOENT"}
                     for path in rollback_paths
                 ],
+                "standard_ordering_dropin": copy.deepcopy(evidence.STANDARD_ROLLBACK_ORDERING),
             }
         self.attach(
             item,
@@ -782,6 +783,7 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
                 {
                     "standard_systemd_units_authoritative",
                     "package_owned_vendor_payload_absent",
+                    "standard_ordering_dropin_owned_and_intact",
                 },
             )
             for scenario_id in (
@@ -816,6 +818,31 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
             self.assertEqual(raw_document["present_path_count"], 0)
 
             mutations = (
+                (
+                    "missing standard ordering payload",
+                    lambda value: value.pop("standard_ordering_dropin"),
+                    "keys are not exact",
+                ),
+                (
+                    "wrong standard ordering digest",
+                    lambda value: value["standard_ordering_dropin"]["file"].update({"sha256": "0" * 64}),
+                    "ordering payload",
+                ),
+                (
+                    "wrong standard package owner",
+                    lambda value: value["standard_ordering_dropin"]["file"].update({"rpm_owner": "syswarden-4.10.0-1.rhelpo.x86_64"}),
+                    "ordering payload",
+                ),
+                (
+                    "unsafe standard ordering directory",
+                    lambda value: value["standard_ordering_dropin"]["directory"].update({"type": "symlink"}),
+                    "ordering payload",
+                ),
+                (
+                    "boolean standard file owner",
+                    lambda value: value["standard_ordering_dropin"]["file"].update({"uid": False}),
+                    "ordering payload",
+                ),
                 (
                     "present vendor path",
                     lambda value: value["path_inventory"][0].update(

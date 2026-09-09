@@ -69,7 +69,12 @@ legacy units under `/etc/systemd/system` were migrated, that the package-owned
 units under `/usr/lib/systemd/system` are the authoritative loaded fragments,
 and that the installed package-owned profile is exact. The rollback scenario
 must prove the inverse transition: the standard units are authoritative again
-and no package-owned vendor payload from v4.10.0 remains.
+and no profile-specific vendor payload from v4.10.0 remains. The shared
+WireGuard ordering drop-in is present in the public v4.04.3 RPM and must remain:
+the rollback proof verifies its exact bytes, safe file and parent metadata, and
+ownership by `syswarden-4.04.3-1.x86_64`. It must not claim that shared file is
+absent. Both final purge checkpoints still require the drop-in and its directory
+to be absent.
 
 For both package-owned purge scenarios, run the verified SysWarden cleanup
 before the final native RPM erase. The cleanup must stop and disable the exact
