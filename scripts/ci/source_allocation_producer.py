@@ -435,7 +435,10 @@ def _verify_nested_unix_socket_isolation(
         listener.bind(str(canary_path))
         listener.listen(1)
         code = (
-            "import errno,socket,sys;"
+            "import errno,os,socket,sys;"
+            "\nif os.path.lexists('/proc'): raise SystemExit(5)"
+            "\nif os.getpid() != 2 or os.getppid() != 1: raise SystemExit(6)"
+            "\n"
             "client=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);"
             "\ntry: client.connect(sys.argv[1])"
             "\nexcept OSError as error:"
@@ -469,8 +472,6 @@ def _verify_nested_unix_socket_isolation(
                 "/var",
                 "--tmpfs",
                 "/var/tmp",
-                "--proc",
-                "/proc",
                 "--dev",
                 "/dev",
                 "--clearenv",
@@ -1196,9 +1197,6 @@ def _invoke_probe(
                 "--unshare-pid",
                 "--unshare-ipc",
                 "--unshare-uts",
-                "--ro-bind",
-                str(binary.parent),
-                str(binary.parent),
                 "--dir",
                 "/run",
                 "--tmpfs",
@@ -1207,14 +1205,23 @@ def _invoke_probe(
                 "/var",
                 "--tmpfs",
                 "/var/tmp",
-                "--proc",
-                "/proc",
+                # Mount inputs after private temporary roots so a workspace
+                # beneath /tmp or /var/tmp remains visible and read-only.
+                "--ro-bind",
+                str(binary.parent),
+                str(binary.parent),
+                # The outer procfs contains protected submounts. Linux refuses
+                # a fresh procfs in this nested user namespace. Expose no procfs
+                # and bind the verified probe at its fixed read-only entrypoint.
+                "--ro-bind",
+                str(binary),
+                "/syswarden-allocation-probe",
                 "--dev",
                 "/dev",
                 "--chdir",
                 "/",
                 "--",
-                f"/proc/self/fd/{descriptor}",
+                "/syswarden-allocation-probe",
             ]
         elif sandbox_sha256 is not None:
             raise AllocationProducerError(

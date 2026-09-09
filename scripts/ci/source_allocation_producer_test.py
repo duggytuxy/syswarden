@@ -376,6 +376,7 @@ class SourceAllocationProducerTests(unittest.TestCase):
             "--unshare-user",
             "--unshare-net",
             "--ro-bind /usr /usr",
+            "--symlink usr/bin /bin",
             "--tmpfs /tmp",
             '--bind "${output_root}" "${output_root}"',
             "--prepared-output-root",
@@ -424,6 +425,42 @@ class SourceAllocationProducerTests(unittest.TestCase):
             sandbox_sha,
             python_target,
         )
+
+    @unittest.skipUnless(platform.system() == "Linux" and os.geteuid() == 0, "protected root runner")
+    def test_probe_canary_runs_inside_the_outer_root_namespace(self) -> None:
+        sandbox = producer.SYSTEM_BWRAP
+        if not sandbox.is_file() or sandbox.stat().st_uid != 0:
+            self.skipTest("canonical root-owned /usr/bin/bwrap is unavailable")
+        python_target = producer.SYSTEM_PYTHON_ENTRY.resolve(strict=True)
+        # A standalone canary does not reproduce the outer procfs submounts.
+        # Execute the same canary inside the actual outer namespace shape.
+        code = (
+            "import hashlib,subprocess,sys; from pathlib import Path; "
+            "subprocess.run(['/bin/sh','-c','test -x /usr/bin/git'],check=True); "
+            "sys.path.insert(0,sys.argv[1]); "
+            "import source_allocation_producer as p; "
+            "p._verify_nested_unix_socket_isolation("
+            "p.SYSTEM_BWRAP,hashlib.sha256(p.SYSTEM_BWRAP.read_bytes()).hexdigest(),"
+            "p.SYSTEM_PYTHON_ENTRY.resolve(strict=True))"
+        )
+        completed = subprocess.run(
+            [
+                str(sandbox), "--die-with-parent", "--new-session",
+                "--unshare-user", "--unshare-net", "--unshare-pid",
+                "--unshare-ipc", "--unshare-uts",
+                "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin",
+                "--ro-bind", "/lib", "/lib",
+                "--ro-bind-try", "/lib64", "/lib64",
+                "--ro-bind", str(producer.REPOSITORY), str(producer.REPOSITORY),
+                "--dir", "/run", "--tmpfs", "/tmp", "--dir", "/var",
+                "--tmpfs", "/var/tmp", "--proc", "/proc", "--dev", "/dev",
+                "--clearenv", "--setenv", "PATH", "/usr/bin:/bin",
+                "--", str(python_target), "-I", "-c", code,
+                str(producer.REPOSITORY / "scripts" / "ci"),
+            ],
+            capture_output=True, timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
 
     @unittest.skipUnless(platform.system() == "Linux", "Linux launcher")
     def test_qualifying_launcher_ignores_python_path_injection(self) -> None:
@@ -717,6 +754,39 @@ class SourceAllocationProducerTests(unittest.TestCase):
         byte_delta = int(counters["total_alloc_bytes_after"]) - int(counters["total_alloc_bytes_before"])
         self.assertEqual(malloc_delta == 0, byte_delta == 0)
         self.assertEqual(counters["gc_cycles_before"], counters["gc_cycles_after"])
+        sandbox = producer.SYSTEM_BWRAP
+        if sandbox.is_file() and sandbox.stat().st_uid == 0:
+            isolated_raw = producer._invoke_probe(
+                probe, probe_sha, request, 30,
+                sandbox_executable=sandbox,
+                sandbox_sha256=hashlib.sha256(sandbox.read_bytes()).hexdigest(),
+            )
+            isolated = json.loads(isolated_raw)
+            self.assertEqual(isolated["workload"], document["workload"])
+            self.assertEqual(isolated["subject"]["probe_binary_sha256"], probe_sha)
+            mismatched = dict(request, probe_binary_sha256="f" * 64)
+            with self.assertRaisesRegex(producer.AllocationProducerError, "executable identity mismatch"):
+                producer._invoke_probe(
+                    probe, probe_sha, mismatched, 30,
+                    sandbox_executable=sandbox,
+                    sandbox_sha256=hashlib.sha256(sandbox.read_bytes()).hexdigest(),
+                )
+            real_popen = subprocess.Popen
+
+            def writable_entrypoint(command, *args, **kwargs):
+                changed = list(command)
+                index = changed.index("/syswarden-allocation-probe")
+                self.assertEqual(changed[index - 2:index], ["--ro-bind", str(probe)])
+                changed[index - 2] = "--bind"
+                return real_popen(changed, *args, **kwargs)
+
+            with mock.patch.object(producer.subprocess, "Popen", side_effect=writable_entrypoint):
+                with self.assertRaisesRegex(producer.AllocationProducerError, "not mounted read-only"):
+                    producer._invoke_probe(
+                        probe, probe_sha, request, 30,
+                        sandbox_executable=sandbox,
+                        sandbox_sha256=hashlib.sha256(sandbox.read_bytes()).hexdigest(),
+                    )
 
 
 if __name__ == "__main__":
