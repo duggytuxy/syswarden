@@ -8,6 +8,7 @@ import gzip
 import io
 import json
 import os
+import shutil
 import tempfile
 import tarfile
 import unittest
@@ -138,8 +139,39 @@ class NativePackageSigningBundleTests(unittest.TestCase):
             self.deb_fingerprint,
             hashlib.sha256(self.deb_public.read_bytes()).hexdigest(),
         )
+        self.bootstrap_release_sha = bundle.BOOTSTRAP_RELEASE_SHA
+        self.bootstrap_signing_run_id = bundle.BOOTSTRAP_SIGNING_RUN_ID
+        self.bootstrap_signed_artifact_id = bundle.BOOTSTRAP_SIGNED_ARTIFACT_ID
+        self.bootstrap_signed_artifact_size = bundle.BOOTSTRAP_SIGNED_ARTIFACT_SIZE
+        self.bootstrap_signed_artifact_digest = (
+            bundle.BOOTSTRAP_SIGNED_ARTIFACT_DIGEST
+        )
+        self.bootstrap_policy = self.root / "bootstrap-policy.json"
+        foundation = self.policy_document("foundation-not-qualified")
+        foundation["deb"]["implementation"] = "implemented-not-qualified"
+        self.write_json(self.bootstrap_policy, foundation)
+        self.original_foundation_policy_sha256 = bundle.FOUNDATION_POLICY_SHA256
+        bundle.FOUNDATION_POLICY_SHA256 = hashlib.sha256(
+            self.bootstrap_policy.read_bytes()
+        ).hexdigest()
+        self.write_bootstrap_policy(json.loads(json.dumps(foundation)))
+        self.bootstrap_bundle = self.root / "bootstrap-bundle"
+        bootstrap_arguments = list(
+            self.finalize_arguments(
+                self.bootstrap_bundle,
+                include_bootstrap=False,
+                release_sha=self.bootstrap_release_sha,
+                signing_run_id=self.bootstrap_signing_run_id,
+            )
+        )
+        bootstrap_arguments.append("--bootstrap-qualification")
+        if bundle.main(tuple(bootstrap_arguments)) != 0:
+            raise AssertionError("bootstrap bundle fixture could not be created")
+        self.write_policy()
+        self.rewrite_verification_evidence()
 
     def tearDown(self) -> None:
+        bundle.FOUNDATION_POLICY_SHA256 = self.original_foundation_policy_sha256
         self.temporary.cleanup()
 
     @staticmethod
@@ -494,13 +526,21 @@ class NativePackageSigningBundleTests(unittest.TestCase):
             }
         self.write_json(path, document)
 
-    def finalize_arguments(self, output: Path | None = None) -> tuple[str, ...]:
-        return (
+    def finalize_arguments(
+        self,
+        output: Path | None = None,
+        *,
+        include_bootstrap: bool = True,
+        release_sha: str | None = None,
+        signing_run_id: int = 300,
+    ) -> tuple[str, ...]:
+        selected_release_sha = release_sha or self.release_sha
+        arguments = [
             "finalize",
             "--release",
             self.release,
             "--release-sha",
-            self.release_sha,
+            selected_release_sha,
             "--repository",
             "duggytuxy/syswarden",
             "--unsigned-packages",
@@ -526,11 +566,11 @@ class NativePackageSigningBundleTests(unittest.TestCase):
             "--rhel-unsigned-artifact-digest",
             "sha256:" + "6" * 64,
             "--signing-run-id",
-            "300",
+            str(signing_run_id),
             "--signing-run-attempt",
             "1",
             "--signing-workflow-sha",
-            self.release_sha,
+            selected_release_sha,
             "--source-date-epoch",
             "1780000000",
             "--signer-image",
@@ -553,9 +593,62 @@ class NativePackageSigningBundleTests(unittest.TestCase):
             str(self.deb_signature),
             "--deb-verification",
             str(self.deb_verification),
-            "--output",
-            str(output or (self.root / "bundle")),
-        )
+        ]
+        if include_bootstrap:
+            arguments.extend(
+                (
+                    "--bootstrap-bundle",
+                    str(self.bootstrap_bundle),
+                    "--bootstrap-release-sha",
+                    self.bootstrap_release_sha,
+                    "--bootstrap-policy",
+                    str(self.bootstrap_policy),
+                    "--bootstrap-policy-sha256",
+                    hashlib.sha256(self.bootstrap_policy.read_bytes()).hexdigest(),
+                    "--bootstrap-signing-run-id",
+                    str(self.bootstrap_signing_run_id),
+                    "--bootstrap-signed-artifact-id",
+                    str(self.bootstrap_signed_artifact_id),
+                    "--bootstrap-signed-artifact-name",
+                    bundle.signed_artifact_name(
+                        self.release,
+                        bundle.BOOTSTRAP_BUNDLE_MODE,
+                        self.bootstrap_signing_run_id,
+                        1,
+                        self.bootstrap_release_sha,
+                    ),
+                    "--bootstrap-signed-artifact-size",
+                    str(self.bootstrap_signed_artifact_size),
+                    "--bootstrap-signed-artifact-digest",
+                    self.bootstrap_signed_artifact_digest,
+                )
+            )
+        arguments.extend(("--output", str(output or (self.root / "bundle"))))
+        return tuple(arguments)
+
+    @staticmethod
+    def replace_argument(
+        arguments: tuple[str, ...], option: str, value: str
+    ) -> tuple[str, ...]:
+        changed = list(arguments)
+        changed[changed.index(option) + 1] = value
+        return tuple(changed)
+
+    @staticmethod
+    def reseal_bundle(root: Path) -> None:
+        rhel_root = root / bundle.RHEL_PACKAGE_OWNED_DIRECTORY
+        for seal_root in (rhel_root, root):
+            members = {}
+            for child in sorted(seal_root.rglob("*")):
+                if child.is_dir():
+                    continue
+                relative = child.relative_to(seal_root).as_posix()
+                if relative == "SIGNED_ARTIFACT_SHA256SUMS.txt":
+                    continue
+                members[relative] = child.read_bytes()
+            (seal_root / "SIGNED_ARTIFACT_SHA256SUMS.txt").write_bytes(
+                bundle.canonical_manifest(members)
+            )
 
     def test_finalize_and_verify_exact_bundle(self) -> None:
         output = self.root / "bundle"
@@ -580,6 +673,15 @@ class NativePackageSigningBundleTests(unittest.TestCase):
         self.assertEqual(provenance["status"], bundle.QUALIFIED_PROVENANCE_STATUS)
         self.assertFalse(provenance["public_release"])
         self.assertFalse(provenance["release_qualified"])
+        reference = provenance["bootstrap_qualification"]
+        self.assertEqual(reference["release_sha"], self.bootstrap_release_sha)
+        self.assertEqual(reference["signing_run"]["id"], self.bootstrap_signing_run_id)
+        self.assertEqual(
+            reference["artifact"]["id"], self.bootstrap_signed_artifact_id
+        )
+        self.assertEqual(
+            reference["artifact"]["size"], self.bootstrap_signed_artifact_size
+        )
         self.assertTrue(provenance["apk_signature"]["exact_unsigned_suffix"])
         self.assertTrue(provenance["rpm_signature"]["payload_preserved"])
         deb_verification = json.loads(
@@ -604,6 +706,32 @@ class NativePackageSigningBundleTests(unittest.TestCase):
         self.assertEqual(
             rhel_provenance["rpm_signature"]["key"],
             provenance["rpm_signature"]["key"],
+        )
+        self.assertEqual(rhel_provenance["bootstrap_qualification"], reference)
+
+    def test_phase_a_policy_digest_is_immutable(self) -> None:
+        self.assertEqual(
+            self.original_foundation_policy_sha256,
+            "6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d",
+        )
+
+    def test_reviewed_phase_a_bootstrap_identity_is_immutable(self) -> None:
+        self.assertEqual(bundle.BOOTSTRAP_REPOSITORY, "duggytuxy/syswarden")
+        self.assertEqual(
+            bundle.BOOTSTRAP_RELEASE_SHA,
+            "9598861f1be80a651658bf3ca8c10424bd70db6c",
+        )
+        self.assertEqual(bundle.BOOTSTRAP_SIGNING_RUN_ID, 34292701745)
+        self.assertEqual(bundle.BOOTSTRAP_SIGNED_ARTIFACT_ID, 10088398939)
+        self.assertEqual(bundle.BOOTSTRAP_SIGNED_ARTIFACT_SIZE, 63065295)
+        self.assertEqual(
+            bundle.BOOTSTRAP_SIGNED_ARTIFACT_NAME,
+            "syswarden-native-signed-packages-4.10.0-34292701745-1-"
+            "9598861f1be80a651658bf3ca8c10424bd70db6c",
+        )
+        self.assertEqual(
+            bundle.BOOTSTRAP_SIGNED_ARTIFACT_DIGEST,
+            "sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3",
         )
 
     def test_inventory_is_exact_and_bound(self) -> None:
@@ -744,8 +872,8 @@ class NativePackageSigningBundleTests(unittest.TestCase):
 
     def test_explicit_bootstrap_qualification_is_sealed_and_verifiable(self) -> None:
         self.write_bootstrap_policy()
-        output = self.root / "bootstrap-bundle"
-        arguments = list(self.finalize_arguments(output))
+        output = self.root / "bootstrap-bundle-explicit"
+        arguments = list(self.finalize_arguments(output, include_bootstrap=False))
         arguments.append("--bootstrap-qualification")
         self.assertEqual(bundle.main(tuple(arguments)), 0)
         self.assertEqual(
@@ -758,6 +886,8 @@ class NativePackageSigningBundleTests(unittest.TestCase):
                     self.release,
                     "--release-sha",
                     self.release_sha,
+                    "--mode",
+                    "bootstrap",
                 )
             ),
             0,
@@ -768,6 +898,239 @@ class NativePackageSigningBundleTests(unittest.TestCase):
         self.assertEqual(provenance["status"], bundle.BOOTSTRAP_PROVENANCE_STATUS)
         self.assertFalse(provenance["public_release"])
         self.assertFalse(provenance["release_qualified"])
+
+    def test_bundle_verification_is_qualified_only_by_default(self) -> None:
+        self.assertEqual(
+            bundle.main(
+                (
+                    "verify",
+                    "--bundle",
+                    str(self.bootstrap_bundle),
+                    "--release",
+                    self.release,
+                    "--release-sha",
+                    self.bootstrap_release_sha,
+                )
+            ),
+            1,
+        )
+        self.assertEqual(
+            bundle.main(
+                (
+                    "verify",
+                    "--bundle",
+                    str(self.bootstrap_bundle),
+                    "--release",
+                    self.release,
+                    "--release-sha",
+                    self.bootstrap_release_sha,
+                    "--mode",
+                    "bootstrap",
+                )
+            ),
+            0,
+        )
+
+    def test_bundle_provenance_integer_types_fail_closed(self) -> None:
+        cases = (
+            ("evidence/NATIVE_SIGNING_PROVENANCE.json", "signing-attempt"),
+            (
+                "rhel-package-owned/evidence/SIGNING_PROVENANCE.json",
+                "schema-version",
+            ),
+        )
+        for index, (relative, field) in enumerate(cases):
+            with self.subTest(field=field):
+                output = self.root / f"provenance-integer-type-{index}"
+                shutil.copytree(self.bootstrap_bundle, output)
+                path = output / relative
+                document = json.loads(path.read_text(encoding="utf-8"))
+                if field == "signing-attempt":
+                    document["signing_run"]["attempt"] = True
+                else:
+                    document["schema_version"] = True
+                self.write_json(path, document)
+                self.reseal_bundle(output)
+                self.assertEqual(
+                    bundle.main(
+                        (
+                            "verify",
+                            "--bundle",
+                            str(output),
+                            "--release",
+                            self.release,
+                            "--release-sha",
+                            self.bootstrap_release_sha,
+                            "--mode",
+                            "bootstrap",
+                        )
+                    ),
+                    1,
+                )
+
+    def test_qualified_mode_requires_every_exact_bootstrap_binding(self) -> None:
+        bootstrap_options = (
+            "--bootstrap-bundle",
+            "--bootstrap-release-sha",
+            "--bootstrap-policy",
+            "--bootstrap-policy-sha256",
+            "--bootstrap-signing-run-id",
+            "--bootstrap-signed-artifact-id",
+            "--bootstrap-signed-artifact-name",
+            "--bootstrap-signed-artifact-size",
+            "--bootstrap-signed-artifact-digest",
+        )
+        for index, option in enumerate(bootstrap_options):
+            with self.subTest(option=option):
+                arguments = list(
+                    self.finalize_arguments(self.root / f"missing-bootstrap-{index}")
+                )
+                position = arguments.index(option)
+                del arguments[position : position + 2]
+                self.assertEqual(bundle.main(tuple(arguments)), 1)
+
+    def test_qualified_mode_rejects_wrong_bootstrap_identities(self) -> None:
+        mutations = (
+            ("--bootstrap-release-sha", self.release_sha),
+            ("--bootstrap-policy-sha256", "0" * 64),
+            ("--bootstrap-signing-run-id", "300"),
+            ("--bootstrap-signed-artifact-id", "0"),
+            (
+                "--bootstrap-signed-artifact-id",
+                str(self.bootstrap_signed_artifact_id + 1),
+            ),
+            (
+                "--bootstrap-signed-artifact-size",
+                str(self.bootstrap_signed_artifact_size + 1),
+            ),
+            (
+                "--bootstrap-signed-artifact-name",
+                "syswarden-native-signed-packages-qualified-4.10.0-250-1-"
+                + self.bootstrap_release_sha,
+            ),
+            (
+                "--bootstrap-signed-artifact-name",
+                "syswarden-native-signed-packages-bootstrap-4.10.0-250-1-"
+                + self.bootstrap_release_sha,
+            ),
+            ("--bootstrap-signed-artifact-digest", "sha256:" + "0" * 63),
+            ("--bootstrap-signed-artifact-digest", "sha256:" + "0" * 64),
+        )
+        for index, (option, value) in enumerate(mutations):
+            with self.subTest(option=option):
+                arguments = self.finalize_arguments(
+                    self.root / f"wrong-bootstrap-{index}"
+                )
+                arguments = self.replace_argument(arguments, option, value)
+                self.assertEqual(bundle.main(arguments), 1)
+
+    def test_sealed_bootstrap_reference_schema_fails_closed(self) -> None:
+        output = self.root / "reference-schema"
+        self.assertEqual(bundle.main(self.finalize_arguments(output)), 0)
+        provenance = json.loads(
+            (output / "evidence/NATIVE_SIGNING_PROVENANCE.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        reference = provenance["bootstrap_qualification"]
+        self.assertEqual(
+            bundle.validate_bootstrap_reference(
+                reference, self.release, self.release_sha, "duggytuxy/syswarden"
+            ),
+            reference,
+        )
+        mutations = (
+            lambda value: value.__setitem__("unexpected", True),
+            lambda value: value.__setitem__("schema_version", True),
+            lambda value: value.__setitem__("release_sha", self.release_sha),
+            lambda value: value.__setitem__("repository", "other/repository"),
+            lambda value: value.__setitem__("policy_sha256", "0" * 64),
+            lambda value: value["signing_run"].__setitem__("attempt", 2),
+            lambda value: value["signing_run"].__setitem__("attempt", True),
+            lambda value: value["signing_run"].__setitem__(
+                "workflow_sha", "c" * 40
+            ),
+            lambda value: value["artifact"].__setitem__("id", 0),
+            lambda value: value["artifact"].__setitem__(
+                "id", self.bootstrap_signed_artifact_id + 1
+            ),
+            lambda value: value["artifact"].__setitem__("size", True),
+            lambda value: value["artifact"].__setitem__(
+                "size", self.bootstrap_signed_artifact_size + 1
+            ),
+            lambda value: value["artifact"].__setitem__(
+                "name", "syswarden-native-signed-packages-qualified"
+            ),
+            lambda value: value["artifact"].__setitem__(
+                "digest", "sha256:" + "0" * 63
+            ),
+            lambda value: value["artifact"].__setitem__(
+                "digest", "sha256:" + "0" * 64
+            ),
+        )
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                changed = json.loads(json.dumps(reference))
+                mutate(changed)
+                with self.assertRaises(bundle.SigningBundleError):
+                    bundle.validate_bootstrap_reference(
+                        changed,
+                        self.release,
+                        self.release_sha,
+                        "duggytuxy/syswarden",
+                    )
+
+    def test_policy_transition_allows_only_the_reviewed_state_changes(self) -> None:
+        qualified = self.policy_document("qualified")
+        qualified["publishing"] = True
+        self.write_json(self.policy, qualified)
+        self.rewrite_verification_evidence()
+        self.assertEqual(
+            bundle.main(
+                self.finalize_arguments(self.root / "qualified-publishing-enabled")
+            ),
+            0,
+        )
+
+        mutations = (
+            (
+                "schema-version-type",
+                lambda document: document.__setitem__("schema_version", True),
+            ),
+            (
+                "key-validity",
+                lambda document: document["rpm"]["trusted_keys"][0].__setitem__(
+                    "valid_until", "2027-01-02"
+                ),
+            ),
+            (
+                "signer-image",
+                lambda document: document["apk"].__setitem__(
+                    "signer_image",
+                    "registry.example/syswarden/apk-signer@sha256:" + "6" * 64,
+                ),
+            ),
+            (
+                "deb-signature-suffix",
+                lambda document: document["deb"].__setitem__(
+                    "signature_suffix", ".sig"
+                ),
+            ),
+        )
+        for index, (name, mutate) in enumerate(mutations):
+            with self.subTest(name=name):
+                document = self.policy_document("qualified")
+                mutate(document)
+                self.write_json(self.policy, document)
+                self.rewrite_verification_evidence()
+                self.assertEqual(
+                    bundle.main(
+                        self.finalize_arguments(
+                            self.root / f"transition-rejected-{index}"
+                        )
+                    ),
+                    1,
+                )
 
     def test_bootstrap_qualification_policy_boundaries_fail_closed(self) -> None:
         cases = (
@@ -810,14 +1173,17 @@ class NativePackageSigningBundleTests(unittest.TestCase):
                 self.write_json(self.policy, document)
                 self.rewrite_verification_evidence()
                 arguments = list(
-                    self.finalize_arguments(self.root / f"bootstrap-rejected-{index}")
+                    self.finalize_arguments(
+                        self.root / f"bootstrap-rejected-{index}",
+                        include_bootstrap=False,
+                    )
                 )
                 arguments.append("--bootstrap-qualification")
                 self.assertEqual(bundle.main(tuple(arguments)), 1)
 
     def test_bootstrap_qualification_cannot_use_publishing_purpose(self) -> None:
         self.write_bootstrap_policy()
-        arguments = list(self.finalize_arguments())
+        arguments = list(self.finalize_arguments(include_bootstrap=False))
         arguments.extend(
             ("--bootstrap-qualification", "--purpose", "publishing")
         )
@@ -826,7 +1192,7 @@ class NativePackageSigningBundleTests(unittest.TestCase):
     def test_bootstrap_qualification_requires_committed_public_key_bytes(self) -> None:
         self.write_bootstrap_policy()
         self.rpm_public.unlink()
-        arguments = list(self.finalize_arguments())
+        arguments = list(self.finalize_arguments(include_bootstrap=False))
         arguments.append("--bootstrap-qualification")
         self.assertEqual(bundle.main(tuple(arguments)), 1)
 
@@ -838,7 +1204,7 @@ class NativePackageSigningBundleTests(unittest.TestCase):
             self.key("rpm-second", second_public, "A" * 40)
         )
         self.write_bootstrap_policy(document)
-        arguments = list(self.finalize_arguments())
+        arguments = list(self.finalize_arguments(include_bootstrap=False))
         arguments.append("--bootstrap-qualification")
         self.assertEqual(bundle.main(tuple(arguments)), 1)
 

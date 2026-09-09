@@ -291,6 +291,7 @@ print(json.dumps(document, separators=(",", ":")))
                 "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
                 "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+                "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
                 "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
             ],
         )
@@ -365,7 +366,7 @@ print(json.dumps(document, separators=(",", ":")))
             self.assertIn(required, self.workflow)
         self.assertEqual(
             self.workflow.count("actions/download-artifact@"),
-            2,
+            3,
         )
         self.assertEqual(
             self.workflow.count('run-id: ${{ inputs.unsigned_package_run_id }}'),
@@ -562,6 +563,210 @@ print(json.dumps(document, separators=(",", ":")))
         ):
             self.assertIn(required, self.workflow)
         self.assertNotIn("--purpose publishing", self.workflow)
+
+    def test_qualified_mode_requires_one_exact_prior_bootstrap(self) -> None:
+        for required in (
+            "bootstrap_release_sha:",
+            "bootstrap_signing_run_id:",
+            "bootstrap_signed_artifact_id:",
+            "bootstrap_policy_sha256:",
+            "APPROVED_BOOTSTRAP_ARTIFACT_DIGEST: sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3",
+            'APPROVED_BOOTSTRAP_ARTIFACT_ID: "10088398939"',
+            "APPROVED_BOOTSTRAP_ARTIFACT_NAME: syswarden-native-signed-packages-4.10.0-34292701745-1-9598861f1be80a651658bf3ca8c10424bd70db6c",
+            'APPROVED_BOOTSTRAP_ARTIFACT_SIZE: "63065295"',
+            "APPROVED_BOOTSTRAP_RELEASE_SHA: 9598861f1be80a651658bf3ca8c10424bd70db6c",
+            "APPROVED_BOOTSTRAP_REPOSITORY: duggytuxy/syswarden",
+            'APPROVED_BOOTSTRAP_RUN_ID: "34292701745"',
+            "FOUNDATION_POLICY_SHA256: 6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d",
+            '"${BOOTSTRAP_POLICY_SHA256}" != "${FOUNDATION_POLICY_SHA256}"',
+            '"${BOOTSTRAP_RELEASE_SHA}" != "${APPROVED_BOOTSTRAP_RELEASE_SHA}"',
+            '"${BOOTSTRAP_SIGNING_RUN_ID}" != "${APPROVED_BOOTSTRAP_RUN_ID}"',
+            '"${BOOTSTRAP_SIGNED_ARTIFACT_ID}" != "${APPROVED_BOOTSTRAP_ARTIFACT_ID}"',
+            "Resolve Exact Prior Bootstrap Run and Artifact",
+            '"${BOOTSTRAP_RELEASE_SHA}" == "${RELEASE_SHA}"',
+            'git merge-base --is-ancestor "${BOOTSTRAP_RELEASE_SHA}" "${RELEASE_SHA}"',
+            'policy_size="$(git cat-file -s "${policy_object}")"',
+            '"${policy_size}" -gt 131072',
+            '.path // ""',
+            '".github/workflows/native-package-signing.yml"',
+            '.event // ""',
+            '"workflow_dispatch"',
+            '.run_attempt | tostring',
+            '.conclusion // ""',
+            '.actor.login // ""',
+            '.triggering_actor.login // ""',
+            "bootstrap signing run must expose exactly one artifact",
+            '.workflow_run.id == $run and .workflow_run.head_sha == $sha and',
+            '.workflow_run.head_branch == "main"',
+            '"${artifact_size}" != "${APPROVED_BOOTSTRAP_ARTIFACT_SIZE}"',
+            '"${artifact_digest}" != "${APPROVED_BOOTSTRAP_ARTIFACT_DIGEST}"',
+            "--bootstrap-bundle",
+            "--bootstrap-policy-sha256",
+            "--bootstrap-signed-artifact-size",
+            "validate_bootstrap_binding",
+        ):
+            self.assertIn(required, self.workflow)
+        guard = self.workflow.index(
+            "Validate Exact Bootstrap Policy Transition and Bundle"
+        )
+        first_secret = self.workflow.index("${{ secrets.")
+        self.assertLess(guard, first_secret)
+
+    def test_bootstrap_and_qualified_artifact_names_are_unambiguous(self) -> None:
+        self.assertIn(
+            'expected_name="syswarden-native-signed-packages-${version}-${REQUESTED_RUN_ID}-1-${BOOTSTRAP_RELEASE_SHA}"',
+            self.workflow,
+        )
+        self.assertIn(
+            'artifact_name="syswarden-native-signed-packages-${RELEASE_TAG#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"',
+            self.workflow,
+        )
+        self.assertIn(
+            'artifact_name="syswarden-native-signed-packages-qualified-${RELEASE_TAG#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"',
+            self.workflow,
+        )
+        self.assertIn('verify_args+=(--mode bootstrap)', self.workflow)
+
+    def test_bootstrap_run_resolver_fails_closed(self) -> None:
+        resolver = named_literal_run_block(
+            self.workflow, "Resolve Exact Prior Bootstrap Run and Artifact"
+        )
+        bootstrap_sha = "9598861f1be80a651658bf3ca8c10424bd70db6c"
+        run_id = 34292701745
+        artifact_id = 10088398939
+        artifact_size = 63065295
+        artifact_digest = (
+            "sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3"
+        )
+        artifact_name = (
+            "syswarden-native-signed-packages-4.10.0-"
+            f"{run_id}-1-{bootstrap_sha}"
+        )
+        valid_run = {
+            "actor": {"login": "duggytuxy"},
+            "conclusion": "success",
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_sha": bootstrap_sha,
+            "id": run_id,
+            "path": ".github/workflows/native-package-signing.yml",
+            "run_attempt": 1,
+            "status": "completed",
+            "triggering_actor": {"login": "duggytuxy"},
+        }
+        valid_artifact = {
+            "digest": artifact_digest,
+            "expired": False,
+            "id": artifact_id,
+            "name": artifact_name,
+            "size_in_bytes": artifact_size,
+            "workflow_run": {
+                "head_branch": "main",
+                "head_sha": bootstrap_sha,
+                "id": run_id,
+            },
+        }
+
+        def execute(
+            run_document: dict[str, Any], artifacts: list[dict[str, Any]]
+        ) -> subprocess.CompletedProcess[str]:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run_path = root / "run.json"
+                artifacts_path = root / "artifacts.json"
+                output_path = root / "output.txt"
+                run_path.write_text(json.dumps(run_document), encoding="utf-8")
+                artifacts_path.write_text(
+                    json.dumps({"artifacts": artifacts}), encoding="utf-8"
+                )
+                gh = root / "gh"
+                gh.write_text(
+                    """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+endpoint = next(
+    argument for argument in sys.argv[1:] if argument.startswith("repos/")
+)
+if endpoint.endswith("/artifacts"):
+    payload = [json.loads(Path(os.environ["TEST_ARTIFACTS_JSON"]).read_text())]
+else:
+    payload = json.loads(Path(os.environ["TEST_RUN_JSON"]).read_text())
+print(json.dumps(payload, separators=(",", ":")))
+""",
+                    encoding="utf-8",
+                )
+                gh.chmod(0o700)
+                environment = os.environ.copy()
+                environment.update(
+                    {
+                        "BOOTSTRAP_RELEASE_SHA": bootstrap_sha,
+                        "APPROVED_BOOTSTRAP_ARTIFACT_DIGEST": artifact_digest,
+                        "APPROVED_BOOTSTRAP_ARTIFACT_ID": str(artifact_id),
+                        "APPROVED_BOOTSTRAP_ARTIFACT_NAME": artifact_name,
+                        "APPROVED_BOOTSTRAP_ARTIFACT_SIZE": str(artifact_size),
+                        "APPROVED_BOOTSTRAP_RELEASE_SHA": bootstrap_sha,
+                        "APPROVED_BOOTSTRAP_REPOSITORY": "duggytuxy/syswarden",
+                        "APPROVED_BOOTSTRAP_RUN_ID": str(run_id),
+                        "GITHUB_OUTPUT": str(output_path),
+                        "GITHUB_REPOSITORY": "duggytuxy/syswarden",
+                        "GH_TOKEN": "test-token",
+                        "PATH": f"{root}:{environment['PATH']}",
+                        "RELEASE_TAG": "v4.10.0",
+                        "REPOSITORY_OWNER": "duggytuxy",
+                        "REQUESTED_ARTIFACT_ID": str(artifact_id),
+                        "REQUESTED_RUN_ID": str(run_id),
+                        "TEST_ARTIFACTS_JSON": str(artifacts_path),
+                        "TEST_RUN_JSON": str(run_path),
+                    }
+                )
+                return subprocess.run(
+                    ["bash", "-c", resolver],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=environment,
+                )
+
+        accepted = execute(valid_run, [valid_artifact])
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        rejected_cases = []
+        wrong_attempt = json.loads(json.dumps(valid_run))
+        wrong_attempt["run_attempt"] = 2
+        rejected_cases.append((wrong_attempt, [valid_artifact]))
+        extra_artifact = json.loads(json.dumps(valid_artifact))
+        extra_artifact["id"] = artifact_id + 1
+        rejected_cases.append((valid_run, [valid_artifact, extra_artifact]))
+        wrong_sha = json.loads(json.dumps(valid_artifact))
+        wrong_sha["workflow_run"]["head_sha"] = "c" * 40
+        rejected_cases.append((valid_run, [wrong_sha]))
+        wrong_branch = json.loads(json.dumps(valid_artifact))
+        wrong_branch["workflow_run"]["head_branch"] = "other"
+        rejected_cases.append((valid_run, [wrong_branch]))
+        bad_digest = json.loads(json.dumps(valid_artifact))
+        bad_digest["digest"] = "sha256:" + "a" * 63
+        rejected_cases.append((valid_run, [bad_digest]))
+        wrong_digest = json.loads(json.dumps(valid_artifact))
+        wrong_digest["digest"] = "sha256:" + "0" * 64
+        rejected_cases.append((valid_run, [wrong_digest]))
+        wrong_size = json.loads(json.dumps(valid_artifact))
+        wrong_size["size_in_bytes"] = artifact_size + 1
+        rejected_cases.append((valid_run, [wrong_size]))
+        wrong_id = json.loads(json.dumps(valid_artifact))
+        wrong_id["id"] = artifact_id + 1
+        rejected_cases.append((valid_run, [wrong_id]))
+        false_bootstrap_suffix = json.loads(json.dumps(valid_artifact))
+        false_bootstrap_suffix["name"] = (
+            "syswarden-native-signed-packages-bootstrap-4.10.0-"
+            f"{run_id}-1-{bootstrap_sha}"
+        )
+        rejected_cases.append((valid_run, [false_bootstrap_suffix]))
+        for run_document, artifacts in rejected_cases:
+            with self.subTest(run=run_document, artifacts=artifacts):
+                self.assertNotEqual(execute(run_document, artifacts).returncode, 0)
 
     def test_apk_operations_are_offline_and_container_hardened(self) -> None:
         self.assertGreaterEqual(self.workflow.count("--network none"), 2)

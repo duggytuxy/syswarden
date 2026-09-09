@@ -42,12 +42,36 @@ on:
         options:
           - bootstrap-qualification
           - qualified-policy
+      bootstrap_release_sha:
+        description: Exact distinct ancestor SHA used by the successful bootstrap run, required only for qualified policy
+        required: false
+        type: string
+      bootstrap_signing_run_id:
+        description: Exact successful bootstrap native-signing run ID, required only for qualified policy
+        required: false
+        type: string
+      bootstrap_signed_artifact_id:
+        description: Exact immutable bootstrap signed-bundle artifact ID, required only for qualified policy
+        required: false
+        type: string
+      bootstrap_policy_sha256:
+        description: Exact SHA-256 of the committed foundation policy, required only for qualified policy
+        required: false
+        type: string
       authorization:
         description: Enter SIGN-NATIVE-PACKAGES-NO-PUBLISH
         required: true
         type: string
 
 env:
+  APPROVED_BOOTSTRAP_ARTIFACT_DIGEST: sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3
+  APPROVED_BOOTSTRAP_ARTIFACT_ID: "10088398939"
+  APPROVED_BOOTSTRAP_ARTIFACT_NAME: syswarden-native-signed-packages-4.10.0-34292701745-1-9598861f1be80a651658bf3ca8c10424bd70db6c
+  APPROVED_BOOTSTRAP_ARTIFACT_SIZE: "63065295"
+  APPROVED_BOOTSTRAP_RELEASE_SHA: 9598861f1be80a651658bf3ca8c10424bd70db6c
+  APPROVED_BOOTSTRAP_REPOSITORY: duggytuxy/syswarden
+  APPROVED_BOOTSTRAP_RUN_ID: "34292701745"
+  FOUNDATION_POLICY_SHA256: 6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   LANG: C
   LC_ALL: C
@@ -135,6 +159,7 @@ jobs:
           EVENT_REF: ${{ github.ref }}
           EVENT_REF_NAME: ${{ github.ref_name }}
           EVENT_REF_TYPE: ${{ github.ref_type }}
+          EVENT_REPOSITORY: ${{ github.repository }}
           EVENT_SHA: ${{ github.sha }}
           EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           RELEASE_SHA: ${{ inputs.release_sha }}
@@ -148,6 +173,10 @@ jobs:
           APK_KEY_ID: ${{ inputs.apk_key_id }}
           DEB_KEY_ID: ${{ inputs.deb_key_id }}
           QUALIFICATION_MODE: ${{ inputs.qualification_mode }}
+          BOOTSTRAP_RELEASE_SHA: ${{ inputs.bootstrap_release_sha }}
+          BOOTSTRAP_SIGNING_RUN_ID: ${{ inputs.bootstrap_signing_run_id }}
+          BOOTSTRAP_SIGNED_ARTIFACT_ID: ${{ inputs.bootstrap_signed_artifact_id }}
+          BOOTSTRAP_POLICY_SHA256: ${{ inputs.bootstrap_policy_sha256 }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
@@ -192,7 +221,29 @@ jobs:
             }
           done
           case "${QUALIFICATION_MODE}" in
-            bootstrap-qualification|qualified-policy) ;;
+            bootstrap-qualification)
+              if [[ -n "${BOOTSTRAP_RELEASE_SHA}" || \
+                    -n "${BOOTSTRAP_SIGNING_RUN_ID}" || \
+                    -n "${BOOTSTRAP_SIGNED_ARTIFACT_ID}" || \
+                    -n "${BOOTSTRAP_POLICY_SHA256}" ]]; then
+                echo "ERROR: bootstrap mode cannot claim a prior bootstrap qualification." >&2
+                exit 1
+              fi
+              ;;
+            qualified-policy)
+              if [[ ! "${BOOTSTRAP_RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
+                    "${BOOTSTRAP_RELEASE_SHA}" == "${RELEASE_SHA}" || \
+                    ! "${BOOTSTRAP_SIGNING_RUN_ID}" =~ ^[1-9][0-9]*$ || \
+                    ! "${BOOTSTRAP_SIGNED_ARTIFACT_ID}" =~ ^[1-9][0-9]*$ || \
+                    "${BOOTSTRAP_POLICY_SHA256}" != "${FOUNDATION_POLICY_SHA256}" || \
+                    "${EVENT_REPOSITORY}" != "${APPROVED_BOOTSTRAP_REPOSITORY}" || \
+                    "${BOOTSTRAP_RELEASE_SHA}" != "${APPROVED_BOOTSTRAP_RELEASE_SHA}" || \
+                    "${BOOTSTRAP_SIGNING_RUN_ID}" != "${APPROVED_BOOTSTRAP_RUN_ID}" || \
+                    "${BOOTSTRAP_SIGNED_ARTIFACT_ID}" != "${APPROVED_BOOTSTRAP_ARTIFACT_ID}" ]]; then
+                echo "ERROR: qualified mode requires the exact reviewed Phase A bootstrap." >&2
+                exit 1
+              fi
+              ;;
             *) echo "ERROR: native signing qualification mode is invalid." >&2; exit 1 ;;
           esac
 
@@ -217,12 +268,13 @@ jobs:
           rhel_unsigned_dir="${signing_root}/rhel-package-owned-unsigned"
           rhel_signed_dir="${signing_root}/rhel-package-owned-signed"
           apk_work_dir="${signing_root}/apk-work"
+          bootstrap_dir="${signing_root}/bootstrap-bundle"
           proof_dir="${signing_root}/proof"
           secret_dir="${signing_root}/private"
           install -d -m 0700 \
             "${unsigned_dir}" "${signed_dir}" \
             "${rhel_unsigned_dir}" "${rhel_signed_dir}" "${apk_work_dir}" \
-            "${proof_dir}" "${secret_dir}"
+            "${bootstrap_dir}" "${proof_dir}" "${secret_dir}"
           {
             printf 'SIGNING_ROOT=%s\n' "${signing_root}"
             printf 'UNSIGNED_DIR=%s\n' "${unsigned_dir}"
@@ -230,11 +282,13 @@ jobs:
             printf 'RHEL_UNSIGNED_DIR=%s\n' "${rhel_unsigned_dir}"
             printf 'RHEL_SIGNED_DIR=%s\n' "${rhel_signed_dir}"
             printf 'APK_WORK_DIR=%s\n' "${apk_work_dir}"
+            printf 'BOOTSTRAP_DIR=%s\n' "${bootstrap_dir}"
             printf 'PROOF_DIR=%s\n' "${proof_dir}"
             printf 'SECRET_DIR=%s\n' "${secret_dir}"
           } >> "${GITHUB_ENV}"
           printf 'unsigned_dir=%s\n' "${unsigned_dir}" >> "${GITHUB_OUTPUT}"
           printf 'rhel_unsigned_dir=%s\n' "${rhel_unsigned_dir}" >> "${GITHUB_OUTPUT}"
+          printf 'bootstrap_dir=%s\n' "${bootstrap_dir}" >> "${GITHUB_OUTPUT}"
 
       - name: Validate Source and Signature Policy Foundation
         shell: bash
@@ -311,6 +365,151 @@ jobs:
           [[ "${source_date_epoch}" =~ ^[1-9][0-9]*$ ]]
           printf 'SIGNING_DATE=%s\n' "${as_of}" >> "${GITHUB_ENV}"
           printf 'SOURCE_DATE_EPOCH=%s\n' "${source_date_epoch}" >> "${GITHUB_ENV}"
+
+      - name: Resolve Exact Prior Bootstrap Run and Artifact
+        if: ${{ inputs.qualification_mode == 'qualified-policy' }}
+        id: bootstrap
+        shell: bash
+        env:
+          BOOTSTRAP_RELEASE_SHA: ${{ inputs.bootstrap_release_sha }}
+          REQUESTED_ARTIFACT_ID: ${{ inputs.bootstrap_signed_artifact_id }}
+          REQUESTED_RUN_ID: ${{ inputs.bootstrap_signing_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          expected_name="syswarden-native-signed-packages-${version}-${REQUESTED_RUN_ID}-1-${BOOTSTRAP_RELEASE_SHA}"
+          if [[ "${GITHUB_REPOSITORY}" != "${APPROVED_BOOTSTRAP_REPOSITORY}" || \
+                "${BOOTSTRAP_RELEASE_SHA}" != "${APPROVED_BOOTSTRAP_RELEASE_SHA}" || \
+                "${REQUESTED_RUN_ID}" != "${APPROVED_BOOTSTRAP_RUN_ID}" || \
+                "${REQUESTED_ARTIFACT_ID}" != "${APPROVED_BOOTSTRAP_ARTIFACT_ID}" || \
+                "${expected_name}" != "${APPROVED_BOOTSTRAP_ARTIFACT_NAME}" ]]; then
+            echo "ERROR: requested bootstrap identity is not the exact reviewed Phase A result." >&2
+            exit 1
+          fi
+          run_json="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${REQUESTED_RUN_ID}")"
+          if [[ "$(jq -r '.id | tostring' <<< "${run_json}")" != "${REQUESTED_RUN_ID}" || \
+                "$(jq -r '.path // ""' <<< "${run_json}")" != ".github/workflows/native-package-signing.yml" || \
+                "$(jq -r '.head_sha // ""' <<< "${run_json}")" != "${BOOTSTRAP_RELEASE_SHA}" || \
+                "$(jq -r '.head_branch // ""' <<< "${run_json}")" != "main" || \
+                "$(jq -r '.event // ""' <<< "${run_json}")" != "workflow_dispatch" || \
+                "$(jq -r '.run_attempt | tostring' <<< "${run_json}")" != "1" || \
+                "$(jq -r '.status // ""' <<< "${run_json}")" != "completed" || \
+                "$(jq -r '.conclusion // ""' <<< "${run_json}")" != "success" || \
+                "$(jq -r '.actor.login // ""' <<< "${run_json}")" != "${REPOSITORY_OWNER}" || \
+                "$(jq -r '.triggering_actor.login // ""' <<< "${run_json}")" != "${REPOSITORY_OWNER}" ]]; then
+            echo "ERROR: requested bootstrap run is not the exact successful owner-dispatched attempt 1." >&2
+            exit 1
+          fi
+          artifacts="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${REQUESTED_RUN_ID}/artifacts" \
+            -f per_page=100)"
+          if [[ "$(jq '[.[] | .artifacts[]?] | length' <<< "${artifacts}")" != "1" ]]; then
+            echo "ERROR: bootstrap signing run must expose exactly one artifact." >&2
+            exit 1
+          fi
+          match="$(jq --arg name "${expected_name}" \
+            --arg sha "${BOOTSTRAP_RELEASE_SHA}" \
+            --argjson run "${REQUESTED_RUN_ID}" \
+            --argjson id "${REQUESTED_ARTIFACT_ID}" '[
+              .[] | .artifacts[]? | select(
+                .id == $id and .name == $name and .expired == false and
+                .workflow_run.id == $run and .workflow_run.head_sha == $sha and
+                .workflow_run.head_branch == "main"
+              )
+            ]' <<< "${artifacts}")"
+          artifact_digest="$(jq -r '.[0].digest // ""' <<< "${match}")"
+          artifact_size="$(jq -r '.[0].size_in_bytes | tostring' <<< "${match}")"
+          if [[ "$(jq 'length' <<< "${match}")" != "1" || \
+                ! "${artifact_size}" =~ ^[1-9][0-9]*$ || \
+                ! "${artifact_digest}" =~ ^sha256:[0-9a-f]{64}$ || \
+                "${artifact_size}" != "${APPROVED_BOOTSTRAP_ARTIFACT_SIZE}" || \
+                "${artifact_digest}" != "${APPROVED_BOOTSTRAP_ARTIFACT_DIGEST}" ]]; then
+            echo "ERROR: requested bootstrap artifact is not the exact reviewed Phase A artifact." >&2
+            exit 1
+          fi
+          {
+            printf 'artifact_digest=%s\n' "${artifact_digest}"
+            printf 'artifact_name=%s\n' "${expected_name}"
+            printf 'artifact_size=%s\n' "${artifact_size}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Download Exact Prior Bootstrap Artifact by ID
+        if: ${{ inputs.qualification_mode == 'qualified-policy' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ inputs.bootstrap_signed_artifact_id }}
+          path: ${{ steps.workspace.outputs.bootstrap_dir }}
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.bootstrap_signing_run_id }}
+
+      - name: Validate Exact Bootstrap Policy Transition and Bundle
+        if: ${{ inputs.qualification_mode == 'qualified-policy' }}
+        shell: bash
+        env:
+          BOOTSTRAP_ARTIFACT_DIGEST: ${{ steps.bootstrap.outputs.artifact_digest }}
+          BOOTSTRAP_ARTIFACT_NAME: ${{ steps.bootstrap.outputs.artifact_name }}
+          BOOTSTRAP_ARTIFACT_SIZE: ${{ steps.bootstrap.outputs.artifact_size }}
+          BOOTSTRAP_POLICY_SHA256: ${{ inputs.bootstrap_policy_sha256 }}
+          BOOTSTRAP_RELEASE_SHA: ${{ inputs.bootstrap_release_sha }}
+          BOOTSTRAP_SIGNING_RUN_ID: ${{ inputs.bootstrap_signing_run_id }}
+          BOOTSTRAP_SIGNED_ARTIFACT_ID: ${{ inputs.bootstrap_signed_artifact_id }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "${BOOTSTRAP_RELEASE_SHA}" != "${RELEASE_SHA}"
+          git cat-file -e "${BOOTSTRAP_RELEASE_SHA}^{commit}"
+          git merge-base --is-ancestor "${BOOTSTRAP_RELEASE_SHA}" "${RELEASE_SHA}"
+          policy_path="scripts/ci/native_package_signature_policy_v4100.json"
+          bootstrap_policy="${SIGNING_ROOT}/bootstrap-policy.json"
+          test ! -e "${bootstrap_policy}"
+          policy_object="${BOOTSTRAP_RELEASE_SHA}:${policy_path}"
+          policy_size="$(git cat-file -s "${policy_object}")"
+          if [[ ! "${policy_size}" =~ ^[1-9][0-9]*$ || "${policy_size}" -gt 131072 ]]; then
+            echo "ERROR: bootstrap policy object has an invalid size." >&2
+            exit 1
+          fi
+          git cat-file blob "${policy_object}" > "${bootstrap_policy}"
+          chmod 0600 "${bootstrap_policy}"
+          PYTHONDONTWRITEBYTECODE=1 python3 - \
+            "${BOOTSTRAP_DIR}" "${bootstrap_policy}" "${policy_path}" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          from scripts.ci import native_package_signature_gate as gate
+          from scripts.ci import native_package_signing_bundle as bundle
+
+          bootstrap_bundle, bootstrap_policy, qualified_policy = map(Path, sys.argv[1:])
+          foundation_bytes = bundle.regular_bytes(
+              bootstrap_policy, bundle.MAX_JSON_BYTES, "bootstrap signature policy"
+          )
+          qualified = gate.load_json(qualified_policy, "qualified signature policy")
+          day = gate.parse_day(os.environ["SIGNING_DATE"], "signing date")
+          bundle.validate_bootstrap_binding(
+              bundle_root=bootstrap_bundle,
+              release=os.environ["RELEASE_TAG"],
+              repository=os.environ["GITHUB_REPOSITORY"],
+              foundation_release_sha=os.environ["BOOTSTRAP_RELEASE_SHA"],
+              foundation_policy_bytes=foundation_bytes,
+              foundation_policy_sha256=os.environ["BOOTSTRAP_POLICY_SHA256"],
+              qualified_policy=qualified,
+              qualified_release_sha=os.environ["RELEASE_SHA"],
+              signing_run_id=int(os.environ["BOOTSTRAP_SIGNING_RUN_ID"]),
+              artifact_id=int(os.environ["BOOTSTRAP_SIGNED_ARTIFACT_ID"]),
+              artifact_name=os.environ["BOOTSTRAP_ARTIFACT_NAME"],
+              artifact_size=int(os.environ["BOOTSTRAP_ARTIFACT_SIZE"]),
+              artifact_digest=os.environ["BOOTSTRAP_ARTIFACT_DIGEST"],
+              day=day,
+          )
+          PY
+          printf 'BOOTSTRAP_POLICY_PATH=%s\n' "${bootstrap_policy}" >> "${GITHUB_ENV}"
 
       - name: Resolve Exact Unsigned Package Run and Artifact
         id: unsigned
@@ -1040,6 +1239,13 @@ jobs:
         shell: bash
         env:
           APK_SIGNER_IMAGE: ${{ vars.SYSWARDEN_APK_SIGNER_IMAGE }}
+          BOOTSTRAP_ARTIFACT_DIGEST: ${{ steps.bootstrap.outputs.artifact_digest }}
+          BOOTSTRAP_ARTIFACT_NAME: ${{ steps.bootstrap.outputs.artifact_name }}
+          BOOTSTRAP_ARTIFACT_SIZE: ${{ steps.bootstrap.outputs.artifact_size }}
+          BOOTSTRAP_POLICY_SHA256: ${{ inputs.bootstrap_policy_sha256 }}
+          BOOTSTRAP_RELEASE_SHA: ${{ inputs.bootstrap_release_sha }}
+          BOOTSTRAP_SIGNING_RUN_ID: ${{ inputs.bootstrap_signing_run_id }}
+          BOOTSTRAP_SIGNED_ARTIFACT_ID: ${{ inputs.bootstrap_signed_artifact_id }}
           QUALIFICATION_MODE: ${{ inputs.qualification_mode }}
           RELEASE_SHA: ${{ inputs.release_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -1055,9 +1261,22 @@ jobs:
           set -euo pipefail
           bundle_root="${SIGNING_ROOT}/bundle"
           bootstrap_args=()
+          prior_bootstrap_args=()
           if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" ]]; then
             bootstrap_args+=(--bootstrap-qualification)
-          elif [[ "${QUALIFICATION_MODE}" != "qualified-policy" ]]; then
+          elif [[ "${QUALIFICATION_MODE}" == "qualified-policy" ]]; then
+            prior_bootstrap_args+=(
+              --bootstrap-bundle "${BOOTSTRAP_DIR}"
+              --bootstrap-release-sha "${BOOTSTRAP_RELEASE_SHA}"
+              --bootstrap-policy "${BOOTSTRAP_POLICY_PATH}"
+              --bootstrap-policy-sha256 "${BOOTSTRAP_POLICY_SHA256}"
+              --bootstrap-signing-run-id "${BOOTSTRAP_SIGNING_RUN_ID}"
+              --bootstrap-signed-artifact-id "${BOOTSTRAP_SIGNED_ARTIFACT_ID}"
+              --bootstrap-signed-artifact-name "${BOOTSTRAP_ARTIFACT_NAME}"
+              --bootstrap-signed-artifact-size "${BOOTSTRAP_ARTIFACT_SIZE}"
+              --bootstrap-signed-artifact-digest "${BOOTSTRAP_ARTIFACT_DIGEST}"
+            )
+          else
             echo "ERROR: native signing qualification mode is invalid." >&2
             exit 1
           fi
@@ -1087,13 +1306,23 @@ jobs:
             --deb-signature "${PROOF_DIR}/syswarden_${RELEASE_TAG#v}_amd64.deb.asc" \
             --deb-verification "${PROOF_DIR}/deb-verification.json" \
             "${bootstrap_args[@]}" \
+            "${prior_bootstrap_args[@]}" \
             --output "${bundle_root}"
+          verify_args=()
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" ]]; then
+            verify_args+=(--mode bootstrap)
+          fi
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py verify \
-            --bundle "${bundle_root}" --release "${RELEASE_TAG}" --release-sha "${RELEASE_SHA}"
+            --bundle "${bundle_root}" --release "${RELEASE_TAG}" \
+            --release-sha "${RELEASE_SHA}" "${verify_args[@]}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py \
             --repository "${GITHUB_WORKSPACE}" verify \
             --snapshot "${SIGNING_ROOT}/repository-state.json"
-          artifact_name="syswarden-native-signed-packages-${RELEASE_TAG#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" ]]; then
+            artifact_name="syswarden-native-signed-packages-${RELEASE_TAG#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
+          else
+            artifact_name="syswarden-native-signed-packages-qualified-${RELEASE_TAG#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
+          fi
           printf 'artifact_name=%s\n' "${artifact_name}" >> "${GITHUB_OUTPUT}"
           printf 'bundle_root=%s\n' "${bundle_root}" >> "${GITHUB_OUTPUT}"
 

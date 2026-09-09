@@ -2,8 +2,12 @@
 
 Status: the protected signing foundation and fail-closed publication
 integration are implemented. Three distinct candidate production public identities are
-enrolled under the non-publishing foundation policy. Bootstrap evidence,
-policy promotion, normal native proof and publication approval remain pending.
+enrolled under the non-publishing foundation policy. Phase 1 bootstrap
+qualification succeeded, and the exact immutable result recorded below is the
+foundation evidence for phase 2. The committed policy remains non-qualified
+until a distinct phase 2 `qualified-policy` run validates the permitted policy
+transition. Policy promotion, normal native proof and publication approval
+remain pending.
 No workflow in this foundation creates a private key.
 
 The offline gate binds one package byte stream to an exact release inventory
@@ -30,8 +34,9 @@ OpenPGP key. APK verification uses a private temporary key directory containing
 only the selected RSA public key. DEB verification uses isolated `gpgv` with a
 temporary keyring derived only from the selected OpenPGP public key. The
 repository policy contains exactly one candidate production public identity per
-package family, but remains intentionally non-qualified and non-publishing until phase
-1 succeeds. The APK signer is pinned to the
+package family. Phase 1 has succeeded, but the policy remains intentionally
+non-qualified and non-publishing until the separate reviewed phase 2 policy
+commit and `qualified-policy` run complete. The APK signer is pinned to the
 AMD64 manifest of the official Alpine Linux 3.24 build-base image at
 `docker.io/alpinelinux/build-base@sha256:31d2a020ccd2058e6ab47940428bd0b7dc83e37b66880891f9ed903a12ea668b`.
 It was reviewed as an offline runtime containing `abuild-sign`, `apk`, OpenSSL
@@ -72,6 +77,39 @@ signed bundle must be rebuilt from the new exact `main` SHA. A fresh
 `qualified-policy` run emits
 `native-signatures-verified-not-release-qualified`. Bootstrap package bytes and
 bootstrap evidence are never reused as phase 2 release evidence.
+
+Phase 2 is machine-bound to the reviewed phase 1 result. Its dispatch inputs
+must match the following immutable identity, which is also pinned independently
+in the workflow and bundle verifier:
+
+| Field | Exact value |
+| --- | --- |
+| Repository | `duggytuxy/syswarden` |
+| Source SHA | `9598861f1be80a651658bf3ca8c10424bd70db6c` |
+| Signing run | `34292701745`, attempt `1` |
+| Signed artifact ID | `10088398939` |
+| Signed artifact name | `syswarden-native-signed-packages-4.10.0-34292701745-1-9598861f1be80a651658bf3ca8c10424bd70db6c` |
+| Signed artifact size | `63065295` bytes |
+| Signed artifact digest | `sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3` |
+| Foundation policy SHA-256 | `6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d` |
+
+The workflow accepts only a completed successful
+`workflow_dispatch` attempt 1 owned by the repository owner, with one unexpired
+artifact whose ID, canonical bootstrap name, byte size, GitHub digest and source
+SHA all match this identity. The bootstrap SHA must be a distinct Git ancestor
+of the phase 2 SHA.
+The extracted foundation policy must have the immutable SHA-256
+`6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d`,
+matching both the dispatch input and bootstrap provenance.
+The policy transition permits only these changes:
+
+* `status`: `foundation-not-qualified` to `qualified`
+* `deb.implementation`: `implemented-not-qualified` to `qualified`
+* `publishing`: false to true when separately approved, or false to false
+
+Every key record, mechanism, signer image and other field must remain identical.
+The exact bootstrap run, artifact and foundation policy reference is sealed into
+both phase 2 provenance documents.
 
 ## Protected workflow
 
@@ -144,10 +182,13 @@ creation date to equal the qualification date.
 ## Immutable output contract
 
 The unique artifact name includes the release, signing run ID, attempt and
-release SHA. Artifact upload uses the immutable artifact protocol and no
-compression transformation. The workflow also requires the upload action to
-return a positive artifact ID and canonical GitHub SHA-256 digest. Its exact
-layout is:
+release SHA. The immutable Phase 1 workflow uses its historical canonical name,
+`syswarden-native-signed-packages-<version>-<run>-1-<sha>`. Phase 2 uses the
+distinct name
+`syswarden-native-signed-packages-qualified-<version>-<run>-1-<sha>`.
+Artifact upload uses the immutable artifact protocol and no compression
+transformation. The workflow also requires the upload action to return a
+positive artifact ID and canonical GitHub SHA-256 digest. Its exact layout is:
 
 ```text
 packages/
@@ -166,9 +207,11 @@ evidence/
 SIGNED_ARTIFACT_SHA256SUMS.txt
 ```
 
-`native_package_signing_bundle.py verify` recomputes the complete file seal,
-signed package manifest, source artifact binding, package transformations,
-selected-key evidence and release SHA. Phase 1 uses provenance status
+`native_package_signing_bundle.py verify` is qualified-only by default and
+recomputes the complete file seal, signed package manifest, source artifact
+binding, package transformations, selected-key evidence, bootstrap reference
+and release SHA. Phase 1 verification requires the explicit `--mode bootstrap`
+argument. Phase 1 uses provenance status
 `native-signatures-bootstrap-verified-not-release-qualified`; phase 2 uses
 `native-signatures-verified-not-release-qualified`. Both set
 `release_qualified` and `public_release` to false. A signed artifact is not a
@@ -287,7 +330,8 @@ remain mandatory before policy status or publishing approval can change.
 
 Qualification must resolve exactly one successful `qualified-policy` protected
 signing run for the release SHA, require the unique artifact ID and GitHub
-digest, download it by ID, execute `native_package_signing_bundle.py verify`,
+digest, require the canonical `qualified` artifact name, download it by ID,
+execute the default qualified-only `native_package_signing_bundle.py verify`,
 and independently rerun `native_package_signature_gate.py` for RPM, APK and
 DEB with purpose `qualification`. It requires provenance status
 `native-signatures-verified-not-release-qualified` and rejects bootstrap

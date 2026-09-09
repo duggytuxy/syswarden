@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import io
@@ -37,6 +38,26 @@ QUALIFIED_PROVENANCE_STATUS = "native-signatures-verified-not-release-qualified"
 BOOTSTRAP_PROVENANCE_STATUS = (
     "native-signatures-bootstrap-verified-not-release-qualified"
 )
+BOOTSTRAP_REFERENCE_PROFILE = (
+    "syswarden-native-package-signing-bootstrap-reference/v4.10.0"
+)
+BOOTSTRAP_REPOSITORY = "duggytuxy/syswarden"
+BOOTSTRAP_RELEASE_SHA = "9598861f1be80a651658bf3ca8c10424bd70db6c"
+BOOTSTRAP_SIGNING_RUN_ID = 34292701745
+BOOTSTRAP_SIGNED_ARTIFACT_ID = 10088398939
+BOOTSTRAP_SIGNED_ARTIFACT_NAME = (
+    "syswarden-native-signed-packages-4.10.0-34292701745-1-"
+    "9598861f1be80a651658bf3ca8c10424bd70db6c"
+)
+BOOTSTRAP_SIGNED_ARTIFACT_SIZE = 63065295
+BOOTSTRAP_SIGNED_ARTIFACT_DIGEST = (
+    "sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3"
+)
+FOUNDATION_POLICY_SHA256 = (
+    "6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d"
+)
+QUALIFIED_BUNDLE_MODE = "qualified"
+BOOTSTRAP_BUNDLE_MODE = "bootstrap"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 GITHUB_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -172,6 +193,21 @@ def exact_keys(value: object, keys: set[str], label: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != keys:
         fail(f"{label} keys are not exact")
     return value
+
+
+def exact_json_equal(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
+    if type(left) is dict:
+        if set(left) != set(right):
+            return False
+        return all(exact_json_equal(left[key], right[key]) for key in left)
+    if type(left) is list:
+        return len(left) == len(right) and all(
+            exact_json_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    return left == right
 
 
 def positive_integer(value: object, label: str) -> int:
@@ -751,6 +787,249 @@ def finalization_provenance_status(
     return BOOTSTRAP_PROVENANCE_STATUS
 
 
+def signed_artifact_name(
+    release: str,
+    mode: str,
+    run_id: int,
+    run_attempt: int,
+    release_sha: str,
+) -> str:
+    if mode not in {QUALIFIED_BUNDLE_MODE, BOOTSTRAP_BUNDLE_MODE}:
+        fail("native signing artifact mode is invalid")
+    positive_integer(run_id, "signing run ID")
+    positive_integer(run_attempt, "signing run attempt")
+    if run_attempt != 1:
+        fail("native signing artifact requires attempt 1")
+    if COMMIT_SHA.fullmatch(release_sha) is None:
+        fail("native signing artifact SHA is malformed")
+    package_names(release)
+    version = release.removeprefix("v")
+    if mode == BOOTSTRAP_BUNDLE_MODE:
+        # Phase A is already immutable. Preserve its exact historical artifact
+        # name so Phase B can consume the evidence that the ancestor produced.
+        return (
+            "syswarden-native-signed-packages-"
+            f"{version}-{run_id}-{run_attempt}-{release_sha}"
+        )
+    return (
+        "syswarden-native-signed-packages-qualified-"
+        f"{version}-{run_id}-{run_attempt}-{release_sha}"
+    )
+
+
+def validate_policy_transition(
+    foundation_policy_bytes: bytes,
+    qualified_policy: dict[str, Any],
+    expected_foundation_policy_sha256: str,
+    day: dt.date,
+) -> str:
+    if SHA256.fullmatch(expected_foundation_policy_sha256) is None:
+        fail("foundation policy SHA-256 is malformed")
+    if expected_foundation_policy_sha256 != FOUNDATION_POLICY_SHA256:
+        fail("foundation policy SHA-256 is not the immutable Phase A digest")
+    actual_foundation_digest = sha256(foundation_policy_bytes)
+    if actual_foundation_digest != expected_foundation_policy_sha256:
+        fail("foundation policy digest differs from the exact approved digest")
+    foundation_policy = signature_gate.decode_json(
+        foundation_policy_bytes, "foundation signature policy"
+    )
+    signature_gate.validate_policy(foundation_policy, day)
+    signature_gate.validate_policy(qualified_policy, day)
+    if (
+        foundation_policy["status"] != "foundation-not-qualified"
+        or foundation_policy["publishing"] is not False
+        or foundation_policy["deb"]["implementation"]
+        != "implemented-not-qualified"
+    ):
+        fail("bootstrap policy is not the exact non-publishing foundation state")
+    if (
+        qualified_policy["status"] != "qualified"
+        or qualified_policy["deb"]["implementation"] != "qualified"
+    ):
+        fail("current policy is not the exact qualified state")
+    expected_qualified = copy.deepcopy(foundation_policy)
+    expected_qualified["status"] = "qualified"
+    expected_qualified["deb"]["implementation"] = "qualified"
+    expected_qualified["publishing"] = qualified_policy["publishing"]
+    if not exact_json_equal(qualified_policy, expected_qualified):
+        fail("qualified policy changes fields outside the approved transition")
+    return actual_foundation_digest
+
+
+def validate_bootstrap_binding(
+    *,
+    bundle_root: Path,
+    release: str,
+    repository: str,
+    foundation_release_sha: str,
+    foundation_policy_bytes: bytes,
+    foundation_policy_sha256: str,
+    qualified_policy: dict[str, Any],
+    qualified_release_sha: str,
+    signing_run_id: int,
+    artifact_id: int,
+    artifact_name: str,
+    artifact_size: int,
+    artifact_digest: str,
+    day: dt.date,
+) -> dict[str, Any]:
+    if REPOSITORY.fullmatch(repository) is None:
+        fail("bootstrap repository identity is malformed")
+    if COMMIT_SHA.fullmatch(foundation_release_sha) is None:
+        fail("bootstrap release SHA is malformed")
+    if foundation_release_sha == qualified_release_sha:
+        fail("bootstrap and qualified release SHAs must be distinct")
+    positive_integer(signing_run_id, "bootstrap signing run ID")
+    positive_integer(artifact_id, "bootstrap signed artifact ID")
+    positive_integer(artifact_size, "bootstrap signed artifact size")
+    if GITHUB_DIGEST.fullmatch(artifact_digest) is None:
+        fail("bootstrap signed artifact digest is malformed")
+    expected_artifact_name = signed_artifact_name(
+        release,
+        BOOTSTRAP_BUNDLE_MODE,
+        signing_run_id,
+        1,
+        foundation_release_sha,
+    )
+    if artifact_name != expected_artifact_name:
+        fail("bootstrap signed artifact name is not canonical")
+    if (
+        repository != BOOTSTRAP_REPOSITORY
+        or foundation_release_sha != BOOTSTRAP_RELEASE_SHA
+        or signing_run_id != BOOTSTRAP_SIGNING_RUN_ID
+        or artifact_id != BOOTSTRAP_SIGNED_ARTIFACT_ID
+        or artifact_name != BOOTSTRAP_SIGNED_ARTIFACT_NAME
+        or artifact_size != BOOTSTRAP_SIGNED_ARTIFACT_SIZE
+        or artifact_digest != BOOTSTRAP_SIGNED_ARTIFACT_DIGEST
+    ):
+        fail("bootstrap evidence is not the exact reviewed Phase A result")
+    policy_digest = validate_policy_transition(
+        foundation_policy_bytes,
+        qualified_policy,
+        foundation_policy_sha256,
+        day,
+    )
+    verify_bundle(
+        bundle_root,
+        release,
+        foundation_release_sha,
+        mode=BOOTSTRAP_BUNDLE_MODE,
+    )
+    provenance = load_json(
+        bundle_root / "evidence" / "NATIVE_SIGNING_PROVENANCE.json",
+        "bootstrap native signing provenance",
+    )
+    signing_run = provenance["signing_run"]
+    if (
+        provenance["repository"] != repository
+        or provenance["policy_sha256"] != policy_digest
+        or provenance["source"]["release_sha"] != foundation_release_sha
+        or signing_run["id"] != signing_run_id
+        or signing_run["attempt"] != 1
+        or signing_run["workflow"]
+        != ".github/workflows/native-package-signing.yml"
+        or signing_run["workflow_sha"] != foundation_release_sha
+    ):
+        fail("bootstrap bundle differs from the exact prior signing run")
+    return {
+        "artifact": {
+            "digest": artifact_digest,
+            "id": artifact_id,
+            "name": artifact_name,
+            "size": artifact_size,
+        },
+        "policy_sha256": policy_digest,
+        "profile": BOOTSTRAP_REFERENCE_PROFILE,
+        "repository": repository,
+        "release_sha": foundation_release_sha,
+        "schema_version": 1,
+        "signing_run": {
+            "attempt": 1,
+            "id": signing_run_id,
+            "workflow": ".github/workflows/native-package-signing.yml",
+            "workflow_sha": foundation_release_sha,
+        },
+    }
+
+
+def validate_bootstrap_reference(
+    reference: object,
+    release: str,
+    qualified_release_sha: str,
+    repository: str,
+) -> dict[str, Any]:
+    checked = exact_keys(
+        reference,
+        {
+            "artifact",
+            "policy_sha256",
+            "profile",
+            "repository",
+            "release_sha",
+            "schema_version",
+            "signing_run",
+        },
+        "bootstrap qualification reference",
+    )
+    if (
+        type(checked["schema_version"]) is not int
+        or checked["schema_version"] != 1
+        or checked["profile"] != BOOTSTRAP_REFERENCE_PROFILE
+        or not isinstance(checked["repository"], str)
+        or REPOSITORY.fullmatch(checked["repository"]) is None
+        or checked["repository"] != repository
+        or checked["repository"] != BOOTSTRAP_REPOSITORY
+        or not isinstance(checked["release_sha"], str)
+        or COMMIT_SHA.fullmatch(checked["release_sha"]) is None
+        or checked["release_sha"] == qualified_release_sha
+        or checked["release_sha"] != BOOTSTRAP_RELEASE_SHA
+        or not isinstance(checked["policy_sha256"], str)
+        or SHA256.fullmatch(checked["policy_sha256"]) is None
+        or checked["policy_sha256"] != FOUNDATION_POLICY_SHA256
+    ):
+        fail("bootstrap qualification reference identity is invalid")
+    signing_run = exact_keys(
+        checked["signing_run"],
+        {"attempt", "id", "workflow", "workflow_sha"},
+        "bootstrap signing run reference",
+    )
+    if (
+        type(signing_run["attempt"]) is not int
+        or signing_run["attempt"] != 1
+        or signing_run["workflow"]
+        != ".github/workflows/native-package-signing.yml"
+        or signing_run["workflow_sha"] != checked["release_sha"]
+        or signing_run["id"] != BOOTSTRAP_SIGNING_RUN_ID
+    ):
+        fail("bootstrap signing run reference is invalid")
+    positive_integer(signing_run["id"], "bootstrap signing run ID")
+    artifact = exact_keys(
+        checked["artifact"],
+        {"digest", "id", "name", "size"},
+        "bootstrap signed artifact reference",
+    )
+    positive_integer(artifact["id"], "bootstrap signed artifact ID")
+    positive_integer(artifact["size"], "bootstrap signed artifact size")
+    if (
+        not isinstance(artifact["digest"], str)
+        or GITHUB_DIGEST.fullmatch(artifact["digest"]) is None
+        or artifact["id"] != BOOTSTRAP_SIGNED_ARTIFACT_ID
+        or artifact["size"] != BOOTSTRAP_SIGNED_ARTIFACT_SIZE
+        or artifact["digest"] != BOOTSTRAP_SIGNED_ARTIFACT_DIGEST
+        or artifact["name"] != BOOTSTRAP_SIGNED_ARTIFACT_NAME
+        or artifact["name"]
+        != signed_artifact_name(
+            release,
+            BOOTSTRAP_BUNDLE_MODE,
+            signing_run["id"],
+            1,
+            checked["release_sha"],
+        )
+    ):
+        fail("bootstrap signed artifact reference is invalid")
+    return checked
+
+
 def finalize(args: argparse.Namespace) -> None:
     release = args.release
     names = package_names(release)
@@ -783,6 +1062,25 @@ def finalize(args: argparse.Namespace) -> None:
     positive_integer(args.source_date_epoch, "source date epoch")
     if OCI_DIGEST.fullmatch(args.signer_image) is None:
         fail("APK signer image must be pinned by SHA-256 digest")
+    bootstrap_fields = (
+        "bootstrap_bundle",
+        "bootstrap_release_sha",
+        "bootstrap_policy",
+        "bootstrap_policy_sha256",
+        "bootstrap_signing_run_id",
+        "bootstrap_signed_artifact_id",
+        "bootstrap_signed_artifact_name",
+        "bootstrap_signed_artifact_size",
+        "bootstrap_signed_artifact_digest",
+    )
+    supplied_bootstrap_fields = {
+        field for field in bootstrap_fields if getattr(args, field) is not None
+    }
+    if args.bootstrap_qualification:
+        if supplied_bootstrap_fields:
+            fail("bootstrap mode cannot claim a prior bootstrap qualification")
+    elif supplied_bootstrap_fields != set(bootstrap_fields):
+        fail("qualified mode requires one complete prior bootstrap qualification")
 
     unsigned = package_set(args.unsigned_packages, release, require_manifest=True)
     signed = package_set(args.signed_packages, release, require_manifest=True)
@@ -842,6 +1140,31 @@ def finalize(args: argparse.Namespace) -> None:
     if policy_document["apk"]["signer_image"] != args.signer_image:
         fail("APK signer image differs from the committed signature policy")
     policy_digest = sha256(policy_bytes)
+    bootstrap_reference: dict[str, Any] | None = None
+    if not args.bootstrap_qualification:
+        if args.bootstrap_signing_run_id == args.signing_run_id:
+            fail("bootstrap and qualified signing run IDs must be distinct")
+        foundation_policy_bytes = regular_bytes(
+            args.bootstrap_policy,
+            MAX_JSON_BYTES,
+            "bootstrap signature policy",
+        )
+        bootstrap_reference = validate_bootstrap_binding(
+            bundle_root=args.bootstrap_bundle,
+            release=release,
+            repository=args.repository,
+            foundation_release_sha=args.bootstrap_release_sha,
+            foundation_policy_bytes=foundation_policy_bytes,
+            foundation_policy_sha256=args.bootstrap_policy_sha256,
+            qualified_policy=policy_document,
+            qualified_release_sha=args.release_sha,
+            signing_run_id=args.bootstrap_signing_run_id,
+            artifact_id=args.bootstrap_signed_artifact_id,
+            artifact_name=args.bootstrap_signed_artifact_name,
+            artifact_size=args.bootstrap_signed_artifact_size,
+            artifact_digest=args.bootstrap_signed_artifact_digest,
+            day=day,
+        )
     rpm_verification = load_json(args.rpm_verification, "RPM verification evidence")
     rhel_rpm_verification = load_json(
         args.rhel_rpm_verification,
@@ -989,6 +1312,8 @@ def finalize(args: argparse.Namespace) -> None:
         },
         "status": provenance_status,
     }
+    if bootstrap_reference is not None:
+        provenance["bootstrap_qualification"] = bootstrap_reference
     write_json(evidence_output / "NATIVE_SIGNING_PROVENANCE.json", provenance)
 
     (
@@ -1047,6 +1372,8 @@ def finalize(args: argparse.Namespace) -> None:
         "status": provenance_status,
         "updater_manifest_included": False,
     }
+    if bootstrap_reference is not None:
+        rhel_provenance["bootstrap_qualification"] = bootstrap_reference
     write_json(
         rhel_evidence_output / "SIGNING_PROVENANCE.json", rhel_provenance
     )
@@ -1080,7 +1407,16 @@ def finalize(args: argparse.Namespace) -> None:
         args.output / "SIGNED_ARTIFACT_SHA256SUMS.txt",
         canonical_manifest(members),
     )
-    verify_bundle(args.output, release, args.release_sha)
+    verify_bundle(
+        args.output,
+        release,
+        args.release_sha,
+        mode=(
+            BOOTSTRAP_BUNDLE_MODE
+            if args.bootstrap_qualification
+            else QUALIFIED_BUNDLE_MODE
+        ),
+    )
 
 
 def expected_bundle_files(release: str) -> tuple[set[str], set[str]]:
@@ -1127,28 +1463,32 @@ def verify_rhel_package_owned_bundle(
         entries["evidence"] / "SIGNING_PROVENANCE.json",
         "RHEL package-owned signing provenance",
     )
+    expected_provenance_keys = {
+        "package_role",
+        "packages",
+        "policy_sha256",
+        "profile",
+        "public_release",
+        "release_qualified",
+        "repository",
+        "rpm_identity",
+        "rpm_signature",
+        "schema_version",
+        "signing_run",
+        "source",
+        "status",
+        "updater_manifest_included",
+    }
+    if standard_provenance["status"] == QUALIFIED_PROVENANCE_STATUS:
+        expected_provenance_keys.add("bootstrap_qualification")
     exact_keys(
         provenance,
-        {
-            "package_role",
-            "packages",
-            "policy_sha256",
-            "profile",
-            "public_release",
-            "release_qualified",
-            "repository",
-            "rpm_identity",
-            "rpm_signature",
-            "schema_version",
-            "signing_run",
-            "source",
-            "status",
-            "updater_manifest_included",
-        },
+        expected_provenance_keys,
         "RHEL package-owned signing provenance",
     )
     if (
-        provenance["schema_version"] != 1
+        type(provenance["schema_version"]) is not int
+        or provenance["schema_version"] != 1
         or provenance["profile"] != RHEL_PACKAGE_OWNED_PROFILE
         or provenance["status"] != standard_provenance["status"]
         or provenance["package_role"] != "rhel-package-owned"
@@ -1157,9 +1497,24 @@ def verify_rhel_package_owned_bundle(
         or provenance["updater_manifest_included"] is not False
         or provenance["policy_sha256"] != standard_provenance["policy_sha256"]
         or provenance["repository"] != standard_provenance["repository"]
-        or provenance["signing_run"] != standard_provenance["signing_run"]
+        or not exact_json_equal(
+            provenance["signing_run"], standard_provenance["signing_run"]
+        )
     ):
         fail("RHEL package-owned signing provenance identity is invalid")
+    if standard_provenance["status"] == QUALIFIED_PROVENANCE_STATUS:
+        reference = validate_bootstrap_reference(
+            provenance["bootstrap_qualification"],
+            release,
+            release_sha,
+            standard_provenance["repository"],
+        )
+        if not exact_json_equal(
+            reference, standard_provenance["bootstrap_qualification"]
+        ):
+            fail(
+                "RHEL package-owned bootstrap reference differs from the standard bundle"
+            )
     identity = exact_keys(
         provenance["rpm_identity"],
         {"architecture", "filename", "name", "release", "version"},
@@ -1276,9 +1631,16 @@ def verify_rhel_package_owned_bundle(
     )
 
 
-def verify_bundle(root: Path, release: str, release_sha: str) -> None:
+def verify_bundle(
+    root: Path,
+    release: str,
+    release_sha: str,
+    mode: str = QUALIFIED_BUNDLE_MODE,
+) -> None:
     if COMMIT_SHA.fullmatch(release_sha) is None:
         fail("expected release SHA is malformed")
+    if mode not in {QUALIFIED_BUNDLE_MODE, BOOTSTRAP_BUNDLE_MODE}:
+        fail("signed bundle verification mode is invalid")
     ensure_real_directory(root, "signed bundle")
     entries = {entry.name: entry for entry in root.iterdir()}
     if set(entries) != {
@@ -1318,35 +1680,47 @@ def verify_bundle(root: Path, release: str, release_sha: str) -> None:
         entries["evidence"] / "NATIVE_SIGNING_PROVENANCE.json",
         "native signing provenance",
     )
+    expected_provenance_keys = {
+        "apk_signature",
+        "deb_signature",
+        "packages",
+        "policy_sha256",
+        "profile",
+        "public_release",
+        "release_qualified",
+        "repository",
+        "rpm_signature",
+        "schema_version",
+        "signer_image",
+        "signing_run",
+        "source",
+        "status",
+    }
+    expected_status = BOOTSTRAP_PROVENANCE_STATUS
+    if mode == QUALIFIED_BUNDLE_MODE:
+        expected_provenance_keys.add("bootstrap_qualification")
+        expected_status = QUALIFIED_PROVENANCE_STATUS
     exact_keys(
         provenance,
-        {
-            "apk_signature",
-            "deb_signature",
-            "packages",
-            "policy_sha256",
-            "profile",
-            "public_release",
-            "release_qualified",
-            "repository",
-            "rpm_signature",
-            "schema_version",
-            "signer_image",
-            "signing_run",
-            "source",
-            "status",
-        },
+        expected_provenance_keys,
         "native signing provenance",
     )
     if (
-        provenance["schema_version"] != 1
+        type(provenance["schema_version"]) is not int
+        or provenance["schema_version"] != 1
         or provenance["profile"] != SCHEMA_PROFILE
-        or provenance["status"]
-        not in {QUALIFIED_PROVENANCE_STATUS, BOOTSTRAP_PROVENANCE_STATUS}
+        or provenance["status"] != expected_status
         or provenance["release_qualified"] is not False
         or provenance["public_release"] is not False
     ):
         fail("native signing provenance identity is invalid")
+    if mode == QUALIFIED_BUNDLE_MODE:
+        validate_bootstrap_reference(
+            provenance["bootstrap_qualification"],
+            release,
+            release_sha,
+            provenance["repository"],
+        )
     if (
         not isinstance(provenance["policy_sha256"], str)
         or SHA256.fullmatch(provenance["policy_sha256"]) is None
@@ -1387,7 +1761,9 @@ def verify_bundle(root: Path, release: str, release_sha: str) -> None:
         "signing run binding",
     )
     if (
-        signing_run["workflow"] != ".github/workflows/native-package-signing.yml"
+        type(signing_run["attempt"]) is not int
+        or signing_run["workflow"]
+        != ".github/workflows/native-package-signing.yml"
         or signing_run["workflow_sha"] != release_sha
         or signing_run["attempt"] != 1
     ):
@@ -1655,6 +2031,15 @@ def main(argv: list[str] | None = None) -> int:
         "--purpose", choices=("qualification", "publishing"), default="qualification"
     )
     final.add_argument("--bootstrap-qualification", action="store_true")
+    final.add_argument("--bootstrap-bundle", type=Path)
+    final.add_argument("--bootstrap-release-sha")
+    final.add_argument("--bootstrap-policy", type=Path)
+    final.add_argument("--bootstrap-policy-sha256")
+    final.add_argument("--bootstrap-signing-run-id", type=int)
+    final.add_argument("--bootstrap-signed-artifact-id", type=int)
+    final.add_argument("--bootstrap-signed-artifact-name")
+    final.add_argument("--bootstrap-signed-artifact-size", type=int)
+    final.add_argument("--bootstrap-signed-artifact-digest")
     final.add_argument("--rpm-proof", required=True, type=Path)
     final.add_argument("--rpm-verification", required=True, type=Path)
     final.add_argument("--rhel-rpm-proof", required=True, type=Path)
@@ -1668,6 +2053,11 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("--bundle", required=True, type=Path)
     verify.add_argument("--release", required=True)
     verify.add_argument("--release-sha", required=True)
+    verify.add_argument(
+        "--mode",
+        choices=(QUALIFIED_BUNDLE_MODE, BOOTSTRAP_BUNDLE_MODE),
+        default=QUALIFIED_BUNDLE_MODE,
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -1682,7 +2072,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "finalize":
             finalize(args)
         else:
-            verify_bundle(args.bundle, args.release, args.release_sha)
+            verify_bundle(args.bundle, args.release, args.release_sha, args.mode)
     except (SigningBundleError, signature_gate.SignatureGateError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

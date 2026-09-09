@@ -2788,7 +2788,7 @@ exit 64
             "native_signing_workflow": "native-package-signing.yml",
             "native_signing_run_id": 104,
             "native_signing_artifact_id": 105,
-            "native_signing_artifact_name": "syswarden-native-signed-packages-4.10.0-104-1-" + release_sha,
+            "native_signing_artifact_name": "syswarden-native-signed-packages-qualified-4.10.0-104-1-" + release_sha,
             "native_signing_artifact_digest": "sha256:" + "e" * 64,
             "native_evidence_workflow": "native-release-evidence.yml",
             "native_evidence_run_id": 106,
