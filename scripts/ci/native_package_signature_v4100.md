@@ -2,12 +2,12 @@
 
 Status: the protected signing foundation and fail-closed publication
 integration are implemented. Three distinct candidate production public identities are
-enrolled under the non-publishing foundation policy. Phase 1 bootstrap
+enrolled under the qualified, non-publishing policy. Phase 1 bootstrap
 qualification succeeded, and the exact immutable result recorded below is the
-foundation evidence for phase 2. The committed policy remains non-qualified
-until a distinct phase 2 `qualified-policy` run validates the permitted policy
-transition. Policy promotion, normal native proof and publication approval
-remain pending.
+foundation evidence for phase 2. The committed policy is now qualified and
+remains non-publishing. A distinct phase 2 `qualified-policy` run, normal native
+proof, supported-host lifecycle labs and explicit publication approval remain
+required before publishing may be enabled.
 No workflow in this foundation creates a private key.
 
 The offline gate binds one package byte stream to an exact release inventory
@@ -34,9 +34,10 @@ OpenPGP key. APK verification uses a private temporary key directory containing
 only the selected RSA public key. DEB verification uses isolated `gpgv` with a
 temporary keyring derived only from the selected OpenPGP public key. The
 repository policy contains exactly one candidate production public identity per
-package family. Phase 1 has succeeded, but the policy remains intentionally
-non-qualified and non-publishing until the separate reviewed phase 2 policy
-commit and `qualified-policy` run complete. The APK signer is pinned to the
+package family. Phase 1 has succeeded, and the separate reviewed phase 2 policy
+commit promotes only the policy status and DEB implementation while keeping
+publishing disabled. The protected `qualified-policy` run and its downstream
+proofs remain required. The APK signer is pinned to the
 AMD64 manifest of the official Alpine Linux 3.24 build-base image at
 `docker.io/alpinelinux/build-base@sha256:31d2a020ccd2058e6ab47940428bd0b7dc83e37b66880891f9ed903a12ea668b`.
 It was reviewed as an offline runtime containing `abuild-sign`, `apk`, OpenSSL
@@ -323,8 +324,10 @@ package is a new unqualified state and must not resume publishing.
 | Tampered evidence or bundle | Canonical evidence and complete artifact seal reject it | Canonical evidence and complete artifact seal reject it | Signature bytes, verification evidence and complete artifact seal reject it |
 
 Static and adversarial unit tests cover the fail-closed controls available in
-this foundation. Real cryptographic fixtures and supported-host lifecycle labs
-remain mandatory before policy status or publishing approval can change.
+the committed qualified, non-publishing policy. This commit promotes policy
+status only. A protected `qualified-policy` run, real cryptographic fixtures and
+supported-host lifecycle labs remain mandatory before publication approval and
+release qualification.
 
 ## Consumer contract
 
@@ -347,7 +350,9 @@ non-revoked, all three native gates succeed with purpose `publishing`, and the
 DEB detached-signature lane is qualified. The release manager revalidates the
 sealed qualification inventory and byte-compares its RPM, APK, DEB and detached
 DEB signature before staging the public assets. With the current policy state,
-qualification fails before those assets can reach the publisher.
+qualification may consume the protected `qualified-policy` run, but publication
+remains fail-closed while `publishing` is false and until the lifecycle labs and
+release qualification succeed.
 
 Before qualification, the release owner must review the enrolled fingerprints,
 validity intervals and empty initial rotation lineage, confirm the protected
