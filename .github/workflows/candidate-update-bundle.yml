@@ -233,15 +233,17 @@ jobs:
           umask 077
           candidate_root="$(mktemp -d "${RUNNER_TEMP%/}/syswarden-candidate-update.XXXXXX")"
           native_dir="${candidate_root}/native-signing"
+          manifest_packages="${candidate_root}/manifest-packages"
           tool_dir="${candidate_root}/tool"
           update_dir="${candidate_root}/update"
           bundle_root="${candidate_root}/bundle"
           install -d -m 0700 \
-            "${native_dir}" "${tool_dir}" "${update_dir}" \
+            "${native_dir}" "${manifest_packages}" "${tool_dir}" "${update_dir}" \
             "${bundle_root}" "${bundle_root}/node01" "${bundle_root}/verification"
           {
             printf 'CANDIDATE_ROOT=%s\n' "${candidate_root}"
             printf 'NATIVE_SIGNING_DIR=%s\n' "${native_dir}"
+            printf 'CANDIDATE_PACKAGES_DIR=%s\n' "${manifest_packages}"
             printf 'MANIFEST_TOOL_DIR=%s\n' "${tool_dir}"
             printf 'UPDATE_DIR=%s\n' "${update_dir}"
             printf 'BUNDLE_ROOT=%s\n' "${bundle_root}"
@@ -336,6 +338,43 @@ jobs:
             ([.rpm.trusted_keys[], .apk.trusted_keys[], .deb.trusted_keys[]] | length == 3)
           ' "${policy}" >/dev/null
 
+      - name: Stage Exact Candidate Manifest Packages
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          umask 077
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts.ci import native_package_signing_bundle as bundle
+
+          source = Path(os.environ["NATIVE_SIGNING_DIR"])
+          destination = Path(os.environ["CANDIDATE_PACKAGES_DIR"])
+          release = os.environ["RELEASE_TAG"]
+          bundle.exact_directory_files(destination, set(), "manifest package staging")
+          bundle.ensure_protected_directory(destination, "manifest package staging")
+          packages = bundle.package_set(
+              source / "packages", release, require_manifest=True, include_deb_signature=True
+          )
+          names = bundle.package_names(release)
+          provenance = bundle.load_json(
+              source / "evidence/NATIVE_SIGNING_PROVENANCE.json", "native signing provenance"
+          )
+          records = [bundle.file_record(names[family], packages[family]) for family in packages]
+          if not bundle.exact_json_equal(
+              sorted(records, key=lambda item: item["name"]), provenance["packages"]["signed"]
+          ):
+              raise SystemExit("manifest packages differ from protected signing provenance")
+          files = {names[family]: data for family, data in packages.items()}
+          for name, data in files.items():
+              bundle.write_exclusive(destination / name, data)
+          bundle.write_exclusive(destination / "SHA256SUMS.txt", bundle.canonical_manifest(files))
+          if bundle.package_set(destination, release, require_manifest=True) != packages:
+              raise SystemExit("staged manifest package bytes changed")
+          PY
+
       - name: Build and Test Candidate Manifest Tool
         id: manifest_tool
         shell: bash
@@ -403,11 +442,11 @@ jobs:
           test -n "${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}"
           "${manifest_tool}" generate \
             --repository "${GITHUB_WORKSPACE}" --tag "${RELEASE_TAG}" \
-            --packages "${NATIVE_SIGNING_DIR}/packages" --output "${UPDATE_DIR}"
+            --packages "${CANDIDATE_PACKAGES_DIR}" --output "${UPDATE_DIR}"
           unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
           env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY "${manifest_tool}" verify \
             --repository "${GITHUB_WORKSPACE}" --tag "${RELEASE_TAG}" \
-            --packages "${NATIVE_SIGNING_DIR}/packages" \
+            --packages "${CANDIDATE_PACKAGES_DIR}" \
             --manifest "${manifest_path}" --signature "${signature_path}"
           version="${RELEASE_TAG#v}"
           install -m 0600 -- \

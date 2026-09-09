@@ -3,8 +3,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 import subprocess
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -208,6 +212,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             "Validate Exact Untagged Candidate Source",
             "Enforce One Successful Candidate Producer Per Commit",
             "Verify Exact Qualified Native Package Source",
+            "Stage Exact Candidate Manifest Packages",
             "Build and Test Candidate Manifest Tool",
             "Revalidate Candidate Manifest Tool Before Secret Exposure",
         ):
@@ -215,6 +220,99 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
                 self.workflow.index(prior),
                 self.workflow.index("Generate and Verify Protected Candidate Manifest"),
             )
+
+    def manifest_staging_fixture(self, root: Path) -> tuple[Path, Path, dict[str, bytes]]:
+        source = root / "native-signing"
+        packages = source / "packages"
+        packages.mkdir(parents=True, mode=0o700)
+        evidence = source / "evidence"
+        evidence.mkdir(mode=0o700)
+        destination = root / "manifest-packages"
+        destination.mkdir(mode=0o700)
+        files = {
+            name: ("unit fixture: " + name + "\n").encode("ascii")
+            for name in (
+                "syswarden-4.10.0-1.x86_64.rpm",
+                "syswarden_4.10.0_amd64.deb",
+                "syswarden_4.10.0_x86_64.apk",
+            )
+        }
+        records = [
+            {"name": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+            for name, data in sorted(files.items())
+        ]
+        (evidence / "NATIVE_SIGNING_PROVENANCE.json").write_text(
+            json.dumps({"packages": {"signed": records}}), encoding="ascii"
+        )
+        files["syswarden_4.10.0_amd64.deb.asc"] = b"unit detached signature\n"
+        for name, data in files.items():
+            (packages / name).write_bytes(data)
+        files["SHA256SUMS.txt"] = "".join(
+            f"{hashlib.sha256(data).hexdigest()}  {name}\n"
+            for name, data in sorted(files.items())
+        ).encode("ascii")
+        (packages / "SHA256SUMS.txt").write_bytes(files["SHA256SUMS.txt"])
+        return source, destination, files
+
+    def run_manifest_staging(self, source: Path, destination: Path) -> subprocess.CompletedProcess:
+        step = workflow_step(self.workflow, "Stage Exact Candidate Manifest Packages")
+        script, = literal_run_blocks(step)
+        return subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", script], cwd=ROOT,
+            env={**os.environ, "NATIVE_SIGNING_DIR": str(source),
+                 "CANDIDATE_PACKAGES_DIR": str(destination), "RELEASE_TAG": "v4.10.0"},
+            capture_output=True, text=True, check=False,
+        )
+
+    def test_actual_staging_preserves_signed_source_and_exact_manifest_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source, destination, original = self.manifest_staging_fixture(Path(temporary))
+            result = self.run_manifest_staging(source, destination)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected = {name: data for name, data in original.items()
+                        if name.endswith((".rpm", ".deb", ".apk"))}
+            expected["SHA256SUMS.txt"] = "".join(
+                f"{hashlib.sha256(data).hexdigest()}  {name}\n"
+                for name, data in sorted(expected.items())
+            ).encode("ascii")
+            self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, expected)
+            self.assertEqual({p.name: p.read_bytes() for p in (source / "packages").iterdir()}, original)
+            for path in destination.iterdir():
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(path.stat().st_nlink, 1)
+            signing = workflow_step(self.workflow, "Generate and Verify Protected Candidate Manifest")
+            self.assertEqual(signing.count('--packages "${CANDIDATE_PACKAGES_DIR}"'), 2)
+            self.assertNotIn('--packages "${NATIVE_SIGNING_DIR}/packages"', signing)
+            self.assertIn('"${BUNDLE_ROOT}/verification/"', signing)
+
+    def test_actual_staging_rejects_tampering_links_and_destination_collisions(self) -> None:
+        for mutation in ("package", "signature", "checksum", "provenance", "extra", "symlink", "collision"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                source, destination, original = self.manifest_staging_fixture(Path(temporary))
+                packages = source / "packages"
+                if mutation in ("package", "signature", "checksum"):
+                    name = {"package": "syswarden_4.10.0_amd64.deb",
+                            "signature": "syswarden_4.10.0_amd64.deb.asc",
+                            "checksum": "SHA256SUMS.txt"}[mutation]
+                    (packages / name).write_bytes(original[name] + b"tampered\n")
+                elif mutation == "provenance":
+                    path = source / "evidence/NATIVE_SIGNING_PROVENANCE.json"
+                    document = json.loads(path.read_text())
+                    document["packages"]["signed"][0]["sha256"] = "0" * 64
+                    path.write_text(json.dumps(document))
+                elif mutation == "extra":
+                    (packages / "extra").write_bytes(b"extra\n")
+                elif mutation == "symlink":
+                    path = packages / "syswarden_4.10.0_amd64.deb"
+                    target = source / "linked-deb"
+                    path.rename(target)
+                    path.symlink_to(target)
+                else:
+                    (destination / "SHA256SUMS.txt").write_bytes(b"preserve\n")
+                before = {p.name: p.read_bytes() for p in destination.iterdir()}
+                result = self.run_manifest_staging(source, destination)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
 
     def test_descriptor_attestation_and_inventory_are_exact(self) -> None:
         for contract in (
@@ -267,6 +365,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             "Resolve Exact Qualified Native Signing Bundle",
             "Download Exact Native Signing Bundle by Artifact ID",
             "Verify Exact Qualified Native Package Source",
+            "Stage Exact Candidate Manifest Packages",
             "Build and Test Candidate Manifest Tool",
             "Revalidate Candidate Manifest Tool Before Secret Exposure",
             "Generate and Verify Protected Candidate Manifest",
