@@ -376,6 +376,7 @@ class SourceAllocationProducerTests(unittest.TestCase):
             "--unshare-user",
             "--unshare-net",
             "--ro-bind /usr /usr",
+            "--symlink usr/bin /bin",
             "--tmpfs /tmp",
             '--bind "${output_root}" "${output_root}"',
             "--prepared-output-root",
@@ -434,7 +435,8 @@ class SourceAllocationProducerTests(unittest.TestCase):
         # A standalone canary does not reproduce the outer procfs submounts.
         # Execute the same canary inside the actual outer namespace shape.
         code = (
-            "import hashlib,sys; from pathlib import Path; "
+            "import hashlib,subprocess,sys; from pathlib import Path; "
+            "subprocess.run(['/bin/sh','-c','test -x /usr/bin/git'],check=True); "
             "sys.path.insert(0,sys.argv[1]); "
             "import source_allocation_producer as p; "
             "p._verify_nested_unix_socket_isolation("
@@ -446,7 +448,8 @@ class SourceAllocationProducerTests(unittest.TestCase):
                 str(sandbox), "--die-with-parent", "--new-session",
                 "--unshare-user", "--unshare-net", "--unshare-pid",
                 "--unshare-ipc", "--unshare-uts",
-                "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
+                "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin",
+                "--ro-bind", "/lib", "/lib",
                 "--ro-bind-try", "/lib64", "/lib64",
                 "--ro-bind", str(producer.REPOSITORY), str(producer.REPOSITORY),
                 "--dir", "/run", "--tmpfs", "/tmp", "--dir", "/var",

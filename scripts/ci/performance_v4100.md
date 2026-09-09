@@ -391,8 +391,10 @@ launcher runs only under privileged-mode `/usr/bin/bash` and uses the real
 target of `/usr/bin/python3` in isolated mode. It binds both interpreter
 digests and identities before and after production. Its outer filesystem starts
 empty and allowlists only the root-owned runtime directories, `os-release`,
-the exact read-only inputs, and the new read-write evidence root. Host `/run`,
-`/tmp`, and `/var/tmp` are not exposed. Repository and module-cache trees are
+the exact read-only inputs, and the new read-write evidence root.
+The fixed `/bin` link resolves to the already read-only `/usr/bin` runtime so
+Git can launch its local transport through `/bin/sh`.
+Host `/run`, `/tmp`, and `/var/tmp` are not exposed. Repository and module-cache trees are
 scanned before Git is invoked and fail on a special file, symlink, nested
 filesystem, unsafe owner, or unsafe mode. An outer Unix-socket canary must be
 unreachable before the attestation can claim egress denial. Temporary detached

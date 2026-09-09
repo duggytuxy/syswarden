@@ -249,6 +249,7 @@ outer_sandbox_arguments=(
     --unshare-ipc
     --unshare-uts
     --ro-bind /usr /usr
+    --symlink usr/bin /bin
     --ro-bind /lib /lib
     --ro-bind-try /lib64 /lib64
     --ro-bind "${os_release_source}" /etc/os-release
