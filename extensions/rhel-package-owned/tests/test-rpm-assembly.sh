@@ -177,6 +177,8 @@ assemble_profile_rpm() {
         --directories /var/lib/syswarden \
         --directories /var/lib/syswarden/ui \
         --directories /var/log/syswarden \
+        --directories /usr/lib/systemd/system/syswarden-firewall.service.d \
+        --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-firewall.service.d" \
         --rpm-attr "0750,root,root:/etc/syswarden" \
         --rpm-attr "0750,root,root:/etc/syswarden/config" \
         --rpm-attr "0750,root,root:/etc/syswarden/config/modules" \

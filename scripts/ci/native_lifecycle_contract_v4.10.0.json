@@ -253,7 +253,7 @@
       "candidate-clean-install": ["offline_chroot_stage_succeeded", "active_systemd_not_required_during_stage", "package_owned_units_installed", "package_owned_configuration_installed", "package_owned_firewall_assets_installed", "first_real_boot_observed", "first_real_boot_services_activated", "first_real_boot_firewall_activated"],
       "clean-cycle-uninstall-purge": ["package_owned_units_removed", "package_owned_dropin_removed", "package_owned_preset_removed", "package_owned_profile_removed", "package_owned_enablement_removed", "erase_ready_boundary_consumed"],
       "candidate-upgrade-v4043-v4100": ["legacy_systemd_units_migrated", "package_owned_units_authoritative", "package_owned_profile_attested"],
-      "verified-rollback-v4100-v4043": ["standard_systemd_units_authoritative", "package_owned_vendor_payload_absent"],
+      "verified-rollback-v4100-v4043": ["standard_systemd_units_authoritative", "package_owned_vendor_payload_absent", "standard_ordering_dropin_owned_and_intact"],
       "candidate-reupgrade-v4043-v4100": ["legacy_systemd_units_migrated", "package_owned_units_authoritative", "package_owned_profile_attested"],
       "candidate-final-uninstall-purge": ["package_owned_units_removed", "package_owned_dropin_removed", "package_owned_preset_removed", "package_owned_profile_removed", "package_owned_enablement_removed", "erase_ready_boundary_consumed"]
     },
@@ -261,7 +261,7 @@
       "candidate-clean-install": ["offline_chroot_stage_succeeded", "active_systemd_not_required_during_stage", "package_owned_units_installed", "package_owned_configuration_installed", "package_owned_firewall_assets_installed", "first_real_boot_observed", "first_real_boot_services_activated", "first_real_boot_firewall_activated"],
       "clean-cycle-uninstall-purge": ["package_owned_units_removed", "package_owned_dropin_removed", "package_owned_preset_removed", "package_owned_profile_removed", "package_owned_enablement_removed", "erase_ready_boundary_consumed"],
       "candidate-upgrade-v4043-v4100": ["legacy_systemd_units_migrated", "package_owned_units_authoritative", "package_owned_profile_attested"],
-      "verified-rollback-v4100-v4043": ["standard_systemd_units_authoritative", "package_owned_vendor_payload_absent"],
+      "verified-rollback-v4100-v4043": ["standard_systemd_units_authoritative", "package_owned_vendor_payload_absent", "standard_ordering_dropin_owned_and_intact"],
       "candidate-reupgrade-v4043-v4100": ["legacy_systemd_units_migrated", "package_owned_units_authoritative", "package_owned_profile_attested"],
       "candidate-final-uninstall-purge": ["package_owned_units_removed", "package_owned_dropin_removed", "package_owned_preset_removed", "package_owned_profile_removed", "package_owned_enablement_removed", "erase_ready_boundary_consumed"]
     }
@@ -275,8 +275,6 @@
     "/var/lib/.syswarden-rhelpo-postun-recovery-v1.new",
     "/usr/lib/systemd/system/syswarden-core.service",
     "/usr/lib/systemd/system/syswarden-firewall.service",
-    "/usr/lib/systemd/system/syswarden-firewall.service.d",
-    "/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf",
     "/usr/lib/systemd/system-preset/90-syswarden-rhel-image.preset",
     "/usr/libexec/syswarden",
     "/usr/libexec/syswarden/rhelpo-postun-recovery-v1",

@@ -830,6 +830,8 @@ SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH = (
     "10-syswarden-wireguard-ordering.conf"
 )
 SYSTEMD_WIREGUARD_ORDERING_DROPIN_FIRST_VERSION = "4.04.3"
+SYSTEMD_ORDERING_RPM_DIRECTORY = "/usr/lib/systemd/system/syswarden-firewall.service.d"
+SYSTEMD_ORDERING_RPM_DIRECTORY_FIRST_VERSION = "4.10.0"
 SYSTEMD_WIREGUARD_ORDERING_DROPIN_SHA256 = (
     "8c4b31f25436882197beec8c8bff5a7599389e564593bd7c353aa99ef3854483"
 )
@@ -2856,6 +2858,15 @@ version_uses_systemd_wireguard_ordering_payload() {
     }
 }
 
+package_owns_systemd_ordering_directory() {
+    package_uses_systemd_wireguard_ordering_payload "$1" || return
+    [ "${PACKAGE_FAMILY}" = rpm ] || return 1
+    [ "${systemd_ordering_major}" -gt 4 ] || {
+        [ "${systemd_ordering_major}" -eq 4 ] && \
+            [ "${systemd_ordering_minor}" -ge 10 ]
+    }
+}
+
 package_uses_systemd_wireguard_ordering_payload() {
     systemd_ordering_role="$1"
     case "${systemd_ordering_role}" in
@@ -2916,6 +2927,10 @@ validate_manifest_contract() {
         systemd_ordering_payload=1
         required_manifest_path "${manifest}" \
             /usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf || return 1
+        if package_owns_systemd_ordering_directory "${artifact_role}"; then
+            required_manifest_path "${manifest}" \
+                /usr/lib/systemd/system/syswarden-firewall.service.d || return 1
+        fi
         if [ "${PACKAGE_FAMILY}" = deb ]; then
             for systemd_ordering_directory in \
                 /usr/lib \
@@ -2974,7 +2989,11 @@ validate_manifest_contract() {
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             elif [ "${geoip_data_license_payload}" -eq 1 ] && \
                  [ "${systemd_ordering_payload}" -eq 1 ]; then
-                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt|usr/lib/systemd/system/syswarden-firewall\.service\.d/10-syswarden-wireguard-ordering\.conf|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt|usr/lib/systemd/system/syswarden-firewall\.service\.d(/10-syswarden-wireguard-ordering\.conf)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+                if ! package_owns_systemd_ordering_directory "${artifact_role}"; then
+                    required_manifest_path "${manifest}" \
+                        /usr/lib/systemd/system/syswarden-firewall.service.d && return 1
+                fi
                 required_manifest_path "${manifest}" \
                     /usr/share/doc/syswarden || return 1
             elif [ "${geoip_data_license_payload}" -eq 1 ]; then
@@ -3075,6 +3094,10 @@ validate_inventory_contract() {
             /usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf \
             file 644 \
             8c4b31f25436882197beec8c8bff5a7599389e564593bd7c353aa99ef3854483 || return 1
+        if package_owns_systemd_ordering_directory "${artifact_role}"; then
+            inventory_has_exact_entry "${inventory}" \
+                /usr/lib/systemd/system/syswarden-firewall.service.d directory 755 - || return 1
+        fi
     else
         systemd_ordering_payload_rc=$?
         [ "${systemd_ordering_payload_rc}" -eq 1 ] || return 1
@@ -6668,6 +6691,13 @@ def _uses_systemd_wireguard_ordering_payload(
     )
 
 
+def _owns_systemd_ordering_directory(family: str, version: str) -> bool:
+    return family == "rpm" and (
+        parse_syswarden_version(version)
+        >= parse_syswarden_version(SYSTEMD_ORDERING_RPM_DIRECTORY_FIRST_VERSION)
+    )
+
+
 def _validate_manager_paths(
     family: str,
     paths: list[str],
@@ -6757,6 +6787,7 @@ def _validate_manager_paths(
     expected = (
         expected_payload_paths
         | ({RPM_DOCUMENTATION_ROOT} if license_payloads else set())
+        | ({SYSTEMD_ORDERING_RPM_DIRECTORY} if _owns_systemd_ordering_directory(family, version) else set())
         | {"/usr/lib/.build-id"}
         | required_build_directories
         | build_links
@@ -6945,6 +6976,14 @@ def validate_inventory_snapshot(
             raise LifecycleLabError("DEB generated changelog inventory is invalid")
     if family == "rpm":
         build_id_targets: set[str] = set()
+        if _owns_systemd_ordering_directory(family, version):
+            directory = entries[SYSTEMD_ORDERING_RPM_DIRECTORY]
+            if (
+                directory["type"] != "directory"
+                or directory["mode"] != "755"
+                or directory["value"] != "-"
+            ):
+                raise LifecycleLabError("RPM ordering directory metadata is not exact")
         if license_payloads:
             documentation_root = entries[RPM_DOCUMENTATION_ROOT]
             if (
