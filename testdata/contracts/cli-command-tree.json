@@ -965,6 +965,49 @@
     }
   },
   {
+    "path": "syswarden recover-wireguard",
+    "use": "recover-wireguard",
+    "short": "Inspect and explicitly recover exact historical WireGuard nftables state",
+    "long": "Inspects one of the two supported historical SysWarden WireGuard generations without changing the host. Recovery is fail-closed and requires a second invocation with --apply and the exact SHA-256 digest printed by the dry run.",
+    "flags": [
+      {
+        "name": "apply",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Apply the exact reviewed recovery plan"
+      },
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for recover-wireguard"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Authorize only the exact lowercase SHA-256 digest printed by the dry run"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden recover-wireguard\"",
+      "2": "unknown command \"arg-1\" for \"syswarden recover-wireguard\"",
+      "3": "unknown command \"arg-1\" for \"syswarden recover-wireguard\"",
+      "4": "unknown command \"arg-1\" for \"syswarden recover-wireguard\""
+    }
+  },
+  {
     "path": "syswarden reload",
     "use": "reload",
     "short": "Reapply policy and normally restart syswarden-core",

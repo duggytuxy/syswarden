@@ -51,7 +51,7 @@ func TestEarlyFirewallRecoveryCommandScope_SW_FW_005(t *testing.T) {
 			t.Errorf("mutating command %q is missing the early firewall recovery barrier", command)
 		}
 	}
-	for _, command := range []string{"audit", "check", "config-get", "list", "manual"} {
+	for _, command := range []string{"audit", "check", "config-get", "list", "manual", "recover-wireguard"} {
 		if _, required := earlyFirewallRecoveryCommands[command]; required {
 			t.Errorf("read-only command %q unexpectedly requires mutating firewall recovery", command)
 		}

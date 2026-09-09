@@ -41,12 +41,17 @@ const maxTUIHAResponseBytes = 1024 * 1024
 const tuiRemovalTombstonePath = "/var/lib/syswarden/removal-in-progress-v1"
 const tuiRemovalTombstoneRecord = "SYSWARDEN_REMOVAL_V1\nstate=in-progress\n"
 const (
-	dashboardSnapshotTitle = "SYSWARDEN LOCAL DASHBOARD (SNAPSHOT)"
-	emptyRegistryMessage   = "Registry is empty. No active entries."
+	dashboardSnapshotTitle         = "SYSWARDEN LOCAL DASHBOARD (SNAPSHOT)"
+	emptyRegistryMessage           = "Registry is empty. No active entries."
+	dashboardPollInterval          = 5 * time.Second
+	dashboardSnapshotMaxAge        = 6 * dashboardPollInterval
+	dashboardSnapshotMaxFutureSkew = 6 * dashboardPollInterval
 	// Five minutes exceeds the HA v2 heartbeat timeout ceiling of two minutes
 	// while leaving bounded room for serialization latency and host clock skew.
 	tuiRuntimeCheckpointTimeTolerance = 5 * time.Minute
 )
+
+type tuiClock func() time.Time
 
 var (
 	haPeerPort          = "62026"
@@ -56,6 +61,7 @@ var (
 	httpClient, haCAErr = newHAHTTPClient(haPeerCABundleFile)
 	activeNode          = tuiNodeSelection{ip: "local"}
 	dashboardFetchMu    sync.Mutex
+	dashboardClock      tuiClock = time.Now
 )
 
 type tuiNodeSelection struct {
@@ -1634,7 +1640,7 @@ func main() {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second):
+			case <-time.After(dashboardPollInterval):
 				readDataAndUpdate()
 			}
 		}
@@ -1655,6 +1661,82 @@ func reportTUIRunResult(err error, output io.Writer) int {
 		_, _ = fmt.Fprintf(output, "[SYSWARDEN-TUI] Terminal application failed: %v\n", err)
 	}
 	return 1
+}
+
+type dashboardSnapshotFreshness struct {
+	current   bool
+	updatedAt time.Time
+	age       time.Duration
+	futureBy  time.Duration
+	reason    string
+}
+
+func inspectDashboardSnapshotFreshness(timestamp string, clock tuiClock) dashboardSnapshotFreshness {
+	if clock == nil {
+		return dashboardSnapshotFreshness{reason: "clock unavailable"}
+	}
+	if timestamp == "" {
+		return dashboardSnapshotFreshness{reason: "missing timestamp"}
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return dashboardSnapshotFreshness{reason: "invalid timestamp"}
+	}
+	updatedAt = updatedAt.UTC()
+	now := clock().UTC()
+	if futureBy := updatedAt.Sub(now); futureBy > dashboardSnapshotMaxFutureSkew {
+		return dashboardSnapshotFreshness{updatedAt: updatedAt, futureBy: futureBy, reason: "timestamp is ahead of the local clock"}
+	}
+	age := now.Sub(updatedAt)
+	if age < 0 {
+		age = 0
+	}
+	if age > dashboardSnapshotMaxAge {
+		return dashboardSnapshotFreshness{updatedAt: updatedAt, age: age, reason: "snapshot is too old"}
+	}
+	return dashboardSnapshotFreshness{current: true, updatedAt: updatedAt, age: age}
+}
+
+func roundedDashboardDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		value = -value
+	}
+	return value.Round(time.Second)
+}
+
+func dashboardOperationalStatus(snapshot DashboardData, fetchErr error, clock tuiClock, colors bool) string {
+	if fetchErr != nil {
+		if colors {
+			return "[red]OFFLINE (Telemetry Error)[-]"
+		}
+		return "OFFLINE | Telemetry error"
+	}
+	freshness := inspectDashboardSnapshotFreshness(snapshot.Timestamp, clock)
+	if !freshness.current {
+		detail := "last update unavailable, reason: " + freshness.reason
+		if !freshness.updatedAt.IsZero() {
+			detail = "last update: " + freshness.updatedAt.Format("2006-01-02 15:04:05Z")
+			if freshness.futureBy > 0 {
+				detail += ", clock lead: " + roundedDashboardDuration(freshness.futureBy).String()
+			} else {
+				detail += ", age: " + roundedDashboardDuration(freshness.age).String()
+			}
+		}
+		if colors {
+			return "[red]STALE[-] [gray](" + detail + ")[-]"
+		}
+		return "STALE | " + detail
+	}
+	if snapshot.Projection != nil && snapshot.Projection.Quality == "degraded" {
+		if colors {
+			return "[yellow]DEGRADED (Display Projection)[-]"
+		}
+		return "DEGRADED | Display projection"
+	}
+	if colors {
+		return "[green]ONLINE[-]"
+	}
+	return "ONLINE"
 }
 
 func escapeTUIDynamicValue(value string) string {
@@ -2390,12 +2472,7 @@ func refreshUI() {
 	ramBar := buildProgressBar(d.System.RamUsedMb, d.System.RamTotalMb, "MEM", "green")
 	diskBar := buildProgressBar(d.System.DiskUsedMb, d.System.DiskTotalMb, "DSK", "cyan")
 
-	errState := " [green]ONLINE[-]"
-	if currentErr != nil {
-		errState = " [red]OFFLINE (Telemetry Error)[-]"
-	} else if d.Projection != nil && d.Projection.Quality == "degraded" {
-		errState = " [yellow]DEGRADED (Display Projection)[-]"
-	}
+	errState := " " + dashboardOperationalStatus(d, currentErr, dashboardClock, true)
 
 	profileStr := ""
 	if d.ProfileName != "" {
@@ -2718,6 +2795,7 @@ func printDashboardText() {
 	}
 
 	fmt.Printf("=== %s ===\n", dashboardSnapshotTitle)
+	fmt.Printf("[TELEMETRY] %s\n", dashboardOperationalStatus(d, nil, dashboardClock, false))
 	fmt.Printf("[SYSTEM] NODE: %s | Uptime: %s | Load: %s\n", d.System.Hostname, d.System.Uptime, load1Str)
 	fmt.Printf("[L3 FIREWALL] Global Blocks: %d (GeoIP: %d | ASN: %d)\n", d.Layer3.GlobalBlocked, d.Layer3.GeoIPBlocked, d.Layer3.ASNBlocked)
 	feedIPv4, feedIPv6 := threatFeedStatusSummaries(d.Layer3.ThreatFeeds, false)

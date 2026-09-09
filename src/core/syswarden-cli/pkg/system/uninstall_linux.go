@@ -15,12 +15,13 @@ type firewallRemovalService struct {
 }
 
 type firewallRemovalServiceSnapshot struct {
-	service        firewallRemovalService
-	loaded         bool
-	active         bool
-	enabled        bool
-	runtimeEnabled bool
-	runlevels      []string
+	service         firewallRemovalService
+	loaded          bool
+	stopRequired    bool
+	failedInitially bool
+	enabled         bool
+	runtimeEnabled  bool
+	runlevels       []string
 }
 
 type firewallRemovalPreparationHost struct {
@@ -334,7 +335,14 @@ func inspectSystemdFirewallRemovalService(
 	}
 	switch activeState {
 	case "active":
-		snapshot.active = true
+		snapshot.stopRequired = true
+	case "failed":
+		// A failed unit is not accepted as quiescent. It is an exact terminal
+		// systemd state that must still pass unit attestation, be explicitly
+		// stopped, and subsequently prove ActiveState=inactive. A bounded
+		// reset-failed transition is available only for this initial state.
+		snapshot.stopRequired = true
+		snapshot.failedInitially = true
 	case "inactive":
 	default:
 		return firewallRemovalServiceSnapshot{}, fmt.Errorf("refusing ambiguous ActiveState %q for %s", activeState, unit)
@@ -464,7 +472,7 @@ func inspectOpenRCFirewallRemovalService(
 		if err := manager.attestOpenRCUnit(service); err != nil {
 			return firewallRemovalServiceSnapshot{}, fmt.Errorf("reattest OpenRC service %s: %w", name, err)
 		}
-		snapshot.active = active
+		snapshot.stopRequired = active
 		return snapshot, nil
 	}
 	if err := manager.attestOpenRCUnit(service); err != nil {
@@ -472,7 +480,7 @@ func inspectOpenRCFirewallRemovalService(
 	}
 	_, statusErr := manager.executor.output(manager.servicePath, name, "status")
 	if statusErr == nil {
-		snapshot.active = true
+		snapshot.stopRequired = true
 	} else {
 		code, exact := firewallRemovalExitCode(statusErr)
 		if !exact || (code != 3 && code != 16) {
@@ -516,7 +524,7 @@ func validateFirewallRemovalSnapshots(
 ) error {
 	for _, snapshot := range snapshots {
 		if snapshot.service.wireGuard && !wireGuardConfigurationPresent {
-			if snapshot.active || snapshot.enabled {
+			if snapshot.stopRequired || snapshot.enabled {
 				return fmt.Errorf("refusing unmanaged WireGuard service state without an attested configuration")
 			}
 			continue
@@ -524,8 +532,8 @@ func validateFirewallRemovalSnapshots(
 		if !snapshot.loaded {
 			continue
 		}
-		if snapshot.active {
-			return fmt.Errorf("firewall mutator %s is still active", snapshot.service.name)
+		if snapshot.stopRequired {
+			return fmt.Errorf("firewall mutator %s has not reached inactive state", snapshot.service.name)
 		}
 		if snapshot.enabled {
 			return fmt.Errorf("firewall mutator %s is still enabled", snapshot.service.name)
@@ -573,7 +581,7 @@ func (manager firewallRemovalManager) disable(snapshot firewallRemovalServiceSna
 }
 
 func (manager firewallRemovalManager) stop(snapshot firewallRemovalServiceSnapshot) error {
-	if !snapshot.active {
+	if !snapshot.stopRequired {
 		return nil
 	}
 	if manager.alpine {
@@ -613,6 +621,120 @@ func (manager firewallRemovalManager) stop(snapshot firewallRemovalServiceSnapsh
 	}
 	if _, err := manager.executor.output(manager.servicePath, "stop", systemdFirewallRemovalUnit(snapshot.service)); err != nil {
 		return fmt.Errorf("stop systemd firewall mutator %s: %w", snapshot.service.name, err)
+	}
+	return nil
+}
+
+func (manager firewallRemovalManager) attestFailedSystemdServiceRuntime(
+	snapshot firewallRemovalServiceSnapshot,
+	wantActiveState string,
+) error {
+	if manager.alpine || !snapshot.failedInitially {
+		return fmt.Errorf("refusing failed-state normalization outside an initially failed systemd unit")
+	}
+	unit := systemdFirewallRemovalUnit(snapshot.service)
+	if err := attestSystemdFirewallRemovalService(manager, snapshot.service); err != nil {
+		return fmt.Errorf("reattest initially failed systemd firewall mutator %s: %w", snapshot.service.name, err)
+	}
+	loadState, err := queryFirewallProperty(manager.executor, manager.servicePath, unit, "LoadState")
+	if err != nil {
+		return err
+	}
+	if loadState != "loaded" {
+		return fmt.Errorf("initially failed systemd firewall mutator %s changed LoadState to %q", snapshot.service.name, loadState)
+	}
+	activeState, err := queryFirewallProperty(manager.executor, manager.servicePath, unit, "ActiveState")
+	if err != nil {
+		return err
+	}
+	if activeState != wantActiveState {
+		return fmt.Errorf(
+			"initially failed systemd firewall mutator %s has ActiveState %q, want %q",
+			snapshot.service.name, activeState, wantActiveState,
+		)
+	}
+	for _, property := range []string{"MainPID", "ControlPID"} {
+		value, err := queryFirewallProperty(manager.executor, manager.servicePath, unit, property)
+		if err != nil {
+			return err
+		}
+		if value != "0" {
+			return fmt.Errorf(
+				"initially failed systemd firewall mutator %s has nonzero %s %q",
+				snapshot.service.name, property, value,
+			)
+		}
+	}
+	return nil
+}
+
+func (manager firewallRemovalManager) normalizeInitiallyFailedSystemdService(
+	snapshot firewallRemovalServiceSnapshot,
+	preReset func() error,
+) error {
+	if !snapshot.failedInitially {
+		return nil
+	}
+	if manager.alpine || preReset == nil {
+		return fmt.Errorf("failed-state normalization dependencies are incomplete")
+	}
+	unit := systemdFirewallRemovalUnit(snapshot.service)
+	if err := attestSystemdFirewallRemovalService(manager, snapshot.service); err != nil {
+		return fmt.Errorf("reattest initially failed systemd firewall mutator %s after stop: %w", snapshot.service.name, err)
+	}
+	activeState, err := queryFirewallProperty(manager.executor, manager.servicePath, unit, "ActiveState")
+	if err != nil {
+		return err
+	}
+	switch activeState {
+	case "inactive":
+		return nil
+	case "failed":
+	default:
+		return fmt.Errorf(
+			"initially failed systemd firewall mutator %s changed to disallowed ActiveState %q after stop",
+			snapshot.service.name, activeState,
+		)
+	}
+	if err := manager.attestFailedSystemdServiceRuntime(snapshot, "failed"); err != nil {
+		return err
+	}
+	if err := preReset(); err != nil {
+		return err
+	}
+	// Repeat exact unit and zero-runtime proofs after the global process and
+	// interface barrier so reset-failed cannot normalize a raced service.
+	if err := manager.attestFailedSystemdServiceRuntime(snapshot, "failed"); err != nil {
+		return err
+	}
+	if _, err := manager.executor.output(manager.servicePath, "reset-failed", unit); err != nil {
+		return fmt.Errorf("reset exact failed systemd firewall mutator %s: %w", snapshot.service.name, err)
+	}
+	if err := manager.attestFailedSystemdServiceRuntime(snapshot, "inactive"); err != nil {
+		return fmt.Errorf("verify failed-state normalization for %s: %w", snapshot.service.name, err)
+	}
+	return nil
+}
+
+func (host firewallRemovalPreparationHost) attestBeforeFailedSystemdReset(
+	wireGuard firewallRemovalWireGuardEvidence,
+) error {
+	currentWireGuard, err := host.attestWireGuard()
+	if err != nil {
+		return fmt.Errorf("reattest WireGuard state before systemd reset-failed: %w", err)
+	}
+	if !sameFirewallRemovalWireGuardEvidence(currentWireGuard, wireGuard) {
+		return fmt.Errorf("WireGuard state changed before systemd reset-failed")
+	}
+	interfacePresent, err := host.wireGuardInterface()
+	if err != nil {
+		return err
+	}
+	if interfacePresent {
+		return fmt.Errorf("WireGuard interface wg-syswarden remains active before systemd reset-failed")
+	}
+	if err := host.postStopProcessScan(); err != nil {
+		return fmt.Errorf("scan SysWarden processes before systemd reset-failed: %w", err)
 	}
 	return nil
 }
@@ -698,7 +820,7 @@ func (host firewallRemovalPreparationHost) prepare() error {
 		return err
 	}
 	for _, snapshot := range snapshots {
-		if snapshot.service.wireGuard && !wireGuard.present && (snapshot.active || snapshot.enabled) {
+		if snapshot.service.wireGuard && !wireGuard.present && (snapshot.stopRequired || snapshot.enabled) {
 			return fmt.Errorf("refusing unmanaged WireGuard service state without an attested configuration")
 		}
 	}
@@ -729,6 +851,16 @@ func (host firewallRemovalPreparationHost) prepare() error {
 			continue
 		}
 		if err := manager.stop(snapshot); err != nil {
+			return recoverableFailure(err)
+		}
+	}
+	for _, snapshot := range snapshots {
+		if !snapshot.failedInitially {
+			continue
+		}
+		if err := manager.normalizeInitiallyFailedSystemdService(snapshot, func() error {
+			return host.attestBeforeFailedSystemdReset(wireGuard)
+		}); err != nil {
 			return recoverableFailure(err)
 		}
 	}

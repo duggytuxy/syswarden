@@ -215,7 +215,8 @@ func attestFirewallRemovalFileOwner(
 		return nil, err
 	}
 	stat, ok := before.Sys().(*syscall.Stat_t)
-	if !ok || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Mode().Perm()&0022 != 0 ||
+	if !ok || before.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 ||
+		!before.Mode().IsRegular() || before.Mode().Perm()&0022 != 0 ||
 		stat.Uid != expectedUID || stat.Gid != expectedGID || stat.Nlink != 1 || before.Size() < 0 ||
 		before.Size() > maximumFirewallRemovalUnitSize {
 		return nil, fmt.Errorf("refusing unsafe firewall removal file %s", path)
@@ -250,15 +251,43 @@ func readFirewallRemovalFileWithOwner(
 	expectedUID uint32,
 	expectedGID uint32,
 ) (firewallRemovalFileSnapshot, error) {
+	return readFirewallRemovalFileWithOwnerModes(path, []os.FileMode{mode}, expectedUID, expectedGID)
+}
+
+func readFirewallRemovalFileWithOwnerModes(
+	path string,
+	modes []os.FileMode,
+	expectedUID uint32,
+	expectedGID uint32,
+) (firewallRemovalFileSnapshot, error) {
+	if len(modes) == 0 {
+		return firewallRemovalFileSnapshot{}, fmt.Errorf("firewall removal service file modes are empty")
+	}
+	requireExecutable := true
+	for _, mode := range modes {
+		if mode == 0 || mode.Perm() != mode {
+			return firewallRemovalFileSnapshot{}, fmt.Errorf("invalid firewall removal service file mode %04o", mode)
+		}
+		if mode&0111 == 0 {
+			requireExecutable = false
+		}
+	}
 	before, err := attestFirewallRemovalFileOwner(
-		path, mode&0111 != 0, expectedUID, expectedGID,
+		path, requireExecutable, expectedUID, expectedGID,
 	)
 	if err != nil {
 		return firewallRemovalFileSnapshot{}, err
 	}
-	if before.Mode().Perm() != mode {
+	modeAllowed := false
+	for _, mode := range modes {
+		if before.Mode().Perm() == mode {
+			modeAllowed = true
+			break
+		}
+	}
+	if !modeAllowed {
 		return firewallRemovalFileSnapshot{}, fmt.Errorf(
-			"firewall removal service file %s has mode %04o, want %04o", path, before.Mode().Perm(), mode,
+			"firewall removal service file %s has unsupported mode %04o", path, before.Mode().Perm(),
 		)
 	}
 	file, err := os.Open(path) // #nosec G304 -- fixed product service paths are lstat/fstat identity attested
@@ -280,7 +309,17 @@ func readFirewallRemovalFileWithOwner(
 }
 
 func readExactFirewallRemovalFile(path string, expected string, mode os.FileMode) error {
-	snapshot, err := readFirewallRemovalFile(path, mode)
+	return readExactFirewallRemovalFileWithOwnerModes(path, expected, []os.FileMode{mode}, 0, 0)
+}
+
+func readExactFirewallRemovalFileWithOwnerModes(
+	path string,
+	expected string,
+	modes []os.FileMode,
+	expectedUID uint32,
+	expectedGID uint32,
+) error {
+	snapshot, err := readFirewallRemovalFileWithOwnerModes(path, modes, expectedUID, expectedGID)
 	if err != nil {
 		return err
 	}
@@ -711,9 +750,15 @@ func attestPackageOwnedSystemdWireGuardUnit(executor firewallManagerExecutor, pa
 func attestSystemdFirewallRemovalUnitFileWith(executor firewallManagerExecutor, path string) error {
 	switch path {
 	case "/etc/systemd/system/syswarden-core.service":
-		return readExactFirewallRemovalFile(path, systemdCoreService, 0600)
+		return readExactFirewallRemovalFileWithOwnerModes(
+			path, systemdCoreService,
+			[]os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode}, 0, 0,
+		)
 	case "/etc/systemd/system/syswarden-firewall.service":
-		return readExactFirewallRemovalFile(path, systemdFirewallService, 0600)
+		return readExactFirewallRemovalFileWithOwnerModes(
+			path, systemdFirewallService,
+			[]os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode}, 0, 0,
+		)
 	case "/usr/lib/systemd/system/wg-quick@.service", "/lib/systemd/system/wg-quick@.service":
 		return attestPackageOwnedSystemdWireGuardUnit(executor, path)
 	default:

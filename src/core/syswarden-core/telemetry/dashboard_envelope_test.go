@@ -7,9 +7,39 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
+
+func TestDashboardPublicationTimestampReflectsPublicationClock_SW_RES_008(t *testing.T) {
+	collectionStarted := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	publicationTime := collectionStarted.Add(45 * time.Second)
+	data := DashboardData{Timestamp: collectionStarted.Format(time.RFC3339)}
+	clockCalls := 0
+	clock := func() time.Time {
+		clockCalls++
+		return publicationTime
+	}
+	dataFile := filepath.Join(t.TempDir(), "data.json")
+	if err := publishDashboardDataWithClock(dataFile, data, clock); err != nil {
+		t.Fatal(err)
+	}
+	if clockCalls != 1 {
+		t.Fatalf("dashboard publication clock calls = %d, want 1", clockCalls)
+	}
+	wire, err := os.ReadFile(dataFile) // #nosec G304 -- dataFile is a fixed dashboard filename beneath t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published DashboardData
+	if err := json.Unmarshal(wire, &published); err != nil {
+		t.Fatal(err)
+	}
+	if published.Timestamp != publicationTime.Format(time.RFC3339) {
+		t.Fatalf("dashboard publication timestamp = %q, want %q", published.Timestamp, publicationTime.Format(time.RFC3339))
+	}
+}
 
 func TestDashboardPublicationHonorsExactOneMiBBoundary_SW_RES_006(t *testing.T) {
 	data := DashboardData{WAF: WAF{

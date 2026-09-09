@@ -55,6 +55,21 @@ exact_file() {
         fail "Refusing modified RHEL package-owned file content: $path"
 }
 
+exact_legacy_source_unit() {
+    path="$1"
+    digest="$2"
+    if [ ! -f "$path" ] || [ -L "$path" ]; then
+        fail "Refusing unsafe legacy SysWarden unit: $path"
+    fi
+    metadata="$(/usr/bin/stat -Lc '%u:%g:%a:%h' -- "$path")"
+    case "$metadata" in
+        0:0:600:1|0:0:644:1) ;;
+        *) fail "Refusing modified legacy SysWarden unit metadata: $path" ;;
+    esac
+    [ "$(/usr/bin/sha256sum -- "$path" | /usr/bin/awk '{print $1}')" = "$digest" ] || \
+        fail "Refusing modified legacy SysWarden unit content: $path"
+}
+
 exact_directory() {
     path="$1"
     [ -d "$path" ] && [ ! -L "$path" ] || fail "Refusing unsafe systemd directory: $path"
@@ -234,15 +249,15 @@ if [ "$1" -gt 1 ]; then
         attest_installed_rhelpo_identity
     fi
     if [ "$core_present" -eq 1 ]; then
-        exact_file /etc/systemd/system/syswarden-core.service 600 \
+        exact_legacy_source_unit /etc/systemd/system/syswarden-core.service \
             8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd
     fi
     if [ "$firewall_present" -eq 1 ]; then
-        exact_file /etc/systemd/system/syswarden-firewall.service 600 \
+        exact_legacy_source_unit /etc/systemd/system/syswarden-firewall.service \
             989be4b60c43bba830333ef30949376e57658222a48947194395393794e328c1
     fi
     if [ "$core_present" -eq 1 ]; then
-        exact_file /etc/systemd/system/syswarden-core.service 600 \
+        exact_legacy_source_unit /etc/systemd/system/syswarden-core.service \
             8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd
         /usr/bin/rm -f -- /etc/systemd/system/syswarden-core.service
         [ ! -e /etc/systemd/system/syswarden-core.service ] && \
@@ -251,7 +266,7 @@ if [ "$1" -gt 1 ]; then
         /usr/bin/sync -f -- /etc/systemd/system
     fi
     if [ "$firewall_present" -eq 1 ]; then
-        exact_file /etc/systemd/system/syswarden-firewall.service 600 \
+        exact_legacy_source_unit /etc/systemd/system/syswarden-firewall.service \
             989be4b60c43bba830333ef30949376e57658222a48947194395393794e328c1
         /usr/bin/rm -f -- /etc/systemd/system/syswarden-firewall.service
         [ ! -e /etc/systemd/system/syswarden-firewall.service ] && \

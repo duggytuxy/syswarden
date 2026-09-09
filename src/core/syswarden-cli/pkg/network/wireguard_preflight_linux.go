@@ -66,11 +66,12 @@ func preflightWireGuardNFTState(
 	}
 	if staleErr := wireGuardTokenizedNFTReadOnlyPreflight(expectation.Identity); staleErr != nil {
 		return fmt.Errorf(
-			"no safe WireGuard nftables reconciliation is available: %w",
+			"no safe WireGuard nftables reconciliation is available: %w; %s",
 			errors.Join(
 				fmt.Errorf("manifest-bound table attestation: %w", currentErr),
 				fmt.Errorf("exact tokenized inactive-table attestation: %w", staleErr),
 			),
+			legacyWireGuardRecoveryDryRunHint(),
 		)
 	}
 	return nil
@@ -84,11 +85,12 @@ func preflightDisabledWireGuardNFTState(identity wireguardstate.ServerConfigurat
 	}
 	if staleErr := wireGuardTokenizedNFTReadOnlyPreflight(identity); staleErr != nil {
 		return fmt.Errorf(
-			"no safe disabled WireGuard nftables reconciliation is available: %w",
+			"no safe disabled WireGuard nftables reconciliation is available: %w; %s",
 			errors.Join(
 				fmt.Errorf("manifest-bound table attestation: %w", currentErr),
 				fmt.Errorf("exact tokenized table attestation: %w", staleErr),
 			),
+			legacyWireGuardRecoveryDryRunHint(),
 		)
 	}
 	return nil

@@ -3,15 +3,28 @@
 package cmd
 
 import (
+	"context"
 	"os/exec"
 	"syswarden-cli/pkg/system"
 )
 
-// getKernelLogCommand returns the native linux command to stream kernel ring buffer logs
-func getKernelLogCommand() *exec.Cmd {
+const kernelAlertLogPath = "/var/log/kern.log"
+
+// getKernelLogCommand returns a live-only kernel log follower.
+func getKernelLogCommand(ctx context.Context) *exec.Cmd {
 	if system.IsAlpine() {
-		return exec.Command("tail", "-F", "/var/log/kern.log") // #nosec
+		return exec.CommandContext(ctx, "tail", kernelLogCommandArgs(true)...) // #nosec G204 -- executable and arguments are fixed internally for the live kernel log follower
 	}
-	// Native journalctl for Linux (captures kernel syswarden drops)
-	return exec.Command("stdbuf", "-oL", "/usr/bin/journalctl", "-k", "-f", "-n", "10", "--no-pager") // #nosec
+	args := kernelLogCommandArgs(false)
+	if _, err := exec.LookPath("stdbuf"); err == nil {
+		return exec.CommandContext(ctx, "stdbuf", append([]string{"-oL", "/usr/bin/journalctl"}, args...)...) // #nosec G204 -- executable and arguments are fixed internally for the live journal follower
+	}
+	return exec.CommandContext(ctx, "/usr/bin/journalctl", args...) // #nosec G204 -- executable and arguments are fixed internally for the live journal follower
+}
+
+func kernelLogCommandArgs(alpine bool) []string {
+	if alpine {
+		return []string{"-F", "-n", "0", kernelAlertLogPath}
+	}
+	return []string{"-k", "-f", "-n", "0", "--no-pager"}
 }

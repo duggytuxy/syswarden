@@ -88,11 +88,13 @@ func TestWireGuardStopReattestsConfigurationHookExecutables_SW2_WGSTATE_001(t *t
 type fakeFirewallRemovalServiceState struct {
 	loaded                        bool
 	active                        bool
+	failed                        bool
 	enabled                       bool
 	runtimeEnabled                bool
 	runlevels                     []string
 	loadStateOverride             string
 	activeStateOverride           string
+	activeStateAfterStopOverride  string
 	unitFileStateOverride         string
 	fragmentPathOverride          string
 	dropInPathsOverride           string
@@ -100,6 +102,11 @@ type fakeFirewallRemovalServiceState struct {
 	execStopOverride              string
 	openRCInactiveStatus          int
 	stopped                       bool
+	stickyFailedAfterStop         bool
+	stickyFailedAfterReset        bool
+	failedAfterStop               bool
+	mainPID                       string
+	controlPID                    string
 	restartAfterFirstVerification bool
 	verificationQueries           int
 }
@@ -110,6 +117,7 @@ type fakeFirewallRemovalManager struct {
 	calls               []string
 	stopErrors          map[string]error
 	disableErrors       map[string]error
+	resetFailedErrors   map[string]error
 	wireGuardConfigPath string
 }
 
@@ -160,8 +168,14 @@ func (manager *fakeFirewallRemovalManager) systemdOutput(arguments ...string) ([
 			if state.activeStateOverride != "" {
 				return []byte(state.activeStateOverride + "\n"), nil
 			}
+			if state.stopped && state.activeStateAfterStopOverride != "" {
+				return []byte(state.activeStateAfterStopOverride + "\n"), nil
+			}
 			if state.active {
 				return []byte("active\n"), nil
+			}
+			if state.failed {
+				return []byte("failed\n"), nil
 			}
 			if state.stopped && state.restartAfterFirstVerification {
 				state.verificationQueries++
@@ -182,6 +196,16 @@ func (manager *fakeFirewallRemovalManager) systemdOutput(arguments ...string) ([
 				return []byte("enabled\n"), nil
 			}
 			return []byte("disabled\n"), nil
+		case "MainPID":
+			if state.mainPID == "" {
+				return []byte("0\n"), nil
+			}
+			return []byte(state.mainPID + "\n"), nil
+		case "ControlPID":
+			if state.controlPID == "" {
+				return []byte("0\n"), nil
+			}
+			return []byte(state.controlPID + "\n"), nil
 		case "FragmentPath":
 			if state.fragmentPathOverride != "" {
 				return []byte(state.fragmentPathOverride + "\n"), nil
@@ -246,8 +270,25 @@ func (manager *fakeFirewallRemovalManager) systemdOutput(arguments ...string) ([
 		if err := manager.stopErrors[unit]; err != nil {
 			return nil, err
 		}
-		manager.states[unit].active = false
-		manager.states[unit].stopped = true
+		state := manager.states[unit]
+		wasFailed := state.failed
+		state.active = false
+		state.failed = state.failedAfterStop || wasFailed && state.stickyFailedAfterStop
+		state.stopped = true
+		return nil, nil
+	}
+	if len(arguments) == 2 && arguments[0] == "reset-failed" {
+		unit := arguments[1]
+		if err := manager.resetFailedErrors[unit]; err != nil {
+			return nil, err
+		}
+		state := manager.states[unit]
+		if state == nil || !state.failed || state.active {
+			return nil, fmt.Errorf("unexpected reset-failed target %s", unit)
+		}
+		if !state.stickyFailedAfterReset {
+			state.failed = false
+		}
 		return nil, nil
 	}
 	return nil, fmt.Errorf("unexpected systemd arguments %q", arguments)
@@ -330,6 +371,7 @@ func (manager *fakeFirewallRemovalManager) mutationCalls() []string {
 	mutations := make([]string, 0)
 	for _, call := range manager.calls {
 		if strings.Contains(call, " disable ") || strings.Contains(call, " stop ") ||
+			strings.Contains(call, " reset-failed ") ||
 			strings.HasSuffix(call, " stop") || strings.Contains(call, " del ") || strings.HasPrefix(call, "wg-quick down ") {
 			mutations = append(mutations, call)
 		}
@@ -665,6 +707,45 @@ func TestPrepareFirewallStateForRemovalSystemdStopsDisablesAndReattests_SW2_FWBA
 	}
 }
 
+func TestPrepareFirewallStateForRemovalStopsFailedExactSystemdServiceBeforeAcceptance_SW2_FWBACKEND_001(t *testing.T) {
+	states := defaultSystemdFirewallRemovalStates()
+	states["syswarden-firewall.service"].failed = true
+	manager := &fakeFirewallRemovalManager{states: states}
+	host := newFirewallRemovalTestHost(t, manager, true)
+	postStopScans := 0
+	host.postStopProcessScan = func() error {
+		postStopScans++
+		return nil
+	}
+
+	if err := host.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if postStopScans != 2 {
+		t.Fatalf("post-stop process scans = %d, want 2", postStopScans)
+	}
+	if states["syswarden-firewall.service"].failed {
+		t.Fatal("failed systemd service was accepted without reaching inactive state")
+	}
+	wantMutations := []string{
+		"systemctl disable syswarden-core.service",
+		"systemctl disable syswarden-firewall.service",
+		"systemctl disable wg-quick@wg-syswarden.service",
+		"systemctl stop syswarden-core.service",
+		"systemctl stop syswarden-firewall.service",
+		"systemctl stop wg-quick@wg-syswarden.service",
+	}
+	if got := manager.mutationCalls(); !reflect.DeepEqual(got, wantMutations) {
+		t.Fatalf("failed-service mutation calls = %#v, want %#v", got, wantMutations)
+	}
+	if err := host.reattest(); err != nil {
+		t.Fatal(err)
+	}
+	if postStopScans != 3 {
+		t.Fatalf("post-stop process scans after read-only reattestation = %d, want 3", postStopScans)
+	}
+}
+
 func TestPrepareFirewallStateForRemovalAcceptsOnlyAttestedVendorSystemdDropIns_SW2_FWBACKEND_001(t *testing.T) {
 	states := defaultSystemdFirewallRemovalStates()
 	for _, unit := range []string{
@@ -773,7 +854,7 @@ func TestPrepareFirewallStateForRemovalDetectsQueuedRestartDuringConfirmation_SW
 	manager := &fakeFirewallRemovalManager{states: states}
 	host := newFirewallRemovalTestHost(t, manager, true)
 	err := host.prepare()
-	if err == nil || !strings.Contains(err.Error(), "still active") || !strings.Contains(err.Error(), "may remain disabled") {
+	if err == nil || !strings.Contains(err.Error(), "has not reached inactive state") || !strings.Contains(err.Error(), "may remain disabled") {
 		t.Fatalf("queued restart result = %v", err)
 	}
 }
@@ -788,11 +869,178 @@ func TestReattestFirewallStatePreparedForRemovalRejectsDrift_SW2_FWBACKEND_001(t
 	}}
 	host := newFirewallRemovalTestHost(t, manager, false)
 	err := host.reattest()
-	if err == nil || !strings.Contains(err.Error(), "still active") {
+	if err == nil || !strings.Contains(err.Error(), "has not reached inactive state") {
 		t.Fatalf("active drift result = %v", err)
 	}
 	if got := manager.mutationCalls(); len(got) != 0 {
 		t.Fatalf("read-only reattestation mutated services: %#v", got)
+	}
+}
+
+func TestReattestFirewallStatePreparedForRemovalRejectsFailedSystemdService_SW2_FWBACKEND_001(t *testing.T) {
+	manager := &fakeFirewallRemovalManager{states: map[string]*fakeFirewallRemovalServiceState{
+		"syswarden-core.service":        {loaded: true},
+		"syswarden-firewall.service":    {loaded: true, failed: true},
+		"syswarden.service":             {},
+		"syswarden-reporter.service":    {},
+		"wg-quick@wg-syswarden.service": {},
+	}}
+	host := newFirewallRemovalTestHost(t, manager, false)
+	err := host.reattest()
+	if err == nil || !strings.Contains(err.Error(), "has not reached inactive state") {
+		t.Fatalf("failed read-only reattestation result = %v", err)
+	}
+	if got := manager.mutationCalls(); len(got) != 0 {
+		t.Fatalf("read-only failed-state reattestation mutated services: %#v", got)
+	}
+}
+
+func TestPrepareFirewallStateForRemovalResetsOnlyStickyInitiallyFailedSystemdService_SW2_FWBACKEND_001(t *testing.T) {
+	states := defaultSystemdFirewallRemovalStates()
+	states["syswarden-firewall.service"].failed = true
+	states["syswarden-firewall.service"].stickyFailedAfterStop = true
+	manager := &fakeFirewallRemovalManager{states: states}
+	host := newFirewallRemovalTestHost(t, manager, true)
+	postStopScans := 0
+	host.postStopProcessScan = func() error {
+		postStopScans++
+		return nil
+	}
+	if err := host.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if states["syswarden-firewall.service"].failed {
+		t.Fatal("reset-failed did not normalize the exact sticky failed unit")
+	}
+	if postStopScans != 3 {
+		t.Fatalf("post-stop process scans = %d, want 3 including the pre-reset barrier", postStopScans)
+	}
+	resetCalls := 0
+	for _, call := range manager.mutationCalls() {
+		if call == "systemctl reset-failed syswarden-firewall.service" {
+			resetCalls++
+		}
+	}
+	if resetCalls != 1 {
+		t.Fatalf("reset-failed calls = %d, want one exact reset", resetCalls)
+	}
+}
+
+func TestPrepareFirewallStateForRemovalRejectsStickyFailedStateAfterBoundedReset_SW2_FWBACKEND_001(t *testing.T) {
+	states := defaultSystemdFirewallRemovalStates()
+	state := states["syswarden-firewall.service"]
+	state.failed = true
+	state.stickyFailedAfterStop = true
+	state.stickyFailedAfterReset = true
+	manager := &fakeFirewallRemovalManager{states: states}
+	host := newFirewallRemovalTestHost(t, manager, true)
+	err := host.prepare()
+	if err == nil || !strings.Contains(err.Error(), "verify failed-state normalization") ||
+		!strings.Contains(err.Error(), "want \"inactive\"") {
+		t.Fatalf("sticky failed state after reset result = %v", err)
+	}
+	resetCalls := 0
+	for _, call := range manager.mutationCalls() {
+		if call == "systemctl reset-failed syswarden-firewall.service" {
+			resetCalls++
+		}
+	}
+	if resetCalls != 1 {
+		t.Fatalf("sticky failed state reset calls = %d, want 1", resetCalls)
+	}
+}
+
+func TestPrepareFirewallStateForRemovalRefusesFailedResetWithRuntimePID_SW2_FWBACKEND_001(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		mainPID    string
+		controlPID string
+		want       string
+	}{
+		{name: "main process", mainPID: "4812", want: "MainPID"},
+		{name: "control process", controlPID: "4813", want: "ControlPID"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			states := defaultSystemdFirewallRemovalStates()
+			state := states["syswarden-firewall.service"]
+			state.failed = true
+			state.stickyFailedAfterStop = true
+			state.mainPID = testCase.mainPID
+			state.controlPID = testCase.controlPID
+			manager := &fakeFirewallRemovalManager{states: states}
+			host := newFirewallRemovalTestHost(t, manager, true)
+			err := host.prepare()
+			if err == nil || !strings.Contains(err.Error(), "nonzero "+testCase.want) {
+				t.Fatalf("failed unit runtime PID result = %v", err)
+			}
+			for _, call := range manager.mutationCalls() {
+				if strings.Contains(call, " reset-failed ") {
+					t.Fatalf("runtime-bearing failed unit was reset: %s", call)
+				}
+			}
+		})
+	}
+}
+
+func TestPrepareFirewallStateForRemovalNeverResetsInitiallyActiveUnit_SW2_FWBACKEND_001(t *testing.T) {
+	states := defaultSystemdFirewallRemovalStates()
+	states["syswarden-core.service"].failedAfterStop = true
+	manager := &fakeFirewallRemovalManager{states: states}
+	host := newFirewallRemovalTestHost(t, manager, true)
+	err := host.prepare()
+	if err == nil || !strings.Contains(err.Error(), "has not reached inactive state") {
+		t.Fatalf("active unit becoming failed result = %v", err)
+	}
+	for _, call := range manager.mutationCalls() {
+		if strings.Contains(call, " reset-failed ") {
+			t.Fatalf("initially active unit was reset: %s", call)
+		}
+	}
+}
+
+func TestPrepareFirewallStateForRemovalRejectsAmbiguousPostStopStateWithoutReset_SW2_FWBACKEND_001(t *testing.T) {
+	states := defaultSystemdFirewallRemovalStates()
+	state := states["syswarden-firewall.service"]
+	state.failed = true
+	state.activeStateAfterStopOverride = "activating"
+	manager := &fakeFirewallRemovalManager{states: states}
+	host := newFirewallRemovalTestHost(t, manager, true)
+	err := host.prepare()
+	if err == nil || !strings.Contains(err.Error(), "disallowed ActiveState \"activating\"") {
+		t.Fatalf("ambiguous post-stop state result = %v", err)
+	}
+	for _, call := range manager.mutationCalls() {
+		if strings.Contains(call, " reset-failed ") {
+			t.Fatalf("ambiguous post-stop state was reset: %s", call)
+		}
+	}
+}
+
+func TestPrepareFirewallStateForRemovalReattestsInitiallyFailedUnitBeforeReset_SW2_FWBACKEND_001(t *testing.T) {
+	states := defaultSystemdFirewallRemovalStates()
+	state := states["syswarden-firewall.service"]
+	state.failed = true
+	state.stickyFailedAfterStop = true
+	manager := &fakeFirewallRemovalManager{states: states}
+	host := newFirewallRemovalTestHost(t, manager, true)
+	attestations := 0
+	host.attestSystemdUnit = func(path string) error {
+		if path == "/etc/systemd/system/syswarden-firewall.service" {
+			attestations++
+			if attestations == 2 {
+				return errors.New("unit bytes changed before reset-failed")
+			}
+		}
+		return nil
+	}
+	err := host.prepare()
+	if err == nil || !strings.Contains(err.Error(), "unit bytes changed before reset-failed") {
+		t.Fatalf("pre-reset unit mutation result = %v", err)
+	}
+	for _, call := range manager.mutationCalls() {
+		if strings.Contains(call, " reset-failed ") {
+			t.Fatalf("modified unit reached reset-failed: %s", call)
+		}
 	}
 }
 
@@ -931,6 +1179,14 @@ func TestPrepareFirewallStateForRemovalAttestsUnitsAndWireGuardContentBeforeMuta
 			want: "unexpected unit fragment",
 		},
 		{
+			name: "failed service with modified unit fragment",
+			prepare: func(_ *firewallRemovalPreparationHost, states map[string]*fakeFirewallRemovalServiceState) {
+				states["syswarden-firewall.service"].failed = true
+				states["syswarden-firewall.service"].fragmentPathOverride = "/etc/systemd/system/operator.service"
+			},
+			want: "unexpected unit fragment",
+		},
+		{
 			name: "modified native unit bytes",
 			prepare: func(host *firewallRemovalPreparationHost, states map[string]*fakeFirewallRemovalServiceState) {
 				states["syswarden-core.service"].active = false
@@ -1036,19 +1292,21 @@ func TestPrepareFirewallStateForRemovalRejectsProcessAndInterfaceRacesBeforeMana
 }
 
 func TestPrepareFirewallStateForRemovalRejectsAmbiguousManagerStateAndExecutable_SW2_FWBACKEND_001(t *testing.T) {
-	t.Run("ambiguous service state", func(t *testing.T) {
-		states := defaultSystemdFirewallRemovalStates()
-		states["syswarden-core.service"].activeStateOverride = "failed"
-		manager := &fakeFirewallRemovalManager{states: states}
-		host := newFirewallRemovalTestHost(t, manager, true)
-		err := host.prepare()
-		if err == nil || !strings.Contains(err.Error(), "ambiguous ActiveState") {
-			t.Fatalf("ambiguous state result = %v", err)
-		}
-		if got := manager.mutationCalls(); len(got) != 0 {
-			t.Fatalf("ambiguous state caused mutations: %#v", got)
-		}
-	})
+	for _, activeState := range []string{"activating", "deactivating", "reloading", "maintenance"} {
+		t.Run("ambiguous service state "+activeState, func(t *testing.T) {
+			states := defaultSystemdFirewallRemovalStates()
+			states["syswarden-core.service"].activeStateOverride = activeState
+			manager := &fakeFirewallRemovalManager{states: states}
+			host := newFirewallRemovalTestHost(t, manager, true)
+			err := host.prepare()
+			if err == nil || !strings.Contains(err.Error(), "ambiguous ActiveState") {
+				t.Fatalf("ambiguous state %q result = %v", activeState, err)
+			}
+			if got := manager.mutationCalls(); len(got) != 0 {
+				t.Fatalf("ambiguous state %q caused mutations: %#v", activeState, got)
+			}
+		})
+	}
 
 	t.Run("relative executable", func(t *testing.T) {
 		manager := &fakeFirewallRemovalManager{states: defaultSystemdFirewallRemovalStates()}

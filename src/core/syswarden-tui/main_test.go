@@ -851,6 +851,98 @@ func TestTUIRunFailureIsReportedWithoutPanic_SW_RES_005(t *testing.T) {
 	}
 }
 
+func TestDashboardOperationalStatusReportsSnapshotFreshness_SW_RES_008(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+
+	fresh := DashboardData{Timestamp: now.Add(-2 * dashboardPollInterval).Format(time.RFC3339Nano)}
+	if got := dashboardOperationalStatus(fresh, nil, clock, false); got != "ONLINE" {
+		t.Fatalf("fresh dashboard status = %q, want ONLINE", got)
+	}
+
+	boundary := DashboardData{Timestamp: now.Add(-dashboardSnapshotMaxAge).Format(time.RFC3339Nano)}
+	if got := dashboardOperationalStatus(boundary, nil, clock, false); got != "ONLINE" {
+		t.Fatalf("boundary dashboard status = %q, want ONLINE", got)
+	}
+
+	stale := DashboardData{Timestamp: now.Add(-dashboardSnapshotMaxAge - time.Second).Format(time.RFC3339Nano)}
+	got := dashboardOperationalStatus(stale, nil, clock, false)
+	for _, expected := range []string{"STALE", "last update: 2026-09-09 11:59:29Z", "age: 31s"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("stale dashboard status = %q, missing %q", got, expected)
+		}
+	}
+}
+
+func TestDashboardOperationalStatusRejectsExcessiveFutureTimestamp_SW_RES_008(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	snapshot := DashboardData{Timestamp: now.Add(dashboardSnapshotMaxFutureSkew + time.Second).Format(time.RFC3339Nano)}
+	got := dashboardOperationalStatus(snapshot, nil, clock, false)
+	for _, expected := range []string{"STALE", "last update: 2026-09-09 12:00:31Z", "clock lead: 31s"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("future dashboard status = %q, missing %q", got, expected)
+		}
+	}
+}
+
+func TestDashboardOperationalStatusRecoversWhenFreshSnapshotArrives_SW_RES_008(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	snapshot := DashboardData{Timestamp: now.Add(-time.Hour).Format(time.RFC3339Nano)}
+	if got := dashboardOperationalStatus(snapshot, nil, clock, false); !strings.HasPrefix(got, "STALE | ") {
+		t.Fatalf("initial dashboard status = %q, want STALE", got)
+	}
+
+	snapshot.Timestamp = now.Format(time.RFC3339Nano)
+	if got := dashboardOperationalStatus(snapshot, nil, clock, false); got != "ONLINE" {
+		t.Fatalf("recovered dashboard status = %q, want ONLINE", got)
+	}
+}
+
+func TestDashboardOperationalStatusTreatsMissingOrInvalidTimestampAsStale_SW_RES_008(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	for _, test := range []struct {
+		name      string
+		timestamp string
+		reason    string
+	}{
+		{name: "missing", reason: "missing timestamp"},
+		{name: "invalid", timestamp: "not-a-time", reason: "invalid timestamp"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := dashboardOperationalStatus(DashboardData{Timestamp: test.timestamp}, nil, clock, false)
+			if !strings.HasPrefix(got, "STALE | ") || !strings.Contains(got, test.reason) {
+				t.Fatalf("dashboard status = %q, want STALE with %q", got, test.reason)
+			}
+		})
+	}
+}
+
+func TestDashboardOperationalStatusUsesFailClosedPriority_SW_RES_008(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	degraded := &DashboardProjection{Quality: "degraded", Reason: "display-payload-bound", PayloadsProjected: 1}
+
+	staleSnapshot := DashboardData{
+		Timestamp:  now.Add(-dashboardSnapshotMaxAge - time.Second).Format(time.RFC3339Nano),
+		Projection: degraded,
+	}
+	if got := dashboardOperationalStatus(staleSnapshot, errors.New("read failed"), clock, false); got != "OFFLINE | Telemetry error" {
+		t.Fatalf("offline dashboard status = %q, want telemetry error priority", got)
+	}
+	if got := dashboardOperationalStatus(staleSnapshot, nil, clock, false); !strings.HasPrefix(got, "STALE | ") {
+		t.Fatalf("stale degraded dashboard status = %q, want stale priority", got)
+	}
+
+	freshSnapshot := staleSnapshot
+	freshSnapshot.Timestamp = now.Format(time.RFC3339Nano)
+	if got := dashboardOperationalStatus(freshSnapshot, nil, clock, false); got != "DEGRADED | Display projection" {
+		t.Fatalf("fresh degraded dashboard status = %q, want degraded", got)
+	}
+}
+
 func TestDashboardSelectionRejectsStaleResultsAndAttributesCurrentErrors_SW_RES_002(t *testing.T) {
 	selection := &tuiNodeSelection{ip: "192.0.2.10"}
 	staleNode, staleGeneration := selection.snapshot()

@@ -21,6 +21,7 @@ func TestTopLevelCommandContract(t *testing.T) {
 		"list",
 		"manual",
 		"migrate-config",
+		"recover-wireguard",
 		"reload",
 		"revoke-ssh",
 		"tui",
@@ -97,6 +98,13 @@ func TestCriticalFlagContract(t *testing.T) {
 				"source":  "",
 				"output":  "",
 				"dry-run": "false",
+			},
+		},
+		{
+			command: "recover-wireguard",
+			flags: map[string]string{
+				"apply":       "false",
+				"plan-sha256": "",
 			},
 		},
 		{

@@ -1196,6 +1196,11 @@ rpm_at_root "${CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocon
 assert_package_identity "${CHROOT_ROOT}" syswarden-4.04.3-1.x86_64
 assert_standard_authority "${CHROOT_ROOT}"
 assert_standard_units_unowned "${CHROOT_ROOT}"
+for unit in syswarden-core.service syswarden-firewall.service; do
+    chroot_admin chmod 0644 -- "${CHROOT_ROOT}/etc/systemd/system/${unit}"
+    [[ "$(run_in_chroot "${CHROOT_ROOT}" /usr/bin/stat -Lc '%u:%g:%a:%h' -- \
+        "/etc/systemd/system/${unit}")" == 0:0:644:1 ]]
+done
 printf '%s\n' '[network]' 'whitelist_ips = ["192.0.2.10/32"]' > "${TEST_WORKSPACE}/99-user.toml"
 chroot_admin install -m 0640 -- "${TEST_WORKSPACE}/99-user.toml" \
     "${CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
@@ -1207,6 +1212,16 @@ chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-pending.new" \
 expect_rhel_upgrade_refusal "${CHROOT_ROOT}" 'preset recovery state owned by no RHEL package-owned install'
 chroot_admin rm -f -- "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
 
+for unsafe_legacy_mode in 0640 0664 0755 1644 2644 4644; do
+    chroot_admin chmod "${unsafe_legacy_mode}" -- \
+        "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
+    [[ "$(run_in_chroot "${CHROOT_ROOT}" /usr/bin/stat -Lc '%a' -- \
+        /etc/systemd/system/syswarden-core.service)" == "${unsafe_legacy_mode#0}" ]]
+    expect_rhel_upgrade_refusal "${CHROOT_ROOT}" \
+        "an exact legacy unit with unsupported mode ${unsafe_legacy_mode}"
+    chroot_admin chmod 0644 -- "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
+done
+
 chroot_admin ln -- "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service" \
     "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service.hardlink"
 expect_rhel_upgrade_refusal "${CHROOT_ROOT}" 'a hard-linked legacy unit'
@@ -1216,7 +1231,7 @@ chroot_admin rm -f -- "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
 chroot_admin ln -s -- /tmp/attacker "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
 expect_rhel_upgrade_refusal "${CHROOT_ROOT}" 'a symlinked legacy unit'
 chroot_admin rm -f -- "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
-chroot_admin install -m 0600 -- \
+chroot_admin install -m 0644 -- \
     "${CHROOT_ROOT}/usr/share/syswarden-standard-fixture/syswarden-core.service" \
     "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
 
@@ -1224,7 +1239,7 @@ printf '%s\n' 'substituted' > "${TEST_WORKSPACE}/substituted-unit"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/substituted-unit" \
     "${CHROOT_ROOT}/etc/systemd/system/syswarden-firewall.service"
 expect_rhel_upgrade_refusal "${CHROOT_ROOT}" 'a byte-substituted legacy unit'
-chroot_admin install -m 0600 -- \
+chroot_admin install -m 0644 -- \
     "${CHROOT_ROOT}/usr/share/syswarden-standard-fixture/syswarden-firewall.service" \
     "${CHROOT_ROOT}/etc/systemd/system/syswarden-firewall.service"
 

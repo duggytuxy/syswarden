@@ -1,13 +1,12 @@
 package cmd
 
 import (
-	"bufio"
-	"encoding/json"
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"regexp"
-	"strings"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -19,52 +18,195 @@ import (
 var alertsCmd = &cobra.Command{
 	Use:   "alerts",
 	Short: "Stream kernel and WAAP alert events",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, stop := alertSignalContext(cmd.Context())
+		defer stop()
 		if !term.IsTerminal(int(os.Stdout.Fd())) {
-			runTextModeFallback()
-			return
+			runTextModeFallback(ctx)
+			return nil
 		}
-
-		app := tview.NewApplication()
-		table := tview.NewTable().
-			SetBorders(false).
-			SetSelectable(true, false).
-			SetFixed(1, 0) // Keep header fixed
-
-		// Add header row
-		headers := []string{"TIMESTAMP", "MODULE", "ACTION", "SOURCE IP", "TARGET (PORT/JAIL/SERVICES)"}
-		for col, header := range headers {
-			table.SetCell(0, col, tview.NewTableCell(header).
-				SetTextColor(tcell.ColorGray).
-				SetSelectable(false).
-				SetAlign(tview.AlignCenter).
-				SetExpansion(1)) // Ensure even expansion
-		}
-
-		// Frame wrapping the table
-		frame := tview.NewFrame(table).
-			SetBorders(0, 0, 0, 0, 0, 0).
-			AddText(" [ SYSWARDEN CLI DASHBOARD (Live Alerts) ] ", true, tview.AlignCenter, tcell.ColorGreen).
-			AddText(" Tailing live Threat Intelligence Logs... (Press Ctrl+C to stop) ", false, tview.AlignCenter, tcell.ColorYellow)
-
-		frame.SetBorder(true).
-			SetBorderColor(tcell.ColorBlue).
-			SetTitleColor(tcell.ColorWhite).
-			SetTitleAlign(tview.AlignCenter)
-
-		// Start streams
-		go StreamKernelLogs(app, table)
-		go streamWAF(app, table)
-
-		// Run TUI app
-		if err := app.SetRoot(frame, true).EnableMouse(true).Run(); err != nil {
-			panic(err)
-		}
+		return runAlertsTUI(ctx)
 	},
 }
 
-func addRow(app *tview.Application, table *tview.Table, date, module, action, src, targetInfo string, modColor, actColor tcell.Color) {
-	app.QueueUpdateDraw(func() {
+const alertUIQueueCapacity = 128
+
+type alertUIUpdate struct {
+	redraw bool
+	apply  func()
+}
+
+type alertUIQueue struct {
+	ctx     context.Context
+	app     *tview.Application
+	updates chan alertUIUpdate
+	done    chan struct{}
+}
+
+func newAlertUIQueue(ctx context.Context, app *tview.Application) *alertUIQueue {
+	return &alertUIQueue{
+		ctx:     ctx,
+		app:     app,
+		updates: make(chan alertUIUpdate, alertUIQueueCapacity),
+		done:    make(chan struct{}),
+	}
+}
+
+func (queue *alertUIQueue) run() {
+	defer close(queue.done)
+	for {
+		select {
+		case <-queue.ctx.Done():
+			return
+		case update := <-queue.updates:
+			if queue.ctx.Err() != nil {
+				return
+			}
+			if update.redraw {
+				queue.app.QueueUpdateDraw(update.apply)
+			} else {
+				queue.app.QueueUpdate(update.apply)
+			}
+		}
+	}
+}
+
+func (queue *alertUIQueue) enqueue(redraw bool, update func()) bool {
+	if queue.ctx.Err() != nil {
+		return false
+	}
+	select {
+	case <-queue.ctx.Done():
+		return false
+	case queue.updates <- alertUIUpdate{redraw: redraw, apply: update}:
+		return true
+	}
+}
+
+func alertSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+}
+
+type alertTUISource func(context.Context, *alertUIQueue, *tview.Table, *tview.TextView)
+
+func runAlertsTUI(parent context.Context) error {
+	return runAlertsTUIWithSources(parent, tview.NewApplication(), StreamKernelLogs, streamWAF)
+}
+
+func runAlertsTUIWithSources(parent context.Context, app *tview.Application, kernelSource, wafSource alertTUISource) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	table := tview.NewTable().
+		SetBorders(false).
+		SetSelectable(true, false).
+		SetFixed(1, 0) // Keep header fixed
+
+		// Add header row.
+	headers := []string{"TIMESTAMP", "MODULE", "ACTION", "SOURCE IP", "TARGET (PORT/JAIL/SERVICES)"}
+	for col, header := range headers {
+		table.SetCell(0, col, tview.NewTableCell(header).
+			SetTextColor(tcell.ColorGray).
+			SetSelectable(false).
+			SetAlign(tview.AlignCenter).
+			SetExpansion(1)) // Ensure even expansion
+	}
+
+	kernelStatus := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetTextColor(tcell.ColorYellow).
+		SetText(formatAlertSourceStatus("KERNEL", alertSourceStatus{}))
+	wafStatus := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetTextColor(tcell.ColorYellow).
+		SetText(formatAlertSourceStatus("WAF", alertSourceStatus{}))
+	content := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(kernelStatus, 1, 0, false).
+		AddItem(wafStatus, 1, 0, false).
+		AddItem(table, 0, 1, true)
+
+		// Frame wrapping the source status and table.
+	frame := tview.NewFrame(content).
+		SetBorders(0, 0, 0, 0, 0, 0).
+		AddText(" [ SYSWARDEN CLI DASHBOARD (Live Alerts) ] ", true, tview.AlignCenter, tcell.ColorGreen).
+		AddText(" Live-only sources start at the current boundary. Press Ctrl+C to stop. ", false, tview.AlignCenter, tcell.ColorYellow)
+
+	frame.SetBorder(true).
+		SetBorderColor(tcell.ColorBlue).
+		SetTitleColor(tcell.ColorWhite).
+		SetTitleAlign(tview.AlignCenter)
+
+	uiQueue := newAlertUIQueue(ctx, app)
+	var streams sync.WaitGroup
+	var startStreams sync.Once
+	uiStarted := false
+	start := func() {
+		startStreams.Do(func() {
+			uiStarted = true
+			go uiQueue.run()
+			streams.Add(2)
+			go func() {
+				defer streams.Done()
+				kernelSource(ctx, uiQueue, table, kernelStatus)
+			}()
+			go func() {
+				defer streams.Done()
+				wafSource(ctx, uiQueue, table, wafStatus)
+			}()
+		})
+	}
+
+	applicationReady := make(chan struct{})
+	applicationReturned := make(chan struct{})
+	var markApplicationReady sync.Once
+	shutdownDone := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		// Prevent a late first draw from adding workers concurrently with Wait.
+		startStreams.Do(func() {})
+		streams.Wait()
+		if uiStarted {
+			select {
+			case <-uiQueue.done:
+			case <-applicationReturned:
+				// An EventError can end tview while an update is queued. Stream
+				// reaping must not depend on that UI worker returning.
+			}
+		}
+		select {
+		case <-applicationReady:
+			app.Stop()
+		case <-applicationReturned:
+			// Run failed before the first draw, so there is no screen to stop.
+		}
+		close(shutdownDone)
+	}()
+
+	app.SetAfterDrawFunc(func(tcell.Screen) {
+		markApplicationReady.Do(func() { close(applicationReady) })
+		start()
+	})
+	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyCtrlC {
+			// Keep the tview event loop alive until the context-bound followers
+			// have exited and been reaped. This lets any already queued update
+			// complete instead of stranding QueueUpdate callers after Run.
+			cancel()
+			return nil
+		}
+		return event
+	})
+
+	err := app.SetRoot(frame, true).EnableMouse(true).Run()
+	close(applicationReturned)
+	cancel()
+	<-shutdownDone
+	return err
+}
+
+func addRow(queue *alertUIQueue, table *tview.Table, redraw bool, date, module, action, src, targetInfo string, modColor, actColor tcell.Color) bool {
+	update := func() {
 		row := table.GetRowCount()
 		table.SetCell(row, 0, tview.NewTableCell(date).SetTextColor(tcell.ColorGray).SetAlign(tview.AlignCenter))
 		table.SetCell(row, 1, tview.NewTableCell(module).SetTextColor(modColor).SetAlign(tview.AlignCenter))
@@ -74,261 +216,98 @@ func addRow(app *tview.Application, table *tview.Table, date, module, action, sr
 
 		// Auto scroll to the end
 		table.ScrollToEnd()
-	})
+	}
+	return queue.enqueue(redraw, update)
 }
 
-func StreamKernelLogs(app *tview.Application, table *tview.Table) {
-	cmd := getKernelLogCommand()
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		return
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	ipRegex := regexp.MustCompile(`SRC=([0-9a-fA-F:.]+)`)
-	portRegex := regexp.MustCompile(`DPT=([0-9]+)`)
-	protoRegex := regexp.MustCompile(`PROTO=([A-Za-z0-9]+)`)
-	modRegex := regexp.MustCompile(`\[(SYSWARDEN-[A-Za-z-]+|CATCH-ALL)\]`)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.Contains(line, "SYSWARDEN-") && !strings.Contains(line, "CATCH-ALL") {
-			continue
-		}
-
-		date := time.Now().Format("2006-01-02 15:04:05")
-		module := "SYSWARDEN-DROP"
-		modColor := tcell.ColorBlue
-		if strings.Contains(line, "[CATCH-ALL]") {
-			module = "SYSWARDEN-CATCH"
-			modColor = tcell.ColorDarkCyan
-		} else if m := modRegex.FindStringSubmatch(line); len(m) > 1 {
-			module = m[1]
-		}
-
-		src := "N/A"
-		if m := ipRegex.FindStringSubmatch(line); len(m) > 1 {
-			src = m[1]
-		}
-
-		targetInfo := "PORT: N/A"
-		if m := portRegex.FindStringSubmatch(line); len(m) > 1 {
-			targetInfo = "PORT: " + m[1]
-		} else if m := protoRegex.FindStringSubmatch(line); len(m) > 1 {
-			targetInfo = "PROTO: " + m[1]
-		}
-
-		addRow(app, table, date, module, "BLOCKED", src, targetInfo, modColor, tcell.ColorRed)
-	}
+func StreamKernelLogs(ctx context.Context, queue *alertUIQueue, table *tview.Table, statusView *tview.TextView) {
+	runKernelSource(
+		ctx,
+		func(phase alertStreamPhase, line string) bool {
+			row, ok := parseKernelAlertRow(line, phase, time.Now())
+			if !ok {
+				return false
+			}
+			return addRow(queue, table, false, row.Date, row.Module, string(row.Phase)+" "+row.Action, row.Source, row.Target, row.ModuleColor, row.ActionColor)
+		},
+		func(status alertSourceStatus) {
+			queue.enqueue(true, func() {
+				statusView.SetText(formatAlertSourceStatus("KERNEL", status))
+			})
+		},
+	)
 }
 
-func streamWAF(app *tview.Application, table *tview.Table) {
-	var cmd *exec.Cmd
-	if _, err := exec.LookPath("stdbuf"); err == nil {
-		cmd = exec.Command("stdbuf", "-oL", "tail", "-F", "-n", "10", "/var/log/syswarden/waf.json") // #nosec
-	} else {
-		cmd = exec.Command("tail", "-F", "-n", "10", "/var/log/syswarden/waf.json") // #nosec
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		return
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := scanner.Text()
-		var wafEvent struct {
-			Action    string `json:"action"`
-			Timestamp string `json:"timestamp"`
-			IP        string `json:"ip"`
-			Jail      string `json:"jail"`
-			Payload   string `json:"payload"`
-		}
-		if err := json.Unmarshal([]byte(line), &wafEvent); err != nil {
-			addRow(app, table, time.Now().Format("2006-01-02 15:04:05"), "SYSWARDEN ERR", "JSON", err.Error(), line, tcell.ColorRed, tcell.ColorRed)
-			continue
-		}
-
-		date := time.Now().Format("2006-01-02 15:04:05")
-		if t, err := time.Parse(time.RFC3339, wafEvent.Timestamp); err == nil {
-			date = t.Format("2006-01-02 15:04:05")
-		}
-
-		switch wafEvent.Action {
-		case "ALLOWED":
-			info := "SERVICE: " + wafEvent.Jail
-			if wafEvent.Payload != "" && wafEvent.Jail == "sshd" {
-				match := regexp.MustCompile(`Accepted (?:password|publickey) for (\S+) from`).FindStringSubmatch(wafEvent.Payload)
-				if len(match) > 1 {
-					info += " | " + match[1]
-				}
+func streamWAF(ctx context.Context, queue *alertUIQueue, table *tview.Table, statusView *tview.TextView) {
+	runWAFSource(
+		ctx,
+		func(phase alertStreamPhase, line string) bool {
+			row, err := parseWAFAlertRow(line, phase, time.Now())
+			if err != nil {
+				addRow(queue, table, true, time.Now().Format("2006-01-02 15:04:05"), "SYSWARDEN ERR", string(phase)+" JSON ERROR", err.Error(), boundedSingleLine(line), tcell.ColorRed, tcell.ColorRed)
+				return false
 			}
-			addRow(app, table, date, "SYSWARDEN WAF", "ALLOWED", wafEvent.IP, info, tcell.ColorGreen, tcell.ColorGreen)
-		case "COMPLIANCE-OK":
-			addRow(app, table, date, "SYSWARDEN WAF", "COMPLIANCE-OK", wafEvent.IP, wafEvent.Payload, tcell.ColorGreen, tcell.ColorGreen)
-		case "COMPLIANCE-DRIFT":
-			addRow(app, table, date, "SYSWARDEN WAF", "COMPLIANCE-DRIFT", wafEvent.IP, wafEvent.Payload, tcell.ColorRed, tcell.ColorRed)
-		case "SIMULATED-BAN":
-			info := "JAIL: " + wafEvent.Jail
-			addRow(app, table, date, "SYSWARDEN WAF", "SIMULATED-BAN", wafEvent.IP, info, tcell.ColorOrange, tcell.ColorOrange)
-		case "SHADOW-ALERT":
-			info := "JAIL: " + wafEvent.Jail
-			addRow(app, table, date, "INSIDER THREAT", "SHADOW-ALERT", wafEvent.IP, info, tcell.ColorOrange, tcell.ColorOrange)
-		case "DETECTED":
-			info := "JAIL: " + wafEvent.Jail
-			addRow(app, table, date, "SYSWARDEN WAF", "DETECTED", wafEvent.IP, info, tcell.ColorYellow, tcell.ColorYellow)
-		default:
-			info := "JAIL: " + wafEvent.Jail
-			if wafEvent.Payload != "" {
-				if wafEvent.Jail == "L3-PORTSCAN" || wafEvent.Jail == "L2-ARP-FLOOD" {
-					portRegex := regexp.MustCompile(`DPT=([0-9]+)`)
-					protoRegex := regexp.MustCompile(`PROTO=([A-Za-z0-9]+)`)
-
-					if m := portRegex.FindStringSubmatch(wafEvent.Payload); len(m) > 1 {
-						info += " | PORT: " + m[1]
-					} else if m := protoRegex.FindStringSubmatch(wafEvent.Payload); len(m) > 1 {
-						info += " | PROTO: " + m[1]
-					}
-				}
-			}
-			addRow(app, table, date, "SYSWARDEN WAF", "BANNED", wafEvent.IP, info, tcell.ColorPurple, tcell.ColorRed)
-		}
-	}
+			return addRow(queue, table, false, row.Date, row.Module, string(row.Phase)+" "+row.Action, row.Source, row.Target, row.ModuleColor, row.ActionColor)
+		},
+		func(status alertSourceStatus) {
+			queue.enqueue(true, func() {
+				statusView.SetText(formatAlertSourceStatus("WAF", status))
+			})
+		},
+	)
 }
 
 func init() {
 	rootCmd.AddCommand(alertsCmd)
 }
 
-func runTextModeFallback() {
+func runTextModeFallback(ctx context.Context) {
 	fmt.Println("=== SYSWARDEN TEXT MODE FALLBACK (Non-Interactive) ===")
-	fmt.Println("Streaming live telemetry to standard output...")
+	fmt.Println("Streaming new LIVE telemetry from the current boundary to standard output...")
 
-	go StreamKernelLogsText()
-	go streamWAFText()
+	var streams sync.WaitGroup
+	streams.Add(2)
+	go func() {
+		defer streams.Done()
+		StreamKernelLogsText(ctx)
+	}()
+	go func() {
+		defer streams.Done()
+		streamWAFText(ctx)
+	}()
 
-	// Block forever
-	select {}
+	<-ctx.Done()
+	streams.Wait()
 }
 
-func StreamKernelLogsText() {
-	cmd := getKernelLogCommand()
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		return
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	ipRegex := regexp.MustCompile(`SRC=([0-9a-fA-F:.]+)`)
-	portRegex := regexp.MustCompile(`DPT=([0-9]+)`)
-	protoRegex := regexp.MustCompile(`PROTO=([A-Za-z0-9]+)`)
-	modRegex := regexp.MustCompile(`\[(SYSWARDEN-[A-Za-z-]+|CATCH-ALL)\]`)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.Contains(line, "SYSWARDEN-") && !strings.Contains(line, "CATCH-ALL") {
-			continue
-		}
-
-		date := time.Now().Format("2006-01-02 15:04:05")
-		module := "SYSWARDEN-DROP"
-		if strings.Contains(line, "[CATCH-ALL]") {
-			module = "SYSWARDEN-CATCH"
-		} else if m := modRegex.FindStringSubmatch(line); len(m) > 1 {
-			module = m[1]
-		}
-
-		src := "N/A"
-		if m := ipRegex.FindStringSubmatch(line); len(m) > 1 {
-			src = m[1]
-		}
-
-		targetInfo := "PORT: N/A"
-		if m := portRegex.FindStringSubmatch(line); len(m) > 1 {
-			targetInfo = "PORT: " + m[1]
-		} else if m := protoRegex.FindStringSubmatch(line); len(m) > 1 {
-			targetInfo = "PROTO: " + m[1]
-		}
-
-		fmt.Printf("[%s] [%s] [BLOCKED] %s -> TARGET: %s\n", date, module, src, targetInfo)
-	}
+func StreamKernelLogsText(ctx context.Context) {
+	reportStatus := newAlertTextStatusReporter(os.Stdout, "KERNEL")
+	runKernelSource(
+		ctx,
+		func(phase alertStreamPhase, line string) bool {
+			row, ok := parseKernelAlertRow(line, phase, time.Now())
+			if ok {
+				fmt.Println(formatAlertTextRow(row))
+			}
+			return ok
+		},
+		reportStatus,
+	)
 }
 
-func streamWAFText() {
-	var cmd *exec.Cmd
-	if _, err := exec.LookPath("stdbuf"); err == nil {
-		cmd = exec.Command("stdbuf", "-oL", "tail", "-F", "-n", "10", "/var/log/syswarden/waf.json") // #nosec
-	} else {
-		cmd = exec.Command("tail", "-F", "-n", "10", "/var/log/syswarden/waf.json") // #nosec
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		return
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := scanner.Text()
-		var wafEvent struct {
-			Action    string `json:"action"`
-			Timestamp string `json:"timestamp"`
-			IP        string `json:"ip"`
-			Jail      string `json:"jail"`
-			Payload   string `json:"payload"`
-		}
-		if err := json.Unmarshal([]byte(line), &wafEvent); err != nil {
-			fmt.Printf("[%s] [SYSWARDEN ERR] [JSON] %s -> %s\n", time.Now().Format("2006-01-02 15:04:05"), err.Error(), line)
-			continue
-		}
-
-		date := time.Now().Format("2006-01-02 15:04:05")
-		if t, err := time.Parse(time.RFC3339, wafEvent.Timestamp); err == nil {
-			date = t.Format("2006-01-02 15:04:05")
-		}
-
-		switch wafEvent.Action {
-		case "ALLOWED":
-			info := "SERVICE: " + wafEvent.Jail
-			if wafEvent.Payload != "" && wafEvent.Jail == "sshd" {
-				match := regexp.MustCompile(`Accepted (?:password|publickey) for (\S+) from`).FindStringSubmatch(wafEvent.Payload)
-				if len(match) > 1 {
-					info += " | " + match[1]
-				}
+func streamWAFText(ctx context.Context) {
+	reportStatus := newAlertTextStatusReporter(os.Stdout, "WAF")
+	runWAFSource(
+		ctx,
+		func(phase alertStreamPhase, line string) bool {
+			row, err := parseWAFAlertRow(line, phase, time.Now())
+			if err != nil {
+				fmt.Printf("[%s] [%s] [SYSWARDEN ERR] [JSON ERROR] %s -> %s\n", time.Now().Format("2006-01-02 15:04:05"), phase, err.Error(), boundedSingleLine(line))
+				return false
 			}
-			fmt.Printf("[%s] [SYSWARDEN L7] [ALLOWED] %s -> %s\n", date, wafEvent.IP, info)
-		case "SHADOW-ALERT":
-			info := "JAIL: " + wafEvent.Jail
-			fmt.Printf("[%s] [INSIDER THREAT] [SHADOW-ALERT] %s -> %s\n", date, wafEvent.IP, info)
-		case "DETECTED":
-			info := "JAIL: " + wafEvent.Jail
-			fmt.Printf("[%s] [SYSWARDEN L7] [DETECTED] %s -> %s\n", date, wafEvent.IP, info)
-		default:
-			info := "JAIL: " + wafEvent.Jail
-			if wafEvent.Payload != "" {
-				if wafEvent.Jail == "L3-PORTSCAN" || wafEvent.Jail == "L2-ARP-FLOOD" {
-					portRegex := regexp.MustCompile(`DPT=([0-9]+)`)
-					protoRegex := regexp.MustCompile(`PROTO=([A-Za-z0-9]+)`)
-
-					if m := portRegex.FindStringSubmatch(wafEvent.Payload); len(m) > 1 {
-						info += " | PORT: " + m[1]
-					} else if m := protoRegex.FindStringSubmatch(wafEvent.Payload); len(m) > 1 {
-						info += " | PROTO: " + m[1]
-					}
-				}
-			}
-			fmt.Printf("[%s] [SYSWARDEN L7] [BANNED] %s -> %s\n", date, wafEvent.IP, info)
-		}
-	}
+			fmt.Println(formatAlertTextRow(row))
+			return true
+		},
+		reportStatus,
+	)
 }

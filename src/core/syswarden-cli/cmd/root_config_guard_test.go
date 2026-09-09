@@ -374,3 +374,46 @@ func TestCompletionSkipsAutomaticConfigurationAndMatchesLegacyAttestation_SW2_PK
 		)
 	}
 }
+
+func TestRecoverWireGuardBypassesDegradedConfigTombstoneAndGenericRecovery_SW2_WGRECOVERY_001(t *testing.T) {
+	valid := filepath.Join(t.TempDir(), "valid.conf")
+	if err := os.WriteFile(valid, []byte("SYSWARDEN_HA_ENABLED=n\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = config.ParseConfig(valid) })
+	if err := config.ParseConfig(filepath.Join(t.TempDir(), "missing.conf")); err == nil {
+		t.Fatal("missing configuration unexpectedly loaded")
+	}
+
+	previousInit := initConfigHook
+	previousRecovery := recoverPendingFirewallTransactionHook
+	previousTombstone := inspectRemovalTombstone
+	t.Cleanup(func() {
+		initConfigHook = previousInit
+		recoverPendingFirewallTransactionHook = previousRecovery
+		inspectRemovalTombstone = previousTombstone
+	})
+	initializations := 0
+	recoveries := 0
+	tombstoneInspections := 0
+	initConfigHook = func() { initializations++ }
+	recoverPendingFirewallTransactionHook = func() error { recoveries++; return nil }
+	inspectRemovalTombstone = func() (bool, error) {
+		tombstoneInspections++
+		return true, fmt.Errorf("retained removal evidence")
+	}
+
+	if err := rootCmd.PersistentPreRunE(recoverWireGuardCmd, nil); err != nil {
+		t.Fatalf("explicit WireGuard recovery pre-run was blocked: %v", err)
+	}
+	if initializations != 0 || recoveries != 0 || tombstoneInspections != 0 {
+		t.Fatalf(
+			"recovery routing initialized config/generic recovery/tombstone inspection = %d/%d/%d",
+			initializations, recoveries, tombstoneInspections,
+		)
+	}
+	if commandRequiresAutomaticConfigLoad(recoverWireGuardCmd) ||
+		commandRequiresEarlyFirewallRecovery(recoverWireGuardCmd) {
+		t.Fatal("explicit WireGuard recovery is attached to an unsafe generic preparation path")
+	}
+}
