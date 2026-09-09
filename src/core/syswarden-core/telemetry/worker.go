@@ -1192,9 +1192,16 @@ func publishDashboardData(dataFile string, data DashboardData) error {
 	return nil
 }
 
+func publishDashboardDataWithClock(dataFile string, data DashboardData, clock func() time.Time) error {
+	if clock == nil {
+		return fmt.Errorf("dashboard publication clock is unavailable")
+	}
+	data.Timestamp = clock().UTC().Format(time.RFC3339)
+	return publishDashboardData(dataFile, data)
+}
+
 func generateTelemetry(fwManager FirewallManager) {
 	data := DashboardData{
-		Timestamp:     time.Now().UTC().Format(time.RFC3339),
 		GithubStars:   getGithubStars(),
 		GithubRelease: getGithubRelease(),
 		ProfileName:   viper.GetString("user.profile_name"),
@@ -1208,7 +1215,7 @@ func generateTelemetry(fwManager FirewallManager) {
 	uiDir := "/var/lib/syswarden/ui"
 	_ = os.MkdirAll(uiDir, 0750)
 	dataFile := filepath.Join(uiDir, "data.json")
-	if err := publishDashboardData(dataFile, data); err != nil {
+	if err := publishDashboardDataWithClock(dataFile, data, time.Now); err != nil {
 		log.Printf("[Telemetry Worker] Error publishing telemetry data: %v", err)
 	}
 }

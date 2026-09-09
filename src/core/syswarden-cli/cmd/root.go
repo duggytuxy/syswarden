@@ -124,8 +124,11 @@ func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
 	if cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
 		return false
 	}
-	if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "completion" {
-		return false
+	if topLevel := topLevelCommand(cmd); topLevel != nil {
+		switch topLevel.Name() {
+		case "completion", "recover-wireguard":
+			return false
+		}
 	}
 	return true
 }
@@ -160,7 +163,7 @@ func commandAllowedDuringRemoval(cmd *cobra.Command) bool {
 		return true
 	}
 	switch topLevel.Name() {
-	case "prepare-package-removal", "uninstall":
+	case "prepare-package-removal", "recover-wireguard", "uninstall":
 		return true
 	}
 	if _, allowed := removalStateReadOnlyCommands[topLevel.Name()]; allowed {
@@ -199,6 +202,7 @@ var degradedConfigAllowlist = map[string]struct{}{
 	"manual":                  {},
 	"migrate-config":          {},
 	"prepare-package-removal": {},
+	"recover-wireguard":       {},
 	"uninstall":               {},
 }
 

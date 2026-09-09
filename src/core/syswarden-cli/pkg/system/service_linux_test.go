@@ -613,6 +613,7 @@ func systemdCoreMigrationArtifact(path string) serviceArtifact {
 		historicalContent:       historicalV4028SystemdCoreService,
 		historicalContentLength: historicalV4028SystemdCoreServiceLength,
 		historicalContentSHA256: historicalV4028SystemdCoreServiceSHA256,
+		historicalModes:         []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 	}
 }
 
@@ -749,6 +750,88 @@ func TestPublishSystemdServicesMigratesExactV4028UnitsAtomicallyAndIdempotently(
 		t.Fatalf("idempotent systemd publication replaced the current firewall unit: %v", err)
 	}
 	assertNoServiceMigrationArtifacts(t, unitDirectory)
+}
+
+func TestPublishSystemdServicesNormalizesExactMode0644UnitsAtomicallyAndIdempotently(t *testing.T) {
+	for _, testCase := range []struct {
+		name            string
+		coreContent     string
+		firewallContent string
+	}{
+		{
+			name:            "current bytes",
+			coreContent:     systemdCoreService,
+			firewallContent: systemdFirewallService,
+		},
+		{
+			name:            "historical bytes",
+			coreContent:     historicalV4028SystemdCoreService,
+			firewallContent: historicalV4028SystemdFirewallService,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			unitDirectory, wantsDirectory := withSystemdPublicationTestPaths(t)
+			corePath := filepath.Join(unitDirectory, "syswarden-core.service")
+			firewallPath := filepath.Join(unitDirectory, "syswarden-firewall.service")
+			mustWriteFile(t, corePath, testCase.coreContent)
+			mustWriteFile(t, firewallPath, testCase.firewallContent)
+			mustChmodTestPath(t, corePath, historicalSourceSystemdUnitMode)
+			mustChmodTestPath(t, firewallPath, historicalSourceSystemdUnitMode)
+			beforeCore, err := os.Lstat(corePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeFirewall, err := os.Lstat(firewallPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := publishSystemdServices(); err != nil {
+				t.Fatalf("normalize exact 0644 systemd units: %v", err)
+			}
+			afterCore, err := os.Lstat(corePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterFirewall, err := os.Lstat(firewallPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if os.SameFile(beforeCore, afterCore) || os.SameFile(beforeFirewall, afterFirewall) {
+				t.Fatal("0644 systemd unit was not atomically replaced")
+			}
+			if afterCore.Mode().Perm() != sourceSystemdUnitMode ||
+				afterFirewall.Mode().Perm() != sourceSystemdUnitMode {
+				t.Fatalf("normalized unit modes = %04o/%04o, want 0600", afterCore.Mode().Perm(), afterFirewall.Mode().Perm())
+			}
+			if got := string(mustReadTestFile(t, corePath)); got != systemdCoreService {
+				t.Fatalf("normalized core bytes = %q", got)
+			}
+			if got := string(mustReadTestFile(t, firewallPath)); got != systemdFirewallService {
+				t.Fatalf("normalized firewall bytes = %q", got)
+			}
+			assertServiceEnablementTarget(
+				t, filepath.Join(wantsDirectory, "syswarden-core.service"), "../syswarden-core.service",
+			)
+			assertServiceEnablementTarget(
+				t, filepath.Join(wantsDirectory, "syswarden-firewall.service"), "../syswarden-firewall.service",
+			)
+			assertNoServiceMigrationArtifacts(t, unitDirectory)
+
+			if err := publishSystemdServices(); err != nil {
+				t.Fatalf("idempotent publication after 0644 normalization: %v", err)
+			}
+			finalCore, err := os.Lstat(corePath)
+			if err != nil || !os.SameFile(afterCore, finalCore) {
+				t.Fatalf("idempotent publication replaced normalized core: %v", err)
+			}
+			finalFirewall, err := os.Lstat(firewallPath)
+			if err != nil || !os.SameFile(afterFirewall, finalFirewall) {
+				t.Fatalf("idempotent publication replaced normalized firewall: %v", err)
+			}
+			assertNoServiceMigrationArtifacts(t, unitDirectory)
+		})
+	}
 }
 
 func TestPublishOpenRCServicesMigratesExactV4028UnitsAtomicallyAndIdempotently(t *testing.T) {
@@ -889,7 +972,7 @@ func TestPublishMigratableServiceFileRefusesNonExactHistoricalState(t *testing.T
 			prepare: func(t *testing.T, path string) string {
 				t.Helper()
 				mustWriteFile(t, path, historicalV4028SystemdCoreService)
-				mustChmodTestPath(t, path, 0644)
+				mustChmodTestPath(t, path, 0664)
 				return historicalV4028SystemdCoreService
 			},
 		},
@@ -898,7 +981,7 @@ func TestPublishMigratableServiceFileRefusesNonExactHistoricalState(t *testing.T
 			prepare: func(t *testing.T, path string) string {
 				t.Helper()
 				mustWriteFile(t, path, historicalV4028SystemdCoreService)
-				if err := os.Chmod(path, 0600|os.ModeSetuid); err != nil {
+				if err := os.Chmod(path, historicalSourceSystemdUnitMode|os.ModeSetuid); err != nil {
 					t.Fatal(err)
 				}
 				return historicalV4028SystemdCoreService
@@ -909,6 +992,7 @@ func TestPublishMigratableServiceFileRefusesNonExactHistoricalState(t *testing.T
 			prepare: func(t *testing.T, path string) string {
 				t.Helper()
 				mustWriteFile(t, path, historicalV4028SystemdCoreService)
+				mustChmodTestPath(t, path, historicalSourceSystemdUnitMode)
 				if err := os.Link(path, path+".operator-link"); err != nil {
 					t.Fatal(err)
 				}
@@ -930,6 +1014,26 @@ func TestPublishMigratableServiceFileRefusesNonExactHistoricalState(t *testing.T
 			assertNoServiceMigrationArtifacts(t, directory)
 		})
 	}
+
+	t.Run("wrong-owner", func(t *testing.T) {
+		if os.Geteuid() != 0 {
+			t.Skip("changing fixture ownership requires root")
+		}
+		directory := t.TempDir()
+		path := filepath.Join(directory, "syswarden-core.service")
+		mustWriteFile(t, path, historicalV4028SystemdCoreService)
+		mustChmodTestPath(t, path, historicalSourceSystemdUnitMode)
+		if err := os.Chown(path, 1, 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := publishServiceArtifacts([]serviceArtifact{systemdCoreMigrationArtifact(path)}); err == nil {
+			t.Fatal("exact 0644 service file with a different owner was accepted")
+		}
+		if got := string(mustReadTestFile(t, path)); got != historicalV4028SystemdCoreService {
+			t.Fatalf("wrong-owner service file changed: %q", got)
+		}
+		assertNoServiceMigrationArtifacts(t, directory)
+	})
 }
 
 func TestPublishSystemdServicesPreservesExactV4028Enablements(t *testing.T) {

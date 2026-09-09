@@ -76,6 +76,7 @@ func TestRemovalTombstoneKeepsReadOnlyAndRemovalRecoveryCommandsUsable_SW2_FWBAC
 		{"ha-fence", "status"},
 		{"ha-fence", "manifest", "verify"},
 		{"prepare-package-removal"},
+		{"recover-wireguard"},
 		{"uninstall"},
 	}
 	for _, path := range allowed {

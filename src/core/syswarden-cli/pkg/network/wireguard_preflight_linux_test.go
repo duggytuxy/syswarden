@@ -139,6 +139,9 @@ func TestDisabledPreflightRefusesUnattestedTableWithoutMutation_SW2_WG_001(t *te
 	if err == nil || !errors.Is(err, provenanceMismatch) || !errors.Is(err, unmarked) {
 		t.Fatalf("disabled unattested-table preflight = %v", err)
 	}
+	if !strings.Contains(err.Error(), "sudo syswarden recover-wireguard") {
+		t.Fatalf("disabled unattested-table preflight omits the explicit read-only recovery path: %v", err)
+	}
 	if harness.serviceState != stateBefore || harness.rollbackCalls != 0 || harness.nftCleanupCalls != 0 {
 		t.Fatalf(
 			"disabled refusal mutated state: state=%#v rollback=%d cleanup=%d",

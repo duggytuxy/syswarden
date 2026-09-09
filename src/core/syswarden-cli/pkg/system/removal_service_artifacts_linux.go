@@ -13,6 +13,7 @@ type preparedSystemdServiceArtifact struct {
 	path                string
 	content             string
 	mode                os.FileMode
+	allowedModes        []os.FileMode
 	allowedTargets      []string
 	requiredServicePath string
 	packageDropIn       bool
@@ -49,8 +50,14 @@ func productionPreparedSystemdServiceArtifactHost() preparedSystemdServiceArtifa
 	firewallPath := filepath.Join(serviceSystemdUnitDir, "syswarden-firewall.service")
 	return preparedSystemdServiceArtifactHost{
 		artifacts: []preparedSystemdServiceArtifact{
-			{path: corePath, content: systemdCoreService, mode: 0600},
-			{path: firewallPath, content: systemdFirewallService, mode: 0600},
+			{
+				path: corePath, content: systemdCoreService, mode: sourceSystemdUnitMode,
+				allowedModes: []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
+			},
+			{
+				path: firewallPath, content: systemdFirewallService, mode: sourceSystemdUnitMode,
+				allowedModes: []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
+			},
 			{
 				path: filepath.Join(serviceSystemdWantsDir, "syswarden-core.service"),
 				allowedTargets: []string{
@@ -82,6 +89,42 @@ func productionPreparedSystemdServiceArtifactHost() preparedSystemdServiceArtifa
 	}
 }
 
+func preparedSystemdServiceArtifactModes(artifact preparedSystemdServiceArtifact) []os.FileMode {
+	if len(artifact.allowedModes) != 0 {
+		return artifact.allowedModes
+	}
+	if artifact.mode != 0 {
+		return []os.FileMode{artifact.mode}
+	}
+	return nil
+}
+
+func inspectSingleLinkExactServiceFileModes(
+	directory *pinnedServiceDirectory,
+	name string,
+	content string,
+	modes []os.FileMode,
+) (os.FileInfo, error) {
+	if len(modes) == 0 {
+		return nil, fmt.Errorf("exact service file modes are empty")
+	}
+	before, err := directory.root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	modeAllowed := false
+	for _, mode := range modes {
+		if mode != 0 && mode.Perm() == mode && before.Mode().Perm() == mode {
+			modeAllowed = true
+			break
+		}
+	}
+	if !modeAllowed {
+		return before, fmt.Errorf("refusing unsupported exact service file mode %04o", before.Mode().Perm())
+	}
+	return inspectSingleLinkExactServiceFile(directory, name, content, before.Mode().Perm())
+}
+
 func (host preparedSystemdServiceArtifactHost) validate() error {
 	if len(host.artifacts) != 5 || host.classifyRuntime == nil || host.processScan == nil ||
 		host.attestPackageDrop == nil || host.executor.lookPath == nil || host.executor.validate == nil ||
@@ -104,8 +147,19 @@ func (host preparedSystemdServiceArtifactHost) validate() error {
 		} else if artifact.optionalParent {
 			return fmt.Errorf("only the package-owned systemd drop-in may have an optional parent")
 		}
-		if len(artifact.allowedTargets) == 0 && (artifact.content == "" || artifact.mode == 0) {
+		modes := preparedSystemdServiceArtifactModes(artifact)
+		if len(artifact.allowedTargets) == 0 && (artifact.content == "" || len(modes) == 0) {
 			return fmt.Errorf("systemd service file recovery contract is incomplete for %s", artifact.path)
+		}
+		seenModes := make(map[os.FileMode]struct{}, len(modes))
+		for _, mode := range modes {
+			if mode == 0 || mode.Perm() != mode {
+				return fmt.Errorf("systemd service file recovery mode is invalid for %s", artifact.path)
+			}
+			if _, duplicate := seenModes[mode]; duplicate {
+				return fmt.Errorf("systemd service file recovery mode is duplicated for %s", artifact.path)
+			}
+			seenModes[mode] = struct{}{}
 		}
 		if len(artifact.allowedTargets) != 0 && artifact.requiredServicePath == "" {
 			return fmt.Errorf("systemd enablement recovery contract is incomplete for %s", artifact.path)
@@ -250,7 +304,9 @@ func (host preparedSystemdServiceArtifactHost) captureArtifact(
 		info = enablement.identity
 		snapshot.target = enablement.target
 	} else {
-		info, err = inspectSingleLinkExactServiceFile(directory, name, artifact.content, artifact.mode)
+		info, err = inspectSingleLinkExactServiceFileModes(
+			directory, name, artifact.content, preparedSystemdServiceArtifactModes(artifact),
+		)
 		if err != nil {
 			return snapshot, fmt.Errorf("attest exact systemd service artifact %s: %w", artifact.path, err)
 		}
@@ -259,7 +315,9 @@ func (host preparedSystemdServiceArtifactHost) captureArtifact(
 			if err != nil {
 				return snapshot, fmt.Errorf("attest package-owned systemd drop-in %s: %w", artifact.path, err)
 			}
-			confirmed, confirmErr := inspectSingleLinkExactServiceFile(directory, name, artifact.content, artifact.mode)
+			confirmed, confirmErr := inspectSingleLinkExactServiceFileModes(
+				directory, name, artifact.content, preparedSystemdServiceArtifactModes(artifact),
+			)
 			if confirmErr != nil || !sameServiceFileMetadata(info, confirmed) {
 				return snapshot, errors.Join(
 					fmt.Errorf("package-owned systemd drop-in %s changed during recovery attestation", artifact.path),
@@ -272,6 +330,9 @@ func (host preparedSystemdServiceArtifactHost) captureArtifact(
 	identity, err := exactRemovalArtifactIdentity(info)
 	if err != nil {
 		return snapshot, fmt.Errorf("capture systemd service artifact identity %s: %w", artifact.path, err)
+	}
+	if identity.uid != host.expectedUID || identity.gid != host.expectedGID {
+		return snapshot, fmt.Errorf("refusing unexpected systemd service artifact owner for %s", artifact.path)
 	}
 	snapshot.present = true
 	snapshot.identity = identity
@@ -399,6 +460,10 @@ func (host preparedSystemdServiceArtifactHost) recoverInterruptedRemoval() error
 }
 
 func removePreparedExactServiceFile(path string, content string, mode os.FileMode) error {
+	return removePreparedExactServiceFileModes(path, content, []os.FileMode{mode})
+}
+
+func removePreparedExactServiceFileModes(path string, content string, modes []os.FileMode) error {
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
@@ -415,7 +480,7 @@ func removePreparedExactServiceFile(path string, content string, mode os.FileMod
 		name,
 		true,
 		func(directory *pinnedServiceDirectory, candidate string) (os.FileInfo, error) {
-			return inspectSingleLinkExactServiceFile(directory, candidate, content, mode)
+			return inspectSingleLinkExactServiceFileModes(directory, candidate, content, modes)
 		},
 	); err != nil {
 		return fmt.Errorf("remove exact prepared service file %s: %w", path, err)
@@ -423,13 +488,13 @@ func removePreparedExactServiceFile(path string, content string, mode os.FileMod
 	return nil
 }
 
-func attestPreparedExactServiceFile(path string, content string, mode os.FileMode) error {
+func attestPreparedExactServiceFileModes(path string, content string, modes []os.FileMode) error {
 	directory, err := openExistingPinnedServiceDirectory(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
 	defer directory.close()
-	if _, err := inspectSingleLinkExactServiceFile(directory, filepath.Base(path), content, mode); err != nil {
+	if _, err := inspectSingleLinkExactServiceFileModes(directory, filepath.Base(path), content, modes); err != nil {
 		return fmt.Errorf("attest exact prepared service file %s: %w", path, err)
 	}
 	return nil
@@ -442,12 +507,24 @@ func removePreparedServiceEnablement(
 	serviceMode os.FileMode,
 	allowedTargets ...string,
 ) error {
+	return removePreparedServiceEnablementModes(
+		path, servicePath, serviceContent, []os.FileMode{serviceMode}, allowedTargets...,
+	)
+}
+
+func removePreparedServiceEnablementModes(
+	path string,
+	servicePath string,
+	serviceContent string,
+	serviceModes []os.FileMode,
+	allowedTargets ...string,
+) error {
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("inspect service enablement %s: %w", path, err)
 	}
-	if err := attestPreparedExactServiceFile(servicePath, serviceContent, serviceMode); err != nil {
+	if err := attestPreparedExactServiceFileModes(servicePath, serviceContent, serviceModes); err != nil {
 		return fmt.Errorf("attest service definition before enablement removal %s: %w", path, err)
 	}
 	directory, err := openExistingPinnedServiceDirectory(filepath.Dir(path))
@@ -567,27 +644,31 @@ func RemovePreparedServiceArtifactsForRemoval() error {
 		if _, _, err := host.captureStable(); err != nil {
 			return fmt.Errorf("preflight exact systemd service artifact removal: %w", err)
 		}
-		if err := removePreparedServiceEnablement(
+		if err := removePreparedServiceEnablementModes(
 			"/etc/systemd/system/multi-user.target.wants/syswarden-core.service",
-			"/etc/systemd/system/syswarden-core.service", systemdCoreService, 0600,
+			"/etc/systemd/system/syswarden-core.service", systemdCoreService,
+			[]os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 			"../syswarden-core.service", "/etc/systemd/system/syswarden-core.service",
 		); err != nil {
 			return err
 		}
-		if err := removePreparedServiceEnablement(
+		if err := removePreparedServiceEnablementModes(
 			"/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service",
-			"/etc/systemd/system/syswarden-firewall.service", systemdFirewallService, 0600,
+			"/etc/systemd/system/syswarden-firewall.service", systemdFirewallService,
+			[]os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 			"../syswarden-firewall.service", "/etc/systemd/system/syswarden-firewall.service",
 		); err != nil {
 			return err
 		}
-		if err := removePreparedExactServiceFile(
-			"/etc/systemd/system/syswarden-core.service", systemdCoreService, 0600,
+		if err := removePreparedExactServiceFileModes(
+			"/etc/systemd/system/syswarden-core.service", systemdCoreService,
+			[]os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 		); err != nil {
 			return err
 		}
-		if err := removePreparedExactServiceFile(
-			"/etc/systemd/system/syswarden-firewall.service", systemdFirewallService, 0600,
+		if err := removePreparedExactServiceFileModes(
+			"/etc/systemd/system/syswarden-firewall.service", systemdFirewallService,
+			[]os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 		); err != nil {
 			return err
 		}

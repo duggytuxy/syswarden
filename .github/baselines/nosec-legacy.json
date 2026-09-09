@@ -1,26 +1,8 @@
 {
   "schema_version": 2,
   "baseline_commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
-  "policy": "The 43 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
+  "policy": "The 37 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
   "legacy": [
-    {
-      "count": 2,
-      "file": "src/core/syswarden-cli/cmd/alerts.go",
-      "source_sha256": "858a699b1dff02d1e28d177d5e7182702bc6d8a070b3394a366840e661e97adb"
-    },
-    {
-      "count": 2,
-      "file": "src/core/syswarden-cli/cmd/alerts.go",
-      "source_sha256": "c2659969fae281a07b4661d4451cb2707324cb9323dd132bbe4bd5bc1540c06d"
-    },
-    {
-      "file": "src/core/syswarden-cli/cmd/alerts_linux.go",
-      "source_sha256": "55c1d03977d98ce91ec2bca700c0555f3070de6cfc42ee44e0f82e2507259ff6"
-    },
-    {
-      "file": "src/core/syswarden-cli/cmd/alerts_linux.go",
-      "source_sha256": "ff23e75e221e747d8a304488e0d8e92b1332a4575ab3b515755f36edb1d8b35d"
-    },
     {
       "file": "src/core/syswarden-cli/pkg/firewall/auto_whitelist.go",
       "source_sha256": "3790e0795ece73f23018a1dc645edfc5ea2f002356b7d02f71188ed2763b96a5"

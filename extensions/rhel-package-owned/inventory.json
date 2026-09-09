@@ -205,7 +205,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "9f90be32aed896cad7a57b72888359dbfc9e34cb0d031b85bcaf0e6954890340",
+      "sha256": "47e365db8be55981db47d5c10cc15a30a371fce96a36c1997592f7bde5c1a210",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-pre-install"
@@ -218,7 +218,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "0839690d77013c2d7ed1fa9b6242e9390200fdc8fed6a8ec2e6c0a1daf7125c7",
+      "sha256": "79355b498a8c616541ca2ab40cd67f89aee7acaf623014fcb7648e786bb4b039",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-post-install"

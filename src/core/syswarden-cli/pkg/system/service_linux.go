@@ -27,6 +27,9 @@ const (
 	serviceManagerOffline   serviceManagerState = "OFFLINE"
 	serviceManagerAmbiguous serviceManagerState = "AMBIGUOUS"
 
+	sourceSystemdUnitMode           os.FileMode = 0600
+	historicalSourceSystemdUnitMode os.FileMode = 0644
+
 	openRCCoreService = `#!/sbin/openrc-run
 
 name="syswarden-core"
@@ -1126,7 +1129,7 @@ func inspectHistoricalServiceArtifact(
 	name string,
 	artifact serviceArtifact,
 ) (os.FileInfo, error) {
-	info, _, err := selectHistoricalServiceArtifact(directory, name, artifact)
+	info, _, _, err := selectHistoricalServiceArtifact(directory, name, artifact)
 	return info, err
 }
 
@@ -1137,7 +1140,11 @@ type historicalServiceContent struct {
 }
 
 func historicalServiceContents(artifact serviceArtifact) []historicalServiceContent {
-	contents := make([]historicalServiceContent, 0, 1+len(artifact.historicalAlternates))
+	capacity := 1 + len(artifact.historicalAlternates)
+	if len(artifact.historicalModes) != 0 {
+		capacity++
+	}
+	contents := make([]historicalServiceContent, 0, capacity)
 	if artifact.historicalContent != "" {
 		contents = append(contents, historicalServiceContent{
 			content:       artifact.historicalContent,
@@ -1145,41 +1152,78 @@ func historicalServiceContents(artifact serviceArtifact) []historicalServiceCont
 			contentSHA256: artifact.historicalContentSHA256,
 		})
 	}
+	// Explicit historicalModes opt an artifact into mode normalization. Its
+	// exact current bytes are then a migration source as well, allowing a
+	// formerly published mode to converge to artifact.mode without accepting
+	// any content drift.
+	if len(artifact.historicalModes) != 0 {
+		digest := sha256.Sum256([]byte(artifact.content))
+		contents = append(contents, historicalServiceContent{
+			content:       artifact.content,
+			contentLength: len([]byte(artifact.content)),
+			contentSHA256: hex.EncodeToString(digest[:]),
+		})
+	}
 	return append(contents, artifact.historicalAlternates...)
+}
+
+func historicalServiceModes(artifact serviceArtifact) ([]os.FileMode, error) {
+	if len(artifact.historicalModes) == 0 {
+		return []os.FileMode{artifact.mode}, nil
+	}
+	modes := make([]os.FileMode, 0, len(artifact.historicalModes))
+	seen := make(map[os.FileMode]struct{}, len(artifact.historicalModes))
+	for _, mode := range artifact.historicalModes {
+		if mode == 0 || mode.Perm() != mode || mode.Perm()&0022 != 0 {
+			return nil, fmt.Errorf("historical service file mode %04o is invalid", mode)
+		}
+		if _, duplicate := seen[mode]; duplicate {
+			return nil, fmt.Errorf("historical service file mode %04o is duplicated", mode)
+		}
+		seen[mode] = struct{}{}
+		modes = append(modes, mode)
+	}
+	return modes, nil
 }
 
 func selectHistoricalServiceArtifact(
 	directory *pinnedServiceDirectory,
 	name string,
 	artifact serviceArtifact,
-) (os.FileInfo, historicalServiceContent, error) {
+) (os.FileInfo, historicalServiceContent, os.FileMode, error) {
 	contents := historicalServiceContents(artifact)
 	if len(contents) == 0 {
-		return nil, historicalServiceContent{}, fmt.Errorf("historical service file has no exact content anchor")
+		return nil, historicalServiceContent{}, 0, fmt.Errorf("historical service file has no exact content anchor")
 	}
 	for _, candidate := range contents {
 		digest := sha256.Sum256([]byte(candidate.content))
 		if len([]byte(candidate.content)) != candidate.contentLength ||
 			hex.EncodeToString(digest[:]) != candidate.contentSHA256 {
-			return nil, historicalServiceContent{}, fmt.Errorf("historical service file anchor is internally inconsistent")
+			return nil, historicalServiceContent{}, 0, fmt.Errorf("historical service file anchor is internally inconsistent")
 		}
+	}
+	modes, err := historicalServiceModes(artifact)
+	if err != nil {
+		return nil, historicalServiceContent{}, 0, err
 	}
 	var failures []error
 	for _, candidate := range contents {
-		info, err := inspectAnchoredHistoricalServiceFile(
-			directory,
-			name,
-			candidate.content,
-			candidate.contentLength,
-			candidate.contentSHA256,
-			artifact.mode,
-		)
-		if err == nil {
-			return info, candidate, nil
+		for _, mode := range modes {
+			info, err := inspectAnchoredHistoricalServiceFile(
+				directory,
+				name,
+				candidate.content,
+				candidate.contentLength,
+				candidate.contentSHA256,
+				mode,
+			)
+			if err == nil {
+				return info, candidate, mode, nil
+			}
+			failures = append(failures, err)
 		}
-		failures = append(failures, err)
 	}
-	return nil, historicalServiceContent{}, errors.Join(failures...)
+	return nil, historicalServiceContent{}, 0, errors.Join(failures...)
 }
 
 func removePinnedServiceArtifactByIdentity(
@@ -1609,7 +1653,10 @@ func publishMigratableServiceFileUsing(
 	if _, err := inspectSingleLinkExactServiceFile(directory, name, artifact.content, artifact.mode); err == nil {
 		return change, directory.sync()
 	}
-	historicalIdentity, selectedHistorical, err := selectHistoricalServiceArtifact(directory, name, artifact)
+	modeNormalization := len(artifact.historicalModes) != 0
+	historicalIdentity, selectedHistorical, selectedHistoricalMode, err := selectHistoricalServiceArtifact(
+		directory, name, artifact,
+	)
 	if err != nil {
 		return change, fmt.Errorf("refusing non-exact historical service file %s: %w", artifact.path, err)
 	}
@@ -1617,6 +1664,9 @@ func publishMigratableServiceFileUsing(
 	artifact.historicalContentLength = selectedHistorical.contentLength
 	artifact.historicalContentSHA256 = selectedHistorical.contentSHA256
 	artifact.historicalAlternates = nil
+	if modeNormalization {
+		artifact.historicalModes = []os.FileMode{selectedHistoricalMode}
+	}
 
 	temporaryName, temporary, temporaryIdentity, err := createTemporaryServiceFile(directory)
 	if err != nil {
@@ -1820,6 +1870,7 @@ type serviceArtifact struct {
 	historicalContentLength int
 	historicalContentSHA256 string
 	historicalAlternates    []historicalServiceContent
+	historicalModes         []os.FileMode
 }
 
 type serviceArtifactChange struct {
@@ -1979,26 +2030,30 @@ func publishSystemdServices() error {
 	firewallUnitPath := filepath.Join(serviceSystemdUnitDir, "syswarden-firewall.service")
 	return publishServiceArtifacts([]serviceArtifact{
 		{
-			path: coreUnitPath, content: systemdCoreService, mode: 0600,
+			path: coreUnitPath, content: systemdCoreService, mode: sourceSystemdUnitMode,
 			historicalContent:       historicalV4028SystemdCoreService,
 			historicalContentLength: historicalV4028SystemdCoreServiceLength,
 			historicalContentSHA256: historicalV4028SystemdCoreServiceSHA256,
+			historicalModes:         []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 		},
 		{
-			path: firewallUnitPath, content: systemdFirewallService, mode: 0600,
+			path: firewallUnitPath, content: systemdFirewallService, mode: sourceSystemdUnitMode,
 			historicalContent:       historicalV4028SystemdFirewallService,
 			historicalContentLength: historicalV4028SystemdFirewallServiceLength,
 			historicalContentSHA256: historicalV4028SystemdFirewallServiceSHA256,
+			historicalModes:         []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 		},
 		{
 			path: filepath.Join(serviceSystemdWantsDir, "syswarden-core.service"), target: "../syswarden-core.service",
 			legacyTargets:    []string{"/etc/systemd/system/syswarden-core.service"},
-			attestedFilePath: coreUnitPath, attestedFileContent: systemdCoreService, attestedFileMode: 0600,
+			attestedFilePath: coreUnitPath, attestedFileContent: systemdCoreService,
+			attestedFileMode: sourceSystemdUnitMode,
 		},
 		{
 			path: filepath.Join(serviceSystemdWantsDir, "syswarden-firewall.service"), target: "../syswarden-firewall.service",
 			legacyTargets:    []string{"/etc/systemd/system/syswarden-firewall.service"},
-			attestedFilePath: firewallUnitPath, attestedFileContent: systemdFirewallService, attestedFileMode: 0600,
+			attestedFilePath: firewallUnitPath, attestedFileContent: systemdFirewallService,
+			attestedFileMode: sourceSystemdUnitMode,
 		},
 	})
 }

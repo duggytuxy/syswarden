@@ -40,6 +40,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %slist%s                : Displays manual IP registries and active HA bans with provenance and expiry.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %smanual%s              : Displays this operator reference.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %smigrate-config%s      : Compatibility alias for transactional modular migration.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %srecover-wireguard%s   : Dry-runs exact historical WireGuard recovery; mutation requires the reviewed plan SHA-256.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sreload%s              : Reapplies policy, repairs cron jobs and normally restarts the core.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %srevoke-ssh%s          : Removes an address from the SSH exception registry.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %stui%s                 : Launches the local terminal dashboard; it opens no network listener.\n", ansiGreen, ansiReset)

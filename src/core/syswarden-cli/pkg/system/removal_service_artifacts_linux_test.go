@@ -31,6 +31,13 @@ func containsEveryRemovalTestValue(value string, expected ...string) bool {
 func newPreparedSystemdServiceArtifactTestHost(
 	t *testing.T,
 ) (preparedSystemdServiceArtifactHost, preparedSystemdServiceArtifactTestPaths, *int) {
+	return newPreparedSystemdServiceArtifactTestHostWithUnitMode(t, sourceSystemdUnitMode)
+}
+
+func newPreparedSystemdServiceArtifactTestHostWithUnitMode(
+	t *testing.T,
+	unitMode os.FileMode,
+) (preparedSystemdServiceArtifactHost, preparedSystemdServiceArtifactTestPaths, *int) {
 	t.Helper()
 	root := t.TempDir()
 	unitDirectory := filepath.Join(root, "etc", "systemd", "system")
@@ -53,8 +60,8 @@ func newPreparedSystemdServiceArtifactTestHost(
 		content string
 		mode    os.FileMode
 	}{
-		{paths.coreUnit, systemdCoreService, 0600},
-		{paths.firewallUnit, systemdFirewallService, 0600},
+		{paths.coreUnit, systemdCoreService, unitMode},
+		{paths.firewallUnit, systemdFirewallService, unitMode},
 		{paths.dropIn, systemdFirewallWireGuardOrderingDropIn, 0644},
 	} {
 		if err := os.WriteFile(fixture.path, []byte(fixture.content), fixture.mode); err != nil {
@@ -78,8 +85,14 @@ func newPreparedSystemdServiceArtifactTestHost(
 	reloads := 0
 	host := preparedSystemdServiceArtifactHost{
 		artifacts: []preparedSystemdServiceArtifact{
-			{path: paths.coreUnit, content: systemdCoreService, mode: 0600},
-			{path: paths.firewallUnit, content: systemdFirewallService, mode: 0600},
+			{
+				path: paths.coreUnit, content: systemdCoreService, mode: sourceSystemdUnitMode,
+				allowedModes: []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
+			},
+			{
+				path: paths.firewallUnit, content: systemdFirewallService, mode: sourceSystemdUnitMode,
+				allowedModes: []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
+			},
 			{
 				path: paths.coreEnablement, allowedTargets: []string{"../syswarden-core.service"},
 				requiredServicePath: paths.coreUnit,
@@ -431,6 +444,112 @@ func TestInterruptedSystemdServiceArtifactRemovalDoesNotReloadCompleteInventory_
 	}
 	if *reloads != 0 {
 		t.Fatalf("complete inventory triggered %d reloads", *reloads)
+	}
+}
+
+func TestHistoricalSystemdServiceArtifactsAtMode0644AreCapturedAndExactlyRemoved_SW2_PKG_001(t *testing.T) {
+	host, paths, _ := newPreparedSystemdServiceArtifactTestHostWithUnitMode(t, historicalSourceSystemdUnitMode)
+	before, absent, err := host.captureStable()
+	if err != nil {
+		t.Fatalf("capture exact historical service artifacts: %v", err)
+	}
+	if absent != 0 || len(before) != len(host.artifacts) {
+		t.Fatalf("historical service artifact capture = %d snapshots, %d absent", len(before), absent)
+	}
+	for _, path := range []string{paths.coreUnit, paths.firewallUnit} {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode().Perm() != historicalSourceSystemdUnitMode {
+			t.Fatalf("historical unit %s mode = %v, error = %v", path, info.Mode().Perm(), err)
+		}
+	}
+
+	allowedModes := []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode}
+	if err := removePreparedServiceEnablementModes(
+		paths.coreEnablement, paths.coreUnit, systemdCoreService, allowedModes, "../syswarden-core.service",
+	); err != nil {
+		t.Fatalf("remove historical core enablement: %v", err)
+	}
+	if err := removePreparedServiceEnablementModes(
+		paths.firewallEnable, paths.firewallUnit, systemdFirewallService, allowedModes,
+		"../syswarden-firewall.service",
+	); err != nil {
+		t.Fatalf("remove historical firewall enablement: %v", err)
+	}
+	if err := removePreparedExactServiceFileModes(paths.coreUnit, systemdCoreService, allowedModes); err != nil {
+		t.Fatalf("remove historical core unit: %v", err)
+	}
+	if err := removePreparedExactServiceFileModes(paths.firewallUnit, systemdFirewallService, allowedModes); err != nil {
+		t.Fatalf("remove historical firewall unit: %v", err)
+	}
+	for _, path := range []string{paths.coreEnablement, paths.firewallEnable, paths.coreUnit, paths.firewallUnit} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("exact historical artifact remains at %s: %v", path, err)
+		}
+	}
+}
+
+func TestHistoricalSystemdServiceArtifactCaptureRejectsModeRace_SW2_PKG_001(t *testing.T) {
+	host, paths, reloads := newPreparedSystemdServiceArtifactTestHostWithUnitMode(
+		t, historicalSourceSystemdUnitMode,
+	)
+	mutated := false
+	host.afterFirstCapture = func() {
+		if mutated {
+			return
+		}
+		mutated = true
+		if err := os.Chmod(paths.firewallUnit, sourceSystemdUnitMode); err != nil {
+			t.Fatalf("change unit mode during double capture: %v", err)
+		}
+	}
+	err := host.recoverInterruptedRemoval()
+	if err == nil || !containsEveryRemovalTestValue(err.Error(), "inventory changed", "recovery attestation") {
+		t.Fatalf("historical mode race refusal = %v", err)
+	}
+	if *reloads != 0 {
+		t.Fatalf("historical mode race triggered %d reloads", *reloads)
+	}
+	if target, err := os.Readlink(paths.firewallEnable); err != nil || target != "../syswarden-firewall.service" {
+		t.Fatalf("historical mode race changed enablement: target=%q error=%v", target, err)
+	}
+}
+
+func TestHistoricalSystemdServiceArtifactRemovalRejectsUnsafeLookalikes_SW2_PKG_001(t *testing.T) {
+	allowedModes := []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode}
+	for _, testCase := range []struct {
+		name   string
+		mode   os.FileMode
+		mutate func(*testing.T, string)
+	}{
+		{name: "unsupported mode", mode: 0640},
+		{name: "modified content", mode: historicalSourceSystemdUnitMode, mutate: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte("operator service\n"), historicalSourceSystemdUnitMode); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "hardlink", mode: historicalSourceSystemdUnitMode, mutate: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Link(path, path+".operator"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "syswarden-firewall.service")
+			if err := os.WriteFile(path, []byte(systemdFirewallService), testCase.mode); err != nil {
+				t.Fatal(err)
+			}
+			if testCase.mutate != nil {
+				testCase.mutate(t, path)
+			}
+			if err := removePreparedExactServiceFileModes(path, systemdFirewallService, allowedModes); err == nil {
+				t.Fatal("unsafe historical systemd unit was removed")
+			}
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("refused historical systemd unit changed: %v", err)
+			}
+		})
 	}
 }
 

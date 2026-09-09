@@ -569,3 +569,101 @@ func TestStableSystemdWireGuardPackageAttestationRejectsEvidenceAndFileDrift(t *
 		t.Fatal("missing package attestation dependencies were accepted")
 	}
 }
+
+func TestHistoricalSourceSystemdUnitAttestationAcceptsOnlyExactModesAndBytes(t *testing.T) {
+	allowedModes := []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode}
+	uid := systemTestUID(t)
+	gid := systemTestGID(t)
+	for _, mode := range allowedModes {
+		t.Run(fmt.Sprintf("mode-%04o", mode), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "syswarden-core.service")
+			if err := os.WriteFile(path, []byte(systemdCoreService), mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := readExactFirewallRemovalFileWithOwnerModes(
+				path, systemdCoreService, allowedModes, uid, gid,
+			); err != nil {
+				t.Fatalf("attest exact source unit mode %04o: %v", mode, err)
+			}
+		})
+	}
+
+	for _, testCase := range []struct {
+		name       string
+		mode       os.FileMode
+		content    string
+		afterWrite func(*testing.T, string)
+	}{
+		{name: "group readable only", mode: 0640, content: systemdCoreService},
+		{name: "world readable current owner mode only", mode: 0644, content: systemdCoreService + "# modified\n"},
+		{name: "executable", mode: 0755, content: systemdCoreService},
+		{name: "hardlinked", mode: 0644, content: systemdCoreService, afterWrite: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Link(path, path+".operator"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "symlink", mode: 0644, content: systemdCoreService, afterWrite: func(t *testing.T, path string) {
+			t.Helper()
+			target := path + ".target"
+			if err := os.Rename(path, target); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "syswarden-core.service")
+			if err := os.WriteFile(path, []byte(testCase.content), testCase.mode); err != nil {
+				t.Fatal(err)
+			}
+			if testCase.afterWrite != nil {
+				testCase.afterWrite(t, path)
+			}
+			if err := readExactFirewallRemovalFileWithOwnerModes(
+				path, systemdCoreService, allowedModes, uid, gid,
+			); err == nil {
+				t.Fatal("unsafe or modified source systemd unit was accepted")
+			}
+		})
+	}
+
+	path := filepath.Join(t.TempDir(), "syswarden-core.service")
+	if err := os.WriteFile(path, []byte(systemdCoreService), historicalSourceSystemdUnitMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := readExactFirewallRemovalFileWithOwnerModes(
+		path, systemdCoreService, allowedModes, uid+1, gid,
+	); err == nil {
+		t.Fatal("source systemd unit with an unexpected owner was accepted")
+	}
+}
+
+func TestHistoricalSourceSystemdUnitAttestationRejectsSpecialBits(t *testing.T) {
+	allowedModes := []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode}
+	for _, special := range []os.FileMode{os.ModeSetuid, os.ModeSetgid, os.ModeSticky} {
+		t.Run(fmt.Sprintf("special-%v", special), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "syswarden-firewall.service")
+			if err := os.WriteFile(path, []byte(systemdFirewallService), historicalSourceSystemdUnitMode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, historicalSourceSystemdUnitMode|special); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode()&special == 0 {
+				t.Skip("fixture filesystem did not retain the requested special bit")
+			}
+			if err := readExactFirewallRemovalFileWithOwnerModes(
+				path, systemdFirewallService, allowedModes, systemTestUID(t), systemTestGID(t),
+			); err == nil {
+				t.Fatal("source systemd unit with special bits was accepted")
+			}
+		})
+	}
+}
