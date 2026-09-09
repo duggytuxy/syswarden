@@ -19,6 +19,12 @@
   updater path for protected native labs. It binds the signed manifest,
   package bytes, embedded CLI, installed package record and activated CLI to
   the same candidate before any service activation.
+- **Explicit legacy WireGuard recovery:** Add `syswarden recover-wireguard`
+  for the two supported historical SysWarden nftables generations on systemd
+  and OpenRC. A read-only plan precedes a separate application bound to its
+  exact SHA-256 digest. Support exact partial cleanup with zero, one or two
+  historical shared forward rules remaining; unknown, active, enabled or
+  changed state remains blocked.
 - **Versioned TUI and GRC evidence:** Add stable KPI fields for admitted and
   rejected events, HITS, highest signature-backed severity, enforcement jail,
   policy action, evidence quality and time window. The TUI and exported
@@ -102,6 +108,13 @@
   the producer, HA transport and TUI. Display payload projection is
   deterministic and explicitly reported, while an oversized essential state
   preserves the last valid snapshot and records a publication failure.
+- **Live alert streaming:** Start `syswarden alerts` at the current kernel and
+  WAAP source boundary without replaying historical events. Expose source
+  health, bound the TUI update queue and cancel and reap follower processes
+  on Ctrl+C, SIGTERM or TUI errors.
+- **Telemetry freshness:** Publish the producer timestamp after collection
+  completes and classify native TUI telemetry as online, degraded, stale or
+  offline from timestamp freshness, read errors and display projection quality.
 - **Persistent blocklist initialization:** Create and attest both IPv4 and
   IPv6 persistent list files during installation, including an initialization
   marker. A later disappearance fails closed instead of silently recreating a
@@ -125,6 +138,12 @@
   ownership or mode drift, substituted package members, changed installed CLI
   bytes, unbounded package-manager children and unsigned or network-fallback
   qualification paths.
+- **Exact service lifecycle compatibility:** Normalize byte-exact historical
+  SysWarden systemd units from mode 0644 to the canonical 0600 mode. Accept the
+  same exact legacy source units during RHEL package-owned migration. Reconcile only an
+  attested failed systemd service state before uninstall, with bounded reset
+  and re-attestation. Modified content, unsafe modes, links, ambiguous owners
+  and changing runtime state continue to fail closed.
 - **Fail-closed native trust policy:** Reject missing, wrong, expired, revoked
   or substituted RPM, APK and DEB signing identities. Production trust roots,
   protected secrets and native signature proof remain required before release.
@@ -173,6 +192,11 @@
   event-quality states, queue pressure, deduplication, rate limits, retry
   boundaries, cancellation ambiguity, bounded dashboard projection, malicious
   terminal strings, secret-safe failures and provider-specific wire payloads.
+- **Legacy recovery and live telemetry coverage:** Add tests for exact
+  WireGuard recovery plans, partial cleanup, stale authorization and host
+  drift, historical service modes, failed-service removal and RHEL ownership
+  attestation. Cover live-only alerts, source health, queue pressure, signal
+  cleanup and native TUI freshness states.
 - **Package and release contracts:** Add fail-closed tests for native signing,
   bootstrap mode boundaries, cross-family key reuse, family-scoped secret
   cleanup, lifecycle evidence, NODE01 migration, protected workflows and final
