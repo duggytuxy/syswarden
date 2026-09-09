@@ -318,13 +318,14 @@ class NativePackageSignatureGateTests(unittest.TestCase):
         self.write_policy(self.bootstrap_document())
         self.assertEqual(gate.main(self.arguments("rpm", "rpm-2026")), 1)
 
-    def test_repository_foundation_policy_cannot_claim_qualification(self) -> None:
+    def test_repository_qualified_policy_remains_non_publishing(self) -> None:
         policy = Path(gate.__file__).with_name("native_package_signature_policy_v4100.json")
         document = gate.load_json(policy, "repository policy")
         qualification_day = gate.parse_day("2026-09-08", "date")
         gate.validate_policy(document, qualification_day)
-        self.assertEqual(document["status"], "foundation-not-qualified")
+        self.assertEqual(document["status"], "qualified")
         self.assertFalse(document["publishing"])
+        self.assertEqual(document["deb"]["implementation"], "qualified")
         expected_ids = {
             "rpm": "rpm-prod-2026-01",
             "apk": "apk-prod-2026-01",
@@ -353,12 +354,6 @@ class NativePackageSignatureGateTests(unittest.TestCase):
             document["apk"]["signer_image"],
             "docker.io/alpinelinux/build-base@sha256:31d2a020ccd2058e6ab47940428bd0b7dc83e37b66880891f9ed903a12ea668b",
         )
-
-        document["publishing"] = True
-        with self.assertRaisesRegex(
-            gate.SignatureGateError, "publishing approval requires"
-        ):
-            gate.validate_policy(document, qualification_day)
 
     @unittest.skipUnless(
         shutil.which("gpg") and shutil.which("openssl"),

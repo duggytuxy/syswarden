@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "syswarden-native-package-signatures/v4.10.0",
-  "status": "foundation-not-qualified",
+  "status": "qualified",
   "publishing": false,
   "rpm": {
     "mechanism": "rpm-openpgp",
@@ -51,6 +51,6 @@
         "supersedes": []
       }
     ],
-    "implementation": "implemented-not-qualified"
+    "implementation": "qualified"
   }
 }
