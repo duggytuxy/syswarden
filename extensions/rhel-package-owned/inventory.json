@@ -192,7 +192,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c",
+      "sha256": "cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63",
       "rpm_ownership": "payload",
       "rpm_package": "syswarden",
       "role": "rpm-postun-recovery"
