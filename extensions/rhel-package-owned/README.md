@@ -166,6 +166,12 @@ frontend before first boot. Existing firewalld deployments are preserved.
 Direct nftables deployments remain valid. Ambiguous or conflicting firewall
 frontends must still fail through the normal SysWarden runtime checks.
 
+The distribution-owned `/usr/lib` parent may retain its native root-owned
+`0555` mode or use `0755`. Installation, runtime attestation and erase preserve
+that mode. This allowance applies only to that shared parent; dedicated product
+directories, ownership, symlink rejection and all other metadata checks remain
+exact.
+
 The package deliberately owns only the protected configuration directories,
 not an administrator's TOML files. This makes an image pipeline free to seed
 its approved configuration after the RPM transaction. Later RPM upgrades do

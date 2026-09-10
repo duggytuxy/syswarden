@@ -118,6 +118,47 @@ func testSuccessfulRHELPackagePayloadAttestation() error {
 	return nil
 }
 
+func TestRHELPackageOwnedDistributionLibraryDirectoryModes(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		path string
+		mode os.FileMode
+		want bool
+	}{
+		{name: "native read-only library parent", path: "usr/lib", mode: 0555, want: true},
+		{name: "writable root library parent", path: "usr/lib", mode: 0755, want: true},
+		{name: "group writable library parent", path: "usr/lib", mode: 0775},
+		{name: "restricted library parent", path: "usr/lib", mode: 0550},
+		{name: "unapproved library parent mode", path: "usr/lib", mode: 0750},
+		{name: "other shared parent stays exact", path: "usr/libexec", mode: 0555},
+		{name: "product directory stays exact", path: "usr/libexec/syswarden", mode: 0555},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			installTestRHELPackageOwnedProfile(t, root)
+			path := filepath.Join(root, test.path)
+			if err := os.Chmod(path, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := os.Chmod(path, 0755); err != nil { // #nosec G302 -- restore the private fixture directory for cleanup
+					t.Error(err)
+				}
+			}()
+			host := testRHELPackageOwnedHost(t, root)
+			present, err := host.attest()
+			if (err == nil && present) != test.want {
+				t.Fatalf("attest() = (%t, %v), want accepted=%t", present, err, test.want)
+			}
+			info, statErr := os.Lstat(path)
+			if statErr != nil || info.Mode().Perm() != test.mode {
+				t.Fatalf("attestation changed directory metadata: %v", statErr)
+			}
+		})
+	}
+}
+
 func installTestRHELPackageOwnedProductSkeleton(t *testing.T, root string) {
 	t.Helper()
 	for _, path := range rhelPackageOwnedProductDirectories {

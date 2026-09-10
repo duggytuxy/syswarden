@@ -66,7 +66,12 @@ exact_existing_directory() {
         return 0
     fi
     [ -d "$path" ] && [ ! -L "$path" ] || fail "Refusing unsafe RPM payload directory: $path"
-    [ "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$path")" = "0:0:${mode}" ] || \
+    metadata="$(/usr/bin/stat -Lc '%u:%g:%a' -- "$path")"
+    # RHEL filesystem packages ship this shared parent read-only.
+    if [ "$path" = /usr/lib ] && [ "$mode" = 755 ] && [ "$metadata" = '0:0:555' ]; then
+        return 0
+    fi
+    [ "$metadata" = "0:0:${mode}" ] || \
         fail "Refusing modified RPM payload directory metadata: $path"
 }
 
