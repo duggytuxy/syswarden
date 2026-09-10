@@ -501,7 +501,7 @@ func syncHAUnban(ctx context.Context, cfg *config.Config, ips []string, options 
 	if cfg.HAToken == "" || strings.TrimSpace(cfg.HAToken) != cfg.HAToken {
 		return errors.New(haAuthSetupErrorMessage)
 	}
-	peers, err := dialableHAPeers(cfg.HAPeerIP)
+	_, err := dialableHAPeers(cfg.HAPeerIP)
 	if err != nil {
 		if errors.Is(err, errNoDialableHAPeer) {
 			return nil
@@ -519,6 +519,34 @@ func syncHAUnban(ctx context.Context, cfg *config.Config, ips []string, options 
 		return err
 	}
 	defer releaseFence()
+	return syncHAUnbanUnderLease(ctx, cfg, ips, options)
+}
+
+// syncHAUnbanUnderLease is used only while the caller retains the same fence
+// lease for the complete local mutation and peer synchronization.
+func syncHAUnbanUnderLease(ctx context.Context, cfg *config.Config, ips []string, options haSyncOptions) error {
+	if cfg == nil {
+		return fmt.Errorf("HA configuration is unavailable")
+	}
+	if !cfg.HAEnabled {
+		return nil
+	}
+	if cfg.HAToken == "" || strings.TrimSpace(cfg.HAToken) != cfg.HAToken {
+		return errors.New(haAuthSetupErrorMessage)
+	}
+	peers, err := dialableHAPeers(cfg.HAPeerIP)
+	if err != nil {
+		if errors.Is(err, errNoDialableHAPeer) {
+			return nil
+		}
+		return err
+	}
+	if len(ips) == 0 {
+		return nil
+	}
+	if err := validateHASyncOptions(options); err != nil {
+		return err
+	}
 	canonicalIPs, err := canonicalHAIPList(ips)
 	if err != nil {
 		return err
