@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
+	"strconv"
 	"strings"
+	"syscall"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/cronstate"
+	"syswarden-cli/pkg/security"
 )
 
 func logHeader(title string) {
@@ -50,31 +54,42 @@ func isServiceActive(service string) bool {
 }
 
 func checkFilePerms(filepath string, validPerms []string, expectedOwner string) {
-	if _, err := os.Stat(filepath); os.IsNotExist(err) {
-		warn(fmt.Sprintf("File %s does not exist.", filepath))
+	account, err := user.Lookup(expectedOwner)
+	if err != nil || account == nil || account.Username != expectedOwner {
+		fail(fmt.Sprintf("Cannot resolve expected owner %s for %s.", expectedOwner, filepath))
 		return
 	}
-
-	info, err := os.Stat(filepath)
+	uid, err := strconv.ParseUint(account.Uid, 10, 32)
 	if err != nil {
-		fail(fmt.Sprintf("Cannot stat %s", filepath))
+		fail(fmt.Sprintf("Invalid expected owner UID for %s.", filepath))
 		return
 	}
+	if err := inspectAuditFilePermissions(filepath, validPerms, uid); err != nil {
+		fail(fmt.Sprintf("%s file permissions or ownership FAILED: %v", filepath, err))
+		return
+	}
+	pass(fmt.Sprintf("%s is a regular file with permitted mode and owner %s.", filepath, expectedOwner))
+}
 
-	modeStr := fmt.Sprintf("%04o", info.Mode().Perm())
-	isValid := false
+func inspectAuditFilePermissions(path string, validPerms []string, expectedUID uint64) error {
+	entry, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	identity, ok := entry.Sys().(*syscall.Stat_t)
+	if !entry.Mode().IsRegular() || !ok || identity.Nlink != 1 || uint64(identity.Uid) != expectedUID {
+		return fmt.Errorf("expected a single-link regular file owned by UID %d", expectedUID)
+	}
+	if entry.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return fmt.Errorf("unexpected special mode bits")
+	}
 	for _, perm := range validPerms {
-		if strings.Contains(modeStr, perm) {
-			isValid = true
-			break
+		mode, err := strconv.ParseUint(perm, 8, 12)
+		if err == nil && uint64(entry.Mode().Perm()) == mode {
+			return nil
 		}
 	}
-
-	if isValid {
-		pass(fmt.Sprintf("%s permissions VERIFIED (%s).", filepath, modeStr))
-	} else {
-		fail(fmt.Sprintf("%s permissions FAILED (Got %s, Expected one of %v).", filepath, modeStr, validPerms))
-	}
+	return fmt.Errorf("got mode %04o, expected one of %v", entry.Mode().Perm(), validPerms)
 }
 
 func RunAudit() {
@@ -113,17 +128,20 @@ func RunAudit() {
 	// Phase 2
 	logHeader("Phase 2: Log Routing & Anti-Injection Verification")
 
-	if _, err := os.Stat("/var/log/auth.log"); err == nil {
-		checkFilePerms("/var/log/auth.log", []string{"640", "600"}, "root")
-	} else if _, err := os.Stat("/var/log/secure"); err == nil {
-		checkFilePerms("/var/log/secure", []string{"640", "600"}, "root")
+	logOwner, ownerErr := security.AuthenticationLogOwner()
+	if ownerErr != nil {
+		fail(fmt.Sprintf("Cannot attest authentication log writer: %v", ownerErr))
+	} else if _, err := os.Lstat("/var/log/auth.log"); err == nil {
+		checkFilePerms("/var/log/auth.log", []string{"640", "600"}, logOwner)
+	} else if _, err := os.Lstat("/var/log/secure"); err == nil {
+		checkFilePerms("/var/log/secure", []string{"640", "600"}, logOwner)
 	}
 
 	if isServiceActive("rsyslog") {
 		pass("Rsyslog daemon is active.")
 		bridgeConf, err := os.ReadFile("/etc/rsyslog.d/99-syswarden-waf-bridge.conf") // #nosec
 		if err == nil && strings.Contains(string(bridgeConf), "omuxsock") {
-			pass("Rsyslog UDS Bridge VERIFIED: Logs are streamed to /var/run/syswarden.sock natively.")
+			pass("Rsyslog UDS bridge configuration contains omuxsock. Live delivery and kernel sender authorization were not tested by this diagnostic.")
 		} else {
 			fail("Rsyslog UDS Bridge FAILED: /etc/rsyslog.d/99-syswarden-waf-bridge.conf is missing or incorrectly configured.")
 		}

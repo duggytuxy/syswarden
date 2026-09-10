@@ -53,6 +53,10 @@ func lockCrontabOn(host hardeningHost) error {
 
 func purgePrivilegedGroupsOn(host hardeningHost) error {
 	fmt.Println(" -> Purging non-root users from privileged groups")
+	logWriter, err := authenticationLogWriterOn(host)
+	if err != nil {
+		return err
+	}
 	currentAdmin := os.Getenv("SUDO_USER")
 	if currentAdmin == "" {
 		current, err := user.Current()
@@ -80,6 +84,10 @@ func purgePrivilegedGroupsOn(host hardeningHost) error {
 			}
 			if member == currentAdmin {
 				fmt.Printf(" [!] SAFEGUARD: Preserving current admin '%s' in '%s' group\n", member, group)
+				continue
+			}
+			if group == "adm" && member == "syslog" && logWriter.name == "syslog" {
+				fmt.Println(" [!] Preserving the configured rsyslog reader in adm")
 				continue
 			}
 			if err := host.executor.run("gpasswd", "-d", member, group); err != nil {
@@ -552,6 +560,10 @@ func reconcileRsyslogService(host hardeningHost) error {
 
 func restrictAuthLogsOn(host hardeningHost) error {
 	fmt.Println(" -> Restricting auth log permissions")
+	writer, err := authenticationLogWriterOn(host)
+	if err != nil {
+		return err
+	}
 	for _, entry := range []struct {
 		path  string
 		group string
@@ -567,7 +579,7 @@ func restrictAuthLogsOn(host hardeningHost) error {
 		if err != nil {
 			return fmt.Errorf("resolve group %s: %w", entry.group, err)
 		}
-		if _, err := host.securePathPermissions(entry.path, false, 0640, 0, gid); err != nil {
+		if _, err := host.securePathPermissions(entry.path, false, 0640, writer.uid, gid); err != nil {
 			return err
 		}
 		fmt.Printf("   [+] Hardened %s to 0640\n", entry.path)
@@ -576,7 +588,7 @@ func restrictAuthLogsOn(host hardeningHost) error {
 	for _, entry := range []struct {
 		path string
 		rule string
-	}{{path: "/etc/logrotate.d/rsyslog", rule: "create 0640 root adm"}, {path: "/etc/logrotate.d/syslog", rule: "create 0640 root root"}} {
+	}{{path: "/etc/logrotate.d/rsyslog", rule: "create 0640 " + writer.name + " adm"}, {path: "/etc/logrotate.d/syslog", rule: "create 0640 " + writer.name + " root"}} {
 		snapshot, err := host.snapshot(entry.path)
 		if err != nil {
 			return err
@@ -608,6 +620,10 @@ func lookupGroupID(name string) (int, error) {
 }
 
 func hardenLogrotateCreateRules(input []byte, replacement string) ([]byte, bool, error) {
+	want := strings.Fields(replacement)
+	if len(want) != 4 || want[0] != "create" || want[1] != "0640" {
+		return nil, false, fmt.Errorf("invalid authentication log rotation policy")
+	}
 	lines := strings.Split(string(input), "\n")
 	changed := false
 	for index, raw := range lines {
@@ -619,11 +635,16 @@ func hardenLogrotateCreateRules(input []byte, replacement string) ([]byte, bool,
 		if err != nil {
 			return nil, false, fmt.Errorf("invalid logrotate create mode %q", fields[1])
 		}
-		if mode&0137 == 0 {
+		ownerMatches := len(fields) == 4 && fields[2] == want[2] && fields[3] == want[3]
+		if (mode == 0600 || mode == 0640) && ownerMatches {
 			continue
 		}
 		indent := raw[:len(raw)-len(strings.TrimLeft(raw, " \t"))]
-		lines[index] = indent + replacement
+		lineReplacement := replacement
+		if mode == 0600 {
+			lineReplacement = "create 0600 " + want[2] + " " + want[3]
+		}
+		lines[index] = indent + lineReplacement
 		changed = true
 	}
 	return []byte(strings.Join(lines, "\n")), changed, nil

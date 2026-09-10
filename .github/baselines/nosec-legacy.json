@@ -109,10 +109,6 @@
       "source_sha256": "541e5063ede65ae76837557956f1801e2b6f2cf25efb927a48f9c5e98f44527f"
     },
     {
-      "file": "src/core/syswarden-core/network/uds.go",
-      "source_sha256": "f66021f9493c7824529ad9f8aad4c89c774039b7fdcc3cd13acc8d46a77bd717"
-    },
-    {
       "file": "src/core/syswarden-core/telemetry/abuse.go",
       "source_sha256": "4591cfef2f14bf71c49c5958567575878304c81b0dc03dec268c01909cf5de7d"
     },

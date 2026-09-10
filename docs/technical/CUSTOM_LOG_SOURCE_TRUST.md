@@ -20,3 +20,29 @@ rotation. The rsyslog check is a configuration-time check, so source directories
 must remain under trusted administrative control while rsyslog runs. Native
 qualification must exercise the installed package and retain its actual refusal
 records; local regression tests alone do not qualify a release.
+
+## Native authentication writer and socket access
+
+Native authentication logs retain the supported rsyslog writer: root by
+default, or the `syslog` account selected by `$PrivDropToUser syslog` in the
+root-owned, non-writable `/etc/rsyslog.conf`. Hardening uses mode 0640 and
+preserves that writer in logrotate rules, including rules already using 0600
+or 0640. An existing `syslog` membership in `adm` is retained for the configured
+writer. Unknown or ambiguous privilege-drop declarations stop hardening before
+authentication log ownership changes. Other privilege-drop configuration
+formats must be reviewed and expressed in this supported form first.
+
+On Linux the datagram socket grants write access to root and the private
+`syslog` group when its account and primary group agree. Every datagram must
+also carry kernel-generated sender credentials for root or that exact syslog
+UID. Membership in the group alone does not authorize injection; missing,
+truncated, or unauthorized credentials are refused before rule evaluation.
+When the syslog account is absent, only root is authorized. A service running
+as a non-root user accepts only its own UID. Platforms without the Linux
+credential mechanism cannot start this receiver.
+
+Custom inputs still require root ownership for a native root service. Operators
+using an unprivileged rsyslog producer must additionally provide read and
+directory traversal access, for example a root-owned 0640 log readable by the
+logging group. The local audit reports permissions and configuration; it does
+not claim that configuration inspection proves successful event delivery.
