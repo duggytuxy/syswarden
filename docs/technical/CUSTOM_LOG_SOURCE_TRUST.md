@@ -25,8 +25,8 @@ records; local regression tests alone do not qualify a release.
 
 Native authentication logs retain the supported rsyslog writer: root by
 default, or the `syslog` account selected by `$PrivDropToUser syslog` in the
-root-owned, non-writable `/etc/rsyslog.conf`. Hardening uses mode 0640 and
-preserves that writer in logrotate rules, including rules already using 0600
+root-owned `/etc/rsyslog.conf` without group or other write access. Hardening
+uses mode 0640 and preserves that writer in logrotate rules, including rules already using 0600
 or 0640. An existing `syslog` membership in `adm` is retained for the configured
 writer. Unknown or ambiguous privilege-drop declarations stop hardening before
 authentication log ownership changes. Other privilege-drop configuration
