@@ -98,7 +98,7 @@
     {
       "id": "ssh-auth",
       "type": "regex",
-      "pattern": "^(?:[A-Z][a-z]{2}[[:space:]]+[0-9]{1,2}[[:space:]]+[0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]]+[^[:space:]]+[[:space:]]+)?sshd(?:\\[[0-9]+\\])?:[[:space:]]+(?:Failed password for|Invalid user|POSSIBLE BREAK-IN).*?from <HOST>(?: port [0-9]+(?: ssh[0-9]+)?)?(?: \\[preauth\\])?[[:space:]]*$",
+      "pattern": "^(?:[A-Z][a-z]{2}[[:space:]]+[0-9]{1,2}[[:space:]]+[0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]]+[^[:space:]]+[[:space:]]+)?sshd(?:-session)?(?:\\[[0-9]+\\])?:[[:space:]]+(?:Failed password for|Invalid user|POSSIBLE BREAK-IN).*?from <HOST>(?: port [0-9]+(?: ssh[0-9]+)?)?(?: \\[preauth\\])?[[:space:]]*$",
       "service": "sshd",
       "action": "track",
       "trusted_host_capture": true
