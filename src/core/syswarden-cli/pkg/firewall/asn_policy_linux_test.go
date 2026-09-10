@@ -72,8 +72,13 @@ func TestASNPolicyPinsRejectChangedPairAndPurpose(t *testing.T) {
 			dir := t.TempDir()
 			base := "allowed_AS16276"
 			writeASNPolicyFixture(t, dir, base, "51.38.0.0/16\n", "2607:5300::/32\n")
-			pin := filepath.Join(dir, base+".policy-pin")
-			content, err := os.ReadFile(pin)
+			fixture, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = fixture.Close() }()
+			pin := base + ".policy-pin"
+			content, err := fixture.ReadFile(pin)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -97,7 +102,7 @@ func TestASNPolicyPinsRejectChangedPairAndPurpose(t *testing.T) {
 			case "partial-pin":
 				content = []byte(asnPolicyPinHeader)
 			}
-			if err := os.WriteFile(pin, content, 0600); err != nil {
+			if err := fixture.WriteFile(pin, content, 0600); err != nil {
 				t.Fatal(err)
 			}
 			if v4, v6, err := configuredASNNftSources(dir, "AS16276", true); err == nil || len(v4)+len(v6) != 0 {
@@ -148,7 +153,7 @@ func TestASNPolicyPinsRejectUnsafeFilesystem(t *testing.T) {
 				case "mode":
 					err = os.Rename(path+".original", path)
 					if err == nil {
-						err = os.Chmod(path, 0644)
+						err = os.Chmod(path, 0644) // #nosec G302 -- deliberately unsafe fixture mode inside t.TempDir verifies fail-closed rejection.
 					}
 				}
 				if err != nil {
@@ -206,7 +211,7 @@ func TestASNPolicyPinsRejectSymlinkedOrWritableDirectory(t *testing.T) {
 	if _, _, err := configuredASNNftSources(link, "AS16276", true); err == nil {
 		t.Fatal("symlinked list directory accepted")
 	}
-	if err := os.Chmod(dir, 0777); err != nil {
+	if err := os.Chmod(dir, 0777); err != nil { // #nosec G302 -- deliberately writable fixture directory beneath the private test parent verifies rejection.
 		t.Fatal(err)
 	}
 	if _, _, err := configuredASNNftSources(dir, "AS16276", true); err == nil {
