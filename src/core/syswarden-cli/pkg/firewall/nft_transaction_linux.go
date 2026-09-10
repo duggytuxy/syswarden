@@ -273,9 +273,10 @@ func (runner execNFTCommandRunner) Run(ctx context.Context, stdin []byte, args .
 }
 
 type nftListSource struct {
-	path     string
-	required bool
-	attested bool
+	path            string
+	required        bool
+	attested        bool
+	asnPolicySHA256 string
 }
 
 type nftSetPopulation struct {
@@ -379,6 +380,12 @@ func readRootedNFTFile(path string) ([]byte, error) {
 var readAttestedNFTFeed = network.ReadAttestedFeedFile
 
 func readNFTListSource(source nftListSource) ([]byte, error) {
+	if source.asnPolicySHA256 != "" {
+		if source.attested {
+			return nil, fmt.Errorf("ASN policy pins cannot replace threat feed attestation")
+		}
+		return readPinnedASNPolicy(source.path, source.asnPolicySHA256)
+	}
 	if !source.attested {
 		return readRootedNFTFile(source.path)
 	}
@@ -1088,12 +1095,25 @@ func populateSet(ctx context.Context, sources []nftListSource, setName string) (
 		}
 
 		validInFile := 0
+		asnPrefixCount := 0
 		for lineNumber, rawLine := range strings.Split(string(content), "\n") {
 			line := strings.TrimSpace(rawLine)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-			canonical, isIPv4, parseErr := canonicalFirewallListNetwork(line)
+			var canonical string
+			var isIPv4 bool
+			var parseErr error
+			if source.asnPolicySHA256 != "" {
+				asnPrefixCount++
+				if asnPrefixCount > maximumPinnedASNPrefixes {
+					errs = append(errs, fmt.Errorf("%s: operator-pinned ASN list exceeds %d routes", setName, maximumPinnedASNPrefixes))
+					break
+				}
+				canonical, isIPv4, parseErr = canonicalPinnedASNNetwork(line, wantIPv6)
+			} else {
+				canonical, isIPv4, parseErr = canonicalFirewallListNetwork(line)
+			}
 			if parseErr != nil {
 				errs = append(errs, fmt.Errorf("%s: %s:%d: %w", setName, source.path, lineNumber+1, parseErr))
 				continue

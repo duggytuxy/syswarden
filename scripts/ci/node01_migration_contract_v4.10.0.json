@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "contract_id": "syswarden-node01-native-migration/v1",
+  "schema_version": 2,
+  "contract_id": "syswarden-node01-native-migration/v2",
   "target_release": "v4.10.0",
   "qualification_state": "candidate-not-qualified",
   "repository": "duggytuxy/syswarden",
@@ -17,10 +17,6 @@
     "baseline": {
       "tag": "v4.02.8",
       "commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc"
-    },
-    "trust_bootstrap": {
-      "tag": "v4.03.2",
-      "commit": "2eae757bbdee510fdd1058ba7770f2c5564ecb23"
     },
     "stable": {
       "tag": "v4.04.3",
@@ -66,21 +62,77 @@
     "ci_execution": "validator-unit-tests-only",
     "host_changes": "operator-authorized-native-lab-only",
     "snapshot_restore": "provider-console-operator-action",
-    "candidate_installation": "offline-signed-qualification-bundle",
+    "candidate_installation": "two-manual-signed-native-deb-installs-and-one-separate-offline-signed-updater",
     "post_publication_updater_acceptance": "separate-required-check-after-publication",
     "publication": false
   },
   "checkpoints": [
-    {"id": "baseline-v4028", "sequence": 1, "version": "v4.02.8", "service_state": "active"},
-    {"id": "bootstrap-v4032-initial", "sequence": 2, "version": "v4.03.2", "service_state": "active"},
-    {"id": "stable-v4043-initial", "sequence": 3, "version": "v4.04.3", "service_state": "active"},
-    {"id": "candidate-v4100-initial", "sequence": 4, "version": "v4.10.0", "service_state": "active"},
-    {"id": "stable-v4043-rollback", "sequence": 5, "version": "v4.04.3", "service_state": "active"},
-    {"id": "baseline-v4028-snapshot", "sequence": 6, "version": "v4.02.8", "service_state": "active"},
-    {"id": "bootstrap-v4032-reupgrade", "sequence": 7, "version": "v4.03.2", "service_state": "active"},
-    {"id": "stable-v4043-reupgrade", "sequence": 8, "version": "v4.04.3", "service_state": "active"},
-    {"id": "candidate-v4100-reupgrade", "sequence": 9, "version": "v4.10.0", "service_state": "active"},
-    {"id": "purged", "sequence": 10, "version": "absent", "service_state": "absent"}
+    {
+      "id": "baseline-v4028",
+      "sequence": 1,
+      "version": "v4.02.8",
+      "service_state": "active"
+    },
+    {
+      "id": "candidate-v4100-initial",
+      "sequence": 2,
+      "version": "v4.10.0",
+      "service_state": "active"
+    },
+    {
+      "id": "candidate-v4100-reboot",
+      "sequence": 3,
+      "version": "v4.10.0",
+      "service_state": "active"
+    },
+    {
+      "id": "baseline-v4028-snapshot",
+      "sequence": 4,
+      "version": "v4.02.8",
+      "service_state": "active"
+    },
+    {
+      "id": "candidate-v4100-reupgrade",
+      "sequence": 5,
+      "version": "v4.10.0",
+      "service_state": "active"
+    },
+    {
+      "id": "purged",
+      "sequence": 6,
+      "version": "absent",
+      "service_state": "absent"
+    },
+    {
+      "id": "stable-v4043-independent",
+      "sequence": 7,
+      "version": "v4.04.3",
+      "service_state": "active"
+    },
+    {
+      "id": "candidate-v4100-updater",
+      "sequence": 8,
+      "version": "v4.10.0",
+      "service_state": "active"
+    },
+    {
+      "id": "candidate-v4100-updater-reboot",
+      "sequence": 9,
+      "version": "v4.10.0",
+      "service_state": "active"
+    },
+    {
+      "id": "purged-updater",
+      "sequence": 10,
+      "version": "absent",
+      "service_state": "absent"
+    },
+    {
+      "id": "original-v4028-restored",
+      "sequence": 11,
+      "version": "v4.02.8",
+      "service_state": "active"
+    }
   ],
   "scenarios": [
     {
@@ -95,44 +147,176 @@
         "package_manager_healthy",
         "services_active",
         "firewall_owned_rules_present",
-        "configuration_and_state_canary_seeded"
+        "configuration_and_state_canary_seeded",
+        "owner_revision_approval_recorded",
+        "exact_asn_pair_pin_approved_and_captured",
+        "original_recovery_state_attested"
       ]
     },
     {
-      "id": "verified-manual-trust-bootstrap-v4028-to-v4032",
+      "id": "manual-signed-candidate-v4028-to-v4100",
       "sequence": 2,
       "from_checkpoint": "baseline-v4028",
-      "to_checkpoint": "bootstrap-v4032-initial",
-      "verified_manifests": [],
+      "to_checkpoint": "candidate-v4100-initial",
+      "verified_manifests": [
+        "v4.10.0"
+      ],
       "required_checks": [
         "historical_updater_not_used",
-        "manual_first_hop_procedure_used",
-        "release_checksum_file_verified",
-        "package_sha256_matched_release_checksum",
-        "bootstrap_release_commit_bound",
-        "bootstrap_version_exact",
+        "native_package_manager_used",
+        "independent_bundle_verification_before_install",
+        "manifest_signature_verified_before_install",
+        "package_digest_matched_manifest",
+        "detached_deb_signature_verified",
+        "producer_candidate_sha_bound_outside_manifest",
+        "zero_network_and_no_fallback",
+        "prevalidation_config_loads_zero",
+        "prevalidation_firewall_recovery_runs_zero",
+        "preinstallation_operator_state_unchanged",
+        "preinstallation_firewall_state_unchanged",
+        "candidate_commit_bound",
+        "candidate_version_exact",
+        "package_manager_healthy",
+        "configuration_and_state_preserved",
+        "approved_asn_pin_preserved",
+        "services_and_firewall_recovered"
+      ],
+      "installation_channel": "manual-signed-native-deb"
+    },
+    {
+      "id": "candidate-configuration-state-preservation",
+      "sequence": 3,
+      "from_checkpoint": "baseline-v4028",
+      "to_checkpoint": "candidate-v4100-initial",
+      "verified_manifests": [],
+      "required_checks": [
+        "configuration_semantics_equal",
+        "operator_state_canary_equal",
+        "complete_state_inventory_reviewed",
+        "ownership_and_modes_safe",
+        "migration_backup_present",
+        "defaults_did_not_overwrite_operator_values",
+        "approved_asn_address_union_exact"
+      ]
+    },
+    {
+      "id": "candidate-native-capabilities",
+      "sequence": 4,
+      "from_checkpoint": "candidate-v4100-initial",
+      "to_checkpoint": "candidate-v4100-initial",
+      "verified_manifests": [],
+      "required_checks": [
+        "services_active",
+        "firewall_owned_rules_effective",
+        "hids_real_event_detected",
+        "hips_controlled_attack_blocked",
+        "waap_controlled_request_classified",
+        "asn_enrichment_exact",
+        "geo_enrichment_exact",
+        "local_audit_clean"
+      ]
+    },
+    {
+      "id": "candidate-native-reboot",
+      "sequence": 5,
+      "from_checkpoint": "candidate-v4100-initial",
+      "to_checkpoint": "candidate-v4100-reboot",
+      "verified_manifests": [],
+      "required_checks": [
+        "new_boot_attested",
+        "configuration_and_state_preserved",
+        "services_and_firewall_recovered",
+        "package_manager_healthy",
+        "approved_asn_pin_preserved"
+      ]
+    },
+    {
+      "id": "snapshot-recovery-v4028",
+      "sequence": 6,
+      "from_checkpoint": "candidate-v4100-reboot",
+      "to_checkpoint": "baseline-v4028-snapshot",
+      "verified_manifests": [],
+      "required_checks": [
+        "provider_snapshot_restored",
+        "new_boot_attested",
+        "baseline_version_exact",
+        "configuration_and_state_preserved",
+        "services_and_firewall_recovered",
+        "package_manager_healthy",
+        "approved_asn_pin_reapplied_from_reviewed_copy"
+      ]
+    },
+    {
+      "id": "manual-signed-reupgrade-v4028-to-v4100",
+      "sequence": 7,
+      "from_checkpoint": "baseline-v4028-snapshot",
+      "to_checkpoint": "candidate-v4100-reupgrade",
+      "verified_manifests": [
+        "v4.10.0"
+      ],
+      "required_checks": [
+        "historical_updater_not_used",
+        "native_package_manager_used",
+        "independent_bundle_verification_before_install",
+        "manifest_signature_verified_before_install",
+        "package_digest_matched_manifest",
+        "detached_deb_signature_verified",
+        "producer_candidate_sha_bound_outside_manifest",
+        "zero_network_and_no_fallback",
+        "prevalidation_config_loads_zero",
+        "prevalidation_firewall_recovery_runs_zero",
+        "preinstallation_operator_state_unchanged",
+        "preinstallation_firewall_state_unchanged",
+        "candidate_commit_bound",
+        "candidate_version_exact",
+        "package_manager_healthy",
+        "configuration_and_state_preserved",
+        "approved_asn_pin_preserved",
+        "services_and_firewall_recovered"
+      ],
+      "installation_channel": "manual-signed-native-deb"
+    },
+    {
+      "id": "candidate-clean-uninstall-purge",
+      "sequence": 8,
+      "from_checkpoint": "candidate-v4100-reupgrade",
+      "to_checkpoint": "purged",
+      "verified_manifests": [],
+      "required_checks": [
+        "package_absent",
+        "services_absent",
+        "processes_absent",
+        "dedicated_firewall_objects_absent",
+        "dedicated_configuration_absent",
+        "dedicated_state_absent",
+        "dedicated_logs_absent",
         "package_manager_healthy"
       ]
     },
     {
-      "id": "signed-update-v4032-to-v4043",
-      "sequence": 3,
-      "from_checkpoint": "bootstrap-v4032-initial",
-      "to_checkpoint": "stable-v4043-initial",
-      "verified_manifests": ["v4.04.3"],
+      "id": "independent-stable-v4043-install",
+      "sequence": 9,
+      "from_checkpoint": "purged",
+      "to_checkpoint": "stable-v4043-independent",
+      "verified_manifests": [
+        "v4.04.3"
+      ],
       "required_checks": [
-        "syswarden_update_used",
+        "verified_native_baseline_install",
         "manifest_signature_verified_before_install",
         "package_digest_matched_manifest",
         "stable_version_exact",
-        "package_manager_healthy"
-      ]
+        "package_manager_healthy",
+        "independent_configuration_and_state_canary_seeded",
+        "legacy_bootstrap_not_claimed"
+      ],
+      "installation_channel": "verified-native-baseline"
     },
     {
       "id": "stable-v4043-operational",
-      "sequence": 4,
-      "from_checkpoint": "stable-v4043-initial",
-      "to_checkpoint": "stable-v4043-initial",
+      "sequence": 10,
+      "from_checkpoint": "stable-v4043-independent",
+      "to_checkpoint": "stable-v4043-independent",
       "verified_manifests": [],
       "required_checks": [
         "services_active",
@@ -143,10 +327,12 @@
     },
     {
       "id": "verified-candidate-install-v4043-to-v4100",
-      "sequence": 5,
-      "from_checkpoint": "stable-v4043-initial",
-      "to_checkpoint": "candidate-v4100-initial",
-      "verified_manifests": ["v4.10.0"],
+      "sequence": 11,
+      "from_checkpoint": "stable-v4043-independent",
+      "to_checkpoint": "candidate-v4100-updater",
+      "verified_manifests": [
+        "v4.10.0"
+      ],
       "required_checks": [
         "offline_qualification_update_channel_used",
         "candidate_cli_attested_before_execution",
@@ -165,105 +351,41 @@
         "candidate_commit_bound",
         "candidate_version_exact",
         "package_manager_healthy"
-      ]
+      ],
+      "installation_channel": "offline-qualification-bundle"
     },
     {
-      "id": "candidate-configuration-state-preservation",
-      "sequence": 6,
-      "from_checkpoint": "baseline-v4028",
-      "to_checkpoint": "candidate-v4100-initial",
+      "id": "stable-updater-state-preservation",
+      "sequence": 12,
+      "from_checkpoint": "stable-v4043-independent",
+      "to_checkpoint": "candidate-v4100-updater",
       "verified_manifests": [],
       "required_checks": [
         "configuration_semantics_equal",
         "operator_state_canary_equal",
         "complete_state_inventory_reviewed",
         "ownership_and_modes_safe",
-        "migration_backup_present",
         "defaults_did_not_overwrite_operator_values"
       ]
     },
     {
-      "id": "candidate-native-capabilities",
-      "sequence": 7,
-      "from_checkpoint": "candidate-v4100-initial",
-      "to_checkpoint": "candidate-v4100-initial",
+      "id": "candidate-updater-native-reboot",
+      "sequence": 13,
+      "from_checkpoint": "candidate-v4100-updater",
+      "to_checkpoint": "candidate-v4100-updater-reboot",
       "verified_manifests": [],
       "required_checks": [
-        "services_active",
-        "firewall_owned_rules_effective",
-        "hids_real_event_detected",
-        "hips_controlled_attack_blocked",
-        "waap_controlled_request_classified",
-        "asn_enrichment_exact",
-        "geo_enrichment_exact",
-        "local_audit_clean"
-      ]
-    },
-    {
-      "id": "signed-rollback-v4100-to-v4043",
-      "sequence": 8,
-      "from_checkpoint": "candidate-v4100-initial",
-      "to_checkpoint": "stable-v4043-rollback",
-      "verified_manifests": ["v4.04.3"],
-      "required_checks": [
-        "supported_rollback_path_used",
-        "manifest_signature_verified_before_install",
-        "package_digest_matched_manifest",
-        "stable_version_exact",
-        "configuration_and_state_preserved",
-        "services_and_firewall_recovered"
-      ]
-    },
-    {
-      "id": "snapshot-recovery-v4028",
-      "sequence": 9,
-      "from_checkpoint": "stable-v4043-rollback",
-      "to_checkpoint": "baseline-v4028-snapshot",
-      "verified_manifests": [],
-      "required_checks": [
-        "provider_snapshot_restored",
         "new_boot_attested",
-        "baseline_version_exact",
         "configuration_and_state_preserved",
         "services_and_firewall_recovered",
         "package_manager_healthy"
       ]
     },
     {
-      "id": "verified-reupgrade-v4028-through-v4043-to-v4100",
-      "sequence": 10,
-      "from_checkpoint": "baseline-v4028-snapshot",
-      "to_checkpoint": "candidate-v4100-reupgrade",
-      "verified_manifests": ["v4.04.3", "v4.10.0"],
-      "required_checks": [
-        "manual_first_hop_procedure_used",
-        "release_checksum_file_verified",
-        "bootstrap_package_sha256_matched_release_checksum",
-        "stable_signed_syswarden_update_hop_used",
-        "candidate_offline_qualification_bundle_used",
-        "candidate_cli_attested_before_execution",
-        "zero_network_and_no_fallback",
-        "prevalidation_config_loads_zero",
-        "prevalidation_firewall_recovery_runs_zero",
-        "preinstallation_operator_state_unchanged",
-        "preinstallation_firewall_state_unchanged",
-        "bundle_identity_and_digest_bound",
-        "producer_candidate_sha_bound_outside_manifest",
-        "both_manifest_signatures_verified_before_install",
-        "both_package_digests_matched_manifests",
-        "candidate_detached_deb_signature_verified",
-        "candidate_commit_bound",
-        "intermediate_bootstrap_checkpoint_attested",
-        "intermediate_stable_checkpoint_attested",
-        "configuration_and_state_preserved",
-        "services_and_firewall_recovered"
-      ]
-    },
-    {
-      "id": "candidate-clean-uninstall-purge",
-      "sequence": 11,
-      "from_checkpoint": "candidate-v4100-reupgrade",
-      "to_checkpoint": "purged",
+      "id": "candidate-updater-clean-uninstall-purge",
+      "sequence": 14,
+      "from_checkpoint": "candidate-v4100-updater-reboot",
+      "to_checkpoint": "purged-updater",
       "verified_manifests": [],
       "required_checks": [
         "package_absent",
@@ -275,6 +397,84 @@
         "dedicated_logs_absent",
         "package_manager_healthy"
       ]
+    },
+    {
+      "id": "original-v4028-final-restoration",
+      "sequence": 15,
+      "from_checkpoint": "purged-updater",
+      "to_checkpoint": "original-v4028-restored",
+      "verified_manifests": [],
+      "required_checks": [
+        "original_provider_snapshot_restored",
+        "new_boot_attested",
+        "original_configuration_semantics_exact",
+        "original_state_canary_exact",
+        "original_config_files_and_metadata_exact",
+        "original_provider_attachment_restored",
+        "services_and_firewall_recovered",
+        "package_manager_healthy"
+      ]
     }
+  ],
+  "revision": {
+    "reason": "The immutable v4.03.2 bootstrap rejects the selected GEO feeds; retain its failed native evidence and qualify the owner-approved direct signed route.",
+    "superseded_contract_sha256": "c5a4ad44c0d5f8a5e1d13fdbea4cdd89e235941ab10f837160fb97d3624f459e",
+    "owner_approved_proposal_sha256": "ef1ca7c0c8e71c2114c9a3853eea648fa6e5b5f708682ecda1f961e9545af2c4",
+    "historical_failure_must_not_be_reported_as_passed": true
+  },
+  "manual_candidate_channel": {
+    "command": "native-deb-install-after-independent-bundle-and-signature-verification",
+    "executor": "native-package-manager-not-historical-updater",
+    "network_requests": 0,
+    "fallback": false,
+    "bundle_identity": "producer-attested-canonical-descriptor",
+    "candidate_sha_binding": "protected-producer-sha-bound-to-bundle-descriptor-outside-update-manifest-v1",
+    "manifest_contains_candidate_sha": false,
+    "prevalidation_config_loads": 0,
+    "prevalidation_firewall_recovery_runs": 0,
+    "operator_state_until_install": "unchanged",
+    "firewall_state_until_install": "unchanged"
+  },
+  "asn_policy_approval": {
+    "list_base": "allowed_AS16276",
+    "ipv4_sha256": "86e56bf2d8c6df05210da2382c8e0708a23a7b054cdce89b7ce44c57dd9ea1c6",
+    "ipv6_sha256": "45d57d719ce5f1358b9a7419ef0254320d82eec955c8888000848f81e09623c4",
+    "pin_sha256": "ce58d446dd35cc8da50d42d7dd2d70740cd39f8947f28ac979216831b9417f37"
+  },
+  "preservation_groups": {
+    "legacy": [
+      "baseline-v4028",
+      "candidate-v4100-initial",
+      "candidate-v4100-reboot",
+      "baseline-v4028-snapshot",
+      "candidate-v4100-reupgrade"
+    ],
+    "stable-updater": [
+      "stable-v4043-independent",
+      "candidate-v4100-updater",
+      "candidate-v4100-updater-reboot"
+    ]
+  },
+  "required_new_boot_pairs": [
+    [
+      "candidate-v4100-initial",
+      "candidate-v4100-reboot"
+    ],
+    [
+      "candidate-v4100-reboot",
+      "baseline-v4028-snapshot"
+    ],
+    [
+      "candidate-v4100-initial",
+      "candidate-v4100-reupgrade"
+    ],
+    [
+      "candidate-v4100-updater",
+      "candidate-v4100-updater-reboot"
+    ],
+    [
+      "purged-updater",
+      "original-v4028-restored"
+    ]
   ]
 }
