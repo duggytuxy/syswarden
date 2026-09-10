@@ -11,10 +11,11 @@ import (
 
 func lifecyclePrivateTestDirectory(t *testing.T) string {
 	t.Helper()
-	path := t.TempDir()
-	if err := os.Chmod(path, 0700); err != nil { // #nosec G302 -- private directory fixture requires owner execute permission
+	path, err := os.MkdirTemp("", "sw-lifecycle-")
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = os.RemoveAll(path) })
 	return path
 }
 
