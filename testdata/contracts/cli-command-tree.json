@@ -1073,6 +1073,36 @@
     }
   },
   {
+    "path": "syswarden runtime-unblock",
+    "use": "runtime-unblock \u003cIP\u003e...",
+    "short": "Remove local runtime claims through the authenticated core",
+    "long": "Remove local runtime claims through the authenticated core. Persistent blocklists and independent HA source claims remain effective. The core enforces the active HA writer and commits native changes with its durable model.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for runtime-unblock"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "requires at least 1 arg(s), only received 0",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
     "path": "syswarden tui",
     "use": "tui",
     "short": "Launch the local SYSWARDEN terminal dashboard",

@@ -2835,6 +2835,21 @@ func StartHAServerContext(ctx context.Context, fwManager firewall.Manager) (fire
 	if err != nil {
 		return nil, fmt.Errorf("bind HA listener: %w", err)
 	}
+	if local, ok := effectiveManager.(*runtimeLifecycleManager); ok {
+		local.operatorFence = api.fence
+		local.operatorUnban = func(entry string) error {
+			api.mutationMu.Lock()
+			defer api.mutationMu.Unlock()
+			desired, err := api.reconcileDesiredHABanAfterRemoval(entry, api.now().UTC())
+			if err != nil {
+				return err
+			}
+			if desired {
+				return fmt.Errorf("another retained HA claim still requires runtime enforcement")
+			}
+			return nil
+		}
+	}
 	api.startHASweeper(ctx)
 	if components != nil {
 		components.startLoops(ctx, cfg.HeartbeatInterval)

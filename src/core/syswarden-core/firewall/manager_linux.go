@@ -511,6 +511,9 @@ func (m *NftablesManager) RunRecoverableMutation(ctx context.Context, mutation R
 	if hooks.Prepare == nil || hooks.Persist == nil || hooks.Commit == nil {
 		return fmt.Errorf("recoverable firewall mutation requires prepare, persist, and commit hooks")
 	}
+	if (hooks.ObserveBefore == nil) != (hooks.ObserveAfter == nil) {
+		return fmt.Errorf("recoverable native observations require both hooks")
+	}
 	if ctx == nil {
 		return fmt.Errorf("recoverable firewall mutation requires a context")
 	}
@@ -531,6 +534,12 @@ func (m *NftablesManager) RunRecoverableMutation(ctx context.Context, mutation R
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if hooks.ObserveBefore != nil {
+		if err := m.observeMutationLocked(entry, hooks.ObserveBefore); err != nil {
+			m.markOperationFailureLocked(err)
+			return fmt.Errorf("observe native state before mutation: %w", err)
+		}
+	}
 	if err := hooks.Prepare(); err != nil {
 		m.markOperationFailureLocked(err)
 		return fmt.Errorf("prepare recoverable firewall mutation: %w", err)
@@ -541,9 +550,15 @@ func (m *NftablesManager) RunRecoverableMutation(ctx context.Context, mutation R
 		return ctx.Err()
 	default:
 	}
-	if err := m.mutateAndVerifyLocked(entry, mutation.Present, mutation.TTL, mutation.Permanent, !mutation.Permanent); err != nil {
+	if err := m.mutateAndVerifyLocked(entry, mutation.Present, mutation.TTL, mutation.Permanent, !mutation.Permanent && !mutation.PreserveStronger); err != nil {
 		m.markOperationFailureLocked(err)
 		return fmt.Errorf("apply recoverable firewall mutation: %w", err)
+	}
+	if hooks.ObserveAfter != nil {
+		if err := m.observeMutationLocked(entry, hooks.ObserveAfter); err != nil {
+			m.markOperationFailureLocked(err)
+			return fmt.Errorf("observe native state after mutation: %w", err)
+		}
 	}
 	if err := hooks.Persist(); err != nil {
 		m.markOperationFailureLocked(err)
@@ -764,6 +779,10 @@ func (m *NftablesManager) elementStateLocked(set *nftables.Set, entry firewallEn
 	if err != nil {
 		return nftables.SetElement{}, false, false, err
 	}
+	return nftablesElementState(elements, entry)
+}
+
+func nftablesElementState(elements []nftables.SetElement, entry firewallEntry) (nftables.SetElement, bool, bool, error) {
 	expected := nftablesIntervalElements(entry, 0)
 	var start nftables.SetElement
 	startPresent := false

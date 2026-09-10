@@ -45,6 +45,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %srevoke-ssh%s          : Removes an address from the SSH exception registry.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %stui%s                 : Launches the local terminal dashboard; it opens no network listener.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sunblock%s             : Removes one or more addresses or CIDRs from the blocklist.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sruntime-unblock%s     : Removes local runtime claims through the authenticated core; persistent and independent HA claims remain.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %suninstall%s           : Deletes SysWarden services, rules, configuration, data and logs.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sunwhitelist%s         : Removes one or more addresses or CIDRs from the whitelist.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %supdate%s              : Installs an update only after signed-manifest and package verification.\n", ansiGreen, ansiReset)

@@ -542,6 +542,20 @@ func TestPackageRemovalRuntimeSocketUsesExactRootOwnedPath_SW2_PKG_001(t *testin
 	}
 }
 
+func TestPackageRemovalCleansBothExactRuntimeSockets(t *testing.T) {
+	var paths []string
+	err := removeExactRuntimeSocketForPackageRemovalUsing(func(path string, uid, gid uint32) error {
+		if uid != 0 || gid != 0 {
+			t.Fatal("runtime socket ownership attestation changed")
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil || len(paths) != 2 || paths[0] != "/run/syswarden.sock" || paths[1] != "/run/syswarden-control.sock" {
+		t.Fatalf("runtime socket cleanup targets: %v, %v", paths, err)
+	}
+}
+
 func TestOfflinePackageRemovalSocketAbsenceAttestationIsReadOnlyAndFailClosed_SW2_PKG_001(t *testing.T) {
 	uid, gid := systemTestIdentity(t)
 	parent := t.TempDir()

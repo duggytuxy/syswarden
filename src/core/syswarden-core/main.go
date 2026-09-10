@@ -140,6 +140,11 @@ func main() {
 	log.Printf("[SYSWARDEN-Core] Firewall backend initialized: %s", fwManager.Name())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	fwManager, closeRuntimeHistory, err := network.PrepareRuntimeLifecycle(ctx, fwManager)
+	if err != nil {
+		log.Fatalf("[SYSWARDEN-Core] Failed to initialize native runtime history: %v", err)
+	}
+	defer closeRuntimeHistory()
 
 	// Load WAAP Config to get global threshold defaults
 	waapConfig := network.LoadWAAPConfig()
@@ -157,6 +162,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("[SYSWARDEN-Core] Failed to initialize HA runtime: %v", err)
 	}
+	controlServer, err := network.StartRuntimeControlServer(fwManager)
+	if err != nil {
+		log.Fatalf("[SYSWARDEN-Core] Failed to start runtime control: %v", err)
+	}
+	defer controlServer.Stop()
 
 	// Initialize Unix Domain Socket
 	udsServer := network.NewUDSServer(ctx, "/var/run/syswarden.sock", threatEngine, fwManager, telemetryLogger)
@@ -217,6 +227,7 @@ func main() {
 
 	log.Println("[SYSWARDEN-Core] Shutting down gracefully...")
 	cancel()
+	controlServer.Stop()
 	udsServer.Stop()
 	wg.Wait()
 	waapEngine.Wait()

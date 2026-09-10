@@ -108,8 +108,8 @@ profile.
 The final removal scenario must also inject a `%postun` failure after the RPM
 record and payload are removed. It must prove that the root-owned durable helper
 remains at `/var/lib/.syswarden-rhelpo-postun-recovery-v1`, that its metadata is
-exactly `0:0:700:1:9843`, and that its SHA-256 is
-`64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c`.
+exactly `0:0:700:1:9923`, and that its SHA-256 is
+`cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63`.
 The package-executed wrapper uses the exact private `rpm-postun-v1` mode and
 must not issue a nested RPM database query while the erase transaction holds
 the package-manager lock. Its authority remains the exact PREUN identity,

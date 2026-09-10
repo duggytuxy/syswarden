@@ -340,13 +340,15 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         qualification = (EXTENSION_ROOT / "NATIVE_QUALIFICATION_V4.10.0.md").read_text(
             encoding="utf-8"
         )
-        for document in (readme, qualification):
+        recovery_helper = (EXTENSION_ROOT / "scriptlets/postun-recovery.sh").read_bytes()
+        recovery_digest = hashlib.sha256(recovery_helper).hexdigest()
+        post_uninstall = (EXTENSION_ROOT / "scriptlets/post-uninstall.sh").read_text(
+            encoding="utf-8"
+        )
+        for document in (readme, qualification, pre_uninstall, post_uninstall):
             self.assertIn("/var/lib/.syswarden-rhelpo-postun-recovery-v1", document)
-            self.assertIn("0:0:700:1:9843", document)
-            self.assertIn(
-                "64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c",
-                document,
-            )
+            self.assertIn(f"0:0:700:1:{len(recovery_helper)}", document)
+            self.assertIn(recovery_digest, document)
         preset = (REPOSITORY_ROOT / "src/init/systemd/90-syswarden-rhel-image.preset").read_text(
             encoding="utf-8"
         )

@@ -602,14 +602,24 @@ func removeExactRuntimeSocketForPackageRemovalUsing(
 	if remove == nil {
 		return fmt.Errorf("runtime socket removal operator is unavailable")
 	}
-	return remove("/run/syswarden.sock", 0, 0)
+	for _, path := range []string{"/run/syswarden.sock", "/run/syswarden-control.sock"} {
+		if err := remove(path, 0, 0); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // AttestRuntimeSocketAbsentForPackageRemoval provides the read-only half of the
 // exact socket contract. It is used only to accept an already-complete removal
 // retry while the service-manager runtime is offline.
 func AttestRuntimeSocketAbsentForPackageRemoval() error {
-	return attestRuntimeSocketAbsentAt("/run/syswarden.sock", 0, 0)
+	for _, path := range []string{"/run/syswarden.sock", "/run/syswarden-control.sock"} {
+		if err := attestRuntimeSocketAbsentAt(path, 0, 0); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func attestRuntimeSocketAbsentAt(path string, expectedUID, expectedGID uint32) error {

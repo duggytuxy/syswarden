@@ -91,10 +91,10 @@ exact_owned_payload_file() {
 exact_recovery_helper() {
     path="$1"
     [ -f "$path" ] && [ ! -L "$path" ] || fail "Refusing unsafe post-uninstall recovery helper: $path"
-    [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$path")" = '0:0:700:1:9843' ] || \
+    [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$path")" = '0:0:700:1:9923' ] || \
         fail "Refusing modified post-uninstall recovery helper metadata: $path"
     [ "$(/usr/bin/sha256sum -- "$path" | /usr/bin/awk '{print $1}')" = \
-        64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c ] || \
+        cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63 ] || \
         fail "Refusing modified post-uninstall recovery helper content: $path"
 }
 
@@ -111,7 +111,7 @@ remove_recoverable_recovery_helper_prefix() {
     case "$size" in
         ''|*[!0-9]*) fail "Refusing malformed partial post-uninstall recovery helper size: $path" ;;
     esac
-    [ "$size" -lt 9843 ] || fail "Refusing non-partial post-uninstall recovery helper: $path"
+    [ "$size" -lt 9923 ] || fail "Refusing non-partial post-uninstall recovery helper: $path"
     actual_digest="$(/usr/bin/sha256sum -- "$path" | /usr/bin/awk '{print $1}')"
     expected_digest="$(/usr/bin/head -c "$size" -- "$source" | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')"
     [ "$actual_digest" = "$expected_digest" ] || \
@@ -128,7 +128,7 @@ publish_recovery_helper() {
     temporary="${destination}.new"
     if [ -e "$temporary" ] || [ -L "$temporary" ]; then
         temporary_metadata="$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$temporary")"
-        if [ "$temporary_metadata" != '0:0:700:1:9843' ]; then
+        if [ "$temporary_metadata" != '0:0:700:1:9923' ]; then
             remove_recoverable_recovery_helper_prefix "$temporary" "$source"
         fi
     fi
@@ -350,7 +350,7 @@ if [ "$1" -eq 0 ]; then
         [ "$entry" = /usr/libexec/syswarden/rhelpo-postun-recovery-v1 ] || \
             fail "Refusing unexpected RHEL package-owned helper payload: $entry"
         exact_owned_payload_file "$entry" 755 \
-            64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c
+            cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63
         recovery_children=$((recovery_children + 1))
     done
     [ "$recovery_children" -eq 1 ] || fail 'RPM-owned recovery helper inventory is incomplete.'

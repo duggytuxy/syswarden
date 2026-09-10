@@ -42,6 +42,7 @@ type runtimeEnforcementView struct {
 	deleted              int
 	tombstoned           int
 	byIP                 map[string]string
+	localSnapshot        *firewall.RuntimeLifecycleSnapshot
 }
 
 type runtimeLifecycleObservation struct {
@@ -60,7 +61,7 @@ func collectRuntimeEnforcementView(manager FirewallManager) (runtimeEnforcementV
 	view := unavailableRuntimeEnforcementView()
 	reporter, available := manager.(firewall.HAReplicationStateReporter)
 	if !available {
-		return view, nil
+		return collectLocalRuntimeEnforcementView(manager)
 	}
 	view.scope = "ha-v2-runtime-snapshot"
 	snapshot, err := reporter.HAReplicationStateSnapshot(maximumRuntimeEnforcementClaims)
@@ -283,7 +284,18 @@ func resolveRuntimeEnforcementState(
 	if persistent.contains(ip) {
 		return "active"
 	}
-	if state := view.byIP[ip]; state != "" {
+	state := view.byIP[ip]
+	if view.localSnapshot != nil {
+		address, err := netip.ParseAddr(ip)
+		if err == nil {
+			for _, claim := range view.localSnapshot.Claims {
+				if prefix, err := netip.ParsePrefix(claim.Entry); err == nil && prefix.Contains(address) {
+					state = strongerRuntimeEnforcementState(state, claim.State)
+				}
+			}
+		}
+	}
+	if state != "" {
 		return state
 	}
 	if observation, exists := lifecycle[ip]; exists {

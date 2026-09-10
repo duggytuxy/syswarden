@@ -204,9 +204,9 @@ then verify the helper before executing it:
 ```bash
 sudo stat -Lc '%u:%g:%a:%h:%s' -- \
   /var/lib/.syswarden-rhelpo-postun-recovery-v1
-# Expected: 0:0:700:1:9843
+# Expected: 0:0:700:1:9923
 sudo sha256sum -- /var/lib/.syswarden-rhelpo-postun-recovery-v1
-# Expected SHA-256: 64aa4a61059a5b6dcf82b9bf6eeb1edfb402e0a5bf2ba262a99608b4eabcd75c
+# Expected SHA-256: cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63
 sudo /bin/sh /var/lib/.syswarden-rhelpo-postun-recovery-v1
 ```
 

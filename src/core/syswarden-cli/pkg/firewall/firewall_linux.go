@@ -203,11 +203,7 @@ func ApplyPolicies() error {
 }
 
 func applyPoliciesWithDynamicUnban(network string) error {
-	removal, err := newNFTDynamicBanRemoval(network)
-	if err != nil {
-		return err
-	}
-	return applyPolicies([]nftDynamicBanRemoval{removal})
+	return applyPoliciesWithAuthoritativeUnban(network, preflightRuntimeUnban, ApplyPolicies, unbanRuntime)
 }
 
 func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
