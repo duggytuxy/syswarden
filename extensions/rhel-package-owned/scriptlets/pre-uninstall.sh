@@ -261,7 +261,13 @@ if [ "$1" -eq 0 ]; then
         parent_mode="${parent_and_mode##*:}"
         [ -d "$parent_path" ] && [ ! -L "$parent_path" ] || \
             fail "Refusing unsafe RPM payload ancestry before erase: $parent_path"
-        [ "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$parent_path")" = "0:0:${parent_mode}" ] || \
+        parent_metadata="$(/usr/bin/stat -Lc '%u:%g:%a' -- "$parent_path")"
+        # Preserve the distribution-owned read-only shared parent.
+        if [ "$parent_path" = /usr/lib ] && [ "$parent_mode" = 755 ] && \
+           [ "$parent_metadata" = '0:0:555' ]; then
+            continue
+        fi
+        [ "$parent_metadata" = "0:0:${parent_mode}" ] || \
             fail "Refusing modified RPM payload ancestry before erase: $parent_path"
     done
     for preset_marker in \

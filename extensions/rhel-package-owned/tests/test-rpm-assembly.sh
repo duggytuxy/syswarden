@@ -22,6 +22,13 @@ cleanup() {
     trap - EXIT HUP INT TERM
     case "${TEST_WORKSPACE}" in
         /tmp/syswarden-rhel-profile-rpm-test.*)
+            if [ "${RPM_ROOT_MODE:-}" = user-namespace ]; then
+                for root in "${CHROOT_ROOT}" "${CLEAN_CHROOT_ROOT}"; do
+                    if [ -d "${root}/usr/lib" ] && [ ! -L "${root}/usr/lib" ]; then
+                        chmod u+w -- "${root}/usr/lib" || status=1
+                    fi
+                done
+            fi
             if [ "${RPM_ROOT_MODE:-}" = sudo ]; then
                 for root in "${CHROOT_ROOT}" "${CLEAN_CHROOT_ROOT}"; do
                     if [ -d "${root}" ]; then
@@ -799,6 +806,8 @@ for root in "${CLEAN_CHROOT_ROOT}" "${CHROOT_ROOT}"; do
     [[ "$(run_in_chroot "${root}" /usr/bin/rpm --eval '%{_dbpath}')" == \
         /usr/lib/sysimage/rpm ]]
     rpm_at_root "${root}" --initdb
+    # Match the native RHEL parent after creating the fixture RPM database.
+    chroot_admin chmod 0555 -- "${root}/usr/lib"
 done
 
 expect_clean_install_refusal() {
@@ -813,6 +822,12 @@ expect_clean_install_refusal() {
         exit 1
     fi
 }
+
+for unsafe_library_mode in 0550 0750 0775; do
+    chroot_admin chmod "${unsafe_library_mode}" -- "${CLEAN_CHROOT_ROOT}/usr/lib"
+    expect_clean_install_refusal "unsupported shared /usr/lib mode ${unsafe_library_mode}"
+done
+chroot_admin chmod 0555 -- "${CLEAN_CHROOT_ROOT}/usr/lib"
 
 # RPM follows directory symlinks while extracting its payload. The PREIN must
 # reject every reserved payload-root redirection before any package bytes land.
@@ -1470,4 +1485,7 @@ prepare_exact_erase_state "${CHROOT_ROOT}"
 rpm_at_root "${CHROOT_ROOT}" --erase syswarden
 assert_final_absence "${CHROOT_ROOT}"
 
+for root in "${CLEAN_CHROOT_ROOT}" "${CHROOT_ROOT}"; do
+    [[ "$(run_in_chroot "${root}" /usr/bin/stat -Lc '%u:%g:%a' -- /usr/lib)" == 0:0:555 ]]
+done
 printf '%s\n' 'RHEL package-owned RPM assembly contract passed.'

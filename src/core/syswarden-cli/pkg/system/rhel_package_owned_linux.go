@@ -801,9 +801,16 @@ func attestRHELPackageOwnedDirectory(
 		return removalArtifactIdentity{}, err
 	}
 	identity, identityErr := exactRemovalArtifactIdentity(info)
+	modeMatches := info.Mode().Perm() == expectedMode
+	// RHEL filesystem packages own /usr/lib with mode 0555. This shared
+	// parent stays read-only; dedicated product directories remain exact.
+	if expectedMode == 0755 && info.Mode().Perm() == 0555 &&
+		filepath.Clean(path) == filepath.Join(trustedRoot, "usr", "lib") {
+		modeMatches = true
+	}
 	if identityErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() ||
 		info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 ||
-		info.Mode().Perm() != expectedMode || identity.uid != expectedUID || identity.gid != expectedGID {
+		!modeMatches || identity.uid != expectedUID || identity.gid != expectedGID {
 		return removalArtifactIdentity{}, errors.Join(
 			fmt.Errorf("RHEL package-owned directory is not exact: %s", path), identityErr,
 		)
