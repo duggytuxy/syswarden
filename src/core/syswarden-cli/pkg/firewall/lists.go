@@ -1412,30 +1412,32 @@ func RemoveFromBlocklist(ip string) error {
 	if err != nil {
 		return fmt.Errorf("invalid IP address: %w", err)
 	}
-	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
-		return fmt.Errorf("validate firewall backend before blocklist mutation: %w", err)
-	}
+	return network.WithHAUnbanMutation(func(syncUnban func([]string) error) error {
+		if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+			return fmt.Errorf("validate firewall backend before blocklist mutation: %w", err)
+		}
 
-	path := BlocklistV6
-	if entry.isIPv4 {
-		path = BlocklistV4
-	}
-	target, err := approvedListFileForPath(path)
-	if err != nil {
-		return err
-	}
-	sanitizeTargets, err := approvedLegacyOperatorListTargets()
-	if err != nil {
-		return err
-	}
-	return removeFromBlocklistAt(
-		entry.network,
-		target,
-		sanitizeTargets,
-		os.Stdout,
-		applyPoliciesWithDynamicUnban,
-		network.SyncHAUnban,
-	)
+		path := BlocklistV6
+		if entry.isIPv4 {
+			path = BlocklistV4
+		}
+		target, err := approvedListFileForPath(path)
+		if err != nil {
+			return err
+		}
+		sanitizeTargets, err := approvedLegacyOperatorListTargets()
+		if err != nil {
+			return err
+		}
+		return removeFromBlocklistAt(
+			entry.network,
+			target,
+			sanitizeTargets,
+			os.Stdout,
+			applyPoliciesWithDynamicUnban,
+			syncUnban,
+		)
+	})
 }
 
 func removeFromBlocklistAt(
