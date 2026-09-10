@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"syswarden-core/firewall"
 )
 
 const (
@@ -42,27 +44,28 @@ type GRCKPIEvidence struct {
 }
 
 type GRCKPILifecycle struct {
-	Scope                       string `json:"scope"`
-	DeletionRecords             int    `json:"deletion_records"`
-	ExpiryRecords               int    `json:"expiry_records"`
-	TombstoneRecords            int    `json:"tombstone_records"`
-	RuntimeStateLinked          bool   `json:"runtime_state_linked"`
-	RuntimeSnapshotComplete     bool   `json:"runtime_snapshot_complete,omitempty"`
-	RuntimeSnapshotTruncated    bool   `json:"runtime_snapshot_truncated,omitempty"`
-	RuntimeClusterID            string `json:"runtime_cluster_id,omitempty"`
-	RuntimeEpoch                uint64 `json:"runtime_epoch,omitempty"`
-	RuntimeNodeID               string `json:"runtime_node_id,omitempty"`
-	RuntimeRole                 string `json:"runtime_role,omitempty"`
-	RuntimeCoordination         string `json:"runtime_coordination,omitempty"`
-	RuntimeModelSHA256          string `json:"runtime_model_sha256,omitempty"`
-	RuntimeCheckpointSHA256     string `json:"runtime_checkpoint_sha256,omitempty"`
-	RuntimePeerCheckpointSHA256 string `json:"runtime_peer_checkpoint_sha256,omitempty"`
-	RuntimeCheckpointAt         string `json:"runtime_checkpoint_at,omitempty"`
-	RuntimeCapturedAt           string `json:"runtime_captured_at,omitempty"`
-	ActiveClaims                int    `json:"active_claims,omitempty"`
-	ExpiredClaims               int    `json:"expired_claims,omitempty"`
-	DeletedClaims               int    `json:"deleted_claims,omitempty"`
-	TombstonedClaims            int    `json:"tombstoned_claims,omitempty"`
+	Scope                       string                             `json:"scope"`
+	DeletionRecords             int                                `json:"deletion_records"`
+	ExpiryRecords               int                                `json:"expiry_records"`
+	TombstoneRecords            int                                `json:"tombstone_records"`
+	RuntimeStateLinked          bool                               `json:"runtime_state_linked"`
+	RuntimeSnapshotComplete     bool                               `json:"runtime_snapshot_complete,omitempty"`
+	RuntimeSnapshotTruncated    bool                               `json:"runtime_snapshot_truncated,omitempty"`
+	RuntimeClusterID            string                             `json:"runtime_cluster_id,omitempty"`
+	RuntimeEpoch                uint64                             `json:"runtime_epoch,omitempty"`
+	RuntimeNodeID               string                             `json:"runtime_node_id,omitempty"`
+	RuntimeRole                 string                             `json:"runtime_role,omitempty"`
+	RuntimeCoordination         string                             `json:"runtime_coordination,omitempty"`
+	RuntimeModelSHA256          string                             `json:"runtime_model_sha256,omitempty"`
+	RuntimeCheckpointSHA256     string                             `json:"runtime_checkpoint_sha256,omitempty"`
+	RuntimePeerCheckpointSHA256 string                             `json:"runtime_peer_checkpoint_sha256,omitempty"`
+	RuntimeCheckpointAt         string                             `json:"runtime_checkpoint_at,omitempty"`
+	RuntimeCapturedAt           string                             `json:"runtime_captured_at,omitempty"`
+	ActiveClaims                int                                `json:"active_claims,omitempty"`
+	ExpiredClaims               int                                `json:"expired_claims,omitempty"`
+	DeletedClaims               int                                `json:"deleted_claims,omitempty"`
+	TombstonedClaims            int                                `json:"tombstoned_claims,omitempty"`
+	RuntimeLocalSnapshot        *firewall.RuntimeLifecycleSnapshot `json:"runtime_local_snapshot,omitempty"`
 }
 
 type GRCKPIEnforcement struct {
@@ -245,7 +248,8 @@ func buildGRCKPIDocumentWithRuntime(
 	document.Lifecycle.ExpiredClaims = runtimeView.expired
 	document.Lifecycle.DeletedClaims = runtimeView.deleted
 	document.Lifecycle.TombstonedClaims = runtimeView.tombstoned
-	if !runtimeView.complete || runtimeView.coordination != "healthy" {
+	document.Lifecycle.RuntimeLocalSnapshot = runtimeView.localSnapshot
+	if !runtimeView.complete || runtimeView.localSnapshot == nil && runtimeView.coordination != "healthy" {
 		document.Status = kpiEvidenceQualityDegraded
 	}
 	for index := range document.Records {
@@ -489,10 +493,7 @@ func validateGRCKPIDocument(document GRCKPIDocument) error {
 			return fmt.Errorf("GRC KPI truncated physical-hit sum is inconsistent")
 		}
 	}
-	runtimeEvidenceComplete := document.Lifecycle.RuntimeStateLinked &&
-		document.Lifecycle.RuntimeSnapshotComplete && !document.Lifecycle.RuntimeSnapshotTruncated &&
-		document.Lifecycle.RuntimeCoordination == "healthy" &&
-		document.Lifecycle.RuntimePeerCheckpointSHA256 == document.Lifecycle.RuntimeCheckpointSHA256
+	runtimeEvidenceComplete := completeGRCRuntimeLifecycle(document.Lifecycle)
 	completeEvidence := globalCatalogPresent && document.Window.Complete && document.Window.Scope == metricScopeRetained &&
 		document.Evidence.JournalDecodeErrors == 0 && document.Evidence.RejectedEvents == 0 &&
 		document.Evidence.RecordsTruncated == 0 && allRecordsComplete && runtimeEvidenceComplete && allRuntimeStatesExact
@@ -503,6 +504,12 @@ func validateGRCKPIDocument(document GRCKPIDocument) error {
 }
 
 func validateGRCRuntimeLifecycle(lifecycle GRCKPILifecycle) error {
+	if lifecycle.Scope == "local-native-runtime-snapshot" {
+		return validateGRCLocalRuntimeLifecycle(lifecycle)
+	}
+	if lifecycle.RuntimeLocalSnapshot != nil {
+		return fmt.Errorf("local native evidence cannot be attached to another lifecycle scope")
+	}
 	if !lifecycle.RuntimeStateLinked {
 		if lifecycle.Scope != "observed-telemetry-records-only" || lifecycle.RuntimeSnapshotComplete ||
 			lifecycle.RuntimeSnapshotTruncated || lifecycle.RuntimeClusterID != "" || lifecycle.RuntimeEpoch != 0 || lifecycle.RuntimeNodeID != "" ||

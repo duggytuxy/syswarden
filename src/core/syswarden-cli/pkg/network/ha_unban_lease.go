@@ -52,5 +52,5 @@ func acquireHAUnbanLease(cfg *config.Config, fence *haLegacyWriterFence) (func()
 	if fence == nil {
 		return nil, fmt.Errorf("HA native-sync fence is unavailable before local unblock")
 	}
-	return acquireHALegacyWriterLease(fence)
+	return acquireHALegacyWriterLeaseMode(fence, false)
 }

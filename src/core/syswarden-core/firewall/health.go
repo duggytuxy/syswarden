@@ -16,6 +16,9 @@ type RecoverableMutation struct {
 	Present   bool
 	Permanent bool
 	TTL       time.Duration
+	// PreserveStronger keeps an existing permanent or longer timed ban.
+	// The default remains exact reconciliation for HA v2 transactions.
+	PreserveStronger bool
 }
 
 // RecoverableMutationHooks are executed while the shared inter-process
@@ -26,6 +29,59 @@ type RecoverableMutationHooks struct {
 	Prepare func() error
 	Persist func() error
 	Commit  func() error
+	// Observation hooks run under the same lock, before Prepare and Persist.
+	// A caller requiring native lifecycle evidence supplies both hooks.
+	ObserveBefore func(NativeRuntimeEntrySnapshot) error
+	ObserveAfter  func(NativeRuntimeEntrySnapshot) error
+}
+
+// NativeRuntimeEntrySnapshot attests exact element agreement in all expected
+// native sets. ExpiresAt is a conservative upper bound on kernel expiration.
+type NativeRuntimeEntrySnapshot struct {
+	Entry      string
+	CapturedAt time.Time
+	Present    bool
+	Permanent  bool
+	ExpiresAt  time.Time
+}
+
+// NativeRuntimeStateReader holds the host firewall lock through the callback.
+// A callback must not reenter the firewall manager. No snapshot is returned
+// when any expected layer is missing, unreadable, or inconsistent.
+type NativeRuntimeStateReader interface {
+	WithNativeRuntimeSnapshot(context.Context, []string, func([]NativeRuntimeEntrySnapshot) error) error
+}
+
+type RuntimeLifecycleClaimSnapshot struct {
+	Entry        string `json:"entry"`
+	Generation   uint64 `json:"generation"`
+	State        string `json:"state"`
+	Cause        string `json:"cause"`
+	CreatedAt    string `json:"created_at"`
+	TransitionAt string `json:"transition_at"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
+	ConfirmedAt  string `json:"confirmed_at,omitempty"`
+}
+
+// RuntimeLifecycleSnapshot describes the local durable native history. Its
+// identity is not an HA cluster and its sequence is not a peer checkpoint.
+type RuntimeLifecycleSnapshot struct {
+	SchemaVersion int                             `json:"schema_version"`
+	Identity      string                          `json:"identity"`
+	Sequence      uint64                          `json:"sequence"`
+	ModelSHA256   string                          `json:"model_sha256"`
+	UpdatedAt     string                          `json:"updated_at"`
+	CapturedAt    string                          `json:"captured_at"`
+	Active        int                             `json:"active"`
+	Expired       int                             `json:"expired"`
+	Deleted       int                             `json:"deleted"`
+	Tombstoned    int                             `json:"tombstoned"`
+	Truncated     bool                            `json:"truncated"`
+	Claims        []RuntimeLifecycleClaimSnapshot `json:"claims"`
+}
+
+type RuntimeLifecycleStateReporter interface {
+	RuntimeLifecycleStateSnapshot(limit int) (RuntimeLifecycleSnapshot, error)
 }
 
 // RecoverableMutationManager couples a caller-owned durable model to the

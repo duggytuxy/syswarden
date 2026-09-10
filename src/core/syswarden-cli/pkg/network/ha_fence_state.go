@@ -244,6 +244,12 @@ func publishCLIHAFenceState(root *os.Root, expectedOwnerUID int, state cliHAFenc
 }
 
 func acquireHALegacyWriterLease(fence *haLegacyWriterFence) (func(), error) {
+	return acquireHALegacyWriterLeaseMode(fence, true)
+}
+
+// A coordinated local unblock uses compatible read leases in both the CLI
+// and the root control server. Fence transitions still require exclusion.
+func acquireHALegacyWriterLeaseMode(fence *haLegacyWriterFence, exclusive bool) (func(), error) {
 	if fence == nil {
 		return func() {}, nil
 	}
@@ -251,7 +257,7 @@ func acquireHALegacyWriterLease(fence *haLegacyWriterFence) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("open HA native-sync fence: %w", err)
 	}
-	lock, err := openCLIHAFenceLockMode(root, fence.expectedOwnerUID, true, true)
+	lock, err := openCLIHAFenceLockMode(root, fence.expectedOwnerUID, exclusive, true)
 	if err != nil {
 		_ = root.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {

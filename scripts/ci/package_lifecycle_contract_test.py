@@ -4950,6 +4950,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
                             ("/opt/syswarden", str(opt_root)),
                             ("/etc/syswarden", str(etc_root)),
                             ("/run/syswarden.sock", str(runtime_socket)),
+                            (
+                                "/run/syswarden-control.sock",
+                                str(runtime_socket.with_name("syswarden-control.sock")),
+                            ),
                         ),
                         key=lambda item: len(item[0]),
                         reverse=True,
@@ -5041,6 +5045,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("syswarden_remove_exact_product_link", postremove)
         self.assertIn("syswarden_remove_exact_runtime_socket", postremove)
         self.assertIn("syswarden_remove_exact_runtime_socket /run/syswarden.sock", postremove)
+        self.assertIn("syswarden_remove_exact_runtime_socket /run/syswarden-control.sock", postremove)
         self.assertIn("/var/lib/syswarden/removal-in-progress-v1", postremove)
         self.assertIn("/var/lib/syswarden/removed-awaiting-purge-v1", postremove)
         self.assertIn("SYSWARDEN_REMOVAL_V1\\nstate=in-progress\\n", postremove)
@@ -5356,6 +5361,10 @@ systemctl() {
                     ("/opt/syswarden", str(opt_root)),
                     ("/etc/syswarden", str(etc_root)),
                     ("/run/syswarden.sock", str(runtime_socket)),
+                    (
+                        "/run/syswarden-control.sock",
+                        str(runtime_socket.with_name("syswarden-control.sock")),
+                    ),
                 ),
                 key=lambda item: len(item[0]),
                 reverse=True,
@@ -5522,6 +5531,10 @@ systemctl() {
                     ("/opt/syswarden", str(opt_root)),
                     ("/etc/syswarden", str(etc_root)),
                     ("/run/syswarden.sock", str(runtime_socket)),
+                    (
+                        "/run/syswarden-control.sock",
+                        str(runtime_socket.with_name("syswarden-control.sock")),
+                    ),
                 ),
                 key=lambda item: len(item[0]),
                 reverse=True,

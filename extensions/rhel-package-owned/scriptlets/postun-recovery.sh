@@ -102,6 +102,8 @@ assert_rpm_payload_absent() {
         /etc/wireguard/wg-syswarden.conf \
         /run/syswarden.sock \
         /var/run/syswarden.sock \
+        /run/syswarden-control.sock \
+        /var/run/syswarden-control.sock \
         /run/syswarden-core.pid \
         /run/syswarden-firewall.lock \
         /run/syswarden-webtui.pid \

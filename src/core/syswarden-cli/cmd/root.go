@@ -86,6 +86,7 @@ var earlyFirewallRecoveryCommands = map[string]struct{}{
 	"revoke-ssh":              {},
 	"tui":                     {},
 	"unblock":                 {},
+	"runtime-unblock":         {},
 	"uninstall":               {},
 	"unwhitelist":             {},
 	"update":                  {},

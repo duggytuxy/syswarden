@@ -40,6 +40,7 @@ func TestEarlyFirewallRecoveryCommandScope_SW_FW_005(t *testing.T) {
 		"revoke-ssh",
 		"tui",
 		"unblock",
+		"runtime-unblock",
 		"uninstall",
 		"unwhitelist",
 		"update",

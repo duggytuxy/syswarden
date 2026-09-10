@@ -10,6 +10,8 @@ The operator owns role assignment, cluster epoch changes, certificate issuance, 
 
 The legacy CLI `unblock` operation cannot remove HA v2 replicated ownership. It refuses HA v2 before touching persistent lists or the local firewall. In HA v1, the CLI holds the native-sync fence lease across local removal and peer synchronization, so an active or transitioning fence stops the operation before local changes. Use only the supported authenticated, source-owned integration route for integration claims; that route cannot remove an independent core-runtime claim.
 
+The authenticated `syswarden runtime-unblock <IP>` command removes the local core-runtime claim through the healthy HA v2 writer and its replicated transaction. Persistent blocklists and independent integration claims remain effective. Local standalone history and the separate root control socket are described in [Native runtime lifecycle](NATIVE_RUNTIME_LIFECYCLE.md).
+
 ## Required configuration
 
 Set `integrations.ha.enabled = true` and `integrations.ha.v2_enabled = true` only after all of these values are ready:

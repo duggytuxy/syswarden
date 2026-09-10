@@ -764,27 +764,28 @@ type tuiGRCKPIEvidence struct {
 }
 
 type tuiGRCKPILifecycle struct {
-	Scope                       string `json:"scope"`
-	DeletionRecords             int    `json:"deletion_records"`
-	ExpiryRecords               int    `json:"expiry_records"`
-	TombstoneRecords            int    `json:"tombstone_records"`
-	RuntimeStateLinked          bool   `json:"runtime_state_linked"`
-	RuntimeSnapshotComplete     bool   `json:"runtime_snapshot_complete,omitempty"`
-	RuntimeSnapshotTruncated    bool   `json:"runtime_snapshot_truncated,omitempty"`
-	RuntimeClusterID            string `json:"runtime_cluster_id,omitempty"`
-	RuntimeEpoch                uint64 `json:"runtime_epoch,omitempty"`
-	RuntimeNodeID               string `json:"runtime_node_id,omitempty"`
-	RuntimeRole                 string `json:"runtime_role,omitempty"`
-	RuntimeCoordination         string `json:"runtime_coordination,omitempty"`
-	RuntimeModelSHA256          string `json:"runtime_model_sha256,omitempty"`
-	RuntimeCheckpointSHA256     string `json:"runtime_checkpoint_sha256,omitempty"`
-	RuntimePeerCheckpointSHA256 string `json:"runtime_peer_checkpoint_sha256,omitempty"`
-	RuntimeCheckpointAt         string `json:"runtime_checkpoint_at,omitempty"`
-	RuntimeCapturedAt           string `json:"runtime_captured_at,omitempty"`
-	ActiveClaims                int    `json:"active_claims,omitempty"`
-	ExpiredClaims               int    `json:"expired_claims,omitempty"`
-	DeletedClaims               int    `json:"deleted_claims,omitempty"`
-	TombstonedClaims            int    `json:"tombstoned_claims,omitempty"`
+	RuntimeLocalSnapshot        *tuiRuntimeLifecycleSnapshot `json:"runtime_local_snapshot,omitempty"`
+	Scope                       string                       `json:"scope"`
+	DeletionRecords             int                          `json:"deletion_records"`
+	ExpiryRecords               int                          `json:"expiry_records"`
+	TombstoneRecords            int                          `json:"tombstone_records"`
+	RuntimeStateLinked          bool                         `json:"runtime_state_linked"`
+	RuntimeSnapshotComplete     bool                         `json:"runtime_snapshot_complete,omitempty"`
+	RuntimeSnapshotTruncated    bool                         `json:"runtime_snapshot_truncated,omitempty"`
+	RuntimeClusterID            string                       `json:"runtime_cluster_id,omitempty"`
+	RuntimeEpoch                uint64                       `json:"runtime_epoch,omitempty"`
+	RuntimeNodeID               string                       `json:"runtime_node_id,omitempty"`
+	RuntimeRole                 string                       `json:"runtime_role,omitempty"`
+	RuntimeCoordination         string                       `json:"runtime_coordination,omitempty"`
+	RuntimeModelSHA256          string                       `json:"runtime_model_sha256,omitempty"`
+	RuntimeCheckpointSHA256     string                       `json:"runtime_checkpoint_sha256,omitempty"`
+	RuntimePeerCheckpointSHA256 string                       `json:"runtime_peer_checkpoint_sha256,omitempty"`
+	RuntimeCheckpointAt         string                       `json:"runtime_checkpoint_at,omitempty"`
+	RuntimeCapturedAt           string                       `json:"runtime_captured_at,omitempty"`
+	ActiveClaims                int                          `json:"active_claims,omitempty"`
+	ExpiredClaims               int                          `json:"expired_claims,omitempty"`
+	DeletedClaims               int                          `json:"deleted_claims,omitempty"`
+	TombstonedClaims            int                          `json:"tombstoned_claims,omitempty"`
 }
 
 type tuiGRCKPIEnforcement struct {
@@ -839,6 +840,9 @@ func grcKPIEvidenceSummary(raw json.RawMessage) string {
 	}
 	if !envelope.Lifecycle.RuntimeStateLinked {
 		return envelope.Status + "/runtime-unlinked"
+	}
+	if envelope.Lifecycle.Scope == "local-native-runtime-snapshot" {
+		return envelope.Status + "/native-runtime"
 	}
 	return envelope.Status + "/ha-v2-" + envelope.Lifecycle.RuntimeCoordination
 }
@@ -953,7 +957,10 @@ func validateTUIGRCKPIEvidence(raw []byte, envelope grcKPIEvidenceEnvelope) erro
 	}
 	lifecycleRequired := []string{"scope", "deletion_records", "expiry_records", "tombstone_records", "runtime_state_linked"}
 	lifecycleOptional := []string(nil)
-	if envelope.Lifecycle.RuntimeStateLinked {
+	if envelope.Lifecycle.RuntimeStateLinked && envelope.Lifecycle.Scope == "local-native-runtime-snapshot" {
+		lifecycleRequired = append(lifecycleRequired, "runtime_local_snapshot", "runtime_model_sha256", "runtime_captured_at")
+		lifecycleOptional = []string{"runtime_snapshot_complete", "runtime_snapshot_truncated", "active_claims", "expired_claims", "deleted_claims", "tombstoned_claims"}
+	} else if envelope.Lifecycle.RuntimeStateLinked {
 		lifecycleRequired = append(lifecycleRequired,
 			"runtime_cluster_id", "runtime_epoch", "runtime_node_id", "runtime_role",
 			"runtime_coordination", "runtime_model_sha256", "runtime_checkpoint_sha256",
@@ -1111,9 +1118,7 @@ func validateTUIGRCKPIEvidence(raw []byte, envelope grcKPIEvidenceEnvelope) erro
 	}
 	if envelope.Status == "complete" && (!envelope.Window.Complete || envelope.Catalog.Version == "" ||
 		envelope.Evidence.JournalDecodeErrors != 0 || envelope.Evidence.RejectedEvents != 0 || envelope.Evidence.RecordsTruncated != 0 ||
-		!envelope.Lifecycle.RuntimeStateLinked || !envelope.Lifecycle.RuntimeSnapshotComplete ||
-		envelope.Lifecycle.RuntimeSnapshotTruncated || envelope.Lifecycle.RuntimeCoordination != "healthy" ||
-		envelope.Lifecycle.RuntimePeerCheckpointSHA256 != envelope.Lifecycle.RuntimeCheckpointSHA256 || !allRecordsComplete) {
+		!completeTUIRuntimeLifecycle(envelope.Lifecycle) || !allRecordsComplete) {
 		return fmt.Errorf("GRC KPI document over-declares complete evidence")
 	}
 	return nil
@@ -1143,6 +1148,12 @@ func requireTUIJSONObjectKeys(raw []byte, label string, required, optional []str
 }
 
 func validateTUIGRCLifecycle(lifecycle tuiGRCKPILifecycle) error {
+	if lifecycle.Scope == "local-native-runtime-snapshot" {
+		return validateTUILocalRuntimeLifecycle(lifecycle)
+	}
+	if lifecycle.RuntimeLocalSnapshot != nil {
+		return fmt.Errorf("local native evidence cannot be attached to another lifecycle scope")
+	}
 	if lifecycle.DeletionRecords < 0 || lifecycle.ExpiryRecords < 0 || lifecycle.TombstoneRecords < 0 {
 		return fmt.Errorf("GRC KPI lifecycle counters are invalid")
 	}
@@ -1626,7 +1637,16 @@ func main() {
 			return nil
 		}
 		if event.Key() == tcell.KeyEscape {
+			if runtimeHistoryOpen {
+				runtimeHistoryOpen = false
+				app.SetRoot(mainFlex, true).SetFocus(bannedTable)
+				return nil
+			}
 			showP2PMenu(mainFlex)
+			return nil
+		}
+		if event.Rune() == 'h' || event.Rune() == 'H' {
+			showRuntimeLifecycleHistory(mainFlex)
 			return nil
 		}
 		return event
@@ -2103,7 +2123,7 @@ func showP2PMenu(mainFlex *tview.Flex) {
 
 func showHotkeysMenu(mainFlex *tview.Flex) {
 	modal := tview.NewModal().
-		SetText("[white]P2P TUI HOTKEYS[-]\n\n[yellow]Esc[-]    : Open P2P HA-Cluster Menu\n[yellow]Ctrl+C[-] : Force exit TUI\n[yellow]q / Q[-]  : Quit TUI\n[yellow]u / U[-]  : Unban IP (when in ALLOWED/BANNED table)\n[yellow]Tab[-]    : Switch focus between panels\n[yellow]Enter[-]  : Select Node in HA-Cluster Explorer").
+		SetText("[white]P2P TUI HOTKEYS[-]\n\n[yellow]h / H[-]  : Runtime lifecycle history\n[yellow]Esc[-]    : Open P2P HA-Cluster Menu\n[yellow]Ctrl+C[-] : Force exit TUI\n[yellow]q / Q[-]  : Quit TUI\n[yellow]u / U[-]  : Unban IP (when in ALLOWED/BANNED table)\n[yellow]Tab[-]    : Switch focus between panels\n[yellow]Enter[-]  : Select Node in HA-Cluster Explorer").
 		AddButtons([]string{"Back"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			showP2PMenu(mainFlex)
@@ -2826,6 +2846,14 @@ func printDashboardText() {
 			a := d.WAF.TopAttackers[i]
 			fmt.Printf(" - %s | hits=%d | severity=%s | jail=%s | enforcement=%s/%s | enforcement_state=%s | policy_quality=%s | metric_quality=%s | hit_quality=%s | evidence=%s | %s / %s / %s\n",
 				a.IP, a.Hits, a.Severity, a.PrimaryJail, a.EnforcementJail, a.EnforcementAction, a.EnforcementState, a.SelectedPolicyQuality, a.MetricQuality, a.HitQuality, a.HitEvidence, a.Country, a.ASN, a.Org)
+		}
+	}
+	fmt.Println("[RUNTIME LIFECYCLE HISTORY]")
+	if lines, err := runtimeLifecycleHistoryLines(d.WAF.GRCKPI); err != nil {
+		fmt.Printf(" - Unavailable: %v\n", err)
+	} else {
+		for _, line := range lines {
+			fmt.Println(" - " + line)
 		}
 	}
 }

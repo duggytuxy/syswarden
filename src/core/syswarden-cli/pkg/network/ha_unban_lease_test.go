@@ -50,6 +50,11 @@ func TestHAUnbanLeasePreventsFenceTransitionUntilLocalAndPeerWorkEnds(t *testing
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
+	coreLease, err := openCLIHAFenceLockMode(root, os.Geteuid(), false, true)
+	if err != nil {
+		t.Fatalf("authenticated core cannot share the CLI unblock fence lease: %v", err)
+	}
+	closeCLIHAFenceLock(coreLease)
 	transition, err := openCLIHAFenceLockMode(root, os.Geteuid(), true, true)
 	if err == nil {
 		closeCLIHAFenceLock(transition)
@@ -72,7 +77,7 @@ func TestHAUnbanLeasePreventsFenceTransitionUntilLocalAndPeerWorkEnds(t *testing
 	options := testHASyncOptions(t, server.Client())
 	options.legacyFence = fence
 	if err := syncHAUnbanUnderLease(context.Background(), cfg, []string{"198.51.100.7"}, options); err != nil {
-		t.Fatalf("peer synchronization tried to reacquire the retained exclusive lease: %v", err)
+		t.Fatalf("peer synchronization failed under the retained fence lease: %v", err)
 	}
 	if requests.Load() != 1 {
 		t.Fatalf("unban requests=%d", requests.Load())

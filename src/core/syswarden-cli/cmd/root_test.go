@@ -24,6 +24,7 @@ func TestTopLevelCommandContract(t *testing.T) {
 		"recover-wireguard",
 		"reload",
 		"revoke-ssh",
+		"runtime-unblock",
 		"tui",
 		"unblock",
 		"uninstall",

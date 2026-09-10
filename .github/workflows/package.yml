@@ -1027,6 +1027,7 @@ jobs:
               syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
               syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
               syswarden_remove_exact_runtime_socket /run/syswarden.sock || exit 1
+              syswarden_remove_exact_runtime_socket /run/syswarden-control.sock || exit 1
               if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
                   syswarden_select_removal_barrier
                   syswarden_barrier_status=$?

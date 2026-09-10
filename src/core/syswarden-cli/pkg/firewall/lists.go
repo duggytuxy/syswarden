@@ -1260,8 +1260,22 @@ func AddToWhitelist(ip string, port string) error {
 	if err != nil {
 		return fmt.Errorf("invalid whitelist entry: %w", err)
 	}
+	if entry.port == "" {
+		return network.WithHAUnbanMutation(func(func([]string) error) error {
+			return addCanonicalWhitelist(entry)
+		})
+	}
+	return addCanonicalWhitelist(entry)
+}
+
+func addCanonicalWhitelist(entry canonicalListEntry) error {
 	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
 		return fmt.Errorf("validate firewall backend before whitelist mutation: %w", err)
+	}
+	if entry.port == "" {
+		if err := preflightRuntimeUnban(entry.network); err != nil {
+			return err
+		}
 	}
 
 	blocklistPath := BlocklistV6
@@ -1415,6 +1429,10 @@ func RemoveFromBlocklist(ip string) error {
 	return network.WithHAUnbanMutation(func(syncUnban func([]string) error) error {
 		if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
 			return fmt.Errorf("validate firewall backend before blocklist mutation: %w", err)
+		}
+
+		if err := preflightRuntimeUnban(entry.network); err != nil {
+			return err
 		}
 
 		path := BlocklistV6
