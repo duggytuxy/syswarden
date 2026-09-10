@@ -18,10 +18,10 @@ from typing import Any, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONTRACT = ROOT / "scripts/ci/node01_migration_contract_v4.10.0.json"
-CONTRACT_SHA256 = "c5a4ad44c0d5f8a5e1d13fdbea4cdd89e235941ab10f837160fb97d3624f459e"
-OBSERVATIONS_SCHEMA = "syswarden-node01-migration-observations/v1"
-EVIDENCE_SCHEMA = "syswarden-node01-migration-evidence/v1"
-VERDICT_SCHEMA = "syswarden-node01-migration-verdict/v1"
+CONTRACT_SHA256 = "64d3b14484659ce9e79b3461a7bcca4359dcf9145417e52b9cfa2f81737372f4"
+OBSERVATIONS_SCHEMA = "syswarden-node01-migration-observations/v2"
+EVIDENCE_SCHEMA = "syswarden-node01-migration-evidence/v2"
+VERDICT_SCHEMA = "syswarden-node01-migration-verdict/v2"
 REPOSITORY = "duggytuxy/syswarden"
 TARGET_RELEASE = "v4.10.0"
 BASELINE_RELEASE = "v4.02.8"
@@ -183,13 +183,14 @@ def _contract(path: Path) -> tuple[dict[str, Any], str]:
         {
             "schema_version", "contract_id", "target_release", "qualification_state",
             "repository", "host", "versions", "update_trust", "native_package_trust",
-            "candidate_channel", "limits", "guardrails", "checkpoints", "scenarios",
+            "candidate_channel", "manual_candidate_channel", "limits", "guardrails", "checkpoints", "scenarios",
+            "revision", "asn_policy_approval", "preservation_groups", "required_new_boot_pairs",
         },
         "migration contract",
     )
     if (
-        contract["schema_version"] != 1
-        or contract["contract_id"] != "syswarden-node01-native-migration/v1"
+        contract["schema_version"] != 2
+        or contract["contract_id"] != "syswarden-node01-native-migration/v2"
         or contract["target_release"] != TARGET_RELEASE
         or contract["qualification_state"] != "candidate-not-qualified"
         or contract["repository"] != REPOSITORY
@@ -229,7 +230,6 @@ def _manifest_verification(
     openpgp_fingerprint: str,
     contract: dict[str, Any],
     expected_channel: str,
-    expected_updater_source_package_sha256: str,
     expected_candidate_package: dict[str, Any],
 ) -> dict[str, Any]:
     manifest_keys = {
@@ -306,14 +306,14 @@ def _manifest_verification(
             raise MigrationEvidenceError("candidate DEB signer differs from the qualified signing policy")
         if item["detached_package_signature_verified"] is not True:
             raise MigrationEvidenceError("candidate DEB detached signature was not verified")
-        channel = contract["candidate_channel"]
+        channel = contract["manual_candidate_channel" if expected_channel == "manual-signed-native-deb" else "candidate_channel"]
         prevalidation = _exact(
             item["qualification_prevalidation"],
             {
                 "config_loads", "firewall_recovery_runs", "operator_state_before_sha256",
                 "operator_state_at_install_sha256", "firewall_state_before_sha256",
                 "firewall_state_at_install_sha256", "install_started_after_bundle_validation",
-                "exact_flags_gate",
+                "exact_invocation_gate",
             },
             "candidate qualification prevalidation",
         )
@@ -323,14 +323,12 @@ def _manifest_verification(
         ):
             _string(prevalidation[key], SHA256, f"candidate {key}")
         if (
-            expected_channel != "offline-qualification-bundle"
+            expected_channel not in ("offline-qualification-bundle", "manual-signed-native-deb")
             or item["installation_channel"] != expected_channel
             or item["normalized_invocation"] != channel["command"]
             or item["network_requests"] != channel["network_requests"]
             or item["fallback_used"] is not channel["fallback"]
             or item["offline_mode_confirmed"] is not True
-            or item["updater_executable_attested"] is not True
-            or item["updater_executable_source_package_sha256"] != item["package_sha256"]
             or type(prevalidation["config_loads"]) is not int
             or prevalidation["config_loads"] != channel["prevalidation_config_loads"]
             or type(prevalidation["firewall_recovery_runs"]) is not int
@@ -341,10 +339,18 @@ def _manifest_verification(
             or prevalidation["firewall_state_before_sha256"]
             != prevalidation["firewall_state_at_install_sha256"]
             or prevalidation["install_started_after_bundle_validation"] is not True
-            or prevalidation["exact_flags_gate"] is not True
+            or prevalidation["exact_invocation_gate"] is not True
         ):
             raise MigrationEvidenceError("candidate did not use the exact offline qualification channel")
-        _string(item["updater_executable_sha256"], SHA256, "candidate updater executable digest")
+        if expected_channel == "offline-qualification-bundle":
+            if (item["updater_executable_attested"] is not True
+                    or item["updater_executable_source_package_sha256"] != item["package_sha256"]):
+                raise MigrationEvidenceError("candidate updater executable is not package-attested")
+            _string(item["updater_executable_sha256"], SHA256, "candidate updater executable digest")
+        elif (item["updater_executable_attested"] is not False
+                or item["updater_executable_sha256"] != "not-applicable"
+                or item["updater_executable_source_package_sha256"] != "not-applicable"):
+            raise MigrationEvidenceError("manual signed installation must not claim an updater executable")
         _string(item["qualification_bundle_identity"], IDENTITY, "qualification bundle identity")
         _string(item["qualification_bundle_descriptor_sha256"], SHA256, "qualification bundle descriptor digest")
         _string(
@@ -364,30 +370,17 @@ def _manifest_verification(
             raise MigrationEvidenceError("stable release must not invent a detached DEB signature")
         if item["installation_channel"] != expected_channel:
             raise MigrationEvidenceError("stable installation channel does not match its scenario")
-        if expected_channel == "production-online-latest":
-            if (
-                item["normalized_invocation"] != "syswarden update"
-                or item["network_requests"] <= 0
-                or item["offline_mode_confirmed"] is not False
-                or item["updater_executable_attested"] is not True
-                or item["updater_executable_source_package_sha256"]
-                != expected_updater_source_package_sha256
-            ):
-                raise MigrationEvidenceError("stable update did not use the production signed updater")
-            for key in ("updater_executable_sha256", "updater_executable_source_package_sha256"):
-                _string(item[key], SHA256, f"stable {key}")
-        elif expected_channel == "verified-native-rollback":
-            if (
-                item["normalized_invocation"] != "native-deb-rollback-after-manifest-verification"
-                or item["network_requests"] != 0
-                or item["offline_mode_confirmed"] is not False
-                or item["updater_executable_attested"] is not False
-                or item["updater_executable_sha256"] != "not-applicable"
-                or item["updater_executable_source_package_sha256"] != "not-applicable"
-            ):
-                raise MigrationEvidenceError("stable rollback channel is invalid")
-        else:
+        if expected_channel != "verified-native-baseline":
             raise MigrationEvidenceError("stable installation channel is invalid")
+        if (
+            item["normalized_invocation"] != "native-deb-install-after-manifest-verification"
+            or item["network_requests"] != 0
+            or item["offline_mode_confirmed"] is not False
+            or item["updater_executable_attested"] is not False
+            or item["updater_executable_sha256"] != "not-applicable"
+            or item["updater_executable_source_package_sha256"] != "not-applicable"
+        ):
+            raise MigrationEvidenceError("independent stable baseline must not claim a historical signed updater hop")
         for key in (
             "qualification_bundle_identity", "qualification_bundle_descriptor_sha256",
             "qualification_bundle_producer_attestation_sha256",
@@ -402,7 +395,7 @@ def _validate_host(value: object, contract: dict[str, Any], candidate_sha: str) 
         value,
         {
             "node_id", "profile_id", "os_id", "os_version", "architecture", "package_family",
-            "service_manager", "ssh_host_key_sha256", "candidate_sha", "attestation_ref",
+            "service_manager", "ssh_host_key_sha256", "restored_ssh_host_key_sha256", "candidate_sha", "attestation_ref",
             "attestation_sha256",
         },
         "host attestation",
@@ -411,6 +404,7 @@ def _validate_host(value: object, contract: dict[str, Any], candidate_sha: str) 
         if host[key] != expected:
             raise MigrationEvidenceError(f"NODE01 host field mismatch: {key}")
     _string(host["ssh_host_key_sha256"], SSH_FINGERPRINT, "NODE01 SSH host key fingerprint")
+    _string(host["restored_ssh_host_key_sha256"], SSH_FINGERPRINT, "restored NODE01 SSH host key fingerprint")
     if host["candidate_sha"] != candidate_sha:
         raise MigrationEvidenceError("host attestation is not candidate-bound")
     _string(host["attestation_sha256"], SHA256, "host attestation digest")
@@ -421,6 +415,8 @@ def _validate_checkpoint(
     value: object,
     expected: dict[str, Any],
     candidate_sha: str,
+    allowed_host_keys: set[str],
+    expected_asn_pin: str,
 ) -> tuple[dict[str, Any], str, dt.datetime]:
     checkpoint = _exact(
         value,
@@ -430,6 +426,7 @@ def _validate_checkpoint(
             "operator_state_canary_sha256", "persistent_state_inventory_sha256",
             "syswarden_firewall_sha256", "core_service_state", "firewall_service_state",
             "package_manager_healthy", "evidence_ref", "evidence_sha256",
+            "ssh_host_key_sha256", "asn_policy_pin_sha256",
         },
         "checkpoint",
     )
@@ -437,6 +434,11 @@ def _validate_checkpoint(
         raise MigrationEvidenceError("checkpoint order or identity is incorrect")
     if checkpoint["installed_version"] != expected["version"]:
         raise MigrationEvidenceError(f"checkpoint version mismatch: {expected['id']}")
+    _string(checkpoint["ssh_host_key_sha256"], SSH_FINGERPRINT, "checkpoint SSH host key")
+    if checkpoint["ssh_host_key_sha256"] not in allowed_host_keys:
+        raise MigrationEvidenceError("checkpoint SSH host key is not in the independently verified recovery pins")
+    if checkpoint["asn_policy_pin_sha256"] != expected_asn_pin:
+        raise MigrationEvidenceError("checkpoint ASN policy approval pin changed or is missing")
     if checkpoint["package_manager_healthy"] is not True:
         raise MigrationEvidenceError(f"package manager is unhealthy at {expected['id']}")
     observed_at = _timestamp(checkpoint["observed_at"], "checkpoint timestamp")
@@ -488,7 +490,7 @@ def _validate_scenario(
         value,
         {
             "id", "sequence", "status", "observed_at", "from_checkpoint", "to_checkpoint",
-            "verified_manifests", "trust_bootstrap_verification", "checks", "evidence_ref",
+            "verified_manifests", "historical_bootstrap_claimed", "checks", "evidence_ref",
             "evidence_sha256",
         },
         "migration scenario",
@@ -506,63 +508,13 @@ def _validate_scenario(
     if type(manifests) is not list or len(manifests) != len(expected_tags):
         raise MigrationEvidenceError(f"verified manifest inventory mismatch: {scenario['id']}")
     for item, tag in zip(manifests, expected_tags, strict=True):
-        if tag == TARGET_RELEASE:
-            channel = "offline-qualification-bundle"
-            source_package = checkpoint_packages[
-                "candidate-v4100-initial"
-                if scenario["id"] == "verified-candidate-install-v4043-to-v4100"
-                else "candidate-v4100-reupgrade"
-            ]
-        elif scenario["id"] == "signed-rollback-v4100-to-v4043":
-            channel = "verified-native-rollback"
-            source_package = "not-applicable"
-        else:
-            channel = "production-online-latest"
-            source_package = checkpoint_packages[
-                "bootstrap-v4032-initial"
-                if scenario["id"] == "signed-update-v4032-to-v4043"
-                else "bootstrap-v4032-reupgrade"
-            ]
         _manifest_verification(
-            item,
-            tag,
-            candidate_sha,
-            openpgp_fingerprint,
-            contract,
-            channel,
-            source_package,
+            item, tag, candidate_sha, openpgp_fingerprint, contract,
+            expected["installation_channel"],
             expected_candidate_package,
         )
-    bootstrap_scenarios = {
-        "verified-manual-trust-bootstrap-v4028-to-v4032": "bootstrap-v4032-initial",
-        "verified-reupgrade-v4028-through-v4043-to-v4100": "bootstrap-v4032-reupgrade",
-    }
-    if scenario["id"] in bootstrap_scenarios:
-        bootstrap = _exact(
-            scenario["trust_bootstrap_verification"],
-            {
-                "release_tag", "producer_commit_sha", "release_tag_signature_verified",
-                "release_checksums_sha256", "package_sha256", "package_digest_matched",
-                "download_origin", "manual_first_hop", "historical_updater_used",
-            },
-            "v4.03.2 trust bootstrap verification",
-        )
-        if (
-            bootstrap["release_tag"] != TRUST_BOOTSTRAP_RELEASE
-            or bootstrap["producer_commit_sha"] != TRUST_BOOTSTRAP_COMMIT
-            or bootstrap["release_tag_signature_verified"] is not True
-            or bootstrap["package_digest_matched"] is not True
-            or bootstrap["download_origin"] != "github-release-assets-separated"
-            or bootstrap["manual_first_hop"] is not True
-            or bootstrap["historical_updater_used"] is not False
-            or bootstrap["package_sha256"]
-            != checkpoint_packages[bootstrap_scenarios[scenario["id"]]]
-        ):
-            raise MigrationEvidenceError("historical v4.03.2 trust bootstrap is invalid")
-        for key in ("release_checksums_sha256", "package_sha256"):
-            _string(bootstrap[key], SHA256, f"trust bootstrap {key}")
-    elif scenario["trust_bootstrap_verification"] != "not-applicable":
-        raise MigrationEvidenceError("non-bootstrap scenario must not claim the historical trust bootstrap")
+    if scenario["historical_bootstrap_claimed"] is not False:
+        raise MigrationEvidenceError("revised migration must not claim the failed historical trust bootstrap")
     observed_at = _timestamp(scenario["observed_at"], "scenario timestamp")
     _string(scenario["evidence_sha256"], SHA256, "scenario evidence digest")
     ref = _string(scenario["evidence_ref"], REFERENCE, "scenario evidence reference")
@@ -687,13 +639,22 @@ def validate_evidence(
         document["campaign"],
         {
             "id", "started_at", "completed_at", "operator_identity", "observation_origin",
-            "synthetic", "network_control", "snapshot_reference",
+            "synthetic", "network_control", "snapshot_reference", "original_snapshot_reference",
+            "original_configuration_semantic_sha256", "original_operator_state_canary_sha256",
+            "owner_approved_proposal_sha256",
         },
         "migration campaign",
     )
     _string(campaign["id"], IDENTIFIER, "campaign id")
     _string(campaign["operator_identity"], IDENTITY, "operator identity")
     _string(campaign["snapshot_reference"], IDENTITY, "snapshot reference")
+    _string(campaign["original_snapshot_reference"], IDENTITY, "original snapshot reference")
+    if campaign["original_snapshot_reference"] == campaign["snapshot_reference"]:
+        raise MigrationEvidenceError("prepared and original recovery snapshot references must be distinct")
+    for key in ("original_configuration_semantic_sha256", "original_operator_state_canary_sha256"):
+        _string(campaign[key], SHA256, key)
+    if campaign["owner_approved_proposal_sha256"] != contract["revision"]["owner_approved_proposal_sha256"]:
+        raise MigrationEvidenceError("migration scope differs from the owner-approved revision")
     if (
         campaign["observation_origin"] != contract["guardrails"]["observation_origin"]
         or campaign["synthetic"] is not False
@@ -725,7 +686,13 @@ def validate_evidence(
     checkpoints: list[dict[str, Any]] = []
     checkpoint_times: list[dt.datetime] = []
     for value, expected in zip(checkpoints_value, expected_checkpoints, strict=True):
-        checkpoint, ref, observed_at = _validate_checkpoint(value, expected, candidate_sha)
+        expected_pin = (contract["asn_policy_approval"]["pin_sha256"]
+                        if expected["id"] in contract["preservation_groups"]["legacy"] else "absent")
+        checkpoint, ref, observed_at = _validate_checkpoint(
+            value, expected, candidate_sha,
+            {document["host"]["ssh_host_key_sha256"], document["host"]["restored_ssh_host_key_sha256"]},
+            expected_pin,
+        )
         if ref in references:
             raise MigrationEvidenceError("raw evidence reference is reused")
         references.add(ref)
@@ -737,26 +704,27 @@ def validate_evidence(
         raise MigrationEvidenceError("checkpoint timestamps are outside the ordered campaign")
 
     by_checkpoint = {item["id"]: item for item in checkpoints}
-    baseline = by_checkpoint["baseline-v4028"]
-    installed = [item for item in checkpoints if item["installed_version"] != "absent"]
-    for item in installed:
-        if item["configuration_semantic_sha256"] != baseline["configuration_semantic_sha256"]:
-            raise MigrationEvidenceError("configuration semantics changed across migration")
-        if item["operator_state_canary_sha256"] != baseline["operator_state_canary_sha256"]:
-            raise MigrationEvidenceError("operator state canary changed across migration")
-    for version, ids in {
-        BASELINE_RELEASE: ("baseline-v4028", "baseline-v4028-snapshot"),
-        TRUST_BOOTSTRAP_RELEASE: ("bootstrap-v4032-initial", "bootstrap-v4032-reupgrade"),
-        STABLE_RELEASE: ("stable-v4043-initial", "stable-v4043-rollback", "stable-v4043-reupgrade"),
-        TARGET_RELEASE: ("candidate-v4100-initial", "candidate-v4100-reupgrade"),
-    }.items():
-        package_hashes = {by_checkpoint[item]["installed_package_sha256"] for item in ids}
-        if len(package_hashes) != 1:
+    for group in contract["preservation_groups"].values():
+        baseline = by_checkpoint[group[0]]
+        for name in group:
+            item = by_checkpoint[name]
+            if item["configuration_semantic_sha256"] != baseline["configuration_semantic_sha256"]:
+                raise MigrationEvidenceError("configuration semantics changed across migration")
+            if item["operator_state_canary_sha256"] != baseline["operator_state_canary_sha256"]:
+                raise MigrationEvidenceError("operator state canary changed across migration")
+    for version in (BASELINE_RELEASE, STABLE_RELEASE, TARGET_RELEASE):
+        hashes = {item["installed_package_sha256"] for item in checkpoints if item["installed_version"] == version}
+        if len(hashes) != 1:
             raise MigrationEvidenceError(f"installed package bytes changed for {version}")
-    if by_checkpoint["baseline-v4028-snapshot"]["boot_id_sha256"] == baseline["boot_id_sha256"]:
-        raise MigrationEvidenceError("snapshot recovery did not attest a new boot")
-    if by_checkpoint["candidate-v4100-reupgrade"]["boot_id_sha256"] == by_checkpoint["candidate-v4100-initial"]["boot_id_sha256"]:
-        raise MigrationEvidenceError("re-upgrade did not occur after the attested snapshot boot")
+    for earlier, later in contract["required_new_boot_pairs"]:
+        if by_checkpoint[earlier]["boot_id_sha256"] == by_checkpoint[later]["boot_id_sha256"]:
+            raise MigrationEvidenceError("required reboot or snapshot recovery did not attest a new boot")
+    original = by_checkpoint["original-v4028-restored"]
+    for key in ("configuration_semantic_sha256", "operator_state_canary_sha256"):
+        if original[key] != campaign["original_" + key]:
+            raise MigrationEvidenceError("final restoration differs from the original pre-lab state")
+    if original["ssh_host_key_sha256"] != document["host"]["ssh_host_key_sha256"]:
+        raise MigrationEvidenceError("final restoration did not recover the original SSH host key")
 
     expected_scenarios = contract["scenarios"]
     scenarios_value = document["scenarios"]
@@ -788,14 +756,15 @@ def validate_evidence(
     ):
         raise MigrationEvidenceError("scenario timestamps are outside the ordered campaign")
 
-    candidate_source_checkpoints = {
-        "verified-candidate-install-v4043-to-v4100": "stable-v4043-initial",
-        "verified-reupgrade-v4028-through-v4043-to-v4100": "stable-v4043-reupgrade",
-    }
+    expected_by_scenario = {item["id"]: item for item in contract["scenarios"]}
     for scenario in scenarios:
-        source_id = candidate_source_checkpoints.get(scenario["id"])
-        if source_id is None:
+        expected = expected_by_scenario[scenario["id"]]
+        if _timestamp(scenario["observed_at"], "scenario timestamp") < _timestamp(
+                by_checkpoint[expected["to_checkpoint"]]["observed_at"], "checkpoint timestamp"):
+            raise MigrationEvidenceError("scenario timestamps precede their attested target checkpoint")
+        if TARGET_RELEASE not in expected["verified_manifests"]:
             continue
+        source_id = expected["from_checkpoint"]
         candidate_manifests = [
             item
             for item in scenario["verified_manifests"]
@@ -819,7 +788,7 @@ def validate_evidence(
                 "candidate prevalidation state differs from the attested source checkpoint"
             )
 
-    stable_package = by_checkpoint["stable-v4043-initial"]["installed_package_sha256"]
+    stable_package = by_checkpoint["stable-v4043-independent"]["installed_package_sha256"]
     candidate_package = by_checkpoint["candidate-v4100-initial"]["installed_package_sha256"]
     if candidate_package != candidate_package_record["sha256"]:
         raise MigrationEvidenceError(

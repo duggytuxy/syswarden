@@ -1303,8 +1303,13 @@ func configuredASNNftSources(directory, asns string, allowed bool) ([]nftListSou
 			continue
 		}
 		base := prefix + "AS" + digits
-		ipv4 = append(ipv4, nftListSource{path: filepath.Join(directory, base+".ipv4"), required: true})
-		ipv6 = append(ipv6, nftListSource{path: filepath.Join(directory, base+".ipv6"), required: true})
+		pin4, pin6, err := configuredASNPolicyPins(directory, base)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("configured ASN %s: %w", base, err))
+			continue
+		}
+		ipv4 = append(ipv4, nftListSource{path: filepath.Join(directory, base+".ipv4"), required: true, asnPolicySHA256: pin4})
+		ipv6 = append(ipv6, nftListSource{path: filepath.Join(directory, base+".ipv6"), required: true, asnPolicySHA256: pin6})
 	}
 	return ipv4, ipv6, errors.Join(errs...)
 }

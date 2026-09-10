@@ -784,7 +784,10 @@ jobs:
             --arg producer_attestation_sha256 "${candidate_attestation_sha256}" '
               [.scenarios[].verified_manifests[] |
                 select(.release_tag == $release_tag)] as $candidate_manifests |
-              ($candidate_manifests | length) == 2 and
+              ($candidate_manifests | length) == 3 and
+              [$candidate_manifests[].installation_channel] ==
+                ["manual-signed-native-deb", "manual-signed-native-deb",
+                 "offline-qualification-bundle"] and
               all($candidate_manifests[];
                 .producer_commit_sha == $release_sha and
                 .manifest_contains_producer_commit == false and
@@ -794,7 +797,6 @@ jobs:
                 .offline_mode_confirmed == true and
                 .fallback_used == false and
                 .network_requests == 0 and
-                .installation_channel == "offline-qualification-bundle" and
                 .qualification_bundle_identity == $bundle_identity and
                 .qualification_bundle_descriptor_sha256 == $descriptor_sha256 and
                 .qualification_bundle_producer_attestation_sha256 == $producer_attestation_sha256 and

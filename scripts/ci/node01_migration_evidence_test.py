@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -62,17 +63,11 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
 
     def manifest(self, tag: str, scenario_id: str) -> dict[str, object]:
         candidate = tag == evidence.TARGET_RELEASE
-        rollback = scenario_id == "signed-rollback-v4100-to-v4043"
-        source_firewall_sha256 = (
-            "9" * 64
-            if scenario_id == "verified-reupgrade-v4028-through-v4043-to-v4100"
-            else "4" * 64
-        )
-        channel = (
-            "offline-qualification-bundle"
-            if candidate
-            else "verified-native-rollback" if rollback else "production-online-latest"
-        )
+        scenario = next(item for item in self.contract["scenarios"] if item["id"] == scenario_id)
+        channel = scenario["installation_channel"]
+        updater = channel == "offline-qualification-bundle"
+        source_index = next(i for i, item in enumerate(self.contract["checkpoints"]) if item["id"] == scenario["from_checkpoint"])
+        source = self.checkpoint(self.contract["checkpoints"][source_index], source_index)
         result: dict[str, object] = {
             "release_tag": tag,
             "producer_commit_sha": self.candidate if candidate else evidence.STABLE_COMMIT,
@@ -91,24 +86,19 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
             "detached_package_signer_fingerprint": self.openpgp_fingerprint if candidate else "not-applicable",
             "installation_channel": channel,
             "normalized_invocation": (
-                self.contract["candidate_channel"]["command"]
-                if candidate
-                else "native-deb-rollback-after-manifest-verification"
-                if rollback
-                else "syswarden update"
+                self.contract["candidate_channel" if updater else "manual_candidate_channel"]["command"]
+                if candidate else "native-deb-install-after-manifest-verification"
             ),
-            "updater_executable_sha256": "5" * 64 if not rollback else "not-applicable",
-            "updater_executable_source_package_sha256": (
-                "d" * 64 if candidate else "not-applicable" if rollback else "7" * 64
-            ),
-            "updater_executable_attested": not rollback,
+            "updater_executable_sha256": "5" * 64 if updater else "not-applicable",
+            "updater_executable_source_package_sha256": "d" * 64 if updater else "not-applicable",
+            "updater_executable_attested": updater,
             "qualification_bundle_identity": (
                 "github:duggytuxy/syswarden:native-signing:12345"
                 if candidate else "not-applicable"
             ),
             "qualification_bundle_descriptor_sha256": "6" * 64 if candidate else "not-applicable",
             "qualification_bundle_producer_attestation_sha256": "9" * 64 if candidate else "not-applicable",
-            "network_requests": 0 if candidate or rollback else 4,
+            "network_requests": 0,
             "fallback_used": False,
             "offline_mode_confirmed": candidate,
             "operation_stdout_sha256": "a" * 64,
@@ -116,12 +106,12 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
             "qualification_prevalidation": {
                 "config_loads": 0,
                 "firewall_recovery_runs": 0,
-                "operator_state_before_sha256": "6" * 64,
-                "operator_state_at_install_sha256": "6" * 64,
-                "firewall_state_before_sha256": source_firewall_sha256,
-                "firewall_state_at_install_sha256": source_firewall_sha256,
+                "operator_state_before_sha256": source["operator_state_canary_sha256"],
+                "operator_state_at_install_sha256": source["operator_state_canary_sha256"],
+                "firewall_state_before_sha256": source["syswarden_firewall_sha256"],
+                "firewall_state_at_install_sha256": source["syswarden_firewall_sha256"],
                 "install_started_after_bundle_validation": True,
-                "exact_flags_gate": True,
+                "exact_invocation_gate": True,
             } if candidate else "not-applicable",
         }
         if candidate:
@@ -146,7 +136,9 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
             evidence.TARGET_RELEASE: "d" * 64,
             "absent": "absent",
         }[version]
-        after_snapshot = index >= 5
+        restored_key = 3 <= index <= 9
+        stable_group = expected["id"] in self.contract["preservation_groups"]["stable-updater"]
+        original = expected["id"] == "original-v4028-restored"
         return {
             "id": expected["id"],
             "sequence": expected["sequence"],
@@ -154,22 +146,20 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
             "installed_version": version,
             "installed_commit": commit,
             "installed_package_sha256": package,
-            "boot_id_sha256": "9" * 64 if after_snapshot else "8" * 64,
-            "configuration_semantic_sha256": "absent" if purged else "5" * 64,
-            "operator_state_canary_sha256": "absent" if purged else "6" * 64,
+            "boot_id_sha256": hashlib.sha256(f"fixture-boot-{index}".encode()).hexdigest(),
+            "configuration_semantic_sha256": "absent" if purged else ("7" if original else "a" if stable_group else "5") * 64,
+            "operator_state_canary_sha256": "absent" if purged else ("8" if original else "c" if stable_group else "6") * 64,
             "persistent_state_inventory_sha256": "absent" if purged else f"{index + 1:x}" * 64,
             "syswarden_firewall_sha256": "absent" if purged else f"{index + 2:x}" * 64,
             "core_service_state": expected["service_state"],
             "firewall_service_state": expected["service_state"],
             "package_manager_healthy": True,
             "evidence_ref": self.raw(f"checkpoint-{index + 1}"),
+            "ssh_host_key_sha256": "SHA256:" + ("B" if restored_key else "A") * 43,
+            "asn_policy_pin_sha256": self.contract["asn_policy_approval"]["pin_sha256"] if expected["id"] in self.contract["preservation_groups"]["legacy"] else "absent",
         }
 
     def scenario(self, expected: dict[str, object], index: int) -> dict[str, object]:
-        bootstrap = str(expected["id"]) in {
-            "verified-manual-trust-bootstrap-v4028-to-v4032",
-            "verified-reupgrade-v4028-through-v4043-to-v4100",
-        }
         return {
             "id": expected["id"],
             "sequence": expected["sequence"],
@@ -181,17 +171,7 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
                 self.manifest(tag, str(expected["id"]))
                 for tag in expected["verified_manifests"]
             ],
-            "trust_bootstrap_verification": {
-                "release_tag": evidence.TRUST_BOOTSTRAP_RELEASE,
-                "producer_commit_sha": evidence.TRUST_BOOTSTRAP_COMMIT,
-                "release_tag_signature_verified": True,
-                "release_checksums_sha256": "e" * 64,
-                "package_sha256": "7" * 64,
-                "package_digest_matched": True,
-                "download_origin": "github-release-assets-separated",
-                "manual_first_hop": True,
-                "historical_updater_used": False,
-            } if bootstrap else "not-applicable",
+            "historical_bootstrap_claimed": False,
             "checks": {name: True for name in expected["required_checks"]},
             "evidence_ref": self.raw(f"scenario-{index + 1}"),
         }
@@ -208,6 +188,10 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
                 "synthetic": False,
                 "network_control": "provider-firewall",
                 "snapshot_reference": "node01-v4028-native-baseline",
+                "original_snapshot_reference": "node01-v4028-original-before-lab",
+                "original_configuration_semantic_sha256": "7" * 64,
+                "original_operator_state_canary_sha256": "8" * 64,
+                "owner_approved_proposal_sha256": self.contract["revision"]["owner_approved_proposal_sha256"],
             },
             "host": {
                 "node_id": "node01",
@@ -218,6 +202,7 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
                 "package_family": "deb",
                 "service_manager": "systemd",
                 "ssh_host_key_sha256": "SHA256:" + "A" * 43,
+                "restored_ssh_host_key_sha256": "SHA256:" + "B" * 43,
                 "candidate_sha": self.candidate,
                 "attestation_ref": self.raw("host-attestation"),
             },
@@ -263,9 +248,78 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
     def test_valid_native_migration_evidence_passes(self) -> None:
         verdict = self.validate()
         self.assertEqual(verdict["status"], "pass")
-        self.assertEqual(verdict["checkpoint_count"], 10)
-        self.assertEqual(verdict["scenario_count"], 11)
-        self.assertEqual(verdict["raw_evidence_count"], 23)
+        self.assertEqual(verdict["checkpoint_count"], 11)
+        self.assertEqual(verdict["scenario_count"], 15)
+        self.assertEqual(verdict["raw_evidence_count"], 28)
+
+    def test_owner_revision_and_every_legacy_pin_are_mandatory(self) -> None:
+        changed = copy.deepcopy(self.valid)
+        changed["campaign"]["owner_approved_proposal_sha256"] = "0" * 64
+        self.assert_invalid(changed, "owner-approved")
+        for index in range(5):
+            changed = copy.deepcopy(self.valid)
+            changed["checkpoints"][index]["asn_policy_pin_sha256"] = "absent"
+            self.assert_invalid(changed, "ASN policy approval")
+
+    def test_independent_baseline_and_original_restoration_stay_separate(self) -> None:
+        self.assertNotEqual(self.valid["checkpoints"][0]["configuration_semantic_sha256"],
+                            self.valid["checkpoints"][6]["configuration_semantic_sha256"])
+        for key in ("configuration_semantic_sha256", "operator_state_canary_sha256"):
+            changed = copy.deepcopy(self.valid)
+            changed["checkpoints"][10][key] = changed["checkpoints"][0][key]
+            self.assert_invalid(changed, "original pre-lab state")
+        changed = copy.deepcopy(self.valid)
+        changed["checkpoints"][10]["ssh_host_key_sha256"] = changed["host"]["restored_ssh_host_key_sha256"]
+        self.assert_invalid(changed, "original SSH host key")
+        changed = copy.deepcopy(self.valid)
+        changed["checkpoints"][4]["ssh_host_key_sha256"] = "SHA256:" + "C" * 43
+        self.assert_invalid(changed, "independently verified recovery pins")
+
+    def test_every_manual_and_updater_candidate_requires_full_verification(self) -> None:
+        for index in (1, 6, 10):
+            for key, value in (("manifest_signature_verified", False),
+                               ("detached_package_signature_verified", False),
+                               ("package_sha256", "0" * 64),
+                               ("qualification_bundle_descriptor_sha256", "missing"),
+                               ("network_requests", 1), ("fallback_used", True)):
+                with self.subTest(index=index, key=key):
+                    changed = copy.deepcopy(self.valid)
+                    changed["scenarios"][index]["verified_manifests"][0][key] = value
+                    self.assert_invalid(changed)
+
+    def test_protected_workflows_require_two_manual_installs_and_one_updater(self) -> None:
+        manifest = self.valid["scenarios"][1]["verified_manifests"][0]
+        arguments = {"release_tag": evidence.TARGET_RELEASE, "release_sha": self.candidate,
+                     "bundle_identity": manifest["qualification_bundle_identity"],
+                     "descriptor_sha256": manifest["qualification_bundle_descriptor_sha256"],
+                     "producer_attestation_sha256": manifest["qualification_bundle_producer_attestation_sha256"],
+                     "manifest_sha256": manifest["manifest_sha256"],
+                     "manifest_signature_sha256": manifest["manifest_signature_sha256"],
+                     "package_name": self.candidate_package_name,
+                     "package_sha256": self.candidate_package_sha256,
+                     "detached_signature_sha256": manifest["detached_package_signature_sha256"]}
+        for name in ("native-release-evidence.yml", "release-qualification.yml"):
+            workflow = (evidence.ROOT / ".github/workflows" / name).read_text()
+            start = workflow.index("              [.scenarios[].verified_manifests[] |")
+            end = workflow.index("\n            ' ", start)
+            expression = workflow[start:end]
+            argv = ["jq", "-e", "--argjson", "package_size", str(self.candidate_package_size)]
+            for key, value in arguments.items():
+                argv.extend(["--arg", key, value])
+            argv.append(expression)
+            for mutation in ("valid", "missing-manual", "manual-as-updater", "updater-as-manual", "changed-bundle"):
+                changed = copy.deepcopy(self.valid)
+                if mutation == "missing-manual":
+                    changed["scenarios"][1]["verified_manifests"] = []
+                elif mutation == "manual-as-updater":
+                    changed["scenarios"][1]["verified_manifests"][0]["installation_channel"] = "offline-qualification-bundle"
+                elif mutation == "updater-as-manual":
+                    changed["scenarios"][10]["verified_manifests"][0]["installation_channel"] = "manual-signed-native-deb"
+                elif mutation == "changed-bundle":
+                    changed["scenarios"][6]["verified_manifests"][0]["qualification_bundle_descriptor_sha256"] = "0" * 64
+                with self.subTest(workflow=name, mutation=mutation):
+                    result = subprocess.run(argv, input=json.dumps(changed), text=True, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 0 if mutation == "valid" else 1, result.stderr)
 
     def test_contract_digest_is_pinned(self) -> None:
         self.assertEqual(evidence.contract_digest(), evidence.CONTRACT_SHA256)
@@ -274,43 +328,34 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(evidence.MigrationEvidenceError, "reviewed"):
             evidence.contract_digest(changed)
 
-    def test_contract_preserves_the_historical_trust_bootstrap_boundary(self) -> None:
+    def test_contract_separates_manual_migration_from_the_updater(self) -> None:
         scenarios = {item["id"]: item for item in self.contract["scenarios"]}
-        manual = scenarios["verified-manual-trust-bootstrap-v4028-to-v4032"]
-        self.assertEqual(manual["verified_manifests"], [])
-        self.assertIn("historical_updater_not_used", manual["required_checks"])
-        signed = scenarios["signed-update-v4032-to-v4043"]
-        self.assertEqual(signed["verified_manifests"], ["v4.04.3"])
+        for name in ("manual-signed-candidate-v4028-to-v4100", "manual-signed-reupgrade-v4028-to-v4100"):
+            manual = scenarios[name]
+            self.assertEqual(manual["verified_manifests"], ["v4.10.0"])
+            self.assertEqual(manual["installation_channel"], "manual-signed-native-deb")
+            self.assertIn("historical_updater_not_used", manual["required_checks"])
         candidate = scenarios["verified-candidate-install-v4043-to-v4100"]
-        self.assertIn("offline_qualification_update_channel_used", candidate["required_checks"])
-        self.assertNotIn("syswarden_update_used", candidate["required_checks"])
-        self.assertEqual(
-            self.contract["guardrails"]["post_publication_updater_acceptance"],
-            "separate-required-check-after-publication",
-        )
+        self.assertEqual(candidate["from_checkpoint"], "stable-v4043-independent")
+        self.assertEqual(candidate["installation_channel"], "offline-qualification-bundle")
+        self.assertNotIn("v4.03.2", [item["version"] for item in self.contract["checkpoints"]])
+        self.assertEqual(self.contract["guardrails"]["post_publication_updater_acceptance"], "separate-required-check-after-publication")
 
-    def test_historical_bootstrap_is_structurally_bound_to_v4032_package(self) -> None:
-        for scenario_index in (1, 9):
-            for key, value in (
-                ("release_tag", "v4.03.3"),
-                ("producer_commit_sha", "0" * 40),
-                ("release_tag_signature_verified", False),
-                ("package_sha256", "0" * 64),
-                ("package_digest_matched", False),
-                ("manual_first_hop", False),
-                ("historical_updater_used", True),
-            ):
-                with self.subTest(scenario_index=scenario_index, key=key):
-                    changed = copy.deepcopy(self.valid)
-                    changed["scenarios"][scenario_index]["trust_bootstrap_verification"][key] = value
-                    self.assert_invalid(changed, "trust bootstrap")
 
-    def test_non_bootstrap_scenario_cannot_claim_manual_bootstrap(self) -> None:
-        changed = copy.deepcopy(self.valid)
-        changed["scenarios"][3]["trust_bootstrap_verification"] = copy.deepcopy(
-            changed["scenarios"][1]["trust_bootstrap_verification"]
-        )
-        self.assert_invalid(changed, "must not claim")
+    def test_manual_install_cannot_claim_the_historical_updater(self) -> None:
+        for index in (1, 6):
+            for key, value in (("updater_executable_attested", True), ("updater_executable_sha256", "0" * 64), ("updater_executable_source_package_sha256", "0" * 64)):
+                changed = copy.deepcopy(self.valid)
+                changed["scenarios"][index]["verified_manifests"][0][key] = value
+                self.assert_invalid(changed, "must not claim an updater")
+
+
+    def test_no_scenario_can_claim_the_failed_historical_bootstrap(self) -> None:
+        for index in range(len(self.valid["scenarios"])):
+            changed = copy.deepcopy(self.valid)
+            changed["scenarios"][index]["historical_bootstrap_claimed"] = True
+            self.assert_invalid(changed, "must not claim")
+
 
     def test_assembler_computes_digests_and_rejects_caller_supplied_digest(self) -> None:
         host_wire = (self.artifact_root / self.valid["host"]["attestation_ref"]).read_bytes()
@@ -420,10 +465,10 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(key=key):
                 changed = copy.deepcopy(self.valid)
-                changed["checkpoints"][-1][key] = value
+                changed["checkpoints"][5][key] = value
                 self.assert_invalid(changed, "purged checkpoint")
         changed = copy.deepcopy(self.valid)
-        changed["checkpoints"][-1]["boot_id_sha256"] = "absent"
+        changed["checkpoints"][5]["boot_id_sha256"] = "absent"
         self.assert_invalid(changed, "boot_id_sha256")
 
     def test_configuration_and_operator_state_must_survive_every_installed_checkpoint(self) -> None:
@@ -441,7 +486,7 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
                 self.assert_invalid(changed, "package bytes changed")
 
     def test_snapshot_and_reupgrade_require_new_boot_evidence(self) -> None:
-        for index, source in ((5, 0), (8, 3)):
+        for index, source in ((2, 1), (3, 2), (4, 1), (8, 7), (10, 9)):
             with self.subTest(index=index):
                 changed = copy.deepcopy(self.valid)
                 changed["checkpoints"][index]["boot_id_sha256"] = changed["checkpoints"][source]["boot_id_sha256"]
@@ -473,24 +518,25 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
                 elif mutation == "failed":
                     changed["scenarios"][6]["status"] = "fail"
                 elif mutation == "missing-check":
-                    changed["scenarios"][6]["checks"].pop("hids_real_event_detected")
+                    changed["scenarios"][3]["checks"].pop("hids_real_event_detected")
                 else:
-                    changed["scenarios"][6]["checks"]["waap_controlled_request_classified"] = False
+                    changed["scenarios"][3]["checks"]["waap_controlled_request_classified"] = False
                 self.assert_invalid(changed)
 
     def test_manifest_inventory_and_order_are_exact(self) -> None:
         changed = copy.deepcopy(self.valid)
-        changed["scenarios"][9]["verified_manifests"].reverse()
+        changed["scenarios"][6]["verified_manifests"] *= 2
         self.assert_invalid(changed, "manifest")
         changed = copy.deepcopy(self.valid)
-        changed["scenarios"][2]["verified_manifests"] = []
+        changed["scenarios"][8]["verified_manifests"] = []
         self.assert_invalid(changed, "manifest")
+
 
     def test_manifest_signature_and_package_digest_must_verify(self) -> None:
         for key in ("manifest_signature_verified", "manifest_package_digest_verified"):
             with self.subTest(key=key):
                 changed = copy.deepcopy(self.valid)
-                changed["scenarios"][4]["verified_manifests"][0][key] = False
+                changed["scenarios"][10]["verified_manifests"][0][key] = False
                 self.assert_invalid(changed, "verification failed")
 
     def test_embedded_update_trust_root_is_exact(self) -> None:
@@ -501,12 +547,12 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(key=key):
                 changed = copy.deepcopy(self.valid)
-                changed["scenarios"][4]["verified_manifests"][0][key] = value
+                changed["scenarios"][10]["verified_manifests"][0][key] = value
                 self.assert_invalid(changed, "embedded trust root")
 
     def test_manifest_v1_cannot_claim_the_external_commit_binding(self) -> None:
         changed = copy.deepcopy(self.valid)
-        changed["scenarios"][4]["verified_manifests"][0]["manifest_contains_producer_commit"] = True
+        changed["scenarios"][10]["verified_manifests"][0]["manifest_contains_producer_commit"] = True
         self.assert_invalid(changed, "must not be credited")
 
     def test_candidate_offline_channel_is_exact_and_networkless(self) -> None:
@@ -525,7 +571,7 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
         for key, value in mutations:
             with self.subTest(key=key):
                 changed = copy.deepcopy(self.valid)
-                changed["scenarios"][4]["verified_manifests"][0][key] = value
+                changed["scenarios"][10]["verified_manifests"][0][key] = value
                 self.assert_invalid(changed)
 
     def test_candidate_prevalidation_cannot_touch_configuration_or_firewall(self) -> None:
@@ -537,21 +583,21 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
             ("operator_state_at_install_sha256", "0" * 64),
             ("firewall_state_at_install_sha256", "0" * 64),
             ("install_started_after_bundle_validation", False),
-            ("exact_flags_gate", False),
+            ("exact_invocation_gate", False),
         )
         for key, value in mutations:
             with self.subTest(key=key):
                 changed = copy.deepcopy(self.valid)
-                prevalidation = changed["scenarios"][4]["verified_manifests"][0]["qualification_prevalidation"]
+                prevalidation = changed["scenarios"][10]["verified_manifests"][0]["qualification_prevalidation"]
                 prevalidation[key] = value
                 self.assert_invalid(changed, "offline qualification channel")
 
     def test_candidate_prevalidation_is_bound_to_its_source_checkpoint(self) -> None:
         for scenario_index, manifest_index, key in (
-            (4, 0, "operator_state_before_sha256"),
-            (4, 0, "firewall_state_before_sha256"),
-            (9, 1, "operator_state_at_install_sha256"),
-            (9, 1, "firewall_state_at_install_sha256"),
+            (10, 0, "operator_state_before_sha256"),
+            (10, 0, "firewall_state_before_sha256"),
+            (6, 0, "operator_state_at_install_sha256"),
+            (6, 0, "firewall_state_at_install_sha256"),
         ):
             with self.subTest(scenario_index=scenario_index, key=key):
                 changed = copy.deepcopy(self.valid)
@@ -564,18 +610,18 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
                 prevalidation[paired] = replacement
                 self.assert_invalid(changed, "source checkpoint")
 
-    def test_stable_update_and_rollback_channels_cannot_be_swapped(self) -> None:
-        changed = copy.deepcopy(self.valid)
-        changed["scenarios"][2]["verified_manifests"][0]["installation_channel"] = "verified-native-rollback"
-        self.assert_invalid(changed, "does not match")
-        changed = copy.deepcopy(self.valid)
-        changed["scenarios"][7]["verified_manifests"][0]["installation_channel"] = "production-online-latest"
-        self.assert_invalid(changed, "does not match")
+    def test_manual_and_updater_channels_cannot_be_swapped(self) -> None:
+        for index, channel in ((1, "offline-qualification-bundle"), (6, "production-online-latest"), (10, "manual-signed-native-deb"), (8, "verified-native-rollback")):
+            changed = copy.deepcopy(self.valid)
+            changed["scenarios"][index]["verified_manifests"][0]["installation_channel"] = channel
+            self.assert_invalid(changed)
 
-    def test_stable_online_updater_is_bound_to_bootstrap_package(self) -> None:
+
+    def test_independent_stable_baseline_does_not_claim_a_historical_updater(self) -> None:
         changed = copy.deepcopy(self.valid)
-        changed["scenarios"][2]["verified_manifests"][0]["updater_executable_source_package_sha256"] = "0" * 64
-        self.assert_invalid(changed, "production signed updater")
+        changed["scenarios"][8]["verified_manifests"][0]["updater_executable_source_package_sha256"] = "0" * 64
+        self.assert_invalid(changed, "historical signed updater")
+
 
     def test_qualified_openpgp_fingerprint_is_an_external_validation_input(self) -> None:
         with self.assertRaisesRegex(evidence.MigrationEvidenceError, "signing-policy binding"):
@@ -592,9 +638,9 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
 
     def test_manifest_release_commit_and_installed_package_are_bound(self) -> None:
         mutations = (
-            (2, "producer_commit_sha", "0" * 40),
-            (4, "producer_commit_sha", "0" * 40),
-            (4, "package_sha256", "0" * 64),
+            (8, "producer_commit_sha", "0" * 40),
+            (10, "producer_commit_sha", "0" * 40),
+            (10, "package_sha256", "0" * 64),
         )
         for scenario_index, key, value in mutations:
             with self.subTest(scenario_index=scenario_index, key=key):
@@ -610,7 +656,7 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(key=key):
                 changed = copy.deepcopy(self.valid)
-                changed["scenarios"][4]["verified_manifests"][0][key] = value
+                changed["scenarios"][10]["verified_manifests"][0][key] = value
                 self.assert_invalid(changed)
 
         changed = copy.deepcopy(self.valid)
@@ -640,12 +686,12 @@ class Node01MigrationEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(key=key):
                 changed = copy.deepcopy(self.valid)
-                changed["scenarios"][4]["verified_manifests"][0][key] = value
+                changed["scenarios"][10]["verified_manifests"][0][key] = value
                 self.assert_invalid(changed)
 
     def test_stable_release_cannot_claim_unpublished_detached_deb_signature(self) -> None:
         changed = copy.deepcopy(self.valid)
-        manifest = changed["scenarios"][2]["verified_manifests"][0]
+        manifest = changed["scenarios"][8]["verified_manifests"][0]
         manifest["detached_package_signature_algorithm"] = "OpenPGP-RSA-SHA256"
         manifest["detached_package_signature_sha256"] = "4" * 64
         manifest["detached_package_signature_verified"] = True
