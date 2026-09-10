@@ -179,6 +179,13 @@ not replace those files and do not re-enable a service disabled by the image
 owner. Dynamic nftables policy is compiled only when the packaged firewall
 service starts on the real system.
 
+That first policy reload initializes and attests both persistent blocklist
+files, including an empty address family, before applying the firewall policy.
+Existing entries are preserved. Once the durable initialization marker exists,
+a missing or unsafe file stops reload; it is never silently recreated as empty.
+This gives the GRC reader explicit empty-state evidence on a fresh image while
+preserving its refusal of incomplete policy state after initialization.
+
 On a configured host, do not erase this variant directly. Run
 `syswarden uninstall` first and require its package-owned erase-ready result,
 then erase the exact `syswarden` RPM with the native package manager. The final
