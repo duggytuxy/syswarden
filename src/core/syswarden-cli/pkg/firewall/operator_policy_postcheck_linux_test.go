@@ -259,17 +259,83 @@ func TestOperatorPolicyPostcheckKeepsZeroLengthPrefixes_SW_FW_006(t *testing.T) 
 	}
 }
 
+func TestOperatorPolicyTransportNativeNFTJSON_SW_FW_007(t *testing.T) {
+	fixtures, err := os.OpenRoot(filepath.Join("..", "..", "..", "..", "..", "testdata", "firewall"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := fixtures.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	expectations := map[string]operatorPolicyRuleExpectation{
+		"native-tcp-v4": {family: config.OperatorPolicyFamilyIPv4, protocol: config.OperatorPolicyProtocolTCP, destinationPort: 80, source: "198.51.100.42/32"},
+		"native-tcp-v6": {family: config.OperatorPolicyFamilyIPv6, protocol: config.OperatorPolicyProtocolTCP, destinationPort: 62028, source: "2001:db8::42/128"},
+		"native-udp-v4": {family: config.OperatorPolicyFamilyIPv4, protocol: config.OperatorPolicyProtocolUDP, destinationPort: 62028, source: "198.51.100.0/24"},
+		"native-udp-v6": {family: config.OperatorPolicyFamilyIPv6, protocol: config.OperatorPolicyProtocolUDP, destinationPort: 62028, source: "2001:db8:1::/64"},
+	}
+	for _, version := range []string{"109", "113", "115", "116"} {
+		t.Run("nft"+version, func(t *testing.T) {
+			content, err := fixtures.ReadFile("operator-policy-transport-native-nft" + version + ".json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			document, err := decodeNFTJSON(content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := make(map[string]bool)
+			for _, entry := range document.NFTables {
+				if entry.Rule == nil {
+					continue
+				}
+				rule := entry.Rule
+				expectation, exists := expectations[rule.Comment]
+				if !exists || seen[rule.Comment] {
+					t.Fatalf("unexpected or duplicate native rule %q", rule.Comment)
+				}
+				seen[rule.Comment] = true
+				expressions, err := expectedOperatorPolicyExpressions(expectation)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := verifyNFTJSONRuleExact(rule, "inet", "sw4100_transport_probe", operatorPolicyChainName, rule.Comment, expressions); err != nil {
+					t.Errorf("native %s postcheck failed: %v", rule.Comment, err)
+				}
+			}
+			if len(seen) != len(expectations) {
+				t.Fatalf("native fixture has %d transport rules, want %d", len(seen), len(expectations))
+			}
+		})
+	}
+}
+
 func TestOperatorPolicyTransportPostcheckRejectsProtocolAndPortDrift_SW_FW_007(t *testing.T) {
 	plan := operatorPolicyPostcheckPlan(t)
 	for _, mutate := range []func(*mutableNFTVerificationDocument){
 		func(candidate *mutableNFTVerificationDocument) {
-			nftMatchAt(t, *candidate, operatorPolicyChainName, 2, 1)["right"] = "udp"
+			match := nftMatchAt(t, *candidate, operatorPolicyChainName, 2, 1)
+			match["left"] = map[string]any{"payload": map[string]any{"protocol": "udp", "field": "dport"}}
 		},
 		func(candidate *mutableNFTVerificationDocument) {
-			nftMatchAt(t, *candidate, operatorPolicyChainName, 2, 2)["right"] = float64(443)
+			nftMatchAt(t, *candidate, operatorPolicyChainName, 2, 1)["right"] = float64(443)
 		},
 		func(candidate *mutableNFTVerificationDocument) {
-			nftMatchAt(t, *candidate, operatorPolicyChainName, 3, 2)["right"] = float64(51821)
+			nftMatchAt(t, *candidate, operatorPolicyChainName, 3, 1)["right"] = float64(51821)
+		},
+		func(candidate *mutableNFTVerificationDocument) {
+			match := nftMatchAt(t, *candidate, operatorPolicyChainName, 3, 1)
+			match["left"] = map[string]any{"payload": map[string]any{"protocol": "tcp", "field": "dport"}}
+		},
+		func(candidate *mutableNFTVerificationDocument) {
+			match := nftMatchAt(t, *candidate, operatorPolicyChainName, 2, 1)
+			match["left"] = map[string]any{"payload": map[string]any{"protocol": "tcp", "field": "sport"}}
+		},
+		func(candidate *mutableNFTVerificationDocument) {
+			expressions := nftRuleExpressionsAt(t, *candidate, operatorPolicyChainName, 2)
+			rule := nftRuleAt(t, *candidate, operatorPolicyChainName, 2)
+			rule["expr"] = append(expressions[:1], expressions[2:]...)
 		},
 	} {
 		candidate := mutableNFTVerificationFixture(t, plan)

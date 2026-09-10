@@ -2348,10 +2348,10 @@ func expectedOperatorPolicyExpressions(expected operatorPolicyRuleExpectation) (
 		if expected.destinationPort == 0 {
 			return nil, fmt.Errorf("transport destination port is absent")
 		}
+		// nft omits the redundant l4proto match when the following typed
+		// transport payload already selects TCP or UDP. Verify that payload
+		// exactly, including its protocol, field and destination port.
 		expressions = append(expressions,
-			map[string]any{"match": map[string]any{
-				"op": "==", "left": map[string]any{"meta": map[string]any{"key": "l4proto"}}, "right": string(expected.protocol),
-			}},
 			map[string]any{"match": map[string]any{
 				"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": string(expected.protocol), "field": "dport"}}, "right": int(expected.destinationPort),
 			}},
