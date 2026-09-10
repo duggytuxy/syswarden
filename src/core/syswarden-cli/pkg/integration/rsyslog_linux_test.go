@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -71,6 +72,45 @@ func TestConfiguredRsyslogPatternsRequireRealRegularMatches_SW_CFG_002(t *testin
 		if _, err := validatedRsyslogLogPatterns(path); err == nil {
 			t.Fatalf("non-regular rsyslog input %s was accepted", path)
 		}
+	}
+}
+
+func TestRsyslogCustomSourcesRequireTrustedOwnershipAndMode_SW_CFG_002(t *testing.T) {
+	for _, mode := range []os.FileMode{0600, 0640, 0644, 0620, 0660, 0602, 0666} {
+		t.Run(fmt.Sprintf("mode-%04o", mode), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "custom.log")
+			if err := os.WriteFile(path, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, mode); err != nil {
+				t.Fatal(err)
+			}
+			patterns, patternErr := validatedRsyslogLogPatterns(path)
+			rendered, count, renderErr := renderWAFRsyslogConfig(path, false)
+			if mode&0022 != 0 {
+				if patternErr == nil || renderErr == nil || len(patterns) != 0 || rendered != "" || count != 0 {
+					t.Fatal("writable custom source was admitted or emitted in the rsyslog configuration")
+				}
+				return
+			}
+			if patternErr != nil || renderErr != nil || len(patterns) != 1 || count != 1 || !strings.Contains(rendered, path) {
+				t.Fatalf("trusted custom source was rejected: patterns=%v render=%v", patternErr, renderErr)
+			}
+		})
+	}
+
+	path := filepath.Join(t.TempDir(), "different-owner.log")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise actual file metadata with a different trusted UID without root
+	// privileges or a test-only override of the production ownership policy.
+	expectedUID := int64(os.Geteuid())
+	if err := verifyRsyslogLogFileForOwner(path, expectedUID); err != nil {
+		t.Fatalf("actual owner was rejected: %v", err)
+	}
+	if err := verifyRsyslogLogFileForOwner(path, expectedUID+1); err == nil || !strings.Contains(err.Error(), "owner UID") {
+		t.Fatalf("different file owner was not refused: %v", err)
 	}
 }
 

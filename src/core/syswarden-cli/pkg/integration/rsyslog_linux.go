@@ -13,6 +13,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 )
 
 func quoteRsyslogString(value string) (string, error) {
@@ -79,28 +81,56 @@ func validatedRsyslogLogPatterns(raw string) ([]string, error) {
 }
 
 func verifyRsyslogLogFile(path string) error {
-	before, err := os.Lstat(path)
-	if err != nil {
+	return verifyRsyslogLogFileForOwner(path, int64(os.Geteuid()))
+}
+
+func verifyRsyslogLogFileForOwner(path string, expectedUID int64) error {
+	var before unix.Stat_t
+	if err := unix.Lstat(path, &before); err != nil {
 		return fmt.Errorf("inspect rsyslog log match %q: %w", path, err)
 	}
-	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
-		return fmt.Errorf("rsyslog log match %q is not a real regular file", path)
+	if err := validateRsyslogLogSecurity(before, expectedUID); err != nil {
+		return fmt.Errorf("rsyslog log match %q is unsafe: %w", path, err)
 	}
-	file, err := os.Open(path) // #nosec G304 -- path is an exact match of a validated absolute log pattern
+	// Refuse a final-component link or blocking special-file replacement between
+	// the initial inspection and open. Check ownership and mode on the held file.
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("open rsyslog log match %q: %w", path, err)
 	}
-	opened, statErr := file.Stat()
-	closeErr := file.Close()
+	var opened, after unix.Stat_t
+	statErr := unix.Fstat(fd, &opened)
+	lstatErr := unix.Lstat(path, &after)
+	closeErr := unix.Close(fd)
 	if statErr != nil {
 		return fmt.Errorf("inspect opened rsyslog log match %q: %w", path, statErr)
 	}
-	after, lstatErr := os.Lstat(path)
-	if lstatErr != nil || !os.SameFile(before, opened) || !os.SameFile(opened, after) || opened.Mode() != after.Mode() {
-		return fmt.Errorf("rsyslog log match %q changed while verifying its type", path)
+	if lstatErr != nil || before.Dev != opened.Dev || before.Ino != opened.Ino ||
+		opened.Dev != after.Dev || opened.Ino != after.Ino || opened.Mode != after.Mode ||
+		opened.Uid != after.Uid || opened.Gid != after.Gid {
+		return fmt.Errorf("rsyslog log match %q changed while verifying its identity", path)
+	}
+	if err := validateRsyslogLogSecurity(opened, expectedUID); err != nil {
+		return fmt.Errorf("opened rsyslog log match %q is unsafe: %w", path, err)
+	}
+	if err := validateRsyslogLogSecurity(after, expectedUID); err != nil {
+		return fmt.Errorf("rsyslog log match %q became unsafe: %w", path, err)
 	}
 	if closeErr != nil {
 		return fmt.Errorf("close rsyslog log match %q: %w", path, closeErr)
+	}
+	return nil
+}
+
+func validateRsyslogLogSecurity(identity unix.Stat_t, expectedUID int64) error {
+	if identity.Mode&unix.S_IFMT != unix.S_IFREG {
+		return fmt.Errorf("not a real regular file")
+	}
+	if int64(identity.Uid) != expectedUID {
+		return fmt.Errorf("owner UID %d does not match expected UID %d", identity.Uid, expectedUID)
+	}
+	if identity.Mode&0022 != 0 {
+		return fmt.Errorf("group or other write bits are set")
 	}
 	return nil
 }
