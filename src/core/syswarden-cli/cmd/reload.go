@@ -12,6 +12,7 @@ import (
 
 var noRestart bool
 var applyPoliciesForReload = firewall.ApplyPolicies
+var ensurePersistentBlocklistPairForReload = firewall.EnsurePersistentBlocklistPair
 var recoverPendingWireGuardForwardingForReload = network.RecoverPendingWireGuardForwardingState
 var recoverPendingWireGuardForReload = network.RecoverPendingWireguardState
 var preflightWireGuardForReload = network.PreflightWireguard
@@ -37,6 +38,9 @@ var reloadCmd = &cobra.Command{
 		}
 		if err := preflightWireGuardForReload(); err != nil {
 			return fmt.Errorf("WireGuard preflight failed before reload mutation: %w", err)
+		}
+		if err := ensurePersistentBlocklistPairForReload(); err != nil {
+			return fmt.Errorf("persistent blocklist initialization failed before policy reload: %w", err)
 		}
 		fmt.Println("[*] Reloading SYSWARDEN configuration from memory...")
 		var failures []error

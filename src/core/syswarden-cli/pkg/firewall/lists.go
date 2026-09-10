@@ -164,7 +164,7 @@ func unlockListDirectory(lockFile *os.File) {
 }
 
 // EnsurePersistentBlocklistPair establishes an explicit, durable empty-state
-// attestation for both address families during install or upgrade. Runtime
+// attestation for both address families during install, upgrade or activation. Runtime
 // readers remain fail-closed if either file disappears after this migration.
 func EnsurePersistentBlocklistPair() error {
 	targets := []approvedListFile{
