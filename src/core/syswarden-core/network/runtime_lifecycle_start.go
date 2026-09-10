@@ -26,10 +26,7 @@ func PrepareRuntimeLifecycle(ctx context.Context, underlying firewall.Manager) (
 		return nil, nil, err
 	}
 	if cfg.Enabled == "y" || cfg.Enabled == "true" || cfg.Enabled == "1" {
-		fence, err := newHAFenceController(filepath.Join(filepath.Dir(haRuntimeBanLedgerFile), "fence"), 0)
-		if err == nil {
-			err = fence.prepareForServer()
-		}
+		fence, err := prepareRuntimeLifecycleHAFence(haTLSDir, haRuntimeBanLedgerFile, 0)
 		if err != nil {
 			closeStore()
 			return nil, nil, err
@@ -41,6 +38,22 @@ func PrepareRuntimeLifecycle(ctx context.Context, underlying firewall.Manager) (
 		return nil, nil, fmt.Errorf("restore retained native runtime claims: %w", err)
 	}
 	return manager, closeStore, nil
+}
+
+func prepareRuntimeLifecycleHAFence(tlsDirectory, ledgerFile string, ownerUID int) (*haFenceController, error) {
+	// Runtime restoration precedes HA server startup. Its fence shares the HA
+	// directory, so initialize TLS first without rotating any retained identity.
+	if _, err := loadOrCreateHATLSCertificate(tlsDirectory); err != nil {
+		return nil, fmt.Errorf("prepare native runtime HA TLS identity: %w", err)
+	}
+	fence, err := newHAFenceController(filepath.Join(filepath.Dir(ledgerFile), "fence"), ownerUID)
+	if err != nil {
+		return nil, err
+	}
+	if err := fence.prepareForServer(); err != nil {
+		return nil, err
+	}
+	return fence, nil
 }
 
 func prepareRuntimeLifecycleAt(ctx context.Context, underlying firewall.Manager, directory string, ownerUID int) (*runtimeLifecycleManager, func(), error) {
