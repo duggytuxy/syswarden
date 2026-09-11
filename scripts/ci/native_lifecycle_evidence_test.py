@@ -536,7 +536,28 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
             "size": 512,
         }
         policy_sha256 = "4" * 64
+        signing = bundle_verify.native_package_signing_bundle
+        bootstrap = {
+            "schema_version": 1,
+            "profile": signing.BOOTSTRAP_REFERENCE_PROFILE,
+            "repository": signing.BOOTSTRAP_REPOSITORY,
+            "release_sha": signing.BOOTSTRAP_RELEASE_SHA,
+            "policy_sha256": signing.FOUNDATION_POLICY_SHA256,
+            "signing_run": {
+                "attempt": 1,
+                "id": signing.BOOTSTRAP_SIGNING_RUN_ID,
+                "workflow": ".github/workflows/native-package-signing.yml",
+                "workflow_sha": signing.BOOTSTRAP_RELEASE_SHA,
+            },
+            "artifact": {
+                "digest": signing.BOOTSTRAP_SIGNED_ARTIFACT_DIGEST,
+                "id": signing.BOOTSTRAP_SIGNED_ARTIFACT_ID,
+                "name": signing.BOOTSTRAP_SIGNED_ARTIFACT_NAME,
+                "size": signing.BOOTSTRAP_SIGNED_ARTIFACT_SIZE,
+            },
+        }
         provenance: dict[str, object] = {
+            "bootstrap_qualification": bootstrap,
             "apk_signature": {
                 "exact_unsigned_suffix": True,
                 "key": apk_key,
@@ -656,6 +677,7 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
             "status": "verified",
         }
         rhel_provenance = {
+            "bootstrap_qualification": copy.deepcopy(bootstrap),
             "package_role": "rhel-package-owned",
             "packages": {
                 "signed": copy.deepcopy(rhel_package),
@@ -1185,6 +1207,44 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
             rhel_package["name"],
             evidence.PACKAGE_NAMES[("RPM-A9-RHELPO", evidence.TARGET_RELEASE)],
         )
+
+    def test_bundle_revalidator_requires_reviewed_bootstrap_for_each_package_role(self) -> None:
+        signing_root, _, _ = self.signing_evidence()
+        paths = (
+            signing_root / "NATIVE_SIGNING_PROVENANCE.json",
+            signing_root.parent / "rhel-package-owned/evidence/SIGNING_PROVENANCE.json",
+        )
+        for path in paths:
+            original = json.loads(path.read_text(encoding="utf-8"))
+            mutations = []
+            missing = copy.deepcopy(original)
+            del missing["bootstrap_qualification"]
+            mutations.append(missing)
+            for key_path, value in (
+                (("schema_version",), True),
+                (("release_sha",), self.candidate),
+                (("repository",), "other/repository"),
+                (("policy_sha256",), "0" * 64),
+                (("unexpected",), True),
+                (("signing_run", "id"), 1),
+                (("artifact", "digest"), "sha256:" + "0" * 64),
+            ):
+                changed = copy.deepcopy(original)
+                target = changed["bootstrap_qualification"]
+                for component in key_path[:-1]:
+                    target = target[component]
+                target[key_path[-1]] = value
+                mutations.append(changed)
+            for changed in mutations:
+                with self.subTest(path=path, reference=changed.get("bootstrap_qualification")):
+                    self.write_json(path, changed)
+                    with self.assertRaises(
+                        bundle_verify.native_package_signing_bundle.SigningBundleError
+                    ):
+                        bundle_verify._validated_signing_inputs(
+                            signing_root, self.candidate
+                        )
+            self.write_json(path, original)
 
     def test_bundle_revalidator_rejects_unqualified_provenance_status(self) -> None:
         signing_root, provenance, _ = self.signing_evidence()
