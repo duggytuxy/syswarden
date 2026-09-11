@@ -167,7 +167,28 @@ class NativeCapabilityEvidenceTests(unittest.TestCase):
             "unsigned_artifact_name": "syswarden-packages-4.10.0",
             "unsigned_package_run_id": 100,
         }
+        signing = evidence.signing_bundle
+        bootstrap = {
+            "schema_version": 1,
+            "profile": signing.BOOTSTRAP_REFERENCE_PROFILE,
+            "repository": signing.BOOTSTRAP_REPOSITORY,
+            "release_sha": signing.BOOTSTRAP_RELEASE_SHA,
+            "policy_sha256": signing.FOUNDATION_POLICY_SHA256,
+            "signing_run": {
+                "attempt": 1,
+                "id": signing.BOOTSTRAP_SIGNING_RUN_ID,
+                "workflow": ".github/workflows/native-package-signing.yml",
+                "workflow_sha": signing.BOOTSTRAP_RELEASE_SHA,
+            },
+            "artifact": {
+                "digest": signing.BOOTSTRAP_SIGNED_ARTIFACT_DIGEST,
+                "id": signing.BOOTSTRAP_SIGNED_ARTIFACT_ID,
+                "name": signing.BOOTSTRAP_SIGNED_ARTIFACT_NAME,
+                "size": signing.BOOTSTRAP_SIGNED_ARTIFACT_SIZE,
+            },
+        }
         standard = {
+            "bootstrap_qualification": bootstrap,
             "apk_signature": {
                 "exact_unsigned_suffix": True,
                 "key": apk_key,
@@ -210,6 +231,7 @@ class NativeCapabilityEvidenceTests(unittest.TestCase):
             "size": len(rhel_data),
         }
         rhel = {
+            "bootstrap_qualification": copy.deepcopy(bootstrap),
             "package_role": "rhel-package-owned",
             "packages": {"signed": rhel_record, "unsigned": rhel_record},
             "policy_sha256": standard["policy_sha256"],
@@ -777,6 +799,45 @@ class NativeCapabilityEvidenceTests(unittest.TestCase):
             evidence._load_package_bindings(
                 self.signing_bundle, self.candidate, contract
             )
+
+    def test_bootstrap_reference_is_required_and_validated_for_each_package_role(self) -> None:
+        contract, _ = evidence.load_contract()
+        paths = (
+            self.signing_bundle / "evidence/NATIVE_SIGNING_PROVENANCE.json",
+            self.signing_bundle / "rhel-package-owned/evidence/SIGNING_PROVENANCE.json",
+        )
+        for path in paths:
+            original = json.loads(path.read_text(encoding="utf-8"))
+            mutations = []
+            missing = copy.deepcopy(original)
+            del missing["bootstrap_qualification"]
+            mutations.append(missing)
+            for key_path, value in (
+                (("schema_version",), True),
+                (("release_sha",), self.candidate),
+                (("repository",), "other/repository"),
+                (("policy_sha256",), "0" * 64),
+                (("unexpected",), True),
+                (("signing_run", "id"), 1),
+                (("artifact", "digest"), "sha256:" + "0" * 64),
+            ):
+                changed = copy.deepcopy(original)
+                target = changed["bootstrap_qualification"]
+                for component in key_path[:-1]:
+                    target = target[component]
+                target[key_path[-1]] = value
+                mutations.append(changed)
+            for changed in mutations:
+                with self.subTest(path=path, reference=changed.get("bootstrap_qualification")):
+                    self.write_json(path, changed)
+                    with self.assertRaisesRegex(
+                        evidence.NativeCapabilityEvidenceError,
+                        "keys are not exact|bootstrap qualification is invalid",
+                    ):
+                        evidence._load_package_bindings(
+                            self.signing_bundle, self.candidate, contract
+                        )
+            self.write_json(path, original)
 
     def test_bootstrap_signing_provenance_is_not_capability_qualification(self) -> None:
         contract, _ = evidence.load_contract()

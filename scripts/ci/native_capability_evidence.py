@@ -725,6 +725,7 @@ def _load_package_bindings(
         standard_provenance,
         {
             "apk_signature",
+            "bootstrap_qualification",
             "deb_signature",
             "packages",
             "policy_sha256",
@@ -744,6 +745,7 @@ def _load_package_bindings(
     rhel = _exact_mapping(
         rhel_provenance,
         {
+            "bootstrap_qualification",
             "package_role",
             "packages",
             "policy_sha256",
@@ -780,6 +782,22 @@ def _load_package_bindings(
     ):
         raise NativeCapabilityEvidenceError(
             "native capability evidence requires the qualified signing provenance"
+        )
+    try:
+        for provenance in (standard, rhel):
+            signing_bundle.validate_bootstrap_reference(
+                provenance["bootstrap_qualification"],
+                contract["target_release"],
+                candidate_commit,
+                provenance["repository"],
+            )
+    except signing_bundle.SigningBundleError as exc:
+        raise NativeCapabilityEvidenceError(
+            f"native signing bootstrap qualification is invalid: {exc}"
+        ) from exc
+    if rhel["bootstrap_qualification"] != standard["bootstrap_qualification"]:
+        raise NativeCapabilityEvidenceError(
+            "native signing bootstrap qualification references differ"
         )
     standard_source = _exact_mapping(
         standard["source"],

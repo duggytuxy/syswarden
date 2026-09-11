@@ -2848,6 +2848,7 @@ func printDashboardText() {
 				a.IP, a.Hits, a.Severity, a.PrimaryJail, a.EnforcementJail, a.EnforcementAction, a.EnforcementState, a.SelectedPolicyQuality, a.MetricQuality, a.HitQuality, a.HitEvidence, a.Country, a.ASN, a.Org)
 		}
 	}
+	printActiveBlockRegistry(os.Stdout, d.WAF.BannedIPs)
 	fmt.Println("[RUNTIME LIFECYCLE HISTORY]")
 	if lines, err := runtimeLifecycleHistoryLines(d.WAF.GRCKPI); err != nil {
 		fmt.Printf(" - Unavailable: %v\n", err)

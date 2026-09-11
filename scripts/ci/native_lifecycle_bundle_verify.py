@@ -246,6 +246,7 @@ def _validated_signing_inputs(
         provenance,
         {
             "apk_signature",
+            "bootstrap_qualification",
             "deb_signature",
             "packages",
             "policy_sha256",
@@ -291,6 +292,12 @@ def _validated_signing_inputs(
         native_package_signing_bundle.fail(
             "native signing provenance trust binding is malformed"
         )
+    native_package_signing_bundle.validate_bootstrap_reference(
+        provenance["bootstrap_qualification"],
+        native_lifecycle_evidence.TARGET_RELEASE,
+        candidate,
+        provenance["repository"],
+    )
     source = native_package_signing_bundle.exact_keys(
         provenance["source"],
         {
@@ -479,6 +486,7 @@ def _validated_rhel_signing_input(
     native_package_signing_bundle.exact_keys(
         provenance,
         {
+            "bootstrap_qualification",
             "package_role",
             "packages",
             "policy_sha256",
@@ -512,6 +520,19 @@ def _validated_rhel_signing_input(
     ):
         native_package_signing_bundle.fail(
             "RHEL package-owned signing provenance identity is invalid"
+        )
+    native_package_signing_bundle.validate_bootstrap_reference(
+        provenance["bootstrap_qualification"],
+        native_lifecycle_evidence.TARGET_RELEASE,
+        candidate,
+        provenance["repository"],
+    )
+    if (
+        provenance["bootstrap_qualification"]
+        != standard_provenance["bootstrap_qualification"]
+    ):
+        native_package_signing_bundle.fail(
+            "RHEL package-owned bootstrap qualification reference differs"
         )
     expected_name = native_package_signing_bundle.rhel_package_owned_name(
         native_lifecycle_evidence.TARGET_RELEASE
