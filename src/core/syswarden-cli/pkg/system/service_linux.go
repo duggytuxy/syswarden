@@ -2061,15 +2061,30 @@ func publishOpenRCServices() error {
 }
 
 func publishSystemdServices() error {
+	content, err := selectedSystemdCoreServiceContent(hostFirewallExecutor())
+	if err != nil {
+		return err
+	}
+	return publishSystemdServicesWithCore(content)
+}
+
+func publishSystemdServicesWithCore(content string) error {
+	if content != systemdCoreService && content != historicalV4043SystemdCoreService {
+		return fmt.Errorf("refusing unknown core service publication content")
+	}
 	coreUnitPath := filepath.Join(serviceSystemdUnitDir, "syswarden-core.service")
 	firewallUnitPath := filepath.Join(serviceSystemdUnitDir, "syswarden-firewall.service")
 	return publishServiceArtifacts([]serviceArtifact{
 		{
-			path: coreUnitPath, content: systemdCoreService, mode: sourceSystemdUnitMode,
+			path: coreUnitPath, content: content, mode: sourceSystemdUnitMode,
 			historicalContent:       historicalV4028SystemdCoreService,
 			historicalContentLength: historicalV4028SystemdCoreServiceLength,
 			historicalContentSHA256: historicalV4028SystemdCoreServiceSHA256,
 			historicalAlternates: []historicalServiceContent{{
+				content:       systemdCoreService,
+				contentLength: len(systemdCoreService),
+				contentSHA256: "cfc30f12ea66548dce4322d2cde38a62cbc257d93be3e82218434a848051dbd7",
+			}, {
 				content:       historicalV4043SystemdCoreService,
 				contentLength: historicalV4043SystemdCoreServiceLength,
 				contentSHA256: historicalV4043SystemdCoreServiceSHA256,
@@ -2086,7 +2101,7 @@ func publishSystemdServices() error {
 		{
 			path: filepath.Join(serviceSystemdWantsDir, "syswarden-core.service"), target: "../syswarden-core.service",
 			legacyTargets:    []string{"/etc/systemd/system/syswarden-core.service"},
-			attestedFilePath: coreUnitPath, attestedFileContent: systemdCoreService,
+			attestedFilePath: coreUnitPath, attestedFileContent: content,
 			attestedFileMode: sourceSystemdUnitMode,
 		},
 		{
@@ -2099,6 +2114,9 @@ func publishSystemdServices() error {
 }
 
 func attestSystemdFirewallOrderingBeforeActivation() error {
+	if err := attestSystemdSocketCapabilityBeforeActivation(); err != nil {
+		return err
+	}
 	_, err := os.Lstat(systemdFirewallWireGuardOrderingDropInPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return attestAbsentSystemdFirewallOrderingDropIn(

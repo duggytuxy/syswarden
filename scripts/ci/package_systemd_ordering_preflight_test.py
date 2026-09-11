@@ -18,6 +18,12 @@ CONTENT = b"[Unit]\nAfter=wg-quick@wg-syswarden.service\n"
 
 
 class SystemdOrderingPreflightTests(unittest.TestCase):
+    artifact_content = CONTENT
+    artifact_relative = "syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf"
+    helper_name = "syswarden_preflight_systemd_ordering_dropin"
+    hash_variable = "syswarden_ordering_sha256"
+    contract_file = "package_systemd_wireguard_ordering_contract.json"
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -26,26 +32,23 @@ class SystemdOrderingPreflightTests(unittest.TestCase):
         self.root.joinpath("usr/lib/systemd/system").mkdir(parents=True)
         self.root.joinpath("etc").mkdir()
         self.fake_bin.mkdir()
-        self.path = self.root / (
-            "usr/lib/systemd/system/syswarden-firewall.service.d/"
-            "10-syswarden-wireguard-ordering.conf"
-        )
+        self.path = self.root / "usr/lib/systemd/system" / self.artifact_relative
         self.directory = self.path.parent
         self._write_package_query_fixtures()
         self.harness = Path(self.temporary.name) / "preflight-harness.sh"
         self.harness.write_text(
             "#!/bin/sh\nset -eu\n"
             + self._isolated_function()
-            + "\nsyswarden_preflight_systemd_ordering_dropin\n",
+            + "\n" + self.helper_name + "\n",
             encoding="ascii",
         )
         self.harness.chmod(0o700)
 
     def _isolated_function(self) -> str:
         source = SCRIPT.read_text(encoding="ascii")
-        marker = "syswarden_preflight_systemd_ordering_dropin() {"
+        marker = self.helper_name + "() {"
         self.assertEqual(source.count(marker), 1)
-        function = source[source.index(marker) :]
+        function = source[source.index(marker) :].split("\n}\n", 1)[0] + "\n}\n"
         self.assertEqual(function.count("/etc/alpine-release"), 1)
         self.assertEqual(function.count("/usr"), 6)
         self.assertEqual(function.count("= 0:0"), 3)
@@ -85,7 +88,9 @@ class SystemdOrderingPreflightTests(unittest.TestCase):
         )
         rpm.chmod(0o700)
 
-    def _write_exact_artifact(self, content: bytes = CONTENT) -> None:
+    def _write_exact_artifact(self, content: bytes | None = None) -> None:
+        if content is None:
+            content = self.artifact_content
         self.directory.mkdir(mode=0o755)
         self.path.write_bytes(content)
         self.path.chmod(0o644)
@@ -119,27 +124,24 @@ class SystemdOrderingPreflightTests(unittest.TestCase):
 
     def test_helper_contract_matches_repository_source_and_json(self) -> None:
         repository_root = Path(__file__).resolve().parents[2]
-        source = repository_root / (
-            "src/init/systemd/syswarden-firewall.service.d/"
-            "10-syswarden-wireguard-ordering.conf"
-        )
+        source = repository_root / "src/init/systemd" / self.artifact_relative
         contract = json.loads(
             (
                 repository_root
-                / "scripts/ci/package_systemd_wireguard_ordering_contract.json"
+                / "scripts/ci" / self.contract_file
             ).read_bytes()
         )
         helper = SCRIPT.read_text(encoding="ascii")
 
-        self.assertEqual(source.read_bytes(), CONTENT)
+        self.assertEqual(source.read_bytes(), self.artifact_content)
         self.assertEqual(
             contract,
             {
-                "sha256": hashlib.sha256(CONTENT).hexdigest(),
-                "size": len(CONTENT),
+                "sha256": hashlib.sha256(self.artifact_content).hexdigest(),
+                "size": len(self.artifact_content),
             },
         )
-        self.assertIn(f"syswarden_ordering_sha256={contract['sha256']}", helper)
+        self.assertIn(f"{self.hash_variable}={contract['sha256']}", helper)
         self.assertIn(f"0:0:644:1:{contract['size']}", helper)
 
     def test_exact_dpkg_owned_artifact_is_accepted(self) -> None:
@@ -153,7 +155,7 @@ class SystemdOrderingPreflightTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_tampered_artifact_is_rejected(self) -> None:
-        self._write_exact_artifact(CONTENT.replace(b"After", b"Bfter"))
+        self._write_exact_artifact(self.artifact_content.replace(b"=", b":", 1))
         result = self._run(dpkg_owner=True)
         self.assertNotEqual(result.returncode, 0, result)
         self.assertIn("modified existing", result.stderr)
@@ -170,7 +172,7 @@ class SystemdOrderingPreflightTests(unittest.TestCase):
     def test_symlinked_artifact_is_rejected(self) -> None:
         self.directory.mkdir(mode=0o755)
         target = Path(self.temporary.name) / "outside.conf"
-        target.write_bytes(CONTENT)
+        target.write_bytes(self.artifact_content)
         target.chmod(0o644)
         self.path.symlink_to(target)
         result = self._run(dpkg_owner=True)
@@ -221,6 +223,18 @@ class SystemdOrderingPreflightTests(unittest.TestCase):
         result = self._run(dpkg_owner=True, rpm_owner=True)
         self.assertNotEqual(result.returncode, 0, result)
         self.assertIn("without one exact package owner", result.stderr)
+
+
+class SystemdSocketPreflightTests(SystemdOrderingPreflightTests):
+    artifact_content = (
+        b"[Service]\n"
+        b"# Assign the socket to the verified private rsyslog producer group.\n"
+        b"CapabilityBoundingSet=CAP_CHOWN\n"
+    )
+    artifact_relative = "syswarden-core.service.d/10-syswarden-socket-ownership.conf"
+    helper_name = "syswarden_preflight_systemd_socket_dropin"
+    hash_variable = "syswarden_socket_sha256"
+    contract_file = "package_systemd_socket_capability_contract.json"
 
 
 if __name__ == "__main__":

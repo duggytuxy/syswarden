@@ -254,6 +254,7 @@ def validate_rpm(package: Path, expected: bytes, contract: ContentContract) -> N
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--artifact", choices=("ordering", "socket"), default="ordering")
     parser.add_argument("--format", choices=("stage", "deb", "rpm"), required=True)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--contract", type=Path, required=True)
@@ -263,7 +264,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    global RELATIVE_PATH, ABSOLUTE_PATH, DIRECTORY_PATH
     args = build_parser().parse_args()
+    # Select only a fixed repository-owned policy, never a caller-supplied path.
+    if args.artifact == "socket":
+        RELATIVE_PATH = (
+            "usr/lib/systemd/system/syswarden-core.service.d/"
+            "10-syswarden-socket-ownership.conf"
+        )
+    else:
+        RELATIVE_PATH = (
+            "usr/lib/systemd/system/syswarden-firewall.service.d/"
+            "10-syswarden-wireguard-ordering.conf"
+        )
+    ABSOLUTE_PATH = "/" + RELATIVE_PATH
+    DIRECTORY_PATH = str(Path(ABSOLUTE_PATH).parent)
     try:
         contract = load_contract(args.contract)
         expected = validate_source_and_stage(
@@ -281,7 +296,7 @@ def main() -> int:
     except OrderingArtifactError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    print(f"Validated exact systemd ordering artifact for {args.format}.")
+    print(f"Validated exact systemd {args.artifact} artifact for {args.format}.")
     return 0
 
 

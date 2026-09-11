@@ -750,8 +750,12 @@ func attestPackageOwnedSystemdWireGuardUnit(executor firewallManagerExecutor, pa
 func attestSystemdFirewallRemovalUnitFileWith(executor firewallManagerExecutor, path string) error {
 	switch path {
 	case "/etc/systemd/system/syswarden-core.service":
+		content, err := selectedSystemdCoreServiceContent(executor)
+		if err != nil {
+			return err
+		}
 		return readExactFirewallRemovalFileWithOwnerModes(
-			path, systemdCoreService,
+			path, content,
 			[]os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode}, 0, 0,
 		)
 	case "/etc/systemd/system/syswarden-firewall.service":
