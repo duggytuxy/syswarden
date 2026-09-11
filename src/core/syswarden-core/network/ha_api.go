@@ -1938,6 +1938,10 @@ func boundedHARemainingTTL(latest, now time.Time) time.Duration {
 }
 
 func (api *haAPI) reconcileDesiredHABanAfterRemoval(ip string, now time.Time) (bool, error) {
+	return api.reconcileDesiredHABanAfterTransition(ip, now, false)
+}
+
+func (api *haAPI) reconcileDesiredHABanAfterTransition(ip string, now time.Time, allowNativeExpiry bool) (bool, error) {
 	canonical, err := canonicalHAStoredEntry(ip)
 	if err != nil {
 		return false, err
@@ -1949,6 +1953,20 @@ func (api *haAPI) reconcileDesiredHABanAfterRemoval(ip string, now time.Time) (b
 	if !desired {
 		if api.fwManager == nil {
 			return false, fmt.Errorf("firewall unavailable")
+		}
+		if allowNativeExpiry {
+			mode, err := api.temporaryBanMode()
+			if err != nil {
+				return false, err
+			}
+			if mode == firewall.BanExpiryNative {
+				// The ledger deadline is rounded to seconds. Let the witnessed
+				// kernel timeout complete instead of recording an operator delete,
+				// or removing a stronger native ban retained during HA admission.
+				if _, targetErr := api.canonicalHAFirewallTarget(canonical); targetErr == nil {
+					return false, nil
+				}
+			}
 		}
 		return false, api.fwManager.Unban(canonical)
 	}
@@ -2402,6 +2420,7 @@ func (api *haAPI) reconcileHABansLocked(now time.Time, limit int) error {
 	allIPs := make([]string, 0)
 	seen := make(map[string]struct{})
 	needsTransition := make(map[string]bool)
+	pendingDeletion := make(map[string]bool)
 	for _, record := range ledger.Bans {
 		expires, err := parseCanonicalHATime(record.ExpiresAt)
 		if err != nil {
@@ -2409,6 +2428,9 @@ func (api *haAPI) reconcileHABansLocked(now time.Time, limit int) error {
 		}
 		if record.State != haBanActive || !expires.After(now) {
 			needsTransition[record.IP] = true
+		}
+		if record.State == haBanPendingDelete {
+			pendingDeletion[record.IP] = true
 		}
 		if _, duplicate := seen[record.IP]; duplicate {
 			continue
@@ -2432,28 +2454,9 @@ func (api *haAPI) reconcileHABansLocked(now time.Time, limit int) error {
 	for _, ip := range candidates {
 		transition := needsTransition[ip]
 		if transition {
-			if err := api.mutateHALedger(func(current *haBanLedger) error {
-				for index := range current.Bans {
-					record := &current.Bans[index]
-					if record.IP != ip {
-						continue
-					}
-					expires, err := parseCanonicalHATime(record.ExpiresAt)
-					if err != nil {
-						return err
-					}
-					if !expires.After(now) {
-						record.State = haBanPendingDelete
-						record.UpdatedAt = now.Format(time.RFC3339)
-					}
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
-		if transition {
-			_, err = api.reconcileDesiredHABanAfterRemoval(ip, now)
+			// Keep elapsed records distinguishable from explicit pending deletes
+			// until reconciliation succeeds, including after a process restart.
+			_, err = api.reconcileDesiredHABanAfterTransition(ip, now, !pendingDeletion[ip])
 		} else {
 			_, err = api.applyDesiredHABan(ip, now)
 		}
@@ -2466,7 +2469,11 @@ func (api *haAPI) reconcileHABansLocked(now time.Time, limit int) error {
 		if err := api.mutateHALedger(func(current *haBanLedger) error {
 			remaining := current.Bans[:0]
 			for _, record := range current.Bans {
-				if record.IP == ip && record.State == haBanPendingDelete {
+				expires, err := parseCanonicalHATime(record.ExpiresAt)
+				if err != nil {
+					return err
+				}
+				if record.IP == ip && (record.State == haBanPendingDelete || !expires.After(now)) {
 					continue
 				}
 				if record.IP == ip && record.State == haBanPendingApply {
