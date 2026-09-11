@@ -2224,6 +2224,7 @@ func getWAFStats(fwManager FirewallManager) WAF {
 		seenIPs[allBans[i].IP] = true
 		waf.BannedIPs = append(waf.BannedIPs, allBans[i])
 	}
+	waf.BannedIPs = appendActiveRuntimeRegistryEntries(waf.BannedIPs, runtimeView)
 
 	metrics, categoryCounts, jailCounts, rejectedMetrics := buildAttackerMetrics(metricEvents, catalog)
 	if !journalScopeComplete {
