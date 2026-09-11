@@ -37,6 +37,12 @@ On Linux the datagram socket grants write access to root and the private
 also carry kernel-generated sender credentials for root or that exact syslog
 UID. Membership in the group alone does not authorize injection; missing,
 truncated, or unauthorized credentials are refused before rule evaluation.
+Package removal accepts that exact root-owned logging socket with mode 0660
+after resolving the same canonical syslog account and private group. The parent
+directory and command socket retain their root:root ownership requirements.
+Legacy root:root sockets and already-absent sockets need no syslog lookup;
+unexpected identities and changes during removal are refused.
+
 When the syslog account is absent, only root is authorized. A service running
 as a non-root user accepts only its own UID. Platforms without the Linux
 credential mechanism cannot start this receiver.

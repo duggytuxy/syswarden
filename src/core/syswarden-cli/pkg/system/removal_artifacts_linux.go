@@ -552,6 +552,10 @@ func removeExactProductSymlinkAt(
 }
 
 func removeExactRuntimeSocketAt(path string, expectedUID, expectedGID uint32) error {
+	return removeExactRuntimeSocketWithPrivateGroupAt(path, expectedUID, expectedGID, nil)
+}
+
+func removeExactRuntimeSocketWithPrivateGroupAt(path string, expectedUID, expectedGID uint32, privateGroup func() (uint32, error)) error {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return fmt.Errorf("runtime socket removal path is not clean and absolute")
 	}
@@ -568,14 +572,14 @@ func removeExactRuntimeSocketAt(path string, expectedUID, expectedGID uint32) er
 	if err != nil {
 		return fmt.Errorf("inspect runtime socket %s: %w", path, err)
 	}
-	stat, ok := before.Sys().(*syscall.Stat_t)
-	if !ok || before.Mode()&os.ModeSymlink != 0 || before.Mode()&os.ModeSocket == 0 ||
-		stat.Uid != expectedUID || stat.Gid != expectedGID || stat.Nlink != 1 {
-		return fmt.Errorf("refusing non-attributable runtime socket %s", path)
+	identity, err := attestRuntimeSocketIdentity(before, expectedUID, expectedGID, privateGroup)
+	if err != nil {
+		return fmt.Errorf("refusing non-attributable runtime socket %s: %w", path, err)
 	}
 	confirmed, err := parent.root.Lstat(name)
-	if err != nil || !os.SameFile(before, confirmed) || before.Mode() != confirmed.Mode() {
-		return errors.Join(fmt.Errorf("runtime socket %s changed during attestation", path), err)
+	confirmedIdentity, identityErr := exactRemovalArtifactIdentity(confirmed)
+	if err != nil || identityErr != nil || identity != confirmedIdentity {
+		return errors.Join(fmt.Errorf("runtime socket %s changed during attestation", path), err, identityErr)
 	}
 	if err := parent.root.Remove(name); err != nil {
 		return fmt.Errorf("remove exact runtime socket %s: %w", path, err)
@@ -593,7 +597,7 @@ func removeExactRuntimeSocketAt(path string, expectedUID, expectedGID uint32) er
 // calls this only after every rsyslog producer has been restarted without the
 // SysWarden bridge and before the matching SELinux policy is removed.
 func RemoveExactRuntimeSocketForPackageRemoval() error {
-	return removeExactRuntimeSocketForPackageRemovalUsing(removeExactRuntimeSocketAt)
+	return removeExactRuntimeSocketForPackageRemovalUsing(removePackageRuntimeSocketAt)
 }
 
 func removeExactRuntimeSocketForPackageRemovalUsing(
