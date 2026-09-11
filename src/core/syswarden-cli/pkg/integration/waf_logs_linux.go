@@ -224,7 +224,16 @@ func SetupWAFLogForwarder() error {
 	if config.GlobalConfig.ModsecLogs != "" && activePatterns == 0 {
 		fmt.Println("[WARN] Configured ModSecurity log patterns have no real regular-file match; custom rsyslog input was omitted.")
 	}
+	if err := withRsyslogAppArmorSocketPolicy(func() error {
+		return setupWAFLogForwarderWithSELinux(rsyslogConf)
+	}); err != nil {
+		return fmt.Errorf("configure WAF log bridge and mandatory access policy: %w", err)
+	}
+	fmt.Println("[+] WAF Log Bridge successfully configured.")
+	return nil
+}
 
+func setupWAFLogForwarderWithSELinux(rsyslogConf string) error {
 	selinuxState, selinuxStateErr := detectSELinuxRuntime()
 	configureSELinuxPolicy, err := shouldConfigureRsyslogSELinuxPolicy(
 		selinuxState,
@@ -289,7 +298,6 @@ func SetupWAFLogForwarder() error {
 		return err
 	}
 
-	fmt.Println("[+] WAF Log Bridge successfully configured.")
 	return nil
 }
 

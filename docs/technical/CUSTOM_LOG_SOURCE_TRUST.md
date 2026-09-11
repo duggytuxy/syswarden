@@ -49,6 +49,22 @@ directory and command socket retain their root:root ownership requirements.
 Legacy root:root sockets and already-absent sockets need no syslog lookup;
 unexpected identities and changes during removal are refused.
 
+When the installed rsyslog AppArmor profile provides its `rsyslog.d` package
+include, installation and reload publish the exact root-owned mode 0600
+`/etc/apparmor.d/rsyslog.d/syswarden` fragment. It grants only write access to
+`/run/syswarden.sock`. The vendor profile and local operator overrides remain
+unchanged. The parser validates the profile before loading it; an existing
+enforce or complain mode is preserved, and an unloaded profile is not enabled.
+Unsupported profile layouts, unrecognized fragments, unsafe file identities,
+and failed policy activation stop bridge setup. A failed setup removes a newly
+created permission and reloads the previous policy.
+
+Package removal first quiesces the rsyslog bridge, then removes only the exact
+AppArmor fragment through a recoverable transaction and reloads the same
+profile. Reload failure restores the fragment for retry. An offline removal
+retry requires every fragment and transaction target to be absent. These checks
+establish policy configuration; native delivery still requires a real event.
+
 When the syslog account is absent, only root is authorized. A service running
 as a non-root user accepts only its own UID. Platforms without the Linux
 credential mechanism cannot start this receiver.

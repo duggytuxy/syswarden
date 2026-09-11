@@ -883,7 +883,7 @@ func exactOwnedArtifactStillExistsInDirectory(
 // target is attested absent; RsyslogPackageRemovalOfflineAlreadyComplete
 // requires callers to skip both mutators.
 func RemoveOwnedRsyslogArtifactsForPackageRemoval() (RsyslogPackageRemovalOutcome, error) {
-	return removeOwnedRsyslogArtifactsForPackageRemovalWithRuntimeAtUsing(
+	outcome, err := removeOwnedRsyslogArtifactsForPackageRemovalWithRuntimeAtUsing(
 		config.GlobalConfig,
 		wafRsyslogParentDirectory,
 		0, 0,
@@ -892,6 +892,29 @@ func RemoveOwnedRsyslogArtifactsForPackageRemoval() (RsyslogPackageRemovalOutcom
 		attestCompletedRsyslogTeardownForOfflinePackageRemoval,
 		reconcileWAFRsyslogServiceForPackageRemoval,
 	)
+	return finishRsyslogPackageRemovalAppArmor(outcome, err, removeRsyslogAppArmorSocketPolicyForPackageRemoval)
+}
+
+func finishRsyslogPackageRemovalAppArmor(outcome RsyslogPackageRemovalOutcome, priorErr error, removePolicy func() error) (RsyslogPackageRemovalOutcome, error) {
+	if priorErr != nil {
+		return outcome, priorErr
+	}
+	switch outcome {
+	case RsyslogPackageRemovalActiveQuiesced:
+		// The producer has consumed the configuration without our bridge.
+		// Revoke only our AppArmor socket permission before socket teardown.
+		if removePolicy == nil {
+			return RsyslogPackageRemovalOutcomeUnknown, fmt.Errorf("AppArmor policy removal is unavailable")
+		}
+		if err := removePolicy(); err != nil {
+			return RsyslogPackageRemovalOutcomeUnknown, fmt.Errorf("remove rsyslog AppArmor socket policy after producer quiescence: %w", err)
+		}
+	case RsyslogPackageRemovalOfflineAlreadyComplete:
+		// Preserve the offline read-only retry contract.
+	default:
+		return RsyslogPackageRemovalOutcomeUnknown, fmt.Errorf("unrecognized rsyslog package-removal outcome %d", outcome)
+	}
+	return outcome, nil
 }
 
 func removeOwnedRsyslogArtifactsForPackageRemovalWithRuntimeAtUsing(
@@ -1221,6 +1244,9 @@ func attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
 ) error {
 	if attestSocketAbsent == nil || inspectSemodule == nil || listSELinuxModules == nil {
 		return fmt.Errorf("offline package-removal absence inspectors are unavailable")
+	}
+	if err := attestRsyslogAppArmorSocketPolicyAbsent(parentPath, uid, gid); err != nil {
+		return fmt.Errorf("attest offline AppArmor socket policy absence: %w", err)
 	}
 	if err := attestLegacyCompletionAbsentForOfflinePackageRemovalAt(
 		parentPath,
