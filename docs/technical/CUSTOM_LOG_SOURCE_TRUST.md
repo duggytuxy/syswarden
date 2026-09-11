@@ -32,6 +32,12 @@ writer. Unknown or ambiguous privilege-drop declarations stop hardening before
 authentication log ownership changes. Other privilege-drop configuration
 formats must be reviewed and expressed in this supported form first.
 
+The SSH authentication rule accepts records from `sshd` and `sshd-session`
+without a syslog envelope, with the traditional month/day timestamp, or with an
+ISO timestamp using `Z` or a numeric timezone offset and optional fractional
+seconds. The process identity remains anchored after the timestamp and host.
+Successful logins and connection-close records do not count as failed attempts.
+
 On Linux the datagram socket grants write access to root and the private
 `syslog` group when its account and primary group agree. Every datagram must
 also carry kernel-generated sender credentials for root or that exact syslog
