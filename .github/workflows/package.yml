@@ -429,6 +429,7 @@ jobs:
           set -euo pipefail
           install -d -m 0755 \
             "${STAGING_AMD64}/opt/syswarden/bin" \
+            "${STAGING_AMD64}/usr/lib/systemd/system/syswarden-core.service.d" \
             "${STAGING_AMD64}/usr/lib/systemd/system/syswarden-firewall.service.d" \
             "${STAGING_AMD64}/usr/local/bin" \
             "${STAGING_AMD64}/usr/share/bash-completion/completions" \
@@ -462,12 +463,21 @@ jobs:
           install -m 0644 \
             "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
             "${STAGING_AMD64}/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf"
+          install -m 0644 \
+            "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+            "${STAGING_AMD64}/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf"
 
       - name: Stage Opt-in RHEL Package-owned RPM Payload
         shell: bash
         run: |
           set -euo pipefail
           cp -a "${STAGING_AMD64}/." "${RHEL_PROFILE_STAGING}/"
+          # RHEL vendor units already carry the socket ownership capability.
+          cmp -s \
+            "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+            "${RHEL_PROFILE_STAGING}/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf"
+          rm -- "${RHEL_PROFILE_STAGING}/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf"
+          rmdir -- "${RHEL_PROFILE_STAGING}/usr/lib/systemd/system/syswarden-core.service.d"
           PYTHONDONTWRITEBYTECODE=1 python3 \
             "${EXACT_SOURCE_ROOT}/extensions/rhel-package-owned/stage.py" \
             --enable-rhel-package-owned-profile \
@@ -690,6 +700,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_AMD64}" \
             --service-manager systemd \
+            --systemd-socket-contract \
+            scripts/ci/package_systemd_socket_capability_contract.json \
+            --systemd-socket-source \
+            "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
             --systemd-ordering-contract \
             scripts/ci/package_systemd_wireguard_ordering_contract.json \
             --systemd-ordering-source \
@@ -748,6 +762,13 @@ jobs:
             "${AMD64_DIGEST_CONTRACT}" >> "${GITHUB_OUTPUT}"
           printf 'apk_amd64_digest_contract=%s\n' \
             "${APK_AMD64_DIGEST_CONTRACT}" >> "${GITHUB_OUTPUT}"
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            scripts/ci/package_systemd_ordering_artifact_gate.py \
+            --artifact socket --format stage \
+            --root "${STAGING_AMD64}" \
+            --source \
+            "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+            --contract scripts/ci/package_systemd_socket_capability_contract.json
 
       - name: Prepare Linux Maintainer Scripts
         run: |
@@ -762,6 +783,7 @@ jobs:
           syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
           syswarden_preflight_systemd_ordering_dropin
+          syswarden_preflight_systemd_socket_dropin
           if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
               if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
                  [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
@@ -1202,6 +1224,8 @@ jobs:
             --after-install "${PACKAGE_RPM_SCRIPTS}/postinst.sh" \
             --before-remove "${PACKAGE_RPM_SCRIPTS}/prerm.sh" \
             --after-remove "${PACKAGE_RPM_SCRIPTS}/postrm.sh" \
+            --directories /usr/lib/systemd/system/syswarden-core.service.d \
+            --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-core.service.d" \
             --directories /usr/lib/systemd/system/syswarden-firewall.service.d \
             --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-firewall.service.d" \
             --directories /usr/share/doc/syswarden \
@@ -1528,6 +1552,13 @@ jobs:
               --source \
               "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
               --contract scripts/ci/package_systemd_wireguard_ordering_contract.json
+            PYTHONDONTWRITEBYTECODE=1 python3 \
+              scripts/ci/package_systemd_ordering_artifact_gate.py \
+              --artifact socket --format "${format}" \
+              --package "${package}" \
+              --source \
+              "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+              --contract scripts/ci/package_systemd_socket_capability_contract.json
           done
 
       - name: Validate Packaged Binary Provenance

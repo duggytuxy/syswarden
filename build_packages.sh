@@ -397,6 +397,7 @@ install -d -m 0755 \
     staging/usr/lib \
     staging/usr/lib/systemd \
     staging/usr/lib/systemd/system \
+    staging/usr/lib/systemd/system/syswarden-core.service.d \
     staging/usr/lib/systemd/system/syswarden-firewall.service.d \
     staging/usr/local \
     staging/usr/local/bin \
@@ -434,6 +435,9 @@ install -m 0644 \
 install -m 0644 \
     "${SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
     staging/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf
+install -m 0644 \
+    "${SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+    staging/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf
 cp "${SOURCE_ROOT}/src/core/syswarden-core/signatures.json" staging-apk/opt/syswarden/
 cp dist/bin-apk/syswarden-cli dist/bin-apk/syswarden-core dist/bin-apk/syswarden-tui staging-apk/opt/syswarden/bin/
 ln -s /opt/syswarden/bin/syswarden-cli staging-apk/usr/local/bin/syswarden
@@ -458,6 +462,10 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging \
     --service-manager systemd \
+    --systemd-socket-contract \
+    "${SOURCE_ROOT}/scripts/ci/package_systemd_socket_capability_contract.json" \
+    --systemd-socket-source \
+    "${SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
     --systemd-ordering-contract \
     "${SOURCE_ROOT}/scripts/ci/package_systemd_wireguard_ordering_contract.json" \
     --systemd-ordering-source \
@@ -571,6 +579,13 @@ fi
 RHEL_PROFILE_STAGE=""
 if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
     RHEL_PROFILE_STAGE="${PACKAGE_WORKSPACE}/rhel-package-owned-profile"
+    # Vendor-owned units already carry CAP_CHOWN and do not need the standard
+    # package's generated-unit compatibility policy.
+    cmp -s \
+        "${SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+        staging-rpm/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf
+    rm -- staging-rpm/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf
+    rmdir -- staging-rpm/usr/lib/systemd/system/syswarden-core.service.d
     PYTHONDONTWRITEBYTECODE=1 python3 \
         "${REPOSITORY_ROOT}/extensions/rhel-package-owned/stage.py" \
         --enable-rhel-package-owned-profile \
@@ -605,6 +620,7 @@ export SYSWARDEN_PKG_INSTALL=1
 syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
 syswarden_preflight_systemd_ordering_dropin
+syswarden_preflight_systemd_socket_dropin
 if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
     if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
        [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
@@ -997,12 +1013,17 @@ normalize_package_mtimes \
 # 4. Generate Packages
 echo "[*] Generating .deb and .rpm packages via FPM..."
 
+RPM_SOCKET_FPM_OPTIONS=(
+    --directories /usr/lib/systemd/system/syswarden-core.service.d
+    --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-core.service.d"
+)
 RPM_PROFILE_DEPENDENCIES=()
 RPM_PROFILE_FPM_OPTIONS=()
 RPM_BUILD_ID_FPM_OPTIONS=(--directories /usr/lib/.build-id)
 RPM_BUILD_ID_DEFINE_OPTIONS=()
 if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
     RPM_PROFILE_DEPENDENCIES=(-d "systemd")
+    RPM_SOCKET_FPM_OPTIONS=()
     RPM_BUILD_ID_FPM_OPTIONS=()
     RPM_BUILD_ID_DEFINE_OPTIONS=(--rpm-rpmbuild-define "_build_id_links none")
     RPM_PROFILE_FPM_OPTIONS=(
@@ -1086,6 +1107,7 @@ fi
         --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
         --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
         "${RPM_BUILD_ID_FPM_OPTIONS[@]}" \
+        "${RPM_SOCKET_FPM_OPTIONS[@]}" \
         --directories /usr/lib/systemd/system/syswarden-firewall.service.d \
         --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-firewall.service.d" \
         --directories /usr/share/doc/syswarden \
@@ -1140,6 +1162,30 @@ EOF
     --config nfpm_alpine_amd64.yaml \
     --packager apk \
     --target "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"
+
+PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
+    --artifact socket --format stage \
+    --root staging \
+    --source \
+    "${SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+    --contract "${SOURCE_ROOT}/scripts/ci/package_systemd_socket_capability_contract.json"
+PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
+    --artifact socket --format deb \
+    --package "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb" \
+    --source \
+    "${SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+    --contract "${SOURCE_ROOT}/scripts/ci/package_systemd_socket_capability_contract.json"
+if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 0 ]; then
+    PYTHONDONTWRITEBYTECODE=1 python3 \
+        "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
+        --artifact socket --format rpm \
+        --package "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" \
+        --source \
+        "${SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+        --contract "${SOURCE_ROOT}/scripts/ci/package_systemd_socket_capability_contract.json"
+fi
 
 PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \

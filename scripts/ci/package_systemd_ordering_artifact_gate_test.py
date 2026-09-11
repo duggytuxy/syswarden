@@ -265,6 +265,37 @@ class OrderingArtifactGateTests(unittest.TestCase):
         with self.assertRaises(gate.OrderingArtifactError):
             gate.validate_source_and_stage(source, CONTRACT)
 
+    def test_socket_policy_cli_requires_its_own_exact_payload(self) -> None:
+        repository = Path.cwd()
+        while not (repository / "scripts/ci/package_stage_gate.py").is_file():
+            if repository.parent == repository:
+                self.fail("repository root is unavailable")
+            repository = repository.parent
+        source = repository / (
+            "src/init/systemd/syswarden-core.service.d/"
+            "10-syswarden-socket-ownership.conf"
+        )
+        stage = self.root / "stage"
+        staged = stage / (
+            "usr/lib/systemd/system/syswarden-core.service.d/"
+            "10-syswarden-socket-ownership.conf"
+        )
+        staged.parent.mkdir(parents=True)
+        command = [
+            sys.executable,
+            str(repository / "scripts/ci/package_systemd_ordering_artifact_gate.py"),
+            "--artifact", "socket", "--format", "stage", "--root", str(stage),
+            "--source", str(source), "--contract",
+            str(repository / "scripts/ci/package_systemd_socket_capability_contract.json"),
+        ]
+        for payload, expected in ((CONTENT, 1), (source.read_bytes(), 0),
+                                  (source.read_bytes().replace(b"CAP_CHOWN", b"CAP_KILL"), 1)):
+            with self.subTest(expected=expected, payload=payload):
+                staged.write_bytes(payload)
+                staged.chmod(0o644)
+                result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, expected, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

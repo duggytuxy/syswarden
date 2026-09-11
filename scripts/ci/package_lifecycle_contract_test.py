@@ -6758,7 +6758,7 @@ systemctl() {
             ),
             2,
         )
-        self.assertEqual(workflow_stage.count("install -m 0644"), 5)
+        self.assertEqual(workflow_stage.count("install -m 0644"), 6)
 
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(local.count("GEOIP-DATA-LICENSE.txt"), 2)

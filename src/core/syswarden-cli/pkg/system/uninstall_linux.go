@@ -936,7 +936,11 @@ func PrepareFirewallStateForRemoval() error {
 		}
 	}
 	if !IsAlpine() && !rhelPackageOwned {
-		if err := productionPreparedSystemdServiceArtifactHost().recoverInterruptedRemoval(); err != nil {
+		host, err := productionPreparedSystemdServiceArtifactHost()
+		if err != nil {
+			return fmt.Errorf("attest systemd socket capability before service recovery: %w", err)
+		}
+		if err := host.recoverInterruptedRemoval(); err != nil {
 			return fmt.Errorf("recover interrupted systemd service artifact removal: %w", err)
 		}
 	}

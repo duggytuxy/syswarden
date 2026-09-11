@@ -80,6 +80,10 @@ SYSTEMD_ORDERING_PATH = (
     "usr/lib/systemd/system/syswarden-firewall.service.d/"
     "10-syswarden-wireguard-ordering.conf"
 )
+SYSTEMD_SOCKET_PATH = (
+    "usr/lib/systemd/system/syswarden-core.service.d/"
+    "10-syswarden-socket-ownership.conf"
+)
 SYSTEMD_LINUX_ENTRIES = {
     **LINUX_ENTRIES,
     "usr/lib": DIRECTORY,
@@ -87,6 +91,8 @@ SYSTEMD_LINUX_ENTRIES = {
     "usr/lib/systemd/system": DIRECTORY,
     "usr/lib/systemd/system/syswarden-firewall.service.d": DIRECTORY,
     SYSTEMD_ORDERING_PATH: ExpectedEntry("file", mode=0o644, nonempty=True),
+    "usr/lib/systemd/system/syswarden-core.service.d": DIRECTORY,
+    SYSTEMD_SOCKET_PATH: ExpectedEntry("file", mode=0o644, nonempty=True),
 }
 
 def entry_kind(metadata: os.stat_result) -> str:
@@ -232,6 +238,7 @@ def validate(
     geoip_data_license_contract: ContentContract | None = None,
     project_license_contract: ContentContract | None = None,
     systemd_ordering_contract: ContentContract | None = None,
+    systemd_socket_contract: ContentContract | None = None,
 ) -> None:
     actual = inventory(root)
     actual_paths = set(actual)
@@ -299,6 +306,9 @@ def validate(
             systemd_ordering_contract,
         )
 
+    if systemd_socket_contract is not None:
+        validate_exact_content(root / SYSTEMD_SOCKET_PATH, systemd_socket_contract)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -314,6 +324,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--systemd-ordering-contract", type=Path)
     parser.add_argument("--systemd-ordering-source", type=Path)
+    parser.add_argument("--systemd-socket-contract", type=Path)
+    parser.add_argument("--systemd-socket-source", type=Path)
     return parser
 
 
@@ -333,6 +345,7 @@ def main() -> int:
         validate_exact_content(args.project_license_source, project_license_contract)
         expected = LINUX_ENTRIES
         systemd_ordering_contract = None
+        systemd_socket_contract = None
         if args.service_manager == "systemd":
             if args.systemd_ordering_contract is None or args.systemd_ordering_source is None:
                 raise PackageStageError(
@@ -344,8 +357,15 @@ def main() -> int:
             validate_exact_content(
                 args.systemd_ordering_source, systemd_ordering_contract
             )
+            if args.systemd_socket_contract is None or args.systemd_socket_source is None:
+                raise PackageStageError("systemd staging requires a socket capability contract and source")
+            systemd_socket_contract = load_content_contract(args.systemd_socket_contract)
+            validate_exact_content(args.systemd_socket_source, systemd_socket_contract)
             expected = SYSTEMD_LINUX_ENTRIES
-        elif args.systemd_ordering_contract is not None or args.systemd_ordering_source is not None:
+        elif any(value is not None for value in (
+            args.systemd_ordering_contract, args.systemd_ordering_source,
+            args.systemd_socket_contract, args.systemd_socket_source,
+        )):
             raise PackageStageError(
                 "OpenRC staging must not carry the systemd ordering contract"
             )
@@ -356,6 +376,7 @@ def main() -> int:
             geoip_data_license_contract,
             project_license_contract,
             systemd_ordering_contract,
+            systemd_socket_contract,
         )
     except PackageStageError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

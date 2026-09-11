@@ -74,6 +74,27 @@ class PackageStageGateTests(unittest.TestCase):
                 package_stage_gate.LINUX_ENTRIES,
             )
 
+    def test_systemd_socket_policy_requires_exact_inventory_and_content(self) -> None:
+        self.create_stage(package_stage_gate.SYSTEMD_LINUX_ENTRIES)
+        path = self.root / package_stage_gate.SYSTEMD_SOCKET_PATH
+        content = path.read_bytes()
+        contract = package_stage_gate.ContentContract(
+            sha256=hashlib.sha256(content).hexdigest(), size=len(content)
+        )
+        package_stage_gate.validate(
+            self.root, package_stage_gate.SYSTEMD_LINUX_ENTRIES,
+            systemd_socket_contract=contract,
+        )
+        path.write_bytes(content + b"changed")
+        with self.assertRaises(package_stage_gate.PackageStageError):
+            package_stage_gate.validate(
+                self.root, package_stage_gate.SYSTEMD_LINUX_ENTRIES,
+                systemd_socket_contract=contract,
+            )
+        path.unlink()
+        with self.assertRaises(package_stage_gate.PackageStageError):
+            package_stage_gate.validate(self.root, package_stage_gate.SYSTEMD_LINUX_ENTRIES)
+
     def test_systemd_inventory_rejects_missing_ordering_artifact(self) -> None:
         self.create_stage(package_stage_gate.SYSTEMD_LINUX_ENTRIES)
         (self.root / package_stage_gate.SYSTEMD_ORDERING_PATH).unlink()

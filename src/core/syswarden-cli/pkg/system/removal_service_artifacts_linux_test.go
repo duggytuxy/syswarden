@@ -17,6 +17,7 @@ type preparedSystemdServiceArtifactTestPaths struct {
 	coreEnablement string
 	firewallEnable string
 	dropIn         string
+	socketDropIn   string
 }
 
 func containsEveryRemovalTestValue(value string, expected ...string) bool {
@@ -43,7 +44,8 @@ func newPreparedSystemdServiceArtifactTestHostWithUnitMode(
 	unitDirectory := filepath.Join(root, "etc", "systemd", "system")
 	wantsDirectory := filepath.Join(unitDirectory, "multi-user.target.wants")
 	dropInDirectory := filepath.Join(root, "usr", "lib", "systemd", "system", "syswarden-firewall.service.d")
-	for _, directory := range []string{unitDirectory, wantsDirectory, dropInDirectory} {
+	socketDirectory := filepath.Join(root, "usr", "lib", "systemd", "system", "syswarden-core.service.d")
+	for _, directory := range []string{unitDirectory, wantsDirectory, dropInDirectory, socketDirectory} {
 		if err := os.MkdirAll(directory, 0755); err != nil { // #nosec G301 -- private fixture models trusted service directories
 			t.Fatal(err)
 		}
@@ -54,6 +56,7 @@ func newPreparedSystemdServiceArtifactTestHostWithUnitMode(
 		coreEnablement: filepath.Join(wantsDirectory, "syswarden-core.service"),
 		firewallEnable: filepath.Join(wantsDirectory, "syswarden-firewall.service"),
 		dropIn:         filepath.Join(dropInDirectory, "10-syswarden-wireguard-ordering.conf"),
+		socketDropIn:   filepath.Join(socketDirectory, "10-syswarden-socket-ownership.conf"),
 	}
 	for _, fixture := range []struct {
 		path    string
@@ -63,6 +66,7 @@ func newPreparedSystemdServiceArtifactTestHostWithUnitMode(
 		{paths.coreUnit, systemdCoreService, unitMode},
 		{paths.firewallUnit, systemdFirewallService, unitMode},
 		{paths.dropIn, systemdFirewallWireGuardOrderingDropIn, 0644},
+		{paths.socketDropIn, systemdCoreSocketCapabilityDropIn, 0644},
 	} {
 		if err := os.WriteFile(fixture.path, []byte(fixture.content), fixture.mode); err != nil {
 			t.Fatal(err)
@@ -105,6 +109,10 @@ func newPreparedSystemdServiceArtifactTestHostWithUnitMode(
 				path: paths.dropIn, content: systemdFirewallWireGuardOrderingDropIn,
 				mode: 0644, packageDropIn: true, optionalParent: true,
 			},
+			{
+				path: paths.socketDropIn, content: systemdCoreSocketCapabilityDropIn,
+				mode: 0644, packageDropIn: true, optionalParent: true,
+			},
 		},
 		trustedRoot: root,
 		expectedUID: systemTestUID(t),
@@ -135,7 +143,7 @@ func newPreparedSystemdServiceArtifactTestHostWithUnitMode(
 		},
 		processScan: func() error { return nil },
 		attestPackageDrop: func(_ firewallManagerExecutor, path string) (string, error) {
-			if path != paths.dropIn {
+			if path != paths.dropIn && path != paths.socketDropIn {
 				return "", fmt.Errorf("unexpected package drop-in path %s", path)
 			}
 			return "syswarden@4.04.3#test", nil

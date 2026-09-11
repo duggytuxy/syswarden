@@ -56,6 +56,15 @@ are bounded and reject unknown fields, duplicate fields, and trailing messages.
 The rsyslog datagram input at `/run/syswarden.sock` cannot submit these commands.
 Package removal cleans up both exact owned sockets after stopping the core.
 
+Standard DEB and RPM packages keep the generated core service byte-compatible
+with v4.04.3. The package owns a separate systemd policy at
+`/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf`
+that adds `CAP_CHOWN` for the private rsyslog socket. The CLI verifies its exact
+content, metadata and stable package ownership before selecting that layout.
+Native downgrade removes the policy with the newer package. Source installs
+and the RHEL package-owned profile retain their existing self-contained units
+with the same effective capabilities. Modified or unowned policies are refused.
+
 For legacy HA, the CLI and core hold compatible read leases on the existing
 writer fence during the coordinated unblock. Fence transitions require an
 exclusive lease and cannot overtake either participant. The ordinary legacy

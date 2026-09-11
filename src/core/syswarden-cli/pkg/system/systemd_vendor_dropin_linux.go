@@ -363,6 +363,12 @@ func attestApprovedSystemdServiceDropIns(
 				return "", err
 			}
 			evidence = append(evidence, item)
+		case systemdCoreSocketCapabilityDropInPath:
+			item, err := attestExactSystemdCoreSocketCapabilityDropIn(executor, path)
+			if err != nil {
+				return "", err
+			}
+			evidence = append(evidence, item)
 		case systemdFirewallWireGuardOrderingDropInPath:
 			item, err := attestExactSystemdFirewallOrderingDropIn(executor, path)
 			if err != nil {
@@ -399,20 +405,32 @@ func attestExactSystemdFirewallOrderingDropInAt(
 	expectedUID uint32,
 	expectedGID uint32,
 ) (string, error) {
+	return attestExactSystemdPackageDropInAt(
+		executor, path, expectedPath, trustedRoot, expectedUID, expectedGID,
+		systemdFirewallWireGuardOrderingDropIn, "ordering",
+	)
+}
+
+func attestExactSystemdPackageDropInAt(
+	executor firewallManagerExecutor,
+	path, expectedPath, trustedRoot string,
+	expectedUID, expectedGID uint32,
+	expectedContent, description string,
+) (string, error) {
 	if path != expectedPath {
-		return "", fmt.Errorf("refusing unexpected SysWarden systemd ordering drop-in %s", path)
+		return "", fmt.Errorf("refusing unexpected SysWarden systemd %s drop-in %s", description, path)
 	}
 	if err := attestApprovedSystemdServiceDropInParents(
 		path, trustedRoot, expectedUID, expectedGID,
 	); err != nil {
-		return "", fmt.Errorf("attest SysWarden systemd ordering drop-in parents: %w", err)
+		return "", fmt.Errorf("attest SysWarden systemd %s drop-in parents: %w", description, err)
 	}
 	first, err := readFirewallRemovalFileWithOwner(path, 0644, expectedUID, expectedGID)
 	if err != nil {
-		return "", fmt.Errorf("attest SysWarden systemd ordering drop-in: %w", err)
+		return "", fmt.Errorf("attest SysWarden systemd %s drop-in: %w", description, err)
 	}
-	if string(first.content) != systemdFirewallWireGuardOrderingDropIn {
-		return "", fmt.Errorf("refusing modified SysWarden systemd ordering drop-in %s", path)
+	if string(first.content) != expectedContent {
+		return "", fmt.Errorf("refusing modified SysWarden systemd %s drop-in %s", description, path)
 	}
 	firstPackageEvidence, err := attestSysWardenSystemdDropInPackageOwnership(executor, path)
 	if err != nil {
@@ -421,16 +439,16 @@ func attestExactSystemdFirewallOrderingDropInAt(
 	second, err := readFirewallRemovalFileWithOwner(path, 0644, expectedUID, expectedGID)
 	if err != nil || !sameFirewallRemovalFileIdentity(first.identity, second.identity) ||
 		!bytes.Equal(first.content, second.content) {
-		return "", fmt.Errorf("SysWarden systemd ordering drop-in changed during attestation")
+		return "", fmt.Errorf("SysWarden systemd %s drop-in changed during attestation", description)
 	}
 	secondPackageEvidence, err := attestSysWardenSystemdDropInPackageOwnership(executor, path)
 	if err != nil || secondPackageEvidence != firstPackageEvidence {
-		return "", fmt.Errorf("SysWarden systemd ordering drop-in package ownership changed during attestation")
+		return "", fmt.Errorf("SysWarden systemd %s drop-in package ownership changed during attestation", description)
 	}
 	if err := attestApprovedSystemdServiceDropInParents(
 		path, trustedRoot, expectedUID, expectedGID,
 	); err != nil {
-		return "", fmt.Errorf("SysWarden systemd ordering drop-in parent chain changed: %w", err)
+		return "", fmt.Errorf("SysWarden systemd %s drop-in parent chain changed: %w", description, err)
 	}
 	digest := sha256.Sum256(first.content)
 	return path + "#" + fmt.Sprintf("%x", digest) + "#" + firstPackageEvidence, nil
