@@ -57,7 +57,7 @@ exact_file() {
 
 exact_legacy_source_unit() {
     path="$1"
-    digest="$2"
+    shift
     if [ ! -f "$path" ] || [ -L "$path" ]; then
         fail "Refusing unsafe legacy SysWarden unit: $path"
     fi
@@ -66,8 +66,11 @@ exact_legacy_source_unit() {
         0:0:600:1|0:0:644:1) ;;
         *) fail "Refusing modified legacy SysWarden unit metadata: $path" ;;
     esac
-    [ "$(/usr/bin/sha256sum -- "$path" | /usr/bin/awk '{print $1}')" = "$digest" ] || \
-        fail "Refusing modified legacy SysWarden unit content: $path"
+    actual_digest="$(/usr/bin/sha256sum -- "$path" | /usr/bin/awk '{print $1}')"
+    for digest in "$@"; do
+        [ "$actual_digest" = "$digest" ] && return 0
+    done
+    fail "Refusing modified legacy SysWarden unit content: $path"
 }
 
 exact_directory() {
@@ -221,7 +224,7 @@ migrate_enablement() {
 }
 
 exact_file /usr/lib/systemd/system/syswarden-core.service 644 \
-    8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd
+    cfc30f12ea66548dce4322d2cde38a62cbc257d93be3e82218434a848051dbd7
 exact_file /usr/lib/systemd/system/syswarden-firewall.service 644 \
     989be4b60c43bba830333ef30949376e57658222a48947194395393794e328c1
 exact_file /usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf 644 \
@@ -250,7 +253,8 @@ if [ "$1" -gt 1 ]; then
     fi
     if [ "$core_present" -eq 1 ]; then
         exact_legacy_source_unit /etc/systemd/system/syswarden-core.service \
-            8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd
+            8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd \
+            cfc30f12ea66548dce4322d2cde38a62cbc257d93be3e82218434a848051dbd7
     fi
     if [ "$firewall_present" -eq 1 ]; then
         exact_legacy_source_unit /etc/systemd/system/syswarden-firewall.service \
@@ -258,7 +262,8 @@ if [ "$1" -gt 1 ]; then
     fi
     if [ "$core_present" -eq 1 ]; then
         exact_legacy_source_unit /etc/systemd/system/syswarden-core.service \
-            8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd
+            8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd \
+            cfc30f12ea66548dce4322d2cde38a62cbc257d93be3e82218434a848051dbd7
         /usr/bin/rm -f -- /etc/systemd/system/syswarden-core.service
         [ ! -e /etc/systemd/system/syswarden-core.service ] && \
             [ ! -L /etc/systemd/system/syswarden-core.service ] || \

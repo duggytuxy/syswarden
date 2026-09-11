@@ -119,11 +119,46 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 NoNewPrivileges=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists
+# CAP_CHOWN assigns the socket to the verified private rsyslog producer group.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN
+
+[Install]
+WantedBy=multi-user.target
+`
+
+	historicalV4043SystemdCoreService = `[Unit]
+Description=SYSWARDEN WAF and Core Engine
+Requires=syswarden-firewall.service
+After=network.target rsyslog.service syswarden-firewall.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/syswarden/bin/syswarden-core
+Restart=on-failure
+RestartSec=5s
+
+# Security Hardening
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_FOWNER
 
 [Install]
 WantedBy=multi-user.target
 `
+
+	historicalV4043SystemdCoreServiceLength = 775
+	historicalV4043SystemdCoreServiceSHA256 = "8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd"
 
 	historicalV4028SystemdCoreService = `[Unit]
 Description=SYSWARDEN WAF and Core Engine
@@ -2034,7 +2069,12 @@ func publishSystemdServices() error {
 			historicalContent:       historicalV4028SystemdCoreService,
 			historicalContentLength: historicalV4028SystemdCoreServiceLength,
 			historicalContentSHA256: historicalV4028SystemdCoreServiceSHA256,
-			historicalModes:         []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
+			historicalAlternates: []historicalServiceContent{{
+				content:       historicalV4043SystemdCoreService,
+				contentLength: historicalV4043SystemdCoreServiceLength,
+				contentSHA256: historicalV4043SystemdCoreServiceSHA256,
+			}},
+			historicalModes: []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 		},
 		{
 			path: firewallUnitPath, content: systemdFirewallService, mode: sourceSystemdUnitMode,

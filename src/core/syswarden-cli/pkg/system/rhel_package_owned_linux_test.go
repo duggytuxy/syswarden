@@ -36,7 +36,7 @@ func testRHELPackageOwnedOwner(t *testing.T, root string) (uint32, uint32) {
 func TestCompiledRHELPackageOwnedProfileMatchesReviewedPayload(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
-		rhelPackageOwnedCoreUnitPath:               "8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd",
+		rhelPackageOwnedCoreUnitPath:               "cfc30f12ea66548dce4322d2cde38a62cbc257d93be3e82218434a848051dbd7",
 		rhelPackageOwnedFirewallUnitPath:           "989be4b60c43bba830333ef30949376e57658222a48947194395393794e328c1",
 		systemdFirewallWireGuardOrderingDropInPath: "8c4b31f25436882197beec8c8bff5a7599389e564593bd7c353aa99ef3854483",
 		rhelPackageOwnedPresetPath:                 "0f6e058dc43d09ed101799ee444015918d28127186c9f0cbc78231906b955354",

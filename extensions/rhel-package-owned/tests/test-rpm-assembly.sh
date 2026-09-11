@@ -234,8 +234,11 @@ install -d -m 0755 \
     "${STANDARD_STAGE}/opt/syswarden/bin" \
     "${STANDARD_STAGE}/usr/local/bin"
 install -m 0644 \
-    "${PROFILE_STAGE}/payload/usr/lib/systemd/system/syswarden-core.service" \
+    "${TEST_DIRECTORY}/fixtures/syswarden-core-v4043.service" \
     "${STANDARD_STAGE}/usr/share/syswarden-standard-fixture/syswarden-core.service"
+[[ "$(sha256sum "${TEST_DIRECTORY}/fixtures/syswarden-core-v4043.service" |
+    awk 'NF == 2 { print $1 }')" == \
+    8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd ]]
 install -m 0644 \
     "${PROFILE_STAGE}/payload/usr/lib/systemd/system/syswarden-firewall.service" \
     "${STANDARD_STAGE}/usr/share/syswarden-standard-fixture/syswarden-firewall.service"
@@ -683,6 +686,9 @@ assert_standard_authority() {
     local root="$1"
     chroot_path_is_regular "${root}" /etc/systemd/system/syswarden-core.service
     chroot_path_is_regular "${root}" /etc/systemd/system/syswarden-firewall.service
+    [[ "$(run_in_chroot "${root}" /usr/bin/sha256sum /etc/systemd/system/syswarden-core.service |
+        awk 'NF == 2 { print $1 }')" == \
+        8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd ]]
     [[ "$(chroot_admin stat -c '%a' "${root}/etc/systemd/system/syswarden-core.service")" == \
         600 ]]
     [[ "$(chroot_admin stat -c '%a' "${root}/etc/systemd/system/syswarden-firewall.service")" == \

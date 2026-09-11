@@ -313,7 +313,7 @@ if [ "$1" -eq 0 ]; then
     done
     [ "$dropin_children" -eq 1 ] || fail 'Required SysWarden systemd drop-in is absent.'
     exact_payload_file /usr/lib/systemd/system/syswarden-core.service \
-        8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd
+        cfc30f12ea66548dce4322d2cde38a62cbc257d93be3e82218434a848051dbd7
     exact_payload_file /usr/lib/systemd/system/syswarden-firewall.service \
         989be4b60c43bba830333ef30949376e57658222a48947194395393794e328c1
     exact_payload_file "$dropin_directory/10-syswarden-wireguard-ordering.conf" \
