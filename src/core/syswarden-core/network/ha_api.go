@@ -2776,6 +2776,17 @@ func StartHAServerContext(ctx context.Context, fwManager firewall.Manager) (fire
 		return nil, fmt.Errorf("HA token is required")
 	}
 
+	// Publish the complete legacy identity before newHAAPI creates its fence
+	// in the same directory. Existing incomplete identities still fail closed.
+	var certificate tls.Certificate
+	if !cfg.V2Enabled {
+		var err error
+		certificate, err = loadOrCreateHATLSCertificate(haTLSDir)
+		if err != nil {
+			return nil, fmt.Errorf("load persistent TLS identity: %w", err)
+		}
+	}
+
 	coreVersion := "unknown"
 	cmd := exec.Command("syswarden")
 	if out, err := cmd.Output(); err == nil {
@@ -2793,7 +2804,6 @@ func StartHAServerContext(ctx context.Context, fwManager firewall.Manager) (fire
 		return nil, fmt.Errorf("invalid HA configuration: %w", err)
 	}
 	effectiveManager := fwManager
-	var certificate tls.Certificate
 	var components *haRuntimeV2Components
 	v2LeaseCommitted := false
 	defer func() {
@@ -2813,11 +2823,6 @@ func StartHAServerContext(ctx context.Context, fwManager firewall.Manager) (fire
 		certificate = components.identity.Certificate
 		effectiveManager = components.manager
 		api.fwManager = effectiveManager
-	} else {
-		certificate, err = loadOrCreateHATLSCertificate(haTLSDir)
-		if err != nil {
-			return nil, fmt.Errorf("load persistent TLS identity: %w", err)
-		}
 	}
 	if components == nil {
 		if err := prepareHAServerAPI(api); err != nil {

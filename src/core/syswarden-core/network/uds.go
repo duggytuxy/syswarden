@@ -20,6 +20,11 @@ import (
 	"github.com/spf13/viper"
 )
 
+type udsProducerIdentity struct {
+	group int
+	uids  []uint32
+}
+
 type UDSServer struct {
 	socketPath              string
 	conn                    *net.UnixConn
@@ -33,6 +38,7 @@ type UDSServer struct {
 	isWhitelisted           func(string) (bool, error)
 	enforcementMode         func() string
 	isInternalLogLine       func(string) bool
+	producerUIDs            []uint32
 	wg                      sync.WaitGroup
 }
 
@@ -71,10 +77,13 @@ func (s *UDSServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on uds socket: %w", err)
 	}
+	identity, err := configureUDSProducerAccess(conn, s.socketPath)
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("attest UDS producer access: %w", err)
+	}
 	s.conn = conn
-
-	// Ensure the socket is writable by authorized groups (0660)
-	_ = os.Chmod(s.socketPath, 0660) // #nosec
+	s.producerUIDs = identity.uids
 
 	log.Printf("[UDS] Listening for unixgram zero-disk streams on %s (0660)", s.socketPath)
 
@@ -98,9 +107,10 @@ func (s *UDSServer) readLoop() {
 	// terminator. ReadMsgUnix exposes MSG_TRUNC so an incomplete record is never
 	// scanned or correlated as though it were authoritative.
 	buf := make([]byte, maxWAAPLogLineBytes+2)
+	control := newUDSCredentialsBuffer()
 
 	for {
-		n, _, flags, _, err := s.conn.ReadMsgUnix(buf, nil)
+		n, controlBytes, flags, _, err := s.conn.ReadMsgUnix(buf, control)
 		if err != nil {
 			select {
 			case <-s.ctx.Done():
@@ -112,6 +122,10 @@ func (s *UDSServer) readLoop() {
 		}
 		if !completeUDSDatagram(n, flags) {
 			log.Printf("[UDS] Refusing truncated or oversized datagram")
+			continue
+		}
+		if !authorizedUDSCredentials(control[:controlBytes], flags, s.producerUIDs) {
+			log.Printf("[UDS] Refusing missing or unauthorized kernel sender credentials")
 			continue
 		}
 
