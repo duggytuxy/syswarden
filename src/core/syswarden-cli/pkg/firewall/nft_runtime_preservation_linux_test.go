@@ -72,6 +72,52 @@ func TestNFTReloadKeepsLiveRuntimeSetsInTheKernel(t *testing.T) {
 	}
 }
 
+func TestNFTRuntimePreservationAcceptsOwnedOperatorPolicyChain(t *testing.T) {
+	wire, snapshot := runtimePreservationFixture(t)
+	var document map[string][]json.RawMessage
+	if err := json.Unmarshal(wire, &document); err != nil {
+		t.Fatal(err)
+	}
+	chain, err := json.Marshal(map[string]any{"chain": map[string]any{
+		"family": "inet", "table": "syswarden", "name": operatorPolicyChainName,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document["nftables"] = append(document["nftables"], chain)
+	wire, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := nftRuntimePreservationRules(wire, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "delete chain inet syswarden " + operatorPolicyChainName + "\n"
+	if strings.Count(rules, want) != 1 || strings.Contains(rules, "banned_ips") {
+		t.Fatalf("owned operator chain was not safely replaced: %s", rules)
+	}
+	for _, replacement := range [][2]string{
+		{`"chain":`, `"set":`},
+		{`"inet"`, `"netdev"`},
+		{`"operator-policy"`, `"operator-policy-other"`},
+		{`"operator-policy"`, `"operator-policy; flush ruleset"`},
+	} {
+		changed := strings.Replace(string(chain), replacement[0], replacement[1], 1)
+		if replacement[1] == `"netdev"` {
+			changed = strings.Replace(changed, `"syswarden"`, `"syswarden_hw_drop"`, 1)
+		}
+		document["nftables"][len(document["nftables"])-1] = json.RawMessage(changed)
+		wire, err = json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rules, err := nftRuntimePreservationRules(wire, snapshot); err == nil || rules != "" {
+			t.Fatalf("operator chain exception accepted unsupported object %s: %q, %v", changed, rules, err)
+		}
+	}
+}
+
 func TestNFTRuntimePreservationRequiresCompatibleCompleteSets(t *testing.T) {
 	wire, snapshot := runtimePreservationFixture(t)
 	for _, replacement := range [][2]string{
