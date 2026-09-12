@@ -139,6 +139,9 @@ func TestPersistentEnforcementSnapshotRejectsUnsafeFilesAndContent_SW_GRC_018(t 
 		"empty line": func(t *testing.T, directory string) {
 			writePersistentEnforcementTestFile(t, directory, persistentEnforcementIPv4File, "192.0.2.1\n\n198.51.100.1\n")
 		},
+		"newline instead of an empty list": func(t *testing.T, directory string) {
+			writePersistentEnforcementTestFile(t, directory, persistentEnforcementIPv4File, "\n")
+		},
 		"surrounding whitespace": func(t *testing.T, directory string) {
 			writePersistentEnforcementTestFile(t, directory, persistentEnforcementIPv4File, " 192.0.2.1\n")
 		},

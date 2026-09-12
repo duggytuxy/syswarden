@@ -847,6 +847,14 @@ func failWithTransactionalListRollback(cause error, mutations []transactionalLis
 	return errors.Join(cause, fmt.Errorf("restore persistent firewall lists after failure: %w", rollbackErr))
 }
 
+// Empty persistent lists must have zero bytes so strict readers can attest absence.
+func serializeListLines(lines []string) []byte {
+	if len(lines) == 0 {
+		return nil
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
 func removeFromListFileAt(target approvedListFile, line string) error {
 	requested, err := parseCanonicalRecoveryListEntry(line, true)
 	if err != nil {
@@ -899,7 +907,7 @@ func removeFromListFileAt(target approvedListFile, line string) error {
 	if !changed {
 		return nil
 	}
-	return writeListFileInDirectoryFromSnapshot(directory, target, []byte(strings.Join(newLines, "\n")+"\n"), content)
+	return writeListFileInDirectoryFromSnapshot(directory, target, serializeListLines(newLines), content)
 }
 
 func sanitizeLegacyListFileAt(target approvedListFile) (bool, error) {
@@ -944,7 +952,7 @@ func sanitizeLegacyListFileAt(target approvedListFile) (bool, error) {
 	if !changed {
 		return false, nil
 	}
-	updated := []byte(strings.Join(newLines, "\n") + "\n")
+	updated := serializeListLines(newLines)
 	if err := writeListFileInDirectoryFromSnapshot(directory, target, updated, content); err != nil {
 		return false, err
 	}
@@ -1141,7 +1149,7 @@ func removeFromListFileTransactionally(target approvedListFile, line string) (tr
 		if !changed {
 			return content, false, nil
 		}
-		return []byte(strings.Join(newLines, "\n") + "\n"), true, nil
+		return serializeListLines(newLines), true, nil
 	})
 }
 
@@ -1171,7 +1179,7 @@ func sanitizeLegacyListFileTransactionally(target approvedListFile) (transaction
 		if !changed {
 			return content, false, nil
 		}
-		return []byte(strings.Join(newLines, "\n") + "\n"), true, nil
+		return serializeListLines(newLines), true, nil
 	})
 }
 
@@ -1608,7 +1616,7 @@ func removeListEntriesForIP(content []byte, ip string) ([]byte, bool, bool) {
 		}
 		newLines = append(newLines, cleanLine)
 	}
-	return []byte(strings.Join(newLines, "\n") + "\n"), found, changed
+	return serializeListLines(newLines), found, changed
 }
 
 func WhitelistInfra() error {
