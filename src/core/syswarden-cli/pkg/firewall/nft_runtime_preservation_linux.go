@@ -52,7 +52,9 @@ func nftRuntimePreservationRules(wire []byte, snapshot nftDynamicSnapshot) (stri
 			if kind == "rule" || kind == "element" {
 				continue
 			}
-			if !nftSetNameRE.MatchString(object.Name) {
+			ownedOperatorChain := kind == "chain" && target == (nftTableTarget{family: "inet", name: "syswarden"}) &&
+				object.Name == operatorPolicyChainName
+			if !nftSetNameRE.MatchString(object.Name) && !ownedOperatorChain {
 				return "", fmt.Errorf("runtime preservation object has an unsupported name")
 			}
 			key := nftObjectKey{family: target.family, table: target.name, name: object.Name}

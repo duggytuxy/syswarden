@@ -69,7 +69,8 @@ func TestNativeReloadPreservesRuntimeExpiryThroughValidationAndRollback(t *testi
  set fixture_set { type ipv4_addr; }
  set banned_ips { type ipv4_addr; flags interval,timeout; }
  set banned_ips6 { type ipv6_addr; flags interval,timeout; }
- chain input { type filter hook input priority 0; policy accept; ip saddr @banned_ips drop; ip6 saddr @banned_ips6 drop; }
+ chain operator-policy { return; }
+ chain input { type filter hook input priority 0; policy accept; jump operator-policy; ip saddr @banned_ips drop; ip6 saddr @banned_ips6 drop; }
 }
 table netdev syswarden_hw_drop {
  set banned_ips { type ipv4_addr; flags interval,timeout; }
