@@ -193,3 +193,99 @@ func TestNativeMutationRefusesPointInsideUntrackedPrefixBeforePreparation(t *tes
 		t.Fatal("covered native point received an absence witness or prepared a deletion")
 	}
 }
+
+func TestNativeRuntimeExpiryUsesCaptureIntervals(t *testing.T) {
+	base := time.Date(2026, 9, 12, 5, 22, 56, 0, time.UTC)
+	for _, test := range []struct {
+		name          string
+		inetStart     time.Duration
+		inetEnd       time.Duration
+		netdevStart   time.Duration
+		netdevEnd     time.Duration
+		inetExpires   time.Duration
+		netdevExpires time.Duration
+		wantError     bool
+	}{
+		{
+			name:      "native boundary with millisecond wire precision",
+			inetStart: 920378592, inetEnd: 920461872,
+			netdevStart: 920629481, netdevEnd: 920694681,
+			inetExpires: 2565377506 * time.Millisecond, netdevExpires: 2565379506 * time.Millisecond,
+		},
+		{
+			name:        "equal deadlines observed across a slow read",
+			inetEnd:     900 * time.Millisecond,
+			netdevStart: time.Second, netdevEnd: 1900 * time.Millisecond,
+			inetExpires: time.Minute, netdevExpires: 59 * time.Second,
+		},
+		{
+			name:        "boundary plus bounded read latency",
+			inetEnd:     400 * time.Millisecond,
+			netdevStart: 500 * time.Millisecond, netdevEnd: 900 * time.Millisecond,
+			inetExpires: time.Minute, netdevExpires: 61900 * time.Millisecond,
+		},
+		{
+			name:        "divergence beyond both capture intervals",
+			inetEnd:     100 * time.Microsecond,
+			netdevStart: 200 * time.Microsecond, netdevEnd: 300 * time.Microsecond,
+			inetExpires: time.Minute, netdevExpires: 62002 * time.Millisecond,
+			wantError: true,
+		},
+		{
+			name:        "reverse divergence beyond both capture intervals",
+			inetEnd:     100 * time.Microsecond,
+			netdevStart: 200 * time.Microsecond, netdevEnd: 300 * time.Microsecond,
+			inetExpires: 62002 * time.Millisecond, netdevExpires: time.Minute,
+			wantError: true,
+		},
+		{
+			name:        "first layer expires during second capture",
+			inetEnd:     100 * time.Microsecond,
+			netdevStart: 500 * time.Microsecond, netdevEnd: 2 * time.Millisecond,
+			inetExpires: time.Millisecond, netdevExpires: time.Millisecond,
+			wantError: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, value := range []string{"192.0.2.44", "2001:db8::44"} {
+				entry, err := parseFirewallEntry(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				observations := make(map[string]nativeLayerObservation)
+				for _, layer := range []struct {
+					name       string
+					start, end time.Duration
+					expires    time.Duration
+				}{
+					{"inet", test.inetStart, test.inetEnd, test.inetExpires},
+					{"netdev", test.netdevStart, test.netdevEnd, test.netdevExpires},
+				} {
+					elements := nftablesIntervalElements(entry, MaximumBanTTL)
+					elements[0].Expires = layer.expires
+					observations[layer.name] = nativeLayerObservation{
+						elements: elements, startedAt: base.Add(layer.start), endedAt: base.Add(layer.end),
+					}
+				}
+				got, err := nativeRuntimeEntrySnapshot(entry, []nftablesLayer{{name: "inet"}, {name: "netdev"}}, observations, true)
+				if (err != nil) != test.wantError {
+					t.Fatalf("%s: snapshot %+v, error %v, want error %t", value, got, err, test.wantError)
+				}
+				if test.wantError {
+					continue
+				}
+				if got.Entry != value || !got.Present || got.Permanent || !got.CapturedAt.Equal(base.Add(test.netdevEnd)) {
+					t.Fatalf("invalid native identity or observation: %+v", got)
+				}
+				// The exposed deadline must cover each layer's upper bound.
+				// A shorter witness could expire a still-enforced claim early.
+				for _, observation := range observations {
+					upper := observation.endedAt.Add(observation.elements[0].Expires + time.Millisecond)
+					if got.ExpiresAt.Before(upper) {
+						t.Fatalf("native witness shortened enforcement: %+v, layer %+v", got, observation)
+					}
+				}
+			}
+		})
+	}
+}
