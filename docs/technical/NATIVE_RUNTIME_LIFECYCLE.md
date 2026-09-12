@@ -84,6 +84,14 @@ witnessed candidate can finish publication after an interrupted process. An
 intent whose native result was never witnessed remains fenced and requires
 explicit recovery; it is not promoted to a successful ban or deletion.
 
+Policy reloads and scheduled feed updates retain compatible current runtime
+sets in the kernel while atomically replacing their surrounding rules and
+persistent sets. Validation and commit latency do not restart a ban's remaining
+lifetime. Policy rollback retains those same runtime sets and omits historical
+elements from its recovery snapshot, so an entry that expires during the
+transaction cannot be replayed. Legacy layouts that require reconstruction
+continue through the existing migration and verification path.
+
 On a normal restart, still-live verified desired claims are restored before
 workers start. Timed claims use the remaining lifetime rounded upward to the
 native backend's whole-second precision. Expired claims require a fresh absence

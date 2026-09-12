@@ -530,10 +530,11 @@ type nftDynamicBan struct {
 }
 
 type nftDynamicSnapshot struct {
-	capturedAt time.Time
-	sets       map[nftObjectKey]map[string]nftDynamicBan
-	discarded  map[nftObjectKey]map[string]nftDynamicBan
-	present    map[nftObjectKey]bool
+	capturedAt   time.Time
+	sets         map[nftObjectKey]map[string]nftDynamicBan
+	discarded    map[nftObjectKey]map[string]nftDynamicBan
+	present      map[nftObjectKey]bool
+	preservation string
 }
 
 type nftDynamicBanRemoval struct {
@@ -917,7 +918,15 @@ func snapshotNFTDynamicBans(ctx context.Context, runner nftCommandRunner, captur
 	if err != nil {
 		return nftDynamicSnapshot{}, fmt.Errorf("decode dynamic nftables bans: %w", err)
 	}
-	return extractNFTDynamicSnapshot(document, capturedAt)
+	snapshot, err := extractNFTDynamicSnapshot(document, capturedAt)
+	if err != nil {
+		return nftDynamicSnapshot{}, err
+	}
+	snapshot.preservation, err = nftRuntimePreservationRules(output, snapshot)
+	if err != nil {
+		return nftDynamicSnapshot{}, err
+	}
+	return snapshot, nil
 }
 
 // QuarantineLegacyDynamicBanIntervals removes only volatile address-family
@@ -1603,12 +1612,30 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 	if err != nil {
 		return fail("prepare preserved dynamic bans: %v", err)
 	}
+	preserveRuntime := dynamicSnapshot.preservation != "" && len(dynamicBanRemovals) == 0
+	if !preserveRuntime {
+		dynamicSnapshot.preservation = ""
+	}
+	if preserveRuntime {
+		rollbackRules, err = nftRollbackWithoutRuntimeElements(rollbackRules)
+		if err != nil {
+			return fail("prepare rollback without resetting runtime expiry: %v", err)
+		}
+		dynamicRules = ""
+		expectedDynamicBans = dynamicSnapshot
+	}
 
 	var transaction strings.Builder
 	for _, target := range syswardenNFTTables {
+		if preserveRuntime && isNFTRuntimeTable(target) {
+			continue
+		}
 		if existing[target] {
 			_, _ = fmt.Fprintf(&transaction, "delete table %s %s\n", target.family, target.name)
 		}
+	}
+	if preserveRuntime {
+		transaction.WriteString(dynamicSnapshot.preservation)
 	}
 	transaction.WriteString(persistentRules)
 	transaction.WriteString(dynamicRules)
@@ -1658,12 +1685,11 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 			fmt.Errorf("%w: %s", applyErr, strings.TrimSpace(string(output))),
 		)
 	}
-	// The expiry values in expectedDynamicBans are the exact relative values
-	// submitted to the successful atomic apply. Start their verification clock
-	// when that apply completes. Anchoring them before the potentially expensive
-	// `nft -c` validation incorrectly treats validation time as elapsed kernel
-	// lifetime and can reject an otherwise exact restored element.
-	expectedDynamicBans.capturedAt = time.Now()
+	// Recreated sets receive relative lifetimes at the atomic apply. Retained
+	// sets keep their original clock, including time spent validating policy.
+	if !preserveRuntime {
+		expectedDynamicBans.capturedAt = time.Now()
+	}
 	if err := updateNFTTransactionJournal(stateDirectory, journal, nftTransactionApplied); err != nil {
 		rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
 		if rollbackErr != nil {
@@ -2035,18 +2061,39 @@ func rollbackNftables(runner nftCommandRunner, snapshot string, dynamicSnapshot 
 	if err != nil {
 		return fmt.Errorf("inspect tables before rollback: %w", err)
 	}
+	preservation := ""
+	if dynamicSnapshot.preservation != "" && previousSets == (nftDynamicSetPresence{true, true, true, true}) {
+		current, err := snapshotNFTDynamicBans(ctx, runner, time.Now())
+		if err != nil {
+			return fmt.Errorf("inspect retained runtime before rollback: %w", err)
+		}
+		if current.preservation == "" {
+			return fmt.Errorf("runtime set identity changed before policy rollback")
+		}
+		snapshot, err = nftRollbackWithoutRuntimeElements(snapshot)
+		if err != nil {
+			return err
+		}
+		preservation = current.preservation
+	}
 	var rollback strings.Builder
 	for _, target := range syswardenNFTTables {
+		if preservation != "" && isNFTRuntimeTable(target) {
+			continue
+		}
 		if existing[target] {
 			_, _ = fmt.Fprintf(&rollback, "delete table %s %s\n", target.family, target.name)
 		}
 	}
+	rollback.WriteString(preservation)
 	rollback.WriteString(snapshot)
-	dynamicRules, err := buildNFTDynamicBanRollbackRules(dynamicSnapshot, time.Now(), previousSets)
-	if err != nil {
-		return fmt.Errorf("prepare rollback dynamic bans: %w", err)
+	if preservation == "" {
+		dynamicRules, err := buildNFTDynamicBanRollbackRules(dynamicSnapshot, time.Now(), previousSets)
+		if err != nil {
+			return fmt.Errorf("prepare rollback dynamic bans: %w", err)
+		}
+		rollback.WriteString(dynamicRules)
 	}
-	rollback.WriteString(dynamicRules)
 	pathDirectory, err := os.MkdirTemp("", "syswarden-firewall-rollback-")
 	if err != nil {
 		return err
@@ -2624,7 +2671,7 @@ func compareNFTDynamicSnapshots(expected, observed nftDynamicSnapshot, observedA
 	for _, key := range nftDynamicBanSets {
 		activeExpected := make(map[string]nftDynamicBan, len(expected.sets[key]))
 		for identity, ban := range expected.sets[key] {
-			if ban.expires > 0 {
+			if ban.timeout > 0 {
 				// A timed element that was already beyond the libnftables
 				// rounding tolerance before observation began must be absent.
 				if ban.expires <= elapsedAtStart && elapsedAtStart-ban.expires > expiryTolerance {
@@ -2637,7 +2684,7 @@ func compareNFTDynamicSnapshots(expected, observed nftDynamicSnapshot, observedA
 		for identity, wanted := range activeExpected {
 			found, exists := actual[identity]
 			if !exists {
-				if wanted.expires > 0 &&
+				if wanted.timeout > 0 &&
 					(wanted.expires <= elapsedAtFinish || wanted.expires-elapsedAtFinish <= expiryTolerance) {
 					// The element could legitimately have expired while nft was
 					// serializing the ruleset captured by this observation window.
