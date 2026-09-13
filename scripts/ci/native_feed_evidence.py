@@ -524,6 +524,7 @@ EMPTY_RAW_FILES = frozenset(
     {
         "concurrency/process-before.txt",
         "concurrency/process-drained.txt",
+        "concurrency/process-quarantined.txt",
         "concurrency/root-crontab.txt",
         "concurrency/schedule-conflicts.txt",
         "concurrency/timers.txt",
@@ -955,6 +956,7 @@ def _signature_binding(
             inventory_path.write_bytes(files["package/signature-inventory.json"])
             inventory_path.chmod(0o600)
             expected_path = root / "expected.json"
+            expected_status_path = root / "gpgv.status"
             policy_document = signature_gate.decode_json(
                 signature_gate.regular_bytes(policy, signature_gate.MAX_JSON_BYTES, "signature policy"),
                 "signature policy",
@@ -980,15 +982,21 @@ def _signature_binding(
                 "qualification",
                 "--evidence-output",
                 str(expected_path),
+                "--gpgv-status-output",
+                str(expected_status_path),
+                "--gpgv-logger-output",
+                str(root / "gpgv.stderr"),
             ]
             if bootstrap:
                 arguments.append("--bootstrap-qualification")
             if signature_gate.main(arguments) != 0:
                 raise NativeFeedEvidenceError("shared native DEB signature gate rejected the package")
             expected_wire = expected_path.read_bytes()
+            expected_status_wire = expected_status_path.read_bytes()
     except signature_gate.SignatureGateError as exc:
         raise NativeFeedEvidenceError(f"native DEB signature binding failed: {exc}") from exc
-    if expected_wire != _canonical_json(raw_evidence):
+    expected_evidence = _strict_json_bytes(expected_wire, "recomputed native signature evidence")
+    if _canonical_json(expected_evidence) != _canonical_json(raw_evidence):
         raise NativeFeedEvidenceError("raw native signature evidence is not reproducible")
     policy_sha = _one_line(files["package/signature-policy.sha256"], "signature policy digest")
     if policy_sha != hashlib.sha256(_regular_bytes(policy, 1048576, "signature policy")).hexdigest():
@@ -1014,15 +1022,79 @@ def _signature_binding(
         raw_signing_fingerprint, raw_signed_at = signature_gate.validate_deb_gpgv_status(
             statuses, selected, dt.date.fromisoformat(signature_date)
         )
+        expected_signing_fingerprint, expected_signed_at = signature_gate.validate_deb_gpgv_status(
+            signature_gate.parse_gpgv_status_output(expected_status_wire.decode("utf-8")),
+            selected, dt.date.fromisoformat(signature_date),
+        )
     except (UnicodeDecodeError, ValueError, signature_gate.SignatureGateError) as exc:
         raise NativeFeedEvidenceError(f"raw gpgv status is invalid: {exc}") from exc
     if (
         raw_evidence.get("key", {}).get("fingerprint") != selected["fingerprint"]
-        or raw_signing_fingerprint != raw_evidence["key"]["fingerprint"]
+        or raw_signing_fingerprint != expected_signing_fingerprint
+        or raw_signed_at != expected_signed_at
         or raw_signed_at != raw_evidence.get("signature", {}).get("created_at")
     ):
         raise NativeFeedEvidenceError("raw gpgv status is not bound to signature evidence")
     return raw_evidence
+
+
+def _validate_ca_lifecycle(files: dict[str, bytes]) -> None:
+    ca_before = _digest_line(
+        files["transport/ca-bundle-before.sha256"],
+        "ca-certificates.crt",
+        "CA bundle before digest",
+    )
+    ca_active = _digest_line(
+        files["transport/ca-bundle-active.sha256"],
+        "ca-certificates.crt",
+        "CA bundle active digest",
+    )
+    ca_restored = _digest_line(
+        files["transport/ca-bundle-restored.sha256"],
+        "ca-certificates.crt",
+        "CA bundle restored digest",
+    )
+    if ca_before != ca_restored or ca_active == ca_before:
+        raise NativeFeedEvidenceError("Ubuntu CA bundle lifecycle was not changed and restored exactly")
+    if (
+        _exit_code(files["transport/ca-before.verify.exit"], "CA verify before exit") == 0
+        or _exit_code(files["transport/ca-active.verify.exit"], "CA verify active exit") != 0
+        or _exit_code(files["transport/ca-restored.verify.exit"], "CA verify restored exit") == 0
+    ):
+        raise NativeFeedEvidenceError("fixture default-trust transition is invalid")
+    for relative in ("transport/ca-before.verify.log", "transport/ca-restored.verify.log"):
+        log = files[relative].decode("utf-8", "strict")
+        if not log.strip() or ": OK" in log:
+            raise NativeFeedEvidenceError("fixture certificate was trusted outside the active window")
+    if not files["transport/ca-active.verify.log"].decode("utf-8", "strict").endswith(": OK\n"):
+        raise NativeFeedEvidenceError("fixture certificate was not trusted in the active window")
+    install_log = files["transport/ca-install.log"].decode("utf-8", "strict")
+    remove_log = files["transport/ca-remove.log"].decode("utf-8", "strict")
+    counts = re.compile(r"^(0|[1-9][0-9]*) added, (0|[1-9][0-9]*) removed; done\.$", re.MULTILINE)
+    # Deleting a local CA need not increment the utility's removal counter.
+    # The bundle and OpenSSL checks above prove that trust was restored.
+    if counts.findall(install_log) != [("1", "0")] or counts.findall(remove_log) not in (
+        [("0", "0")], [("0", "1")],
+    ):
+        raise NativeFeedEvidenceError("Ubuntu CA update counters are inconsistent with the fixture lifecycle")
+
+
+def _validate_tls_system_trust(files: dict[str, bytes]) -> None:
+    default_trust = files["transport/default-trust.verify.log"].decode("utf-8", "strict")
+    tls_probe = files["transport/tls13.probe.log"].decode("utf-8", "strict")
+    supplied_ca = files["transport/supplied-ca.verify.log"].decode("utf-8", "strict")
+    if (
+        "Verification: OK" not in default_trust
+        or "Verify return code: 0 (ok)" not in default_trust
+        or "TLSv1.3" not in default_trust
+        or not any(
+            re.fullmatch(r"\* +SSL certificate (?:verify ok\.|verified via OpenSSL\.)", line)
+            for line in tls_probe.splitlines()
+        )
+        or "TLSv1.3" not in tls_probe
+        or ": OK" not in supplied_ca
+    ):
+        raise NativeFeedEvidenceError("TLS 1.3 system-trust proof is incomplete")
 
 
 def _parse_os_release(wire: bytes) -> dict[str, str]:
@@ -1650,39 +1722,7 @@ def assemble_from_raw(
     ):
         raise NativeFeedEvidenceError("active fixture hosts state is not an isolated atomic replacement")
 
-    ca_before = _digest_line(
-        files["transport/ca-bundle-before.sha256"],
-        "ca-certificates.crt",
-        "CA bundle before digest",
-    )
-    ca_active = _digest_line(
-        files["transport/ca-bundle-active.sha256"],
-        "ca-certificates.crt",
-        "CA bundle active digest",
-    )
-    ca_restored = _digest_line(
-        files["transport/ca-bundle-restored.sha256"],
-        "ca-certificates.crt",
-        "CA bundle restored digest",
-    )
-    if ca_before != ca_restored or ca_active == ca_before:
-        raise NativeFeedEvidenceError("Ubuntu CA bundle lifecycle was not changed and restored exactly")
-    if (
-        _exit_code(files["transport/ca-before.verify.exit"], "CA verify before exit") == 0
-        or _exit_code(files["transport/ca-active.verify.exit"], "CA verify active exit") != 0
-        or _exit_code(files["transport/ca-restored.verify.exit"], "CA verify restored exit") == 0
-    ):
-        raise NativeFeedEvidenceError("fixture default-trust transition is invalid")
-    for relative in ("transport/ca-before.verify.log", "transport/ca-restored.verify.log"):
-        log = files[relative].decode("utf-8", "strict")
-        if not log.strip() or ": OK" in log:
-            raise NativeFeedEvidenceError("fixture certificate was trusted outside the active window")
-    if not files["transport/ca-active.verify.log"].decode("utf-8", "strict").endswith(": OK\n"):
-        raise NativeFeedEvidenceError("fixture certificate was not trusted in the active window")
-    install_log = files["transport/ca-install.log"].decode("utf-8", "strict")
-    remove_log = files["transport/ca-remove.log"].decode("utf-8", "strict")
-    if "1 added, 0 removed" not in install_log or "0 added, 1 removed" not in remove_log:
-        raise NativeFeedEvidenceError("Ubuntu CA update did not add and remove exactly one certificate")
+    _validate_ca_lifecycle(files)
     if files["transport/readiness.body"] != b"fixture-ready\n":
         raise NativeFeedEvidenceError("TLS fixture readiness body is invalid")
     for relative in ("transport/fixture-cert.pem", "transport/fixture-ca.pem"):
@@ -1727,18 +1767,7 @@ def assemble_from_raw(
         or fixture_stopped["proc_absent"] is not True
     ):
         raise NativeFeedEvidenceError("TLS fixture was not proven stopped")
-    default_trust = files["transport/default-trust.verify.log"].decode("utf-8", "strict")
-    tls_probe = files["transport/tls13.probe.log"].decode("utf-8", "strict")
-    supplied_ca = files["transport/supplied-ca.verify.log"].decode("utf-8", "strict")
-    if (
-        "Verification: OK" not in default_trust
-        or "Verify return code: 0 (ok)" not in default_trust
-        or "TLSv1.3" not in default_trust
-        or "SSL certificate verify ok" not in tls_probe
-        or "TLSv1.3" not in tls_probe
-        or ": OK" not in supplied_ca
-    ):
-        raise NativeFeedEvidenceError("TLS 1.3 system-trust proof is incomplete")
+    _validate_tls_system_trust(files)
     try:
         fixture_log = files["transport/fixture.stderr.log"].decode("utf-8")
     except UnicodeDecodeError as exc:
