@@ -436,6 +436,161 @@ class NativeFeedEvidenceTests(unittest.TestCase):
         self.assertTrue(payload.endswith(b"\n"))
         self.assertNotIn(b" ", payload)
 
+    def test_signature_binding_accepts_producer_format_and_signing_subkey(self) -> None:
+        policy = self.root / "policy.json"
+        policy.write_text('{"deb":{"implementation":"qualified"}}\n', encoding="ascii")
+        signed_at = "2026-09-08T08:00:00Z"
+        signed_epoch = int(dt.datetime(2026, 9, 8, 8, tzinfo=dt.timezone.utc).timestamp())
+        signing_subkey = "B" * 40
+        status = (
+            "[GNUPG:] NEWSIG\n"
+            f"[GNUPG:] KEY_CONSIDERED {self.signer} 0\n"
+            f"[GNUPG:] SIG_ID {'A' * 27} 2026-09-08 {signed_epoch}\n"
+            f"[GNUPG:] GOODSIG {signing_subkey[-16:]} Test signer\n"
+            f"[GNUPG:] VALIDSIG {signing_subkey} 2026-09-08 {signed_epoch} "
+            f"0 4 0 1 8 00 {self.signer}\n"
+        ).encode("ascii")
+        document = {
+            "schema_version": 1,
+            "key": {"fingerprint": self.signer},
+            "signature": {"created_at": signed_at},
+            "package": {"sha256": self.package_sha256},
+        }
+        producer_output = self.root / "producer.json"
+        gate.signature_gate.write_json_exclusive(producer_output, document)
+        files = {
+            "package/native-signature-evidence.json": producer_output.read_bytes(),
+            "package/signature-inventory.json": b"{}\n",
+            "package/signature-policy.sha256": (
+                hashlib.sha256(policy.read_bytes()).hexdigest() + "\n"
+            ).encode("ascii"),
+            "package/gpgv.status": status,
+            "package/gpgv.stderr": b"",
+        }
+
+        def verify(arguments: list[str]) -> int:
+            output = Path(arguments[arguments.index("--evidence-output") + 1])
+            gate.signature_gate.write_json_exclusive(output, document)
+            status_output = Path(arguments[arguments.index("--gpgv-status-output") + 1])
+            status_output.write_bytes(status)
+            logger_output = Path(arguments[arguments.index("--gpgv-logger-output") + 1])
+            logger_output.write_bytes(b"")
+            return 0
+
+        def bind() -> dict[str, object]:
+            return gate._signature_binding(
+                files,
+                package=self.root / self.package_name,
+                signature=self.root / (self.package_name + ".asc"),
+                policy=policy,
+                key_id="deb-2026",
+                signature_date="2026-09-08",
+            )
+
+        with (
+            mock.patch.object(gate.signature_gate, "main", side_effect=verify) as verifier,
+            mock.patch.object(
+                gate.signature_gate, "select_verification_key",
+                return_value={"fingerprint": self.signer},
+            ),
+        ):
+            self.assertEqual(bind(), document)
+            files["package/native-signature-evidence.json"] = gate._canonical_json(document)
+            self.assertEqual(bind(), document)
+            altered_documents = [
+                {**document, "schema_version": True},
+                {**document, "key": {"fingerprint": "B" * 40}},
+                {key: value for key, value in document.items() if key != "package"},
+                {**document, "unexpected": "unverified"},
+            ]
+            for altered in altered_documents:
+                with self.subTest(altered=altered):
+                    files["package/native-signature-evidence.json"] = gate._canonical_json(altered)
+                    with self.assertRaisesRegex(gate.NativeFeedEvidenceError, "not reproducible"):
+                        bind()
+            files["package/native-signature-evidence.json"] = b'{"x":1,"x":2}\n'
+            with self.assertRaisesRegex(gate.NativeFeedEvidenceError, "duplicate JSON key"):
+                bind()
+            files["package/native-signature-evidence.json"] = producer_output.read_bytes()
+            files["package/gpgv.status"] = status.replace(
+                signing_subkey.encode("ascii"), b"C" * 40
+            ).replace(b"B" * 16, b"C" * 16)
+            with self.assertRaisesRegex(gate.NativeFeedEvidenceError, "not bound"):
+                bind()
+            files["package/gpgv.status"] = status
+            verifier.side_effect = None
+            verifier.return_value = 1
+            with self.assertRaisesRegex(gate.NativeFeedEvidenceError, "signature gate rejected"):
+                bind()
+
+    def test_ca_lifecycle_requires_restored_bytes_and_removed_trust(self) -> None:
+        def digest(value: str) -> bytes:
+            return (value * 64 + "  ca-certificates.crt\n").encode("ascii")
+
+        files = {
+            "transport/ca-bundle-before.sha256": digest("a"),
+            "transport/ca-bundle-active.sha256": digest("b"),
+            "transport/ca-bundle-restored.sha256": digest("a"),
+            "transport/ca-before.verify.exit": b"1\n",
+            "transport/ca-active.verify.exit": b"0\n",
+            "transport/ca-restored.verify.exit": b"1\n",
+            "transport/ca-before.verify.log": b"fixture.pem: verification failed\n",
+            "transport/ca-active.verify.log": b"fixture.pem: OK\n",
+            "transport/ca-restored.verify.log": b"fixture.pem: verification failed\n",
+            "transport/ca-install.log": b"1 added, 0 removed; done.\n",
+            "transport/ca-remove.log": b"0 added, 0 removed; done.\n",
+        }
+        gate._validate_ca_lifecycle(files)
+        gate._validate_ca_lifecycle({**files, "transport/ca-remove.log": b"0 added, 1 removed; done.\n"})
+        mutations = {
+            "ca-bundle-active.sha256": digest("a"),
+            "ca-bundle-restored.sha256": digest("b"),
+            "ca-before.verify.exit": b"0\n",
+            "ca-active.verify.exit": b"1\n",
+            "ca-restored.verify.exit": b"0\n",
+            "ca-before.verify.log": b"fixture.pem: OK\n",
+            "ca-active.verify.log": b"fixture.pem: verification failed\n",
+            "ca-restored.verify.log": b"fixture.pem: OK\n",
+            "ca-install.log": b"11 added, 0 removed; done.\n",
+            "ca-remove.log": b"0 added, 2 removed; done.\n",
+        }
+        for name, wire in mutations.items():
+            with self.subTest(name=name), self.assertRaises(gate.NativeFeedEvidenceError):
+                gate._validate_ca_lifecycle({**files, "transport/" + name: wire})
+        for wire in (b"", files["transport/ca-remove.log"] * 2):
+            with self.subTest(wire=wire), self.assertRaises(gate.NativeFeedEvidenceError):
+                gate._validate_ca_lifecycle({**files, "transport/ca-remove.log": wire})
+
+    def test_tls_system_trust_accepts_supported_curl_verification_messages(self) -> None:
+        files = {
+            "transport/default-trust.verify.log": (
+                b"Verification: OK\nNew, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384\n"
+                b"Verify return code: 0 (ok)\n"
+            ),
+            "transport/tls13.probe.log": (
+                b"* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384\n"
+                b"* SSL certificate verified via OpenSSL.\n"
+            ),
+            "transport/supplied-ca.verify.log": b"fixture.pem: OK\n",
+        }
+        gate._validate_tls_system_trust(files)
+        legacy = files["transport/tls13.probe.log"].replace(
+            b"* SSL certificate verified via OpenSSL.", b"*  SSL certificate verify ok."
+        )
+        gate._validate_tls_system_trust({**files, "transport/tls13.probe.log": legacy})
+        changes = [
+            ("tls13.probe.log", b"verified via OpenSSL.", b"verification failed"),
+            ("tls13.probe.log", b"TLSv1.3", b"TLSv1.2"),
+            ("default-trust.verify.log", b"TLSv1.3", b"TLSv1.2"),
+            ("default-trust.verify.log", b"Verification: OK", b"Verification error"),
+            ("default-trust.verify.log", b"0 (ok)", b"20 (unable to get local issuer certificate)"),
+            ("supplied-ca.verify.log", b": OK", b": verification failed"),
+        ]
+        for name, old, new in changes:
+            path = "transport/" + name
+            with self.subTest(name=name, old=old), self.assertRaises(gate.NativeFeedEvidenceError):
+                gate._validate_tls_system_trust({**files, path: files[path].replace(old, new)})
+
     def test_nft_parser_uses_only_exact_set_elements(self) -> None:
         document = {
             "nftables": [
