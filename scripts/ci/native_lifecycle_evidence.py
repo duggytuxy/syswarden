@@ -1673,11 +1673,16 @@ def assemble(
         raise LifecycleEvidenceError("exactly one observation per required profile is required")
     if len({item["campaign"]["id"] for item in validated}) != profile_count:
         raise LifecycleEvidenceError("native lifecycle campaign identities are ambiguous")
-    if (
-        len({item["campaign"]["snapshot_reference"] for item in validated})
-        != profile_count
-    ):
-        raise LifecycleEvidenceError("native lifecycle snapshot identities are ambiguous")
+    snapshot_hosts: dict[str, str] = {}
+    for item in validated:
+        reference = item["campaign"]["snapshot_reference"]
+        host_id = item["host"]["host_id"]
+        # Package variants on one host can share its recovery snapshot.
+        if reference in snapshot_hosts and snapshot_hosts[reference] != host_id:
+            raise LifecycleEvidenceError(
+                "native lifecycle snapshot identities are ambiguous across hosts"
+            )
+        snapshot_hosts[reference] = host_id
     if (
         len({item["host"]["instance_identity_sha256"] for item in validated})
         != profile_count

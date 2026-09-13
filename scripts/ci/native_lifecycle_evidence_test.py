@@ -1103,13 +1103,28 @@ class NativeLifecycleEvidenceTests(unittest.TestCase):
                     ]
         self.assert_invalid(self.rewrite(3, changed), "proof is reused")
 
-    def test_campaign_snapshot_instance_and_boot_namespaces_are_distinct(self) -> None:
-        for field in ("id", "snapshot_reference"):
-            with self.subTest(field=field):
-                changed = copy.deepcopy(self.observations[3])
-                changed["campaign"][field] = self.observations[1]["campaign"][field]
-                self.assert_invalid(self.rewrite(3, changed), field.split("_")[0])
-                self.write_json(self.paths[3], self.observations[3])
+    def test_shared_recovery_snapshot_is_scoped_to_one_host(self) -> None:
+        changed = copy.deepcopy(self.observations[3])
+        changed["campaign"]["snapshot_reference"] = self.observations[1]["campaign"][
+            "snapshot_reference"
+        ]
+        result = self.assemble(self.rewrite(3, changed))
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["profile_count"], 5)
+
+        other_host = copy.deepcopy(self.observations[0])
+        other_host["campaign"]["snapshot_reference"] = changed["campaign"][
+            "snapshot_reference"
+        ]
+        self.assert_invalid(
+            self.rewrite(0, other_host), "snapshot identities are ambiguous across hosts"
+        )
+
+    def test_campaign_instance_and_boot_namespaces_are_distinct(self) -> None:
+        changed = copy.deepcopy(self.observations[3])
+        changed["campaign"]["id"] = self.observations[1]["campaign"]["id"]
+        self.assert_invalid(self.rewrite(3, changed), "campaign identities")
+        self.write_json(self.paths[3], self.observations[3])
         changed = copy.deepcopy(self.observations[3])
         changed["host"]["instance_identity_sha256"] = self.observations[1]["host"][
             "instance_identity_sha256"
