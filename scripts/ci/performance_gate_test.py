@@ -270,7 +270,7 @@ class PerformanceGateTests(unittest.TestCase):
         ):
             gate.evaluate(evidence, self.contract, self.metrics, {}, self.candidate)
 
-    def test_reviewed_lifecycle_requires_exact_standard_native_profile_inventory(
+    def test_reviewed_lifecycle_requires_all_frozen_native_profiles(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
@@ -309,8 +309,8 @@ class PerformanceGateTests(unittest.TestCase):
                 "qualification_state": "candidate-not-qualified",
                 "publishing": False,
                 "status": "pass",
-                "profile_count": 3,
-                "raw_evidence_count": 87,
+                "profile_count": 5,
+                "raw_evidence_count": 145,
                 "raw_evidence_inventory_sha256": "5" * 64,
                 "profiles": [
                     {
@@ -342,6 +342,14 @@ class PerformanceGateTests(unittest.TestCase):
                         "host": {"profile_id": "RPM-A9"},
                         "packages": [],
                     },
+                    {
+                        "host": {"profile_id": "RPM-A9-RHELPO"},
+                        "packages": [],
+                    },
+                    {
+                        "host": {"profile_id": "RPM-A10-RHELPO"},
+                        "packages": [],
+                    },
                 ],
             }
             with (
@@ -363,18 +371,62 @@ class PerformanceGateTests(unittest.TestCase):
 
                 for label, mutation in (
                     (
-                        "package-owned substitution",
-                        lambda item: item["profiles"][2]["host"].__setitem__(
-                            "profile_id", "RPM-A9-PACKAGE-OWNED"
+                        "legacy standard-only verdict",
+                        lambda item: item.update(
+                            profile_count=3,
+                            raw_evidence_count=87,
+                            profiles=item["profiles"][:3],
                         ),
                     ),
                     (
+                        "missing package-owned profile",
+                        lambda item: item["profiles"].pop(),
+                    ),
+                    (
+                        "duplicate profile",
+                        lambda item: item["profiles"][3]["host"].update(
+                            profile_id="RPM-A9"
+                        ),
+                    ),
+                    (
+                        "unknown profile",
+                        lambda item: item["profiles"][2]["host"].update(
+                            profile_id="RPM-A9-PACKAGE-OWNED"
+                        ),
+                    ),
+                    (
+                        "wrong profile count",
+                        lambda item: item.update(profile_count=4),
+                    ),
+                    (
                         "raw evidence truncation",
-                        lambda item: item.__setitem__("raw_evidence_count", 58),
+                        lambda item: item.update(raw_evidence_count=144),
                     ),
                     (
                         "contract substitution",
-                        lambda item: item.__setitem__("contract_sha256", "7" * 64),
+                        lambda item: item.update(contract_sha256="7" * 64),
+                    ),
+                    (
+                        "candidate substitution",
+                        lambda item: item.update(candidate_commit="b" * 40),
+                    ),
+                    (
+                        "candidate package substitution",
+                        lambda item: item["profiles"][1]["packages"][1].update(
+                            package_sha256="7" * 64
+                        ),
+                    ),
+                    (
+                        "package producer substitution",
+                        lambda item: item["profiles"][1]["packages"][1].update(
+                            producer_commit="b" * 40
+                        ),
+                    ),
+                    (
+                        "package verification missing",
+                        lambda item: item["profiles"][1]["packages"][1].update(
+                            verified_before_install=False
+                        ),
                     ),
                 ):
                     changed = copy.deepcopy(lifecycle)

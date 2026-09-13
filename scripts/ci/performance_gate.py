@@ -744,6 +744,17 @@ def reviewed_bindings(
             "adapter config subject bindings do not match the contract"
         )
 
+    try:
+        lifecycle_contract, lifecycle_contract_sha256 = native_lifecycle.load_contract()
+    except native_lifecycle.LifecycleEvidenceError as exc:
+        raise PerformanceGateError("native lifecycle contract is invalid") from exc
+    expected_profile_ids = sorted(
+        profile["id"] for profile in lifecycle_contract["profiles"]
+    )
+    expected_profile_count = len(expected_profile_ids)
+    expected_raw_count = expected_profile_count * lifecycle_contract["limits"][
+        "required_raw_evidence_per_profile"
+    ]
     lifecycle = _exact_mapping(
         _load_regular_json(lifecycle_verdict_path),
         {
@@ -767,12 +778,12 @@ def reviewed_bindings(
         or lifecycle["repository"] != "duggytuxy/syswarden"
         or lifecycle["target_release"] != contract["target_release"]
         or lifecycle["candidate_commit"] != candidate_commit
-        or lifecycle["contract_sha256"] != native_lifecycle.CONTRACT_SHA256
+        or lifecycle["contract_sha256"] != lifecycle_contract_sha256
         or lifecycle["qualification_state"] != "candidate-not-qualified"
         or lifecycle["publishing"] is not False
         or lifecycle["status"] != "pass"
-        or lifecycle["profile_count"] != 3
-        or lifecycle["raw_evidence_count"] != 87
+        or lifecycle["profile_count"] != expected_profile_count
+        or lifecycle["raw_evidence_count"] != expected_raw_count
         or not isinstance(lifecycle["raw_evidence_inventory_sha256"], str)
         or SHA256_PATTERN.fullmatch(lifecycle["raw_evidence_inventory_sha256"])
         is None
@@ -787,11 +798,10 @@ def reviewed_bindings(
         else None
         for profile in profiles
     ]
-    if sorted(profile_ids, key=lambda value: "" if value is None else str(value)) != [
-        "APK-324",
-        "DEB-U2604",
-        "RPM-A9",
-    ]:
+    if (
+        sorted(profile_ids, key=lambda value: "" if value is None else str(value))
+        != expected_profile_ids
+    ):
         raise PerformanceGateError("native lifecycle profile inventory is invalid")
     deb_profiles = [
         profile
