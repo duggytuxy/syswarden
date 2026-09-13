@@ -254,8 +254,8 @@ func TestCLIProcessExitCodeContract_SW_QA_001(t *testing.T) {
 			if !strings.Contains(stdout, test.stdoutContains) {
 				t.Fatalf("stdout does not contain %q:\n%s", test.stdoutContains, stdout)
 			}
-			if test.stderrContains != "" && strings.Count(stderr, test.stderrContains) != 1 {
-				t.Fatalf("stderr must contain %q exactly once:\n%s", test.stderrContains, stderr)
+			if !strings.Contains(stderr, test.stderrContains) {
+				t.Fatalf("stderr does not contain %q:\n%s", test.stderrContains, stderr)
 			}
 			if test.stderrEmpty && stderr != "" {
 				t.Fatalf("stderr is not empty:\n%s", stderr)

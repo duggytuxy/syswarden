@@ -21,7 +21,8 @@ var updateFeedsCmd = &cobra.Command{
 			mirrorURL = "https://codeberg.org/"
 		}
 
-		return runFeedUpdateGuarded(
+		return runFeedUpdateCommand(
+			cmd,
 			firewall.PreflightConfiguredBackendMutation,
 			func() error {
 				return network.DownloadFeeds(mirrorURL, config.GlobalConfig.CustomURLIPv6, config.GlobalConfig.CustomHash, config.GlobalConfig.CustomHashIPv6, config.GlobalConfig.ListChoice, config.GlobalConfig.GeoCodes, config.GlobalConfig.ASNList, config.GlobalConfig.GeoAllowed, config.GlobalConfig.ASNAllowed, config.GlobalConfig.LANMode, config.GlobalConfig.UseSpamhaus)
@@ -29,6 +30,13 @@ var updateFeedsCmd = &cobra.Command{
 			firewall.ApplyPolicies,
 		)
 	},
+}
+
+func runFeedUpdateCommand(cmd *cobra.Command, preflight func() error, download func() error, apply func() error) error {
+	// Execute prints the returned runtime error. Keep Cobra's usage output and
+	// leave argument-validation behavior unchanged before this handler runs.
+	cmd.SilenceErrors = true
+	return runFeedUpdateGuarded(preflight, download, apply)
 }
 
 func runFeedUpdateGuarded(preflight func() error, download func() error, apply func() error) error {
