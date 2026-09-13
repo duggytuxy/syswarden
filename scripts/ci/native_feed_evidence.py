@@ -524,6 +524,7 @@ EMPTY_RAW_FILES = frozenset(
     {
         "concurrency/process-before.txt",
         "concurrency/process-drained.txt",
+        "concurrency/process-quarantined.txt",
         "concurrency/root-crontab.txt",
         "concurrency/schedule-conflicts.txt",
         "concurrency/timers.txt",

@@ -495,6 +495,45 @@ class NativeFeedEvidenceTests(unittest.TestCase):
         for address in gate.tls_fixture.OSINT_COMMON.decode("ascii").splitlines():
             self.assertIn(f"{address}/32", networks)
 
+    def test_raw_bundle_accepts_empty_quarantined_writer_observation(self) -> None:
+        relative = "concurrency/process-quarantined.txt"
+        contract = {
+            "raw_evidence": {"manifest": "SHA256SUMS", "inventory": [relative]},
+            "limits": {
+                "maximum_raw_total_bytes": 4096,
+                "maximum_feed_bytes": 4096,
+                "maximum_input_bytes": 4096,
+            },
+        }
+        root = self.root / "quarantined-writer"
+        (root / "concurrency").mkdir(mode=0o700, parents=True)
+        root.chmod(0o700)
+        observation = root / relative
+        observation.write_bytes(b"")
+        observation.chmod(0o600)
+        manifest = root / "SHA256SUMS"
+        manifest.write_text(
+            f"{hashlib.sha256(b'').hexdigest()}  {relative}\n", encoding="ascii"
+        )
+        manifest.chmod(0o600)
+
+        files, manifest_sha256 = gate.load_raw_bundle(root, contract)
+        self.assertEqual(files[relative], b"")
+        self.assertEqual(manifest_sha256, hashlib.sha256(manifest.read_bytes()).hexdigest())
+
+        observation.chmod(0o644)
+        with self.assertRaisesRegex(gate.NativeFeedEvidenceError, "private bounded"):
+            gate.load_raw_bundle(root, contract)
+        observation.chmod(0o600)
+        alias = self.root / "writer-alias"
+        os.link(observation, alias)
+        with self.assertRaisesRegex(gate.NativeFeedEvidenceError, "private bounded"):
+            gate.load_raw_bundle(root, contract)
+        alias.unlink()
+        observation.unlink()
+        with self.assertRaisesRegex(gate.NativeFeedEvidenceError, "inventory"):
+            gate.load_raw_bundle(root, contract)
+
     def test_raw_bundle_rejects_private_markers_extra_files_and_bad_manifest_bytes(self) -> None:
         contract = {
             "raw_evidence": {
