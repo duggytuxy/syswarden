@@ -75,15 +75,16 @@ func prepareHARuntimeV2(ctx context.Context, cfg HAConfig, manager firewall.Mana
 	if err := validateHARuntimeV2Config(cfg); err != nil {
 		return nil, err
 	}
-	transactional, ok := manager.(firewall.RecoverableMutationManager)
-	if !ok {
+	if _, ok := manager.(firewall.RecoverableMutationManager); !ok {
 		return nil, fmt.Errorf("HA v2 requires the authoritative recoverable firewall transaction capability")
 	}
-	store, err := newHAV2TransactionStore(cfg.StateFile, cfg.TransactionFile, os.Geteuid())
+	lease, err := reserveHARuntimeV2Lease(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if err := store.acquireInstanceLock(); err != nil {
+	defer lease.Close()
+	store, err := lease.take(cfg)
+	if err != nil {
 		return nil, err
 	}
 	prepared := false
@@ -92,6 +93,20 @@ func prepareHARuntimeV2(ctx context.Context, cfg HAConfig, manager firewall.Mana
 			store.releaseInstanceLock()
 		}
 	}()
+	components, err := prepareHARuntimeV2WithLease(ctx, cfg, manager, now, store)
+	prepared = err == nil
+	return components, err
+}
+
+// The caller owns the consumed lease through recovery and listener startup.
+func prepareHARuntimeV2WithLease(ctx context.Context, cfg HAConfig, manager firewall.Manager, now func() time.Time, store *haV2TransactionStore) (*haRuntimeV2Components, error) {
+	if ctx == nil || manager == nil || now == nil || store == nil {
+		return nil, fmt.Errorf("HA v2 runtime dependencies are unavailable")
+	}
+	transactional, ok := manager.(firewall.RecoverableMutationManager)
+	if !ok {
+		return nil, fmt.Errorf("HA v2 requires the authoritative recoverable firewall transaction capability")
+	}
 	secret, err := readHARuntimeV2Secret(cfg.V2SecretFile, os.Geteuid())
 	if err != nil {
 		return nil, fmt.Errorf("load HA v2 message secret: %w", err)
@@ -174,7 +189,6 @@ func prepareHARuntimeV2(ctx context.Context, cfg HAConfig, manager firewall.Mana
 		return nil, err
 	}
 	go func() { <-ctx.Done(); transport.CloseIdleConnections() }()
-	prepared = true
 	return &haRuntimeV2Components{adapter: adapter, outbound: outbound, identity: identity, manager: replicated}, nil
 }
 
