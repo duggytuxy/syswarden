@@ -2772,7 +2772,27 @@ func StartHAServer(fwManager firewall.Manager) {
 // daemon may expose to local writers. Any incomplete v2 attestation is a hard
 // startup error rather than a silent fallback to unreplicated mutations.
 func StartHAServerContext(ctx context.Context, fwManager firewall.Manager) (firewall.Manager, error) {
+	lease, err := ReserveHAStartupLease()
+	if err != nil {
+		return nil, fmt.Errorf("reserve HA v2 instance lease: %w", err)
+	}
+	defer lease.Close()
+	return StartHAServerContextWithLease(ctx, fwManager, lease)
+}
+
+// StartHAServerContextWithLease consumes a matching early daemon reservation.
+// After consumption, failed startup releases the lease and success retains it
+// for the process. A rejected, unconsumed handle remains owned by its caller.
+func StartHAServerContextWithLease(ctx context.Context, fwManager firewall.Manager, lease *HAStartupLease) (firewall.Manager, error) {
 	cfg := loadHAConfig()
+	if cfg.V2Enabled {
+		if err := validateHARuntimeV2Config(cfg); err != nil {
+			return nil, err
+		}
+	}
+	if !cfg.V2Enabled && lease != nil {
+		return nil, fmt.Errorf("HA startup lease does not match legacy configuration")
+	}
 	if (cfg.Enabled != "y" && cfg.Enabled != "true" && cfg.Enabled != "1") || len(cfg.PeerIPs) == 0 {
 		return fwManager, nil
 	}
@@ -2782,6 +2802,21 @@ func StartHAServerContext(ctx context.Context, fwManager firewall.Manager) (fire
 	if cfg.Token == "" || strings.TrimSpace(cfg.Token) != cfg.Token {
 		return nil, fmt.Errorf("HA token is required")
 	}
+
+	var store *haV2TransactionStore
+	v2LeaseCommitted := false
+	if cfg.V2Enabled {
+		var err error
+		store, err = lease.take(cfg)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer func() {
+		if store != nil && !v2LeaseCommitted {
+			store.releaseInstanceLock()
+		}
+	}()
 
 	// Publish the complete legacy identity before newHAAPI creates its fence
 	// in the same directory. Existing incomplete identities still fail closed.
@@ -2812,17 +2847,11 @@ func StartHAServerContext(ctx context.Context, fwManager firewall.Manager) (fire
 	}
 	effectiveManager := fwManager
 	var components *haRuntimeV2Components
-	v2LeaseCommitted := false
-	defer func() {
-		if components != nil && !v2LeaseCommitted {
-			components.adapter.transactionStore.releaseInstanceLock()
-		}
-	}()
 	if cfg.V2Enabled {
 		if err := attestHAV2LegacyHandoff(api); err != nil {
 			return nil, err
 		}
-		components, err = prepareHARuntimeV2(ctx, cfg, fwManager, time.Now)
+		components, err = prepareHARuntimeV2WithLease(ctx, cfg, fwManager, time.Now, store)
 		if err != nil {
 			return nil, fmt.Errorf("prepare HA v2: %w", err)
 		}

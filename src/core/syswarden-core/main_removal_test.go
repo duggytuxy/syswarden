@@ -100,3 +100,28 @@ func TestCoreRemovalGuardRunsBeforeRuntimeFilesystemMutation_SW2_FWBACKEND_001(t
 		t.Fatalf("core startup guard ordering is not fail-closed: guard=%d mutation=%d", guard, firstMutation)
 	}
 }
+
+func TestCoreHAStartupLeasePrecedesStatefulInitialization(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source")
+	}
+	source, err := os.ReadFile(filepath.Join(filepath.Dir(currentFile), "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(source)
+	validated := strings.Index(content, "config.FirewallBackendForMutation()")
+	reserved := strings.Index(content, "network.ReserveHAStartupLease()")
+	if validated < 0 || reserved <= validated {
+		t.Fatal("HA reservation must follow validated backend configuration")
+	}
+	for _, call := range []string{"logger.NewLogger(", "firewall.NewManager(", "network.PrepareRuntimeLifecycle(", "engine.NewEngine("} {
+		if position := strings.Index(content, call); position < 0 || position <= reserved {
+			t.Fatalf("HA reservation must precede %s", call)
+		}
+	}
+	if !strings.Contains(content, "network.StartHAServerContextWithLease(ctx, fwManager, haStartupLease)") {
+		t.Fatal("HA startup must receive the original daemon reservation")
+	}
+}

@@ -125,6 +125,13 @@ func main() {
 		log.Fatalf("[SYSWARDEN-Core] Refusing firewall backend: %v", err)
 	}
 
+	// Reserve HA v2 ownership before telemetry compaction or shared startup.
+	haStartupLease, err := network.ReserveHAStartupLease()
+	if err != nil {
+		log.Fatalf("[SYSWARDEN-Core] Failed to reserve HA runtime: %v", err)
+	}
+	defer haStartupLease.Close()
+
 	log.Println("[SYSWARDEN-Core] Starting Next-Gen WAF Daemon...")
 
 	// Ensure the native package root exists for runtime assets.
@@ -135,6 +142,7 @@ func main() {
 	// Initialize Firewall Manager
 	fwManager, err := firewall.NewManager(firewallBackend)
 	if err != nil {
+		haStartupLease.Close()
 		log.Fatalf("[SYSWARDEN-Core] Failed to initialize firewall: %v", err)
 	}
 	log.Printf("[SYSWARDEN-Core] Firewall backend initialized: %s", fwManager.Name())
@@ -142,6 +150,7 @@ func main() {
 	defer cancel()
 	fwManager, closeRuntimeHistory, err := network.PrepareRuntimeLifecycle(ctx, fwManager)
 	if err != nil {
+		haStartupLease.Close()
 		log.Fatalf("[SYSWARDEN-Core] Failed to initialize native runtime history: %v", err)
 	}
 	defer closeRuntimeHistory()
@@ -152,14 +161,16 @@ func main() {
 	// Initialize Threat Engine
 	threatEngine, err := engine.NewEngine(runtimepaths.Signatures(), waapConfig.Threshold, int(waapConfig.Window.Seconds()))
 	if err != nil {
+		haStartupLease.Close()
 		log.Fatalf("[SYSWARDEN-Core] Failed to initialize threat engine: %v", err)
 	}
 	log.Printf("[SYSWARDEN-Core] Loaded %d threat signatures", threatEngine.RuleCount())
 
 	// Start HA before exposing any daemon-originated firewall writer. In HA v2
 	// mode this returns the fail-closed replicated manager used by every worker.
-	fwManager, err = network.StartHAServerContext(ctx, fwManager)
+	fwManager, err = network.StartHAServerContextWithLease(ctx, fwManager, haStartupLease)
 	if err != nil {
+		haStartupLease.Close()
 		log.Fatalf("[SYSWARDEN-Core] Failed to initialize HA runtime: %v", err)
 	}
 	controlServer, err := network.StartRuntimeControlServer(fwManager)
