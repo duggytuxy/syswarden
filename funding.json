@@ -1,0 +1,97 @@
+{
+  "$schema": "https://fundingjson.org/schema/v1.1.0.json",
+  "entity": {
+    "type": "individual",
+    "role": "owner",
+    "name": "Laurent M. (Duggy Tuxy)",
+    "email": "laurent@data-shield.eu",
+    "description": "I am the creator and maintainer of SysWarden, an independent open-source Linux security project. I develop the software, investigate defects, maintain documentation and qualify releases on real Linux systems. Community funding helps sustain this work and cover the infrastructure and development tools it requires. My priority is to deliver reliable, auditable releases while keeping SysWarden free and open source. Individuals and organizations that depend on the project can support its maintenance and future development. For organizational sponsorship or a specific funding proposal, please contact me by email.",
+    "webpageUrl": {
+      "url": "https://github.com/duggytuxy"
+    }
+  },
+  "projects": [
+    {
+      "guid": "syswarden",
+      "name": "SysWarden",
+      "description": "SysWarden is an open-source Linux security orchestrator written in Go. It combines nftables enforcement, host telemetry, threat-intelligence lists, security-log analysis and a local terminal dashboard. It includes native DEB, RPM and APK packaging, high-availability synchronization and optional BunkerWeb integration. Funding supports security maintenance, reproducible builds, package signing, documentation and practical qualification on supported distributions. It also helps advance the v5 roadmap, with particular attention to reliable operation, integration testing and maintainability. Release work includes installation, migration, rollback, reboot, removal, recovery and performance checks. Support helps give these tasks the time and infrastructure they need before a release is published.",
+      "webpageUrl": {
+        "url": "https://github.com/duggytuxy/syswarden#readme"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/duggytuxy/syswarden"
+      },
+      "licenses": [
+        "spdx:GPL-3.0-or-later"
+      ],
+      "tags": [
+        "security",
+        "linux",
+        "firewall",
+        "networking",
+        "intrusion-detection",
+        "intrusion-prevention",
+        "threat-intelligence",
+        "system-administration",
+        "high-availability",
+        "golang"
+      ]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "ko-fi",
+        "type": "payment-provider",
+        "address": "https://ko-fi.com/laurentmduggytuxy",
+        "description": "Support SysWarden through the maintainer's existing Ko-fi page. Choose a one-time or monthly contribution and mention SysWarden in your message. Use the options and currency available at checkout."
+      },
+      {
+        "guid": "paypal",
+        "type": "payment-provider",
+        "address": "https://www.paypal.com/donate/?hosted_button_id=MHZQVBNAVDEDE",
+        "description": "Make a voluntary donation to support SysWarden through the maintainer's PayPal donation page. Choose your contribution using the options available at checkout."
+      }
+    ],
+    "plans": [
+      {
+        "guid": "community-support",
+        "status": "active",
+        "name": "One-time community support",
+        "description": "Contribute any amount to help maintain SysWarden, investigate issues, improve documentation and respond to community feedback. This is a voluntary contribution to the open-source project.",
+        "amount": 0,
+        "currency": "EUR",
+        "frequency": "one-time",
+        "channels": [
+          "ko-fi",
+          "paypal"
+        ]
+      },
+      {
+        "guid": "sustainable-maintenance",
+        "status": "active",
+        "name": "Monthly maintenance and infrastructure",
+        "description": "Provide recurring support at an amount you choose. Funding helps cover maintainer time, test servers, backup and recovery exercises, continuous integration, development tools and ongoing security maintenance. Predictable support makes it easier to sustain this work between releases.",
+        "amount": 0,
+        "currency": "EUR",
+        "frequency": "monthly",
+        "channels": [
+          "ko-fi"
+        ]
+      },
+      {
+        "guid": "release-qualification-and-v5",
+        "status": "active",
+        "name": "Release qualification and the v5 roadmap",
+        "description": "Help fund release engineering and the development of SysWarden v5. Priorities include signed packages, compatibility testing across Linux distributions, migration and rollback validation, high-availability recovery scenarios, performance measurements and continued BunkerWeb integration work. Contributions support engineering and verification time; release dates depend on successful qualification.",
+        "amount": 0,
+        "currency": "EUR",
+        "frequency": "one-time",
+        "channels": [
+          "ko-fi",
+          "paypal"
+        ]
+      }
+    ]
+  }
+}
