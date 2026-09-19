@@ -836,6 +836,12 @@ func processKernelDropLine(
 		if isUnspecifiedSourceIGMPAllHostsTraffic(line) {
 			return
 		}
+		// Echo probes are not transport-port scans. Keep the original kernel
+		// drop record and firewall verdict, without creating a source ban or
+		// an alert callback (and therefore a webhook) for ordinary monitoring.
+		if isICMPEchoRequest(line) {
+			return
+		}
 		if isWhitelisted(ip) {
 			return
 		}
@@ -920,6 +926,48 @@ func processKernelDropLine(
 		// source ban is claimed unless a firewall mutation actually succeeds.
 		logDetected(ip, evidence.RuleID, line, evidence)
 	}
+}
+
+// isICMPEchoRequest recognizes only unambiguous kernel echo-request records.
+// Other ICMP messages, transport records and malformed fields retain the
+// existing observation path. Dedicated attack prefixes never use this exception.
+func isICMPEchoRequest(line string) bool {
+	var source, protocol, messageType, code string
+	var seen uint8
+	for field := range strings.FieldsSeq(line) {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		var bit uint8
+		switch key {
+		case "SRC":
+			bit, source = 1, value
+		case "PROTO":
+			bit, protocol = 2, value
+		case "TYPE":
+			bit, messageType = 4, value
+		case "CODE":
+			bit, code = 8, value
+		case "SPT", "DPT":
+			return false
+		default:
+			continue
+		}
+		if seen&bit != 0 {
+			return false
+		}
+		seen |= bit
+	}
+	if seen != 15 || code != "0" {
+		return false
+	}
+	address, err := netip.ParseAddr(source)
+	if err != nil || address.Zone() != "" || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() {
+		return false
+	}
+	return (address.Is4() && protocol == "ICMP" && messageType == "8") ||
+		(address.Is6() && protocol == "ICMPv6" && messageType == "128")
 }
 
 func isUnspecifiedSourceIGMPAllHostsTraffic(line string) bool {

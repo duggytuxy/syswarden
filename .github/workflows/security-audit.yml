@@ -58,7 +58,7 @@ jobs:
             /etc/apt/sources.list.d/google-chrome.sources
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            bubblewrap=0.9.0-1ubuntu0.1
+            bubblewrap=0.9.0-1ubuntu0.3
           test "$(bwrap --version)" = "bubblewrap 0.9.0"
           command -v apparmor_parser >/dev/null
           test -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns

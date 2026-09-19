@@ -246,7 +246,7 @@ class GoToolchainEvaluationTests(unittest.TestCase):
         end = '            echo "ERROR: Bubblewrap child retained usable capabilities."'
         approved = audit[audit.index(start):audit.index(end)]
         self.assertIn(approved, preparation)
-        self.assertIn("rpm bubblewrap=0.9.0-1ubuntu0.1", self.workflow)
+        self.assertIn("rpm bubblewrap=0.9.0-1ubuntu0.3", self.workflow)
         self.assertIn('GOTOOLCHAIN=local CI=true "${CANDIDATE_GO}"', preparation)
         self.assertIn(
             "^Test(NftablesRulesGolden|BubblewrapFirewallGoldenTemporaryDirectoryContract)_SW_QA_001$",
