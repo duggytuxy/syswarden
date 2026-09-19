@@ -84,7 +84,7 @@ jobs:
             /etc/apt/sources.list.d/google-chrome.sources
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            rpm bubblewrap=0.9.0-1ubuntu0.1
+            rpm bubblewrap=0.9.0-1ubuntu0.3
           gem install --no-document fpm -v 1.17.0
           tool_dir="${RUNNER_TEMP}/go127-tools"
           install -d -m 0700 "${tool_dir}"

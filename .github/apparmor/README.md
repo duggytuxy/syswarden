@@ -18,3 +18,13 @@ path and does not load a host AppArmor policy.
 Updating this file requires review of the upstream commit, a new exact digest,
 and successful execution of the fail-closed Bubblewrap probe and firewall
 golden test.
+
+The Ubuntu 24.04 package pin is `bubblewrap=0.9.0-1ubuntu0.3`; its upstream
+runtime version remains `0.9.0`. This revision replaces the retired
+`0.9.0-1ubuntu0.1` entry in the
+[official Ubuntu security archive](https://security.ubuntu.com/ubuntu/pool/main/b/bubblewrap/).
+It restores package availability, but does not fix CVE-2026-87766: Ubuntu
+reverted the earlier fix after a symlink-resolution regression, as documented
+in [USN-8779-2](https://ubuntu.com/security/notices/USN-8779-2).
+The pinned AppArmor policy and all enforcement canaries remain unchanged.
+Those canaries do not establish immunity to this sandbox-setup vulnerability.

@@ -737,6 +737,8 @@ class ActFixtureTests(unittest.TestCase):
             "a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859"
         )
 
+        self.assertIn("bubblewrap=0.9.0-1ubuntu0.3", workflow)
+        self.assertIn('test "$(bwrap --version)" = "bubblewrap 0.9.0"', workflow)
         self.assertEqual(hashlib.sha256(profile).hexdigest(), expected_sha256)
         self.assertIn(expected_sha256, workflow)
         self.assertIn(expected_sha256, policy_readme)
