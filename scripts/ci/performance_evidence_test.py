@@ -239,6 +239,40 @@ class PerformanceEvidenceTests(unittest.TestCase):
                     candidate_samples=candidate,
                 )
 
+    def test_quantized_disk_vectors_keep_provenance_and_regression_checks(self) -> None:
+        for factor in (1.0, 1.125):
+            with self.subTest(factor=factor), tempfile.TemporaryDirectory(dir="/tmp") as directory:
+                root = Path(directory)
+                paths = [self.make_campaign(root, index) for index in (1, 2, 3)]
+                for index, path in enumerate(paths, start=1):
+                    for role in ("baseline", "candidate"):
+                        samples = root / f"{role}-{index}.json"
+                        document = json.loads(samples.read_text(encoding="utf-8"))
+                        value = 1036.288 * (factor if role == "candidate" else 1.0)
+                        document["metrics"]["disk_io_bytes_per_event"]["samples"] = [value] * 10
+                        samples.write_text(json.dumps(document), encoding="utf-8")
+                    campaign = evidence.build_campaign(
+                        candidate_commit=self.candidate,
+                        identifier=f"campaign-{index}",
+                        recorded_at=f"2026-09-{9 + index:02d}T08:00:00Z",
+                        environment_id="node02-ubuntu-26.04",
+                        environment_attestation=root / f"environment-{index}.json",
+                        probe=root / f"probe-{index}.sh",
+                        baseline_samples=root / f"baseline-{index}.json",
+                        candidate_samples=root / f"candidate-{index}.json",
+                    )
+                    path.write_text(json.dumps(campaign), encoding="utf-8")
+                _, report = evidence.assemble_evidence(candidate_commit=self.candidate, campaigns=paths)
+                self.assertEqual(report["verdict"], "pass" if factor == 1.0 else "fail")
+                self.assertEqual(report["failed_metrics"], [] if factor == 1.0 else ["disk_io_bytes_per_event"])
+
+                first = json.loads(paths[0].read_text(encoding="utf-8"))
+                reused = json.loads(paths[1].read_text(encoding="utf-8"))
+                reused["subjects"]["baseline"]["samples_sha256"] = first["subjects"]["baseline"]["samples_sha256"]
+                paths[1].write_text(json.dumps(reused), encoding="utf-8")
+                with self.assertRaisesRegex(evidence.PerformanceEvidenceError, "reused"):
+                    evidence.assemble_evidence(candidate_commit=self.candidate, campaigns=paths)
+
     def test_cross_campaign_integrity_rejects_clones_and_binding_drift(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
             root = Path(directory)

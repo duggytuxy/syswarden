@@ -424,7 +424,7 @@ def assemble_evidence(
     ] = {
         name: set()
         for name, metric in metric_contracts.items()
-        if name not in gate.STATIC_SIZE_METRICS
+        if name not in gate.STATIC_SIZE_METRICS | gate.QUANTIZED_COUNTER_METRICS
         and math.ceil(metric.minimum_samples / contract["minimum_campaigns"]) > 1
     }
     for campaign in validated:
