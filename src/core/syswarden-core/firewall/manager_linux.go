@@ -363,16 +363,52 @@ type nftablesConnection interface {
 
 type nftablesConnectionFactory func() nftablesConnection
 
+type nftablesTransactionConnection interface {
+	nftablesConnection
+	CloseLasting() error
+}
+
 type NftablesManager struct {
-	conn       nftablesConnection
-	newConn    nftablesConnectionFactory
-	inetSet    *nftables.Set
-	netdevSet  *nftables.Set
-	inetSet6   *nftables.Set
-	netdevSet6 *nftables.Set
-	health     HealthState
-	lastErr    error
-	mu         sync.RWMutex
+	conn                   nftablesConnection
+	newConn                nftablesConnectionFactory
+	inetSet                *nftables.Set
+	netdevSet              *nftables.Set
+	inetSet6               *nftables.Set
+	netdevSet6             *nftables.Set
+	health                 HealthState
+	lastErr                error
+	mu                     sync.RWMutex
+	newTransactionConn     func() (nftablesTransactionConnection, error)
+	transactionConnections []nftablesTransactionConnection
+}
+
+// Reuse sockets only inside the shared firewall lock. Refreshes still create a
+// fresh connection, so a failed batch cannot leak queued mutations into a retry.
+func (m *NftablesManager) beginTransactionConnectionsLocked() {
+	if m.newTransactionConn != nil {
+		m.transactionConnections = make([]nftablesTransactionConnection, 0, 4)
+	}
+}
+
+func (m *NftablesManager) endTransactionConnectionsLocked(result *error) {
+	if m.transactionConnections == nil {
+		return
+	}
+	connections := m.transactionConnections
+	m.transactionConnections = nil
+	// A new transient connection also discards any queued, unflushed messages.
+	m.conn = m.newConn()
+	var closeErrs []error
+	for _, connection := range connections {
+		if err := connection.CloseLasting(); err != nil {
+			closeErrs = append(closeErrs, err)
+		}
+	}
+	if err := errors.Join(closeErrs...); err != nil {
+		err = fmt.Errorf("close transaction netlink connections: %w", err)
+		*result = errors.Join(*result, err)
+		m.markOperationFailureLocked(*result)
+	}
 }
 
 type nftablesLayer struct {
@@ -503,7 +539,7 @@ func validateRecoverableMutation(mutation RecoverableMutation) (firewallEntry, e
 // every other core firewall write from WAL preparation through durable commit.
 // The mutation is idempotent, so an intact WAL can be replayed after a crash or
 // an ambiguous response without widening the firewall policy.
-func (m *NftablesManager) RunRecoverableMutation(ctx context.Context, mutation RecoverableMutation, hooks RecoverableMutationHooks) error {
+func (m *NftablesManager) RunRecoverableMutation(ctx context.Context, mutation RecoverableMutation, hooks RecoverableMutationHooks) (resultErr error) {
 	entry, err := validateRecoverableMutation(mutation)
 	if err != nil {
 		return err
@@ -534,6 +570,8 @@ func (m *NftablesManager) RunRecoverableMutation(ctx context.Context, mutation R
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.beginTransactionConnectionsLocked()
+	defer m.endTransactionConnectionsLocked(&resultErr)
 	if hooks.ObserveBefore != nil {
 		if err := m.observeMutationLocked(entry, hooks.ObserveBefore); err != nil {
 			m.markOperationFailureLocked(err)
@@ -827,7 +865,22 @@ func nftablesElementState(elements []nftables.SetElement, entry firewallEntry) (
 }
 
 func (m *NftablesManager) refreshHandlesLocked() error {
-	connection := m.newConn()
+	var connection nftablesConnection
+	if m.transactionConnections != nil {
+		lasting, err := m.newTransactionConn()
+		if lasting != nil {
+			m.transactionConnections = append(m.transactionConnections, lasting)
+		}
+		if err != nil {
+			m.clearHandlesLocked()
+			m.health = HealthUnavailable
+			m.lastErr = fmt.Errorf("open transaction netlink connection: %w", err)
+			return m.lastErr
+		}
+		connection = lasting
+	} else {
+		connection = m.newConn()
+	}
 	if connection == nil {
 		m.clearHandlesLocked()
 		m.health = HealthUnavailable
@@ -971,5 +1024,15 @@ func newManagerForConfiguredBackend(backend string, factory nftablesConnectionFa
 // NewManager constructs only the authoritative nftables runtime manager for a
 // backend already accepted by the validated core configuration.
 func NewManager(backend string) (Manager, error) {
-	return newManagerForConfiguredBackend(backend, func() nftablesConnection { return &nftables.Conn{} })
+	manager, err := newManagerForConfiguredBackend(backend, func() nftablesConnection { return &nftables.Conn{} })
+	if native, ok := manager.(*NftablesManager); ok {
+		native.newTransactionConn = func() (nftablesTransactionConnection, error) {
+			connection, err := nftables.New(nftables.AsLasting())
+			if err != nil {
+				return nil, err
+			}
+			return connection, nil
+		}
+	}
+	return manager, err
 }
