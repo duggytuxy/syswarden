@@ -103,6 +103,7 @@ Operational procedures are centralized in the
 | Goal | Documentation |
 | --- | --- |
 | Verify and install a package | [Installation procedure](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#4-verify-and-install-one-package) |
+| Build and install the latest source | [Build and install from source](https://github.com/duggytuxy/syswarden/wiki/Build-and-Install-from-Source) |
 | Upgrade from historical v4.02.8 to v4.03.2 | [Migration procedure](https://github.com/duggytuxy/syswarden/wiki/Migration-v4.02.8-to-v4.03.2) |
 | Configure SysWarden | [Configuration guide](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#7-configuration-layout) |
 | Integrate SysWarden into RHEL 9+ images | [RHEL 9+ image integration](https://github.com/duggytuxy/syswarden/wiki/RHEL-9-Image-Extensions) |
