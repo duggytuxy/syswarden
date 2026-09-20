@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -284,7 +285,76 @@ func TestNftablesManagerKernelIntervals_SW_FW_004(t *testing.T) {
 	if reattested.Health() != HealthHealthy {
 		t.Fatalf("reattested NftablesManager health = %s, want %s", reattested.Health(), HealthHealthy)
 	}
+	assertKernelRecoverableTransactions(t)
 	t.Log("SYSWARDEN_MANAGER_KERNEL_RAW_INTERVALS_OK")
+}
+
+func assertKernelRecoverableTransactions(t *testing.T) {
+	t.Helper()
+	backend, err := NewManager("nftables")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := backend.(*NftablesManager)
+	noop := func() error { return nil }
+	var samples []time.Duration
+	var initialFDs int
+	for iteration := 0; iteration < 20; iteration++ {
+		for _, entry := range []string{"192.0.2.44", "2001:db8::44"} {
+			permanent := iteration%2 == 0
+			for _, present := range []bool{true, false} {
+				hooks := RecoverableMutationHooks{
+					ObserveBefore: func(snapshot NativeRuntimeEntrySnapshot) error {
+						if snapshot.Present == present {
+							t.Fatal("incorrect native before witness")
+						}
+						return nil
+					},
+					Prepare: noop, Persist: noop, Commit: noop,
+					ObserveAfter: func(snapshot NativeRuntimeEntrySnapshot) error {
+						if snapshot.Present != present || (present && snapshot.Permanent != permanent) {
+							t.Fatal("incorrect native after witness")
+						}
+						return nil
+					},
+				}
+				mutation := RecoverableMutation{Entry: entry, Present: present, Permanent: present && permanent}
+				if present && !permanent {
+					mutation.TTL = time.Minute
+				}
+				started := time.Now()
+				if err := manager.RunRecoverableMutation(context.Background(), mutation, hooks); err != nil {
+					t.Fatalf("recoverable native mutation: %v", err)
+				}
+				if iteration > 0 {
+					samples = append(samples, time.Since(started))
+				}
+				entries := []string(nil)
+				if present {
+					entries = []string{entry}
+				}
+				if err := manager.WithNativeRuntimeSnapshot(context.Background(), entries, func(snapshots []NativeRuntimeEntrySnapshot) error {
+					if len(snapshots) != len(entries) || (present && !snapshots[0].Present) {
+						t.Fatal("incorrect authoritative native inventory")
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		fds, err := os.ReadDir("/proc/self/fd")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if iteration == 0 {
+			initialFDs = len(fds)
+		} else if len(fds) > initialFDs {
+			t.Fatalf("native transactions leaked descriptors: %d -> %d", initialFDs, len(fds))
+		}
+	}
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	t.Logf("recoverable native mutation diagnostic: samples=%d median=%s; durability callbacks are test-only no-ops", len(samples), samples[len(samples)/2])
 }
 
 func waitForKernelTimedStartExpiration(t *testing.T, manager *NftablesManager, interval kernelIntervalExpectation, timeout time.Duration) bool {

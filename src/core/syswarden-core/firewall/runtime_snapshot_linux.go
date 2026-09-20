@@ -31,7 +31,7 @@ func (m *NftablesManager) observeMutationLocked(entry firewallEntry, observe fun
 	return observe(snapshots[0])
 }
 
-func (m *NftablesManager) WithNativeRuntimeSnapshot(ctx context.Context, entries []string, consume func([]NativeRuntimeEntrySnapshot) error) error {
+func (m *NftablesManager) WithNativeRuntimeSnapshot(ctx context.Context, entries []string, consume func([]NativeRuntimeEntrySnapshot) error) (resultErr error) {
 	if ctx == nil || consume == nil || len(entries) > maximumNativeSnapshotEntries {
 		return fmt.Errorf("native runtime snapshot requires bounded entries, a context, and a callback")
 	}
@@ -55,6 +55,8 @@ func (m *NftablesManager) WithNativeRuntimeSnapshot(ctx context.Context, entries
 	defer releaseFirewallRuntimeLock(lock)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.beginTransactionConnectionsLocked()
+	defer m.endTransactionConnectionsLocked(&resultErr)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -78,12 +80,22 @@ func (m *NftablesManager) nativeRuntimeSnapshotsLocked(entries []firewallEntry, 
 		{name: "inet6", set: m.inetSet6}, {name: "netdev6", set: m.netdevSet6}}
 	observations := make(map[string]nativeLayerObservation, len(layers))
 	tracked := make(map[string]bool, len(entries))
+	requiredLayers := make(map[string]bool, len(layers))
 	for _, entry := range entries {
 		tracked[string(entry.key)] = true
+		for _, layer := range m.layersForKeyLocked(entry.key) {
+			requiredLayers[layer.name] = true
+		}
 	}
 	for _, layer := range layers {
 		if layer.set == nil {
 			return nil, fmt.Errorf("native runtime evidence lacks expected %s layer", layer.name)
+		}
+		// A mutation witness concerns only the target address family. A full
+		// inventory must still read every layer, including empty families, to
+		// reject untracked claims before authoritative reconciliation.
+		if !requireTrackedInventory && !requiredLayers[layer.name] {
+			continue
 		}
 		observation := nativeLayerObservation{startedAt: time.Now().UTC()}
 		elements, err := m.conn.GetSetElements(layer.set)
