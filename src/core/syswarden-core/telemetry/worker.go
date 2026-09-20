@@ -600,7 +600,7 @@ func StartWorker(
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
-		generateTelemetry(fwManager)
+		generateTelemetry(ctx, fwManager)
 
 		for {
 			select {
@@ -608,7 +608,7 @@ func StartWorker(
 				log.Println("[Telemetry Worker] Shutting down gracefully...")
 				return
 			case <-ticker.C:
-				generateTelemetry(fwManager)
+				generateTelemetry(ctx, fwManager)
 			}
 		}
 	}()
@@ -1248,10 +1248,18 @@ func publishDashboardDataWithClock(dataFile string, data DashboardData, clock fu
 	return publishDashboardData(dataFile, data)
 }
 
-func generateTelemetry(fwManager FirewallManager) {
+func generateTelemetry(ctx context.Context, fwManager FirewallManager) {
+	if ctx.Err() != nil {
+		return
+	}
+	stars, release := getGithubStars(ctx), getGithubRelease(ctx)
+	// Shutdown must not start another snapshot after a cancelled metadata fetch.
+	if ctx.Err() != nil {
+		return
+	}
 	data := DashboardData{
-		GithubStars:   getGithubStars(),
-		GithubRelease: getGithubRelease(),
+		GithubStars:   stars,
+		GithubRelease: release,
 		ProfileName:   viper.GetString("user.profile_name"),
 		System:        getSystemStats(),
 		Layer3:        getLayer3Stats(),
@@ -2022,13 +2030,16 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 var cachedStars string = "260"
 var lastStarFetch time.Time
 
-func getGithubStars() string {
+func getGithubStars(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return cachedStars
+	}
 	if time.Since(lastStarFetch) < 1*time.Hour && cachedStars != "N/A" {
 		return cachedStars
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequest("GET", "https://api.github.com/repos/duggytuxy/syswarden", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/duggytuxy/syswarden", nil)
 	if err != nil {
 		return cachedStars
 	}
@@ -2055,13 +2066,16 @@ func getGithubStars() string {
 var cachedRelease string = "Unknown"
 var lastReleaseFetch time.Time
 
-func getGithubRelease() string {
+func getGithubRelease(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return cachedRelease
+	}
 	if time.Since(lastReleaseFetch) < 1*time.Hour && cachedRelease != "Unknown" {
 		return cachedRelease
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequest("GET", "https://api.github.com/repos/duggytuxy/syswarden/releases/latest", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/duggytuxy/syswarden/releases/latest", nil)
 	if err != nil {
 		return cachedRelease
 	}
