@@ -137,8 +137,9 @@ func (queue *ingressQueue) popFront() *ingressObservation {
 }
 
 type compiledRegex struct {
-	def RuleDef
-	re  *regexp.Regexp
+	def       RuleDef
+	re        *regexp.Regexp
+	prefilter *regexPrefilter
 }
 
 type Match struct {
@@ -367,7 +368,7 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 					return nil, fmt.Errorf("rule %s must compile to exactly one trusted host capture", rule.ID)
 				}
 			}
-			e.regexRules = append(e.regexRules, compiledRegex{def: rule, re: re})
+			e.regexRules = append(e.regexRules, compiledRegex{def: rule, re: re, prefilter: compileRegexPrefilter(re.String())})
 		}
 	}
 
@@ -400,7 +401,16 @@ func (e *Engine) Scan(logLine string) *Match {
 		start int
 	}
 	regexCandidates := make([]regexCandidate, 0, len(e.regexRules))
-	addRegexCandidate := func(rr compiledRegex, content string) {
+	recordText := regexScanText{text: logLine}
+	targetText := regexScanText{text: requestTarget}
+	decodedTarget, decodeErr := url.QueryUnescape(requestTarget)
+	decodedText := regexScanText{text: decodedTarget}
+	hasDecodedTarget := hasRequestTarget && decodeErr == nil && decodedTarget != requestTarget
+	addRegexCandidate := func(rr compiledRegex, input *regexScanText) {
+		if !input.matches(rr.prefilter) {
+			return
+		}
+		content := input.text
 		indexes := rr.re.FindStringSubmatchIndex(content)
 		if indexes == nil {
 			return
@@ -436,16 +446,15 @@ func (e *Engine) Scan(logLine string) *Match {
 	}
 	for _, rr := range e.regexRules {
 		if rr.def.MatchScope == matchScopeRecord {
-			addRegexCandidate(rr, logLine)
+			addRegexCandidate(rr, &recordText)
 			continue
 		}
 		if !hasRequestTarget {
 			continue
 		}
-		addRegexCandidate(rr, requestTarget)
-		decodedTarget, err := url.QueryUnescape(requestTarget)
-		if err == nil && decodedTarget != requestTarget {
-			addRegexCandidate(rr, decodedTarget)
+		addRegexCandidate(rr, &targetText)
+		if hasDecodedTarget {
+			addRegexCandidate(rr, &decodedText)
 		}
 	}
 
@@ -509,8 +518,7 @@ func (e *Engine) Scan(logLine string) *Match {
 		}
 		if hasRequestTarget {
 			addMatches([]byte(requestTarget), matchScopeRequestTarget)
-			decodedTarget, err := url.QueryUnescape(requestTarget)
-			if err == nil && decodedTarget != requestTarget {
+			if hasDecodedTarget {
 				addMatches([]byte(decodedTarget), matchScopeRequestTarget)
 			}
 		}
