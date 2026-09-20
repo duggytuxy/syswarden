@@ -80,6 +80,13 @@ metrics requiring 30 aggregate samples are requested for all ten iterations;
 - `nft_transaction_milliseconds`: request to committed live nftables state.
 - `disk_io_bytes_per_event`: process read and write byte delta divided by admitted events.
 
+Disk I/O is accounted in discrete byte increments. With a fixed admitted-event
+count, independent campaigns can produce identical nonzero disk-I/O vectors.
+The assembler and gate therefore require distinct sample-document digests and
+campaign timestamps instead of rejecting equal disk-I/O values. Binding checks,
+sample counts, regression calculations, and the 10 percent limit still apply.
+The duplicate-vector check remains in place for other dynamic metrics.
+
 The repository adapter is `native_performance_adapter.py`. It performs the
 measurement but deliberately does not guess distribution-specific package,
 service, workload or nftables commands. One private, reviewed configuration

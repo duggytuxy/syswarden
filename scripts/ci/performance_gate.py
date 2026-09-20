@@ -36,6 +36,10 @@ IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 MAX_CAMPAIGNS_PER_METRIC = 32
 MAX_SAMPLES_PER_SIDE = 10000
 STATIC_SIZE_METRICS = frozenset({"binary_bytes", "package_bytes"})
+# Block-accounted byte deltas divided by a fixed event count can repeat exactly
+# across independent runs. Their provenance still requires distinct sample
+# documents and timestamps; equality of these values is not proof of reuse.
+QUANTIZED_COUNTER_METRICS = frozenset({"disk_io_bytes_per_event"})
 NONNEGATIVE_METRICS = frozenset(
     {"idle_cpu_percent", "loaded_cpu_percent", "disk_io_bytes_per_event"}
 )
@@ -404,7 +408,7 @@ def evaluate(
     dynamic_sample_pairs: dict[str, set[tuple[tuple[float, ...], tuple[float, ...]]]] = {
         name: set()
         for name, metric in metric_contracts.items()
-        if name not in STATIC_SIZE_METRICS
+        if name not in STATIC_SIZE_METRICS | QUANTIZED_COUNTER_METRICS
         and math.ceil(metric.minimum_samples / minimum_campaigns) > 1
     }
     for name, metric_contract in metric_contracts.items():

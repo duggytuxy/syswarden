@@ -441,6 +441,17 @@ class PerformanceGateTests(unittest.TestCase):
                             self.contract,
                         )
 
+    def test_quantized_disk_vectors_do_not_imply_reused_measurements(self) -> None:
+        for factor in (1.0, 1.125):
+            with self.subTest(factor=factor):
+                evidence = self.evidence()
+                for campaign in evidence["metrics"]["disk_io_bytes_per_event"]["campaigns"]:
+                    campaign["baseline"] = [1036.288] * 10
+                    campaign["candidate"] = [1036.288 * factor] * 10
+                report = gate.evaluate(evidence, self.contract, self.metrics, {}, self.candidate)
+                self.assertEqual(report["verdict"], "pass" if factor == 1.0 else "fail")
+                self.assertEqual(report["failed_metrics"], [] if factor == 1.0 else ["disk_io_bytes_per_event"])
+
     def test_cross_campaign_clones_and_binding_drift_are_rejected(self) -> None:
         evidence = self.evidence()
         for metric in evidence["metrics"].values():
