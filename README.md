@@ -43,6 +43,11 @@ Current source version: **v4.10.0**.
 The latest qualified, stable public release is
 [v4.04.3](https://github.com/duggytuxy/syswarden/releases/tag/v4.04.3).
 
+The source version identifies the development candidate; it does not mean that
+its native packages have completed release qualification. Check the applicability
+notice in each [technical document](docs/technical/) before using it on a stable
+installation. In particular, HA v2 settings require the v4.10.0 candidate.
+
 ## Features
 
 - Authoritative nftables enforcement with bounded firewalld and UFW
@@ -70,6 +75,19 @@ The latest qualified, stable public release is
 | High availability | TLS 1.3, bearer authentication and peer-scoped synchronization |
 | Operations | Local CLI and TUI, modular configuration, audit and lifecycle controls |
 | Supply chain | Checksummed Linux packages, signed update metadata and release evidence |
+
+## Release inventory and verification
+
+The stable v4.04.3 release publishes a machine-readable SPDX software bill of
+materials, [syswarden-sbom.spdx.json](https://github.com/duggytuxy/syswarden/releases/download/v4.04.3/syswarden-sbom.spdx.json),
+for dependency review. An SBOM is an inventory, not a vulnerability-free claim.
+
+`SHA256SUMS.txt` checks package integrity against the downloaded inventory.
+Authenticate the Ed25519-signed update manifest with an independently trusted
+release key before installing a manually downloaded package. The
+[operator guidance](docs/technical/OPERATOR_VERSION_AND_DIAGNOSTICS.md#authenticate-a-manual-package-download)
+explains the existing verifier, its trust prerequisites and the distinction
+between package authentication and the SBOM inventory.
 
 ## Intelligence Sources
 
@@ -104,6 +122,7 @@ Operational procedures are centralized in the
 | --- | --- |
 | Verify and install a package | [Installation procedure](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#4-verify-and-install-one-package) |
 | Build and install the latest source | [Build and install from source](https://github.com/duggytuxy/syswarden/wiki/Build-and-Install-from-Source) |
+| Diagnose SSH detection, RHEL CLI paths and HA trust | [Version-aware operator guidance](docs/technical/OPERATOR_VERSION_AND_DIAGNOSTICS.md) |
 | Configure BunkerWeb log inputs | [BunkerWeb log configuration](examples/bunkerweb/README.md) |
 | Upgrade from historical v4.02.8 to v4.03.2 | [Migration procedure](https://github.com/duggytuxy/syswarden/wiki/Migration-v4.02.8-to-v4.03.2) |
 | Configure SysWarden | [Configuration guide](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#7-configuration-layout) |

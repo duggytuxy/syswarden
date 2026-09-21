@@ -1,5 +1,8 @@
 # Native feed qualification for v4.10.0
 
+Applies to: the v4.10.0 source candidate. This document does not establish
+release qualification and must not be used as a v4.04.3 configuration guide.
+
 Status: implemented evidence gate, not qualified.
 
 The v4.10.0 release requires one candidate-bound native feed campaign on

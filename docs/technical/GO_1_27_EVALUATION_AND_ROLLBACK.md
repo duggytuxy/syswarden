@@ -1,5 +1,8 @@
 # Go 1.27 Evaluation and Rollback
 
+Applies to: the v4.10.0 source candidate and its maintainer-only toolchain
+evaluation. This is not a stable v4.04.3 installation procedure.
+
 ## Current release decision
 
 Go 1.26.6 remains the SysWarden release toolchain. The isolated Go 1.27.1

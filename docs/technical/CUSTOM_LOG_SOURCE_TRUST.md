@@ -1,5 +1,8 @@
 # Custom log source ownership and permissions
 
+Applies to: the v4.10.0 source candidate. This document does not establish
+release qualification and must not be used as a v4.04.3 configuration guide.
+
 The `waap.modsec_logs` setting supplies custom inputs to the rsyslog bridge and
 the direct WAAP log collector. Both paths require a real regular file owned by
 the service's effective user, which is root for the native installation. Group

@@ -1,5 +1,8 @@
 # NODE01 Native Migration Qualification for v4.10.0
 
+Applies to: the v4.10.0 source candidate. This document does not establish
+release qualification and must not be used as a v4.04.3 configuration guide.
+
 Status: owner-approved revision 2 of the procedure and evidence contract.
 Fresh native execution on the exact candidate remains mandatory. This document
 neither claims successful migration nor authorizes publication.

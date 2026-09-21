@@ -1,5 +1,8 @@
 # HA v2 native qualification candidate
 
+Applies to: the v4.10.0 source candidate. This document does not establish
+release qualification and must not be used as a v4.04.3 configuration guide.
+
 Status: implemented evidence gate, not qualified.
 
 The v4.10.0 release requires a real two-node AMD64 campaign before it may claim

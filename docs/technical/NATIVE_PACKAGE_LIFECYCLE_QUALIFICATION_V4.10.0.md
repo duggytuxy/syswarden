@@ -1,5 +1,8 @@
 # Native Package Lifecycle Qualification for v4.10.0
 
+Applies to: the v4.10.0 source candidate. This document does not establish
+release qualification and must not be used as a v4.04.3 configuration guide.
+
 This document defines the release evidence boundary for five real native
 package lifecycle campaigns on Ubuntu 26.04, AlmaLinux 9.8, AlmaLinux 10.2 and
 Alpine 3.24. It does not execute a lab, connect to a host, approve a candidate
