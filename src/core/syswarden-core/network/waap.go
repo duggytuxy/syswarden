@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -85,22 +84,41 @@ func loadWAAPConfig() WAAPConfig {
 }
 
 func discoverLogs() []string {
-	var discovered []string
-	autoPaths := map[string][]string{
-		"/var/log/nginx":    {"/var/log/nginx/access.log", "/var/log/nginx/*.log"},
-		"/var/log/apache2":  {"/var/log/apache2/access.log", "/var/log/apache2/*.log"},
-		"/var/log/httpd":    {"/var/log/httpd/access_log", "/var/log/httpd/*_log"},
-		"/var/log/caddy":    {"/var/log/caddy/access.log", "/var/log/caddy/*.log"},
-		"/var/log/traefik":  {"/var/log/traefik/access.log", "/var/log/traefik/*.log"},
-		"/var/log/lighttpd": {"/var/log/lighttpd/access.log"},
-		"/var/log":          {"/var/log/secure", "/var/log/auth.log", "/var/log/messages"},
+	return discoverLogsIn("/var/log")
+}
+
+func discoverLogsIn(root string) []string {
+	patterns := []string{
+		"nginx/*.log",
+		"apache2/*.log",
+		"httpd/*_log",
+		"caddy/*.log",
+		"traefik/*.log",
+		"lighttpd/access.log",
+		"bunkerweb/access.log",
+		"bunkerweb/error.log",
+		"bunkerweb/modsec_audit.log",
+		"secure", "auth.log", "messages", "syslog",
 	}
 
-	for dir, patterns := range autoPaths {
-		if stat, err := os.Stat(dir); err == nil && stat.IsDir() {
-			discovered = append(discovered, patterns...)
+	var discovered []string
+	seen := make(map[string]struct{})
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(root, pattern))
+		if err != nil {
+			continue
+		}
+		for _, path := range matches {
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			// Only omit absent optional defaults. The secure resolver still
+			// validates every match before any log follower starts.
+			discovered = append(discovered, path)
 		}
 	}
+	sort.Strings(discovered)
 	return discovered
 }
 
