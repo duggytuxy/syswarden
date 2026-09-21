@@ -1,5 +1,8 @@
 # HA v2 operator prerequisites
 
+Applies to: the v4.10.0 source candidate. This document does not establish
+release qualification and must not be used as a v4.04.3 configuration guide.
+
 This document records the external operator inputs required before the optional two-node HA v2 runtime can start. It is an implementation prerequisite, not a qualification claim or a deployment guide.
 
 ## Fixed topology and authority

@@ -1,5 +1,8 @@
 # Native runtime lifecycle
 
+Applies to: the v4.10.0 source candidate. This document does not establish
+release qualification and must not be used as a v4.04.3 configuration guide.
+
 SysWarden records verified native enforcement independently of the attack
 journal. Standalone and legacy HA operation use a local durable history. HA v2
 continues to use its replicated model, writer fence, and peer checkpoints.

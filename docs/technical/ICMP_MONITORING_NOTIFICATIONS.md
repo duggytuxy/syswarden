@@ -1,5 +1,8 @@
 # Ping monitoring and webhook notifications
 
+Applies to: the v4.10.0 source candidate. This document does not establish
+release qualification and must not be used as a v4.04.3 configuration guide.
+
 The v4.10.0 candidate excludes valid IPv4 ICMP echo requests (type 8, code 0)
 and IPv6 ICMP echo requests (type 128, code 0) from the catch-all port-scan
 tracker. Ordinary ping probes therefore produce no port-scan strike, source ban
