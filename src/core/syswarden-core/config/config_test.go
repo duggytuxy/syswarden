@@ -455,3 +455,33 @@ func TestSupportedGeoIPCountryCodeContractMatchesEmbeddedSnapshot(t *testing.T) 
 		}
 	}
 }
+
+func TestBunkerWebLogOverridePreservesWAAPPolicy(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	preset, err := os.ReadFile("../../../../examples/bunkerweb/90-waap-logs-debian.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := writeConfigFixture(t, validMaster("schema_version = 1"), map[string]string{
+		"30-waap.toml": `[waap]
+enforcement_mode = "audit"
+bruteforce_threshold = 7
+bruteforce_window_seconds = 61
+bruteforce_logs = "auto"
+modsec_logs = "/var/log/modsec/*.log"
+`,
+		"90-waap-logs-debian.toml": string(preset),
+	})
+	if _, err := LoadConfigDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	if got := viper.GetString("waap.bruteforce_logs"); got != "/var/log/bunkerweb/access.log /var/log/bunkerweb/error.log /var/log/auth.log /var/log/syslog" {
+		t.Fatalf("bruteforce_logs = %q", got)
+	}
+	if got := viper.GetString("waap.modsec_logs"); got != "/var/log/bunkerweb/modsec_audit.log" {
+		t.Fatalf("modsec_logs = %q", got)
+	}
+	if viper.GetString("waap.enforcement_mode") != "audit" || viper.GetInt("waap.bruteforce_threshold") != 7 || viper.GetInt("waap.bruteforce_window_seconds") != 61 {
+		t.Fatal("log override changed the WAAP enforcement policy")
+	}
+}

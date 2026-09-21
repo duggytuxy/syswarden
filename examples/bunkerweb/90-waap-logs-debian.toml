@@ -1,0 +1,5 @@
+# Optional BunkerWeb log paths for a Debian host with rsyslog.
+# Review every path before installing this override.
+[waap]
+bruteforce_logs = "/var/log/bunkerweb/access.log /var/log/bunkerweb/error.log /var/log/auth.log /var/log/syslog"
+modsec_logs = "/var/log/bunkerweb/modsec_audit.log"
