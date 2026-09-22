@@ -27,7 +27,14 @@
 
 # SysWarden
 
-**Host-local Linux defense with auditable, fail-closed enforcement.**
+**Linux defense. Your host. Your rules.**
+
+Host-local Linux defense with auditable, fail-closed enforcement.
+
+[Website](https://syswarden.io/) |
+[Documentation](https://github.com/duggytuxy/syswarden/wiki) |
+[Build from source](https://github.com/duggytuxy/syswarden/wiki/Build-and-Install-from-Source) |
+[Roadmap](https://github.com/duggytuxy/syswarden/issues/222)
 
 SysWarden is an open-source Linux security orchestrator that combines an
 authoritative nftables policy, host telemetry, threat-intelligence lists,
@@ -47,6 +54,17 @@ The source version identifies the development candidate; it does not mean that
 its native packages have completed release qualification. Check the applicability
 notice in each [technical document](docs/technical/) before using it on a stable
 installation. In particular, HA v2 settings require the v4.10.0 candidate.
+
+## Observe, decide, enforce
+
+<div align="center">
+  <img src="assets/syswarden-defense-flow.png" alt="Conceptual defense flow: host signals feed policy decisions, nftables enforces validated actions, and evidence records the outcome." width="720">
+</div>
+
+SysWarden observes host signals, evaluates operator policy and applies validated
+actions through nftables. Logs and release evidence help operators review what
+was observed and exercised. This illustration summarizes the defense model;
+individual capabilities remain subject to their documented version and scope.
 
 ## Features
 
@@ -75,6 +93,14 @@ installation. In particular, HA v2 settings require the v4.10.0 candidate.
 | High availability | TLS 1.3, bearer authentication and peer-scoped synchronization |
 | Operations | Local CLI and TUI, modular configuration, audit and lifecycle controls |
 | Supply chain | Checksummed Linux packages, signed update metadata and release evidence |
+
+## BunkerWeb integration plugin
+
+Use the optional BunkerWeb integration plugin to connect supported BunkerWeb
+security events to SysWarden host enforcement through the authenticated HTTPS
+API. The [integration guide](https://github.com/duggytuxy/syswarden/wiki/BunkerWeb-Integration)
+covers configuration and compatibility. Follow the version-specific prerequisites
+before enabling synchronization or HA v2.
 
 ## Release inventory and verification
 

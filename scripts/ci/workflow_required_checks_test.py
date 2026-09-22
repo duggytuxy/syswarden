@@ -264,7 +264,7 @@ class RequiredCheckWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(
             hero.count(
-                '<rect width="1600" height="340" rx="24" fill="#0b1f33"/>'
+                '<rect width="1600" height="340" rx="24" fill="#080d13"/>'
             ),
             1,
         )
@@ -321,7 +321,7 @@ class RequiredCheckWorkflowTests(unittest.TestCase):
             float(wordmark.group("x")),
         )
 
-        self.assertEqual(hero.count('fill="#0b1f33"'), 1)
+        self.assertEqual(hero.count('fill="#080d13"'), 1)
         self.assertEqual(hero.count("fill: #FFFFFF;"), 2)
         self.assertNotIn("fill: #0f2740;", hero)
         self.assertNotIn("fill: #34506b;", hero)
