@@ -23,3 +23,8 @@ SysWarden requires time and funding. That is why it is important to appeal for d
   requires a reviewed exception instead of silently extending that baseline.
 - Reference version-controlled repository assets from wiki pages. Do not
   upload an alternate or generated SysWarden logo to the wiki.
+
+The website identity also includes the approved transparent defense illustration
+and graphite social preview listed in [the visual asset guide](assets/README.md).
+These illustrations complement the official logo. Reuse the approved assets,
+check both light and dark surfaces, and keep release status in adjacent text.

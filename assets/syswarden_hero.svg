@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="340" viewBox="0 0 1600 340" role="img" aria-labelledby="title description">
   <title id="title">Official SysWarden logo</title>
-  <desc id="description">The official SysWarden Linux host defense logo at full banner scale.</desc>
+  <desc id="description">The official SysWarden Linux host defense logo on the website graphite background.</desc>
   <defs>
     <linearGradient id="officialShieldGradient" x1="0" y1="0" x2="0" y2="100">
       <stop offset="0%" stop-color="#00A3FF"/>
@@ -39,7 +39,7 @@
     </style>
   </defs>
 
-  <rect width="1600" height="340" rx="24" fill="#0b1f33"/>
+  <rect width="1600" height="340" rx="24" fill="#080d13"/>
   <g transform="translate(170 12.5) scale(2.1)">
     <use href="#syswardenOfficialLogo"/>
   </g>
