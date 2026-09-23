@@ -890,24 +890,20 @@ func (m *NftablesManager) refreshHandlesLocked() error {
 	m.conn = connection
 	m.clearHandlesLocked()
 
-	tables, err := connection.ListTables()
-	if err != nil {
-		m.health = HealthUnavailable
-		m.lastErr = fmt.Errorf("list nftables tables: %w", err)
-		return m.lastErr
+	// Query the two owned tables directly. GetSets performs a fresh kernel
+	// lookup scoped by both family and name; enumerating unrelated tables
+	// first adds no evidence about the required ban sets.
+	tables := []*nftables.Table{
+		{Name: "syswarden", Family: nftables.TableFamilyINet},
+		{Name: "syswarden_hw_drop", Family: nftables.TableFamilyNetdev},
 	}
-
 	var validationErrs []error
-	foundInet := false
-	foundNetdev := false
 	for _, table := range tables {
 		var destinationV4, destinationV6 **nftables.Set
 		switch {
 		case table.Name == "syswarden" && table.Family == nftables.TableFamilyINet:
-			foundInet = true
 			destinationV4, destinationV6 = &m.inetSet, &m.inetSet6
 		case table.Name == "syswarden_hw_drop" && table.Family == nftables.TableFamilyNetdev:
-			foundNetdev = true
 			destinationV4, destinationV6 = &m.netdevSet, &m.netdevSet6
 		default:
 			continue
@@ -925,12 +921,6 @@ func (m *NftablesManager) refreshHandlesLocked() error {
 				*destinationV6 = set
 			}
 		}
-	}
-	if !foundInet {
-		validationErrs = append(validationErrs, fmt.Errorf("required table inet syswarden is missing"))
-	}
-	if !foundNetdev {
-		validationErrs = append(validationErrs, fmt.Errorf("required table netdev syswarden_hw_drop is missing"))
 	}
 	for name, set := range map[string]*nftables.Set{
 		"inet banned_ips":    m.inetSet,

@@ -190,7 +190,12 @@ func (c *fakeNftablesConnection) GetSets(table *nftables.Table) ([]*nftables.Set
 	if c.getSetsErr != nil {
 		return nil, c.getSetsErr
 	}
-	return append([]*nftables.Set(nil), c.sets[fakeNftTableKey(table)]...), nil
+	for _, existing := range c.tables {
+		if fakeNftTableKey(existing) == fakeNftTableKey(table) {
+			return append([]*nftables.Set(nil), c.sets[fakeNftTableKey(table)]...), nil
+		}
+	}
+	return nil, fmt.Errorf("table %s does not exist", fakeNftTableKey(table))
 }
 
 func (c *fakeNftablesConnection) SetAddElements(set *nftables.Set, elements []nftables.SetElement) error {
