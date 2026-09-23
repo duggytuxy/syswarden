@@ -719,19 +719,19 @@ class NativePackageSigningBundleTests(unittest.TestCase):
         self.assertEqual(bundle.BOOTSTRAP_REPOSITORY, "duggytuxy/syswarden")
         self.assertEqual(
             bundle.BOOTSTRAP_RELEASE_SHA,
-            "9598861f1be80a651658bf3ca8c10424bd70db6c",
+            "c741c775e990ac6c877847b3a99ca3a5c392e35b",
         )
-        self.assertEqual(bundle.BOOTSTRAP_SIGNING_RUN_ID, 34292701745)
-        self.assertEqual(bundle.BOOTSTRAP_SIGNED_ARTIFACT_ID, 10088398939)
-        self.assertEqual(bundle.BOOTSTRAP_SIGNED_ARTIFACT_SIZE, 63065295)
+        self.assertEqual(bundle.BOOTSTRAP_SIGNING_RUN_ID, 35822833447)
+        self.assertEqual(bundle.BOOTSTRAP_SIGNED_ARTIFACT_ID, 10734465160)
+        self.assertEqual(bundle.BOOTSTRAP_SIGNED_ARTIFACT_SIZE, 64068607)
         self.assertEqual(
             bundle.BOOTSTRAP_SIGNED_ARTIFACT_NAME,
-            "syswarden-native-signed-packages-4.10.0-34292701745-1-"
-            "9598861f1be80a651658bf3ca8c10424bd70db6c",
+            "syswarden-native-signed-packages-4.10.0-35822833447-1-"
+            "c741c775e990ac6c877847b3a99ca3a5c392e35b",
         )
         self.assertEqual(
             bundle.BOOTSTRAP_SIGNED_ARTIFACT_DIGEST,
-            "sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3",
+            "sha256:e06ab6cf35c0c71a512588867e13715e7d754dc70e0ce2fb4c8c073b36429d1a",
         )
 
     def test_inventory_is_exact_and_bound(self) -> None:
@@ -1079,6 +1079,27 @@ class NativePackageSigningBundleTests(unittest.TestCase):
                         self.release_sha,
                         "duggytuxy/syswarden",
                     )
+
+    def test_expired_original_reference_cannot_replace_recovered_bootstrap(self) -> None:
+        output = self.root / "original-reference"
+        self.assertEqual(bundle.main(self.finalize_arguments(output)), 0)
+        provenance = json.loads(
+            (output / "evidence/NATIVE_SIGNING_PROVENANCE.json").read_text()
+        )
+        reference = provenance["bootstrap_qualification"]
+        old_sha = "9598861f1be80a651658bf3ca8c10424bd70db6c"
+        reference["release_sha"] = old_sha
+        reference["signing_run"].update(id=34292701745, workflow_sha=old_sha)
+        reference["artifact"].update(
+            id=10088398939,
+            size=63065295,
+            name=f"syswarden-native-signed-packages-4.10.0-34292701745-1-{old_sha}",
+            digest="sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3",
+        )
+        with self.assertRaises(bundle.SigningBundleError):
+            bundle.validate_bootstrap_reference(
+                reference, self.release, self.release_sha, "duggytuxy/syswarden"
+            )
 
     def test_policy_transition_allows_only_the_reviewed_state_changes(self) -> None:
         qualified = self.policy_document("qualified")

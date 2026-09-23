@@ -571,13 +571,13 @@ print(json.dumps(document, separators=(",", ":")))
             "bootstrap_signing_run_id:",
             "bootstrap_signed_artifact_id:",
             "bootstrap_policy_sha256:",
-            "APPROVED_BOOTSTRAP_ARTIFACT_DIGEST: sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3",
-            'APPROVED_BOOTSTRAP_ARTIFACT_ID: "10088398939"',
-            "APPROVED_BOOTSTRAP_ARTIFACT_NAME: syswarden-native-signed-packages-4.10.0-34292701745-1-9598861f1be80a651658bf3ca8c10424bd70db6c",
-            'APPROVED_BOOTSTRAP_ARTIFACT_SIZE: "63065295"',
-            "APPROVED_BOOTSTRAP_RELEASE_SHA: 9598861f1be80a651658bf3ca8c10424bd70db6c",
+            "APPROVED_BOOTSTRAP_ARTIFACT_DIGEST: sha256:e06ab6cf35c0c71a512588867e13715e7d754dc70e0ce2fb4c8c073b36429d1a",
+            'APPROVED_BOOTSTRAP_ARTIFACT_ID: "10734465160"',
+            "APPROVED_BOOTSTRAP_ARTIFACT_NAME: syswarden-native-signed-packages-4.10.0-35822833447-1-c741c775e990ac6c877847b3a99ca3a5c392e35b",
+            'APPROVED_BOOTSTRAP_ARTIFACT_SIZE: "64068607"',
+            "APPROVED_BOOTSTRAP_RELEASE_SHA: c741c775e990ac6c877847b3a99ca3a5c392e35b",
             "APPROVED_BOOTSTRAP_REPOSITORY: duggytuxy/syswarden",
-            'APPROVED_BOOTSTRAP_RUN_ID: "34292701745"',
+            'APPROVED_BOOTSTRAP_RUN_ID: "35822833447"',
             "FOUNDATION_POLICY_SHA256: 6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d",
             '"${BOOTSTRAP_POLICY_SHA256}" != "${FOUNDATION_POLICY_SHA256}"',
             '"${BOOTSTRAP_RELEASE_SHA}" != "${APPROVED_BOOTSTRAP_RELEASE_SHA}"',
@@ -645,7 +645,7 @@ print(json.dumps(document, separators=(",", ":")))
             {"EVENT_ACTOR": "another-user"}, {"EVENT_TRIGGERING_ACTOR": "another-user"},
             {"RUN_ATTEMPT": "2"}, {"EVENT_REF_NAME": "feature"},
             {"WORKFLOW_SHA": "b" * 40}, {"RELEASE_TAG": "v4.10.1"},
-            {"BOOTSTRAP_SIGNED_ARTIFACT_ID": "10088398939"},
+            {"BOOTSTRAP_SIGNED_ARTIFACT_ID": "10734465160"},
         ):
             with self.subTest(changes=changes):
                 self.assertNotEqual(execute(changes).returncode, 0)
@@ -715,16 +715,62 @@ print(json.dumps(document, separators=(",", ":")))
         )
         self.assertIn('verify_args+=(--mode bootstrap)', self.workflow)
 
+    def test_recovered_bootstrap_extracts_foundation_from_its_own_commit(self) -> None:
+        script = named_literal_run_block(
+            self.workflow, "Validate Exact Bootstrap Policy Transition and Bundle"
+        ).split("PYTHONDONTWRITEBYTECODE=1 python3 -", 1)[0]
+        environment = dict(os.environ)
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+            environment.pop(name, None)
+        environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
+        foundation_bytes = (ROOT / "scripts/ci/native_package_signature_foundation_v4100.json").read_bytes()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def git(*args: str) -> str:
+                return subprocess.check_output(
+                    ["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                     "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", *args],
+                    cwd=root, env=environment, text=True, stderr=subprocess.PIPE,
+                ).strip()
+
+            git("init", "--quiet")
+            policy_dir = root / "scripts/ci"
+            policy_dir.mkdir(parents=True)
+            foundation = policy_dir / "native_package_signature_foundation_v4100.json"
+            foundation.write_bytes(foundation_bytes)
+            (policy_dir / POLICY.name).write_bytes(POLICY.read_bytes())
+            git("add", ".")
+            git("commit", "--quiet", "-m", "Recovery source with separate foundation")
+            bootstrap_sha = git("rev-parse", "HEAD")
+            foundation.write_text("successor bytes must never replace the ancestor policy\n")
+            git("add", ".")
+            git("commit", "--quiet", "-m", "Distinct successor")
+            signing_root = root / "signing"
+            signing_root.mkdir()
+            result = subprocess.run(
+                ["bash", "-c", script], cwd=root, env=environment | {
+                    "BOOTSTRAP_RELEASE_SHA": bootstrap_sha,
+                    "RELEASE_SHA": git("rev-parse", "HEAD"),
+                    "SIGNING_ROOT": str(signing_root),
+                }, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            extracted = signing_root / "bootstrap-policy.json"
+            self.assertEqual(extracted.read_bytes(), foundation_bytes)
+            self.assertNotEqual(extracted.read_bytes(), POLICY.read_bytes())
+            self.assertEqual(extracted.stat().st_mode & 0o777, 0o600)
+
     def test_bootstrap_run_resolver_fails_closed(self) -> None:
         resolver = named_literal_run_block(
             self.workflow, "Resolve Exact Prior Bootstrap Run and Artifact"
         )
-        bootstrap_sha = "9598861f1be80a651658bf3ca8c10424bd70db6c"
-        run_id = 34292701745
-        artifact_id = 10088398939
-        artifact_size = 63065295
+        bootstrap_sha = "c741c775e990ac6c877847b3a99ca3a5c392e35b"
+        run_id = 35822833447
+        artifact_id = 10734465160
+        artifact_size = 64068607
         artifact_digest = (
-            "sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3"
+            "sha256:e06ab6cf35c0c71a512588867e13715e7d754dc70e0ce2fb4c8c073b36429d1a"
         )
         artifact_name = (
             "syswarden-native-signed-packages-4.10.0-"

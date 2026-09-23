@@ -65,13 +65,13 @@ on:
         type: string
 
 env:
-  APPROVED_BOOTSTRAP_ARTIFACT_DIGEST: sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3
-  APPROVED_BOOTSTRAP_ARTIFACT_ID: "10088398939"
-  APPROVED_BOOTSTRAP_ARTIFACT_NAME: syswarden-native-signed-packages-4.10.0-34292701745-1-9598861f1be80a651658bf3ca8c10424bd70db6c
-  APPROVED_BOOTSTRAP_ARTIFACT_SIZE: "63065295"
-  APPROVED_BOOTSTRAP_RELEASE_SHA: 9598861f1be80a651658bf3ca8c10424bd70db6c
+  APPROVED_BOOTSTRAP_ARTIFACT_DIGEST: sha256:e06ab6cf35c0c71a512588867e13715e7d754dc70e0ce2fb4c8c073b36429d1a
+  APPROVED_BOOTSTRAP_ARTIFACT_ID: "10734465160"
+  APPROVED_BOOTSTRAP_ARTIFACT_NAME: syswarden-native-signed-packages-4.10.0-35822833447-1-c741c775e990ac6c877847b3a99ca3a5c392e35b
+  APPROVED_BOOTSTRAP_ARTIFACT_SIZE: "64068607"
+  APPROVED_BOOTSTRAP_RELEASE_SHA: c741c775e990ac6c877847b3a99ca3a5c392e35b
   APPROVED_BOOTSTRAP_REPOSITORY: duggytuxy/syswarden
-  APPROVED_BOOTSTRAP_RUN_ID: "34292701745"
+  APPROVED_BOOTSTRAP_RUN_ID: "35822833447"
   FOUNDATION_POLICY_SHA256: 6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   LANG: C
@@ -494,7 +494,7 @@ jobs:
           policy_path="scripts/ci/native_package_signature_policy_v4100.json"
           bootstrap_policy="${SIGNING_ROOT}/bootstrap-policy.json"
           test ! -e "${bootstrap_policy}"
-          policy_object="${BOOTSTRAP_RELEASE_SHA}:${policy_path}"
+          policy_object="${BOOTSTRAP_RELEASE_SHA}:scripts/ci/native_package_signature_foundation_v4100.json"
           policy_size="$(git cat-file -s "${policy_object}")"
           if [[ ! "${policy_size}" =~ ^[1-9][0-9]*$ || "${policy_size}" -gt 131072 ]]; then
             echo "ERROR: bootstrap policy object has an invalid size." >&2
