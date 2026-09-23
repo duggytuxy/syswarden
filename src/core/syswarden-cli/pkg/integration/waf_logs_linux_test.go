@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -878,7 +879,7 @@ func TestWAFRsyslogExactContentRetryActivatesAfterInterruptedPublication(t *test
 		t.Fatalf("exact-content recovery = changed %v error %v", changed, err)
 	}
 
-	var calls []string
+	runner := &rsyslogActivationTestRunner{pid: 1056, timestamp: 100}
 	err = finishWAFRsyslogSetup(changed, err, func(gotChanged bool) error {
 		if gotChanged {
 			t.Fatal("exact-content recovery unexpectedly reported a replacement")
@@ -888,23 +889,14 @@ func TestWAFRsyslogExactContentRetryActivatesAfterInterruptedPublication(t *test
 			gotChanged,
 			func() (string, error) { return "ACTIVE", nil },
 			func() bool { return false },
-			func(name string, args ...string) ([]byte, error) {
-				calls = append(calls, strings.Join(append([]string{name}, args...), " "))
-				return nil, nil
-			},
+			runner.run,
 		)
 	})
 	if err != nil {
 		t.Fatalf("exact-content recovery activation error = %v", err)
 	}
-	want := strings.Join([]string{
-		"/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl reload rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-	}, "\n")
-	if got := strings.Join(calls, "\n"); got != want {
-		t.Fatalf("interrupted-publication recovery calls = %q, want %q", got, want)
+	if runner.restarts != 1 || runner.reloads != 0 || runner.pid == 1056 || runner.timestamp <= 100 {
+		t.Fatalf("interrupted publication did not activate the bridge: %+v", runner)
 	}
 }
 
@@ -980,163 +972,92 @@ func TestRestartManagedServiceKeepsOpenRCRestartForOtherServices_SW_PKG_001(t *t
 	}
 }
 
-func TestRestartManagedServiceReloadsAndAttestsActiveSystemdRsyslog_SW_PKG_001(t *testing.T) {
-	var calls []string
-	err := restartManagedServiceUsing(
-		"rsyslog",
-		func() (string, error) { return "ACTIVE", nil },
-		func() bool { return false },
-		func(name string, args ...string) ([]byte, error) {
-			calls = append(calls, strings.Join(append([]string{name}, args...), " "))
-			return nil, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("restartManagedServiceUsing() error = %v", err)
-	}
-	want := strings.Join([]string{
-		"/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl reload rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-	}, "\n")
-	if got := strings.Join(calls, "\n"); got != want {
-		t.Fatalf("service-manager calls = %q, want %q", got, want)
+// Model rsyslog's process lifetime: HUP succeeds without loading new rules.
+// Only a real restart changes the process identity and configuration generation.
+type rsyslogActivationTestRunner struct {
+	pid, timestamp    uint64
+	restarts, reloads int
+	bridgeLoaded      bool
+	failFirst         string
+	stale             bool
+}
+
+func (r *rsyslogActivationTestRunner) run(name string, args ...string) ([]byte, error) {
+	command := strings.Join(append([]string{name}, args...), " ")
+	switch command {
+	case "/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf", "/usr/bin/systemctl reset-failed rsyslog":
+		return nil, nil
+	case "/usr/bin/systemctl reload rsyslog":
+		r.reloads++
+		return nil, nil
+	case "/usr/bin/systemctl restart rsyslog":
+		r.restarts++
+		if r.failFirst == "restart" && r.restarts == 1 {
+			return nil, errors.New("synthetic restart failure")
+		}
+		if !r.stale && !(r.failFirst == "identity" && r.restarts == 1) {
+			r.pid += 1000
+			r.timestamp += 100
+			r.bridgeLoaded = true
+		}
+		return nil, nil
+	case "/usr/bin/systemctl is-active --quiet rsyslog":
+		if r.failFirst == "active" && r.restarts == 1 {
+			return nil, errors.New("synthetic inactive service")
+		}
+		return nil, nil
+	case "/usr/bin/systemctl show --property=MainPID --value rsyslog":
+		return []byte(fmt.Sprintf("%d\n", r.pid)), nil
+	case "/usr/bin/systemctl show --property=ActiveEnterTimestampMonotonic --value rsyslog":
+		return []byte(fmt.Sprintf("%d\n", r.timestamp)), nil
+	case "/usr/bin/journalctl --no-pager --quiet --boot --unit rsyslog.service --lines=40":
+		return []byte("bounded test journal"), nil
+	default:
+		return nil, fmt.Errorf("unexpected activation command: %s", command)
 	}
 }
 
-func TestRestartManagedServiceReloadsExactContentSystemdRsyslogAfterInterruptedSetup_SW_PKG_001(t *testing.T) {
-	var calls []string
-	err := restartManagedServiceUsingConfigState(
-		"rsyslog",
-		false,
-		func() (string, error) { return "ACTIVE", nil },
-		func() bool { return false },
-		func(name string, args ...string) ([]byte, error) {
-			calls = append(calls, strings.Join(append([]string{name}, args...), " "))
-			return nil, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("restartManagedServiceUsingConfigState() error = %v", err)
-	}
-	want := strings.Join([]string{
-		"/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl reload rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-	}, "\n")
-	if got := strings.Join(calls, "\n"); got != want {
-		t.Fatalf("exact-content systemd recovery calls = %q, want %q", got, want)
-	}
-}
-
-func TestRestartManagedServiceActivatesUnchangedInactiveSystemdRsyslog_SW_PKG_001(t *testing.T) {
-	sentinel := errors.New("synthetic inactive state")
-	var calls []string
-	err := restartManagedServiceUsingConfigState(
-		"rsyslog",
-		false,
-		func() (string, error) { return "ACTIVE", nil },
-		func() bool { return false },
-		func(name string, args ...string) ([]byte, error) {
-			calls = append(calls, strings.Join(append([]string{name}, args...), " "))
-			if len(calls) == 2 {
-				return []byte("inactive\n"), sentinel
-			}
-			return nil, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("restartManagedServiceUsingConfigState() activation error = %v", err)
-	}
-	want := strings.Join([]string{
-		"/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl restart rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-	}, "\n")
-	if got := strings.Join(calls, "\n"); got != want {
-		t.Fatalf("inactive-service calls = %q, want %q", got, want)
-	}
-}
-
-func TestRestartManagedServiceFallsBackAfterSystemdRsyslogReloadOrAttestationFailure_SW_PKG_001(t *testing.T) {
-	want := strings.Join([]string{
-		"/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl reload rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl restart rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-	}, "\n")
-	for _, tt := range []struct {
-		name        string
-		failureCall int
+func TestRestartManagedServiceLoadsSystemdRsyslogBridge_SW_PKG_001(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		changed        bool
+		pid, timestamp uint64
 	}{
-		{name: "reload failure", failureCall: 3},
-		{name: "active attestation failure", failureCall: 4},
+		{"changed configuration", true, 1056, 100},
+		{"interrupted exact publication", false, 1056, 100},
+		{"inactive unchanged service", false, 0, 0},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			sentinel := errors.New("synthetic reload activation failure")
-			var calls []string
-			err := restartManagedServiceUsing(
-				"rsyslog",
-				func() (string, error) { return "ACTIVE", nil },
-				func() bool { return false },
-				func(name string, args ...string) ([]byte, error) {
-					calls = append(calls, strings.Join(append([]string{name}, args...), " "))
-					if len(calls) == tt.failureCall {
-						return []byte("activation failed"), sentinel
-					}
-					return nil, nil
-				},
-			)
-			if err != nil {
-				t.Fatalf("restartManagedServiceUsing() fallback error = %v", err)
-			}
-			if got := strings.Join(calls, "\n"); got != want {
-				t.Fatalf("reload-fallback calls = %q, want %q", got, want)
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &rsyslogActivationTestRunner{pid: tc.pid, timestamp: tc.timestamp}
+			err := restartManagedServiceUsingConfigState("rsyslog", tc.changed,
+				func() (string, error) { return "ACTIVE", nil }, func() bool { return false }, runner.run)
+			if err != nil || !runner.bridgeLoaded || runner.reloads != 0 || runner.restarts != 1 {
+				t.Fatalf("bridge activation = %+v, error %v", runner, err)
 			}
 		})
 	}
 }
 
-func TestRestartManagedServiceRetriesSystemdRsyslogExactlyOnce_SW_PKG_001(t *testing.T) {
-	sentinel := errors.New("synthetic first restart failure")
-	var calls []string
-	err := restartManagedServiceUsing(
-		"rsyslog",
-		func() (string, error) { return "ACTIVE", nil },
-		func() bool { return false },
-		func(name string, args ...string) ([]byte, error) {
-			calls = append(calls, strings.Join(append([]string{name}, args...), " "))
-			switch len(calls) {
-			case 2:
-				return []byte("inactive\n"), sentinel
-			case 3:
-				return []byte("first restart output"), sentinel
-			case 4:
-				return []byte("failed\n"), sentinel
-			default:
-				return nil, nil
+func TestRestartManagedServiceRetriesSystemdRsyslogActivationOnce_SW_PKG_001(t *testing.T) {
+	for _, failure := range []string{"restart", "active", "identity"} {
+		t.Run(failure, func(t *testing.T) {
+			runner := &rsyslogActivationTestRunner{pid: 1056, timestamp: 100, failFirst: failure}
+			err := restartManagedServiceUsing("rsyslog",
+				func() (string, error) { return "ACTIVE", nil }, func() bool { return false }, runner.run)
+			if err != nil || !runner.bridgeLoaded || runner.restarts != 2 || runner.reloads != 0 {
+				t.Fatalf("bounded activation recovery = %+v, error %v", runner, err)
 			}
-		},
-	)
-	if err != nil {
-		t.Fatalf("restartManagedServiceUsing() recovery error = %v", err)
+		})
 	}
-	want := strings.Join([]string{
-		"/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl restart rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl reset-failed rsyslog",
-		"/usr/bin/systemctl restart rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-	}, "\n")
-	if got := strings.Join(calls, "\n"); got != want {
-		t.Fatalf("recovery calls = %q, want %q", got, want)
+}
+
+func TestRestartManagedServiceRejectsUnchangedSystemdRsyslogProcess_SW_PKG_001(t *testing.T) {
+	runner := &rsyslogActivationTestRunner{pid: 1056, timestamp: 100, stale: true}
+	err := restartManagedServiceUsing("rsyslog",
+		func() (string, error) { return "ACTIVE", nil }, func() bool { return false }, runner.run)
+	if err == nil || !strings.Contains(err.Error(), "MainPID remained 1056") ||
+		runner.bridgeLoaded || runner.restarts != 2 || runner.reloads != 0 {
+		t.Fatalf("unchanged process was not rejected: %+v, error %v", runner, err)
 	}
 }
 
@@ -1185,19 +1106,12 @@ func TestRestartManagedServiceBoundsTerminalSystemdRsyslogEvidence_SW_PKG_001(t 
 	if err == nil || !strings.Contains(err.Error(), "failed after one bounded retry") {
 		t.Fatalf("terminal retry error = %v", err)
 	}
-	want := strings.Join([]string{
-		"/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl restart rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/systemctl reset-failed rsyslog",
-		"/usr/bin/systemctl restart rsyslog",
-		"/usr/bin/systemctl is-active --quiet rsyslog",
-		"/usr/bin/journalctl --no-pager --quiet --boot --unit rsyslog.service --lines=40",
-	}, "\n")
-	if got := strings.Join(calls, "\n"); got != want {
-		t.Fatalf("terminal failure calls = %q, want %q", got, want)
+	joined := strings.Join(calls, "\n")
+	if strings.Count(joined, "/usr/bin/systemctl restart rsyslog") != 2 ||
+		strings.Contains(joined, " reload ") || len(calls) != 15 {
+		t.Fatalf("terminal failure exceeded bounded attested restarts: %v", calls)
 	}
+
 	if !strings.Contains(err.Error(), "[evidence truncated]") {
 		t.Fatalf("terminal evidence did not report truncation: %q", err.Error())
 	}
@@ -1352,7 +1266,7 @@ func TestPackageRemovalRsyslogRestartRejectsUnchangedSystemdIdentity_SW2_PKG_001
 		[]byte("100\n"),
 	}
 	calls := 0
-	err := attemptAttestedSystemdRsyslogRestartForPackageRemovalUsing(
+	err := attemptAttestedSystemdRsyslogRestartUsing(
 		func(string, ...string) ([]byte, error) {
 			if calls >= len(responses) {
 				t.Fatal("unexpected identity-attestation command")
