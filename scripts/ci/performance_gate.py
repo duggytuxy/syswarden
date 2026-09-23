@@ -201,8 +201,13 @@ def _sha256_regular(path: Path, maximum: int = MAX_INPUT_BYTES) -> str:
 
 
 def load_contract(path: Path = DEFAULT_CONTRACT) -> tuple[dict[str, Any], dict[str, MetricContract]]:
+    return validate_contract(_load_regular_json(path))
+
+
+def validate_contract(value: object) -> tuple[dict[str, Any], dict[str, MetricContract]]:
+    """Validate the same policy for standalone and combined evidence gates."""
     document = _exact_mapping(
-        _load_regular_json(path),
+        value,
         {
             "schema_version",
             "contract_id",
@@ -211,11 +216,12 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> tuple[dict[str, Any], dict[s
             "baseline_commit",
             "minimum_campaigns",
             "stable_regression_percent",
+            "latency_budget",
             "metrics",
         },
         "contract",
     )
-    if document["schema_version"] != 1 or document["contract_id"] != "syswarden-performance/v1":
+    if type(document["schema_version"]) is not int or document["schema_version"] != 2 or document["contract_id"] != "syswarden-performance/v2":
         raise PerformanceGateError("unsupported performance contract")
     if document["target_release"] != "v4.10.0" or document["baseline_release"] != "v4.04.3":
         raise PerformanceGateError("unexpected performance release binding")
@@ -226,6 +232,16 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> tuple[dict[str, Any], dict[s
     threshold = document["stable_regression_percent"]
     if type(threshold) not in (int, float) or not math.isfinite(threshold) or threshold <= 0:
         raise PerformanceGateError("stable regression threshold must be positive")
+    budget = _exact_mapping(
+        document["latency_budget"],
+        {"metric", "median_max_milliseconds", "p95_max_milliseconds", "percentile_method"},
+        "latency budget",
+    )
+    if budget["metric"] != "event_to_rule_milliseconds" or budget["percentile_method"] != "nearest-rank":
+        raise PerformanceGateError("latency budget metric or percentile method is invalid")
+    for key, expected in (("median_max_milliseconds", 10), ("p95_max_milliseconds", 20)):
+        if type(budget[key]) not in (int, float) or budget[key] != expected:
+            raise PerformanceGateError("latency budget must retain the approved 10 ms median and 20 ms p95")
     raw_metrics = document["metrics"]
     if not isinstance(raw_metrics, dict) or not raw_metrics:
         raise PerformanceGateError("contract metrics must be a non-empty object")
@@ -245,6 +261,9 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> tuple[dict[str, Any], dict[s
             direction=item["direction"],
             minimum_samples=item["minimum_samples"],
         )
+    latency = metrics.get(budget["metric"])
+    if latency is None or latency.unit != "milliseconds" or latency.direction != "lower" or latency.minimum_samples < 30:
+        raise PerformanceGateError("latency budget requires at least 30 lower-is-better millisecond samples")
     return document, metrics
 
 
@@ -363,6 +382,9 @@ def evaluate(
     expected_baseline_package_sha256: str | None = None,
     expected_candidate_package_sha256: str | None = None,
 ) -> dict[str, Any]:
+    _, validated_metrics = validate_contract(contract)
+    if metric_contracts != validated_metrics:
+        raise PerformanceGateError("metric definitions do not match the validated contract")
     document = _exact_mapping(
         evidence,
         {
@@ -395,6 +417,9 @@ def evaluate(
     unknown_waivers = set(waivers) - set(metric_contracts)
     if unknown_waivers:
         raise PerformanceGateError(f"waiver references unknown metrics: {sorted(unknown_waivers)}")
+    latency_budget = contract["latency_budget"]
+    if latency_budget["metric"] in waivers:
+        raise PerformanceGateError("the absolute latency budget cannot be waived")
 
     threshold = float(contract["stable_regression_percent"])
     minimum_campaigns = int(contract["minimum_campaigns"])
@@ -640,8 +665,15 @@ def evaluate(
             metric_contract.direction,
             threshold,
         ) and regressed_campaigns >= math.ceil(len(campaigns) / 2)
-        waived = stable and name in waivers
-        if stable and not waived:
+        candidate_p95 = _percentile(candidate_all, 0.95)
+        absolute_latency = name == latency_budget["metric"]
+        budget_exceeded = absolute_latency and (
+            candidate_median > latency_budget["median_max_milliseconds"]
+            or candidate_p95 > latency_budget["p95_max_milliseconds"]
+        )
+        failed = budget_exceeded if absolute_latency else stable
+        waived = failed and name in waivers
+        if failed and not waived:
             failures.append(name)
         results[name] = {
             "unit": metric_contract.unit,
@@ -657,13 +689,20 @@ def evaluate(
                 "samples": len(candidate_all),
                 "minimum": min(candidate_all),
                 "median": candidate_median,
-                "p95": _percentile(candidate_all, 0.95),
+                "p95": candidate_p95,
                 "maximum": max(candidate_all),
             },
             "aggregate_regression_percent": aggregate_regression,
             "regressed_campaigns": regressed_campaigns,
             "campaign_count": len(campaigns),
             "stable_regression": stable,
+            "acceptance": (
+                {"kind": "absolute-latency-budget", **latency_budget}
+                if absolute_latency
+                else {"kind": "stable-relative-regression", "threshold_percent": threshold}
+            ),
+            "budget_exceeded": budget_exceeded,
+            "accepted": not failed or waived,
             "waived": waived,
             "campaigns": campaign_results,
         }

@@ -32,7 +32,8 @@ class PerformanceGateTests(unittest.TestCase):
             for index in range(self.contract["minimum_campaigns"]):
                 count = max(1, remaining // (self.contract["minimum_campaigns"] - index))
                 remaining -= count
-                baseline = [100.0 + index + sample / 1000 for sample in range(count)]
+                base = 4.0 if name == "event_to_rule_milliseconds" else 100.0
+                baseline = [base + index + sample / 1000 for sample in range(count)]
                 if contract.direction == "lower":
                     candidate = [value * factor for value in baseline]
                 else:
@@ -158,8 +159,9 @@ class PerformanceGateTests(unittest.TestCase):
     def test_stable_regression_fails_without_performance_waiver(self) -> None:
         report = gate.evaluate(self.evidence(1.2), self.contract, self.metrics, {}, self.candidate)
         self.assertEqual(report["verdict"], "fail")
-        self.assertEqual(set(report["failed_metrics"]), set(self.metrics))
+        self.assertEqual(set(report["failed_metrics"]), set(self.metrics) - {"event_to_rule_milliseconds"})
         self.assertTrue(all(item["stable_regression"] for item in report["metrics"].values()))
+        self.assertTrue(report["metrics"]["event_to_rule_milliseconds"]["accepted"])
 
     def test_one_noisy_campaign_is_not_a_stable_regression(self) -> None:
         evidence = self.evidence()
@@ -168,6 +170,99 @@ class PerformanceGateTests(unittest.TestCase):
         report = gate.evaluate(evidence, self.contract, self.metrics, {}, self.candidate)
         self.assertEqual(report["verdict"], "pass")
         self.assertFalse(report["metrics"][name]["stable_regression"])
+
+    def latency_report(self, samples: list[float], *, baseline: float = 4.0) -> dict[str, object]:
+        self.assertEqual(len(samples), 30)
+        evidence = self.evidence()
+        for index, campaign in enumerate(evidence["metrics"]["event_to_rule_milliseconds"]["campaigns"]):
+            campaign["candidate"] = samples[index * 10:(index + 1) * 10]
+            campaign["baseline"] = [baseline + index / 100] * 10
+        return gate.evaluate(evidence, self.contract, self.metrics, {}, self.candidate)
+
+    def test_absolute_latency_boundary_and_relative_cost_are_both_reported(self) -> None:
+        report = self.latency_report([10.0] * 28 + [20.0] * 2)
+        self.assertEqual(report["verdict"], "pass")
+        latency = report["metrics"]["event_to_rule_milliseconds"]
+        self.assertEqual(latency["candidate"]["median"], 10.0)
+        self.assertEqual(latency["candidate"]["p95"], 20.0)
+        self.assertTrue(latency["stable_regression"])
+        self.assertGreater(latency["aggregate_regression_percent"], 10)
+        self.assertTrue(latency["accepted"])
+        self.assertFalse(latency["waived"])
+        self.assertFalse(latency["budget_exceeded"])
+        self.assertEqual(latency["acceptance"]["kind"], "absolute-latency-budget")
+
+    def test_absolute_latency_median_fails_even_with_a_faster_candidate(self) -> None:
+        report = self.latency_report([10.001] * 30, baseline=100.0)
+        self.assertEqual(report["verdict"], "fail")
+        self.assertEqual(report["failed_metrics"], ["event_to_rule_milliseconds"])
+        latency = report["metrics"]["event_to_rule_milliseconds"]
+        self.assertFalse(latency["stable_regression"])
+        self.assertTrue(latency["budget_exceeded"])
+        self.assertFalse(latency["accepted"])
+
+    def test_absolute_latency_p95_fails_with_two_slow_samples_in_one_campaign(self) -> None:
+        report = self.latency_report([4.0] * 28 + [20.001] * 2)
+        self.assertEqual(report["failed_metrics"], ["event_to_rule_milliseconds"])
+        latency = report["metrics"]["event_to_rule_milliseconds"]
+        self.assertEqual(latency["candidate"]["median"], 4.0)
+        self.assertEqual(latency["candidate"]["p95"], 20.001)
+        self.assertFalse(latency["stable_regression"])
+
+    def test_latency_p95_uses_all_samples_without_averaging_campaign_percentiles(self) -> None:
+        report = self.latency_report([4.0] * 28 + [20.0, 100.0])
+        self.assertEqual(report["verdict"], "pass")
+        latency = report["metrics"]["event_to_rule_milliseconds"]
+        self.assertEqual(latency["candidate"]["samples"], 30)
+        self.assertEqual(latency["candidate"]["p95"], 20.0)
+        self.assertEqual(latency["candidate"]["maximum"], 100.0)
+
+    def test_absolute_latency_waiver_is_rejected(self) -> None:
+        with self.assertRaisesRegex(gate.PerformanceGateError, "cannot be waived"):
+            gate.evaluate(self.evidence(), self.contract, self.metrics,
+                          {"event_to_rule_milliseconds": {}}, self.candidate)
+
+    def test_absolute_latency_contract_cannot_be_omitted_or_relaxed(self) -> None:
+        for key, value in (
+            ("median_max_milliseconds", 10.001),
+            ("p95_max_milliseconds", 20.001),
+            ("median_max_milliseconds", True),
+            ("median_max_milliseconds", "10"),
+            ("p95_max_milliseconds", float("nan")),
+            ("p95_max_milliseconds", float("inf")),
+            ("percentile_method", "interpolated"),
+            ("metric", "nft_transaction_milliseconds"),
+        ):
+            contract = copy.deepcopy(self.contract)
+            contract["latency_budget"][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(gate.PerformanceGateError):
+                gate.validate_contract(contract)
+        contract = copy.deepcopy(self.contract)
+        del contract["latency_budget"]
+        with self.assertRaisesRegex(gate.PerformanceGateError, "contract keys"):
+            gate.validate_contract(contract)
+        for key, value in (("minimum_samples", 3), ("direction", "higher"), ("unit", "seconds")):
+            contract = copy.deepcopy(self.contract)
+            contract["metrics"]["event_to_rule_milliseconds"][key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(gate.PerformanceGateError, "latency budget requires"):
+                gate.validate_contract(contract)
+
+    def test_old_contract_and_evidence_cannot_be_silently_reinterpreted(self) -> None:
+        for key, value in (("schema_version", 1), ("contract_id", "syswarden-performance/v1")):
+            contract = copy.deepcopy(self.contract)
+            contract[key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(gate.PerformanceGateError, "unsupported performance contract"):
+                gate.validate_contract(contract)
+        evidence = self.evidence()
+        evidence["contract_id"] = "syswarden-performance/v1"
+        with self.assertRaisesRegex(gate.PerformanceGateError, "contract_id binding"):
+            gate.evaluate(evidence, self.contract, self.metrics, {}, self.candidate)
+
+    def test_validated_metric_definitions_cannot_be_substituted(self) -> None:
+        metrics = dict(self.metrics)
+        metrics["event_to_rule_milliseconds"] = gate.MetricContract("seconds", "lower", 3)
+        with self.assertRaisesRegex(gate.PerformanceGateError, "metric definitions"):
+            gate.evaluate(self.evidence(), self.contract, metrics, {}, self.candidate)
 
     def test_waiver_must_be_candidate_bound_complete_and_current(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -183,6 +278,7 @@ class PerformanceGateTests(unittest.TestCase):
                         "expires_on": "2026-09-30",
                     }
                     for name in self.metrics
+                    if name != "event_to_rule_milliseconds"
                 },
             }
             path.write_text(json.dumps(waiver), encoding="utf-8")
@@ -191,7 +287,8 @@ class PerformanceGateTests(unittest.TestCase):
                 self.evidence(1.2), self.contract, self.metrics, loaded, self.candidate
             )
             self.assertEqual(report["verdict"], "pass")
-            self.assertTrue(all(item["waived"] for item in report["metrics"].values()))
+            self.assertTrue(all(report["metrics"][name]["waived"] for name in loaded))
+            self.assertFalse(report["metrics"]["event_to_rule_milliseconds"]["waived"])
 
             expired = copy.deepcopy(waiver)
             expired["waivers"][next(iter(self.metrics))]["expires_on"] = "2026-09-02"

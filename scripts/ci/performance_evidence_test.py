@@ -55,7 +55,7 @@ class PerformanceEvidenceTests(unittest.TestCase):
                 name: {
                     "unit": metric.unit,
                     "samples": [
-                        factor * (100.0 + index / 1000)
+                        factor * ((4.0 if name == "event_to_rule_milliseconds" else 100.0) + index / 1000)
                         for index in range(
                             (metric.minimum_samples + self.contract["minimum_campaigns"] - 1)
                             // self.contract["minimum_campaigns"]

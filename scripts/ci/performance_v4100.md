@@ -21,6 +21,38 @@ documents must be distinct.
 consumption over the reviewed observation window. Both are cost metrics, so a
 lower value is better.
 
+## Acceptance policy and revision
+
+The owner approved the absolute event-to-rule latency budget on 2026-09-23.
+The native contract is now `syswarden-performance/v2` (contract schema 2):
+
+- Candidate event-to-rule median must be at most 10 milliseconds.
+- Candidate event-to-rule p95 must be at most 20 milliseconds.
+- Both limits apply to the pooled candidate samples from all recorded paired
+  campaigns, with at least three campaigns and 30 samples per subject. Compute
+  p95 by nearest rank: sort the N samples and select position `ceil(0.95 * N)`
+  using one-based indexing. For 30 samples this is position 29. Do not average
+  campaign percentiles, discard slow samples or substitute a favorable retry.
+- Keep the immutable baseline measurements, relative deltas, campaign medians
+  and extrema in the report. A relative latency regression is still reported;
+  it is no longer the latency acceptance criterion. The maximum remains visible
+  because a p95 budget is not a worst-case latency guarantee.
+- The other ten native metrics retain the 10 percent stable relative regression
+  limit. Source-allocation limits and all functional, security, GRC, recovery,
+  HA, migration and signing requirements remain unchanged and mandatory.
+
+This is an explicit policy revision, not an assertion that a candidate is
+qualified. Preserve previous v1 contracts, samples and failing verdicts under
+their original identities. Do not relabel them as v2 evidence. New qualifying
+campaigns bind the reviewed v2 contract and the exact signed candidate.
+
+The budget measures the reviewed local source-event to verified-rule boundary.
+It is not a bound on Internet round-trip time or on the time from the first
+attack request to detection. The measurement producer and boundary are unchanged.
+The absolute budget cannot be waived; exceeding either limit fails the native
+channel even when the baseline was slower or only one campaign contains the
+slow samples that push the pooled p95 above its limit.
+
 ## Evidence flow
 
 1. Restore or rebuild one attested native AMD64 host.
@@ -360,10 +392,16 @@ python3 scripts/ci/performance_evidence.py assemble \
   --report /secure/evidence/performance-report.json
 ```
 
-A stable regression is a regression above 10 percent in the aggregate and in
-at least half of the campaigns. Functional or security failures cannot be
-waived. A performance-only waiver must be candidate-bound, current, justified
-and linked to retained evidence.
+A stable relative regression is a regression above 10 percent in the aggregate
+and in at least half of the campaigns. This remains the acceptance rule for
+the ten native metrics other than event-to-rule latency. The latency result
+uses the absolute budget above. Its `stable_regression` field is informational;
+`acceptance`, `budget_exceeded` and `accepted` make the effective rule explicit.
+Functional or security failures and the absolute latency budget cannot be
+waived. The standalone gate's existing relative-performance waiver mechanism
+requires a candidate-bound, current, justified approval linked to retained
+evidence. The final combined native/allocation gate recomputes both channels
+without waivers.
 
 ## Independent source-bound allocation channel
 

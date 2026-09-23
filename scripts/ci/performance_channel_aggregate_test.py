@@ -50,7 +50,8 @@ class PerformanceChannelAggregateTests(unittest.TestCase):
                     // (self.native_contract["minimum_campaigns"] - index),
                 )
                 remaining -= count
-                baseline = [100.0 + index + sample / 1000 for sample in range(count)]
+                base = 4.0 if name == "event_to_rule_milliseconds" else 100.0
+                baseline = [base + index + sample / 1000 for sample in range(count)]
                 campaigns.append(
                     {
                         "id": f"campaign-{index + 1}",
@@ -241,6 +242,31 @@ class PerformanceChannelAggregateTests(unittest.TestCase):
             self.call_aggregate(
                 allocation_report_mutation=("evidence_sha256", "0" * 64)
             )
+
+    def test_aggregate_rejects_an_unapproved_latency_contract(self) -> None:
+        for key, value in (("p95_max_milliseconds", 21), ("percentile_method", "interpolated")):
+            contract = copy.deepcopy(self.native_contract)
+            contract["latency_budget"][key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(
+                aggregate.PerformanceAggregateError, "native performance contract is invalid"
+            ):
+                self.call_aggregate(native_contract=contract)
+
+    def test_absolute_latency_failure_cannot_be_hidden_by_passing_allocations(self) -> None:
+        evidence = self.native_evidence()
+        evidence["metrics"]["event_to_rule_milliseconds"]["campaigns"][2]["candidate"][-2:] = [21.0, 21.0]
+        with mock.patch.object(self, "native_evidence", return_value=evidence):
+            with self.assertRaisesRegex(aggregate.PerformanceAggregateError, "native performance channel is not passing"):
+                self.call_aggregate()
+            with self.assertRaisesRegex(aggregate.PerformanceAggregateError, "does not reproduce exactly"):
+                self.call_aggregate(native_report_mutation=("verdict", "pass"))
+
+    def test_relative_latency_regression_can_pass_the_absolute_budget(self) -> None:
+        evidence = self.native_evidence()
+        for campaign in evidence["metrics"]["event_to_rule_milliseconds"]["campaigns"]:
+            campaign["candidate"] = [value * 1.2 for value in campaign["baseline"]]
+        with mock.patch.object(self, "native_evidence", return_value=evidence):
+            self.assertEqual(self.call_aggregate()["verdict"], "pass")
 
     def test_cli_creates_once_with_private_mode(self) -> None:
         native_evidence, native_report, allocation_evidence, allocation_report = (
