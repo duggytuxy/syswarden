@@ -132,6 +132,55 @@ Every key record, mechanism, signer image and other field must remain identical.
 The exact bootstrap run, artifact and foundation policy reference is sealed into
 both phase 2 provenance documents.
 
+## Recovery after bootstrap artifact expiry
+
+The original Phase 1 artifact listed above expired on 2026-09-23 at
+04:29:23 UTC. GitHub returned HTTP 410 for its download. The protected signing
+[run 35819449530](https://github.com/duggytuxy/syswarden/actions/runs/35819449530)
+therefore stopped before accessing signing secrets. A successful historical
+run or a later qualified bundle does not replace the missing archive bytes.
+Rerunning the failed qualified signing job cannot recover the expired artifact.
+
+The manual `bootstrap-recovery` mode creates a new, non-publishing bootstrap
+proof with the existing trust roots. It requires the distinct authorization
+`REQUALIFY-NATIVE-BOOTSTRAP-NO-PUBLISH`, the protected environment's approval,
+an owner-dispatched first attempt, and packages built from the exact current
+`main` SHA. Leave all four prior-bootstrap dispatch inputs empty.
+
+Recovery selects `native_package_signature_foundation_v4100.json`, an exact
+copy of the original foundation policy from commit
+`9598861f1be80a651658bf3ca8c10424bd70db6c`. Its SHA-256 must remain
+`6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d`.
+Before signing, the workflow checks its bytes and the strict transition from
+that foundation to the current qualified policy. The production policy stays
+unchanged. A changed key, fingerprint, signer image, revoked or expired selected
+key, or any other unapproved policy difference fails closed. All native
+signature and payload-preservation checks still run, including the RHEL
+package-owned variant.
+
+Recovery output has bootstrap status only. It cannot satisfy release or native
+lifecycle qualification, and it does not automatically become an approved
+bootstrap reference. Complete the following separate steps:
+
+1. Independently verify the completed recovery run, its exact source and unsigned
+   artifact bindings, all native signature proofs, and the bootstrap bundle seal.
+2. Download the exact uploaded ZIP by artifact ID before expiry. Check the GitHub
+   digest and byte size, retain these identifiers with the original archive, and
+   verify a second owner-controlled backup copy. Retain only public packages,
+   public keys and evidence; private signing keys are never part of this archive.
+3. Submit a separate reviewed promotion of the new bootstrap run, source SHA,
+   artifact ID, canonical name, size and digest in both the workflow and verifier.
+   Keep the original foundation policy digest. That promotion must explicitly
+   extract the immutable foundation file, rather than the qualified production
+   policy at the recovery source SHA, and test substitution failures.
+4. After promotion, rebuild packages from the new exact `main` SHA and perform
+   a fresh `qualified-policy` signing run followed by the required qualification.
+
+Until that separate promotion is reviewed, the normal qualified path remains
+bound to the original reference and rejects its expired artifact. Signed
+artifacts now request 90 days of retention. This is a retention window, not
+permanent evidence storage, and does not restore any expired artifact.
+
 ## Protected workflow
 
 `.github/workflows/native-package-signing.yml` is manual-only and frozen to
@@ -140,9 +189,10 @@ v4.10.0. It has read-only repository and Actions permissions and uses the
 with required reviewers and prevent administrator bypass before adding any
 secret. The workflow accepts only the repository owner's first attempt at the
 exact current `main` SHA and requires the literal
-`SIGN-NATIVE-PACKAGES-NO-PUBLISH` authorization. Its required
-`qualification_mode` input accepts only `bootstrap-qualification` or
-`qualified-policy`. Both modes are non-publishing.
+`SIGN-NATIVE-PACKAGES-NO-PUBLISH` authorization for `bootstrap-qualification`
+and `qualified-policy`. The additional `bootstrap-recovery` mode requires
+`REQUALIFY-NATIVE-BOOTSTRAP-NO-PUBLISH` and the recovery procedure above.
+All three modes are non-publishing.
 
 The environment must provide:
 

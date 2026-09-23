@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -612,6 +613,93 @@ print(json.dumps(document, separators=(",", ":")))
         first_secret = self.workflow.index("${{ secrets.")
         self.assertLess(guard, first_secret)
 
+    def test_recovery_requires_explicit_authorization_and_owner_context(self) -> None:
+        script = named_literal_run_block(self.workflow, "Validate Protected Manual Context")
+        environment = dict(os.environ)
+        environment.update({
+            "APK_SIGNER_IMAGE": json.loads(POLICY.read_text())["apk"]["signer_image"],
+            "AUTHORIZATION": "REQUALIFY-NATIVE-BOOTSTRAP-NO-PUBLISH",
+            "EVENT_ACTOR": "duggytuxy", "EVENT_TRIGGERING_ACTOR": "duggytuxy",
+            "REPOSITORY_OWNER": "duggytuxy", "EVENT_REPOSITORY": "duggytuxy/syswarden",
+            "EVENT_NAME": "workflow_dispatch", "EVENT_REF_TYPE": "branch",
+            "EVENT_REF_NAME": "main", "EVENT_REF": "refs/heads/main",
+            "EVENT_SHA": "a" * 40, "WORKFLOW_SHA": "a" * 40,
+            "RELEASE_SHA": "a" * 40, "RELEASE_TAG": "v4.10.0", "RUN_ATTEMPT": "1",
+            "UNSIGNED_PACKAGE_RUN_ID": "101", "UNSIGNED_ARTIFACT_ID": "102",
+            "RHEL_PACKAGE_OWNED_ARTIFACT_ID": "103",
+            "RPM_KEY_ID": "rpm-prod-2026-01", "APK_KEY_ID": "apk-prod-2026-01",
+            "DEB_KEY_ID": "deb-prod-2026-01", "QUALIFICATION_MODE": "bootstrap-recovery",
+            "BOOTSTRAP_RELEASE_SHA": "", "BOOTSTRAP_SIGNING_RUN_ID": "",
+            "BOOTSTRAP_SIGNED_ARTIFACT_ID": "", "BOOTSTRAP_POLICY_SHA256": "",
+        })
+
+        def execute(changes: dict[str, str]) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(["bash", "-c", script], env=environment | changes,
+                                  capture_output=True, text=True, timeout=10)
+
+        accepted = execute({})
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        for changes in (
+            {"AUTHORIZATION": "SIGN-NATIVE-PACKAGES-NO-PUBLISH"},
+            {"QUALIFICATION_MODE": "bootstrap-qualification"},
+            {"EVENT_ACTOR": "another-user"}, {"EVENT_TRIGGERING_ACTOR": "another-user"},
+            {"RUN_ATTEMPT": "2"}, {"EVENT_REF_NAME": "feature"},
+            {"WORKFLOW_SHA": "b" * 40}, {"RELEASE_TAG": "v4.10.1"},
+            {"BOOTSTRAP_SIGNED_ARTIFACT_ID": "10088398939"},
+        ):
+            with self.subTest(changes=changes):
+                self.assertNotEqual(execute(changes).returncode, 0)
+        accepted = execute({"QUALIFICATION_MODE": "bootstrap-qualification",
+                            "AUTHORIZATION": "SIGN-NATIVE-PACKAGES-NO-PUBLISH"})
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_recovery_cannot_change_foundation_keys_or_qualified_policy(self) -> None:
+        script = named_literal_run_block(self.workflow, "Validate Source and Signature Policy Foundation")
+        python_script = script.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        foundation = ROOT / "scripts/ci/native_package_signature_foundation_v4100.json"
+        foundation_bytes = foundation.read_bytes()
+        current_bytes = POLICY.read_bytes()
+        signer = json.loads(current_bytes)["apk"]["signer_image"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staged_foundation, staged_current = root / "foundation.json", root / "current.json"
+
+            def execute(base: bytes, current: bytes, day: str = "2026-09-23",
+                        rpm_key: str = "rpm-prod-2026-01", image: str = signer) -> subprocess.CompletedProcess[str]:
+                staged_foundation.write_bytes(base)
+                staged_current.write_bytes(current)
+                return subprocess.run(
+                    [sys.executable, "-B", "-c", python_script, str(staged_foundation), day,
+                     rpm_key, "apk-prod-2026-01", "deb-prod-2026-01", image,
+                     "bootstrap-recovery", str(staged_current)],
+                    cwd=ROOT, capture_output=True, text=True, timeout=10,
+                )
+
+            accepted = execute(foundation_bytes, current_bytes)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            for family in ("rpm", "apk", "deb"):
+                changed = json.loads(current_bytes)
+                changed[family]["trusted_keys"][0]["public_key_sha256"] = "0" * 64
+                with self.subTest(family=family):
+                    self.assertNotEqual(execute(foundation_bytes, json.dumps(changed).encode()).returncode, 0)
+            for base, current in ((foundation_bytes + b"\n", current_bytes),
+                                  (current_bytes, current_bytes),
+                                  (foundation_bytes, foundation_bytes)):
+                self.assertNotEqual(execute(base, current).returncode, 0)
+            self.assertNotEqual(execute(foundation_bytes, current_bytes, day="2029-01-01").returncode, 0)
+            self.assertNotEqual(execute(foundation_bytes, current_bytes, rpm_key="other").returncode, 0)
+            self.assertNotEqual(execute(foundation_bytes, current_bytes, image="unreviewed").returncode, 0)
+
+    def test_recovery_keeps_native_verification_and_separate_bootstrap_output(self) -> None:
+        selection = named_literal_run_block(self.workflow, "Validate Source and Signature Policy Foundation")
+        self.assertIn("validate_policy_transition", selection)
+        self.assertIn("SIGNING_POLICY_PATH", selection)
+        verification = named_literal_run_block(self.workflow, "Verify Native Signatures with Isolated Trust Roots")
+        self.assertIn('policy="${SIGNING_POLICY_PATH:?validated signing policy is required}"', verification)
+        self.assertIn('"${QUALIFICATION_MODE}" == "bootstrap-recovery"', verification)
+        self.assertEqual(verification.count('--policy "${policy}"'), 4)
+        self.assertIn("retention-days: 90", self.workflow)
+
     def test_bootstrap_and_qualified_artifact_names_are_unambiguous(self) -> None:
         self.assertIn(
             'expected_name="syswarden-native-signed-packages-${version}-${REQUESTED_RUN_ID}-1-${BOOTSTRAP_RELEASE_SHA}"',
@@ -755,6 +843,11 @@ print(json.dumps(payload, separators=(",", ":")))
         wrong_size = json.loads(json.dumps(valid_artifact))
         wrong_size["size_in_bytes"] = artifact_size + 1
         rejected_cases.append((valid_run, [wrong_size]))
+        expired = json.loads(json.dumps(valid_artifact))
+        expired["expired"] = True
+        expired_result = execute(valid_run, [expired])
+        self.assertNotEqual(expired_result.returncode, 0)
+        self.assertIn("approved bootstrap artifact has expired", expired_result.stderr)
         wrong_id = json.loads(json.dumps(valid_artifact))
         wrong_id["id"] = artifact_id + 1
         rejected_cases.append((valid_run, [wrong_id]))

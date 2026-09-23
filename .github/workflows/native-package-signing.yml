@@ -41,6 +41,7 @@ on:
         type: choice
         options:
           - bootstrap-qualification
+          - bootstrap-recovery
           - qualified-policy
       bootstrap_release_sha:
         description: Exact distinct ancestor SHA used by the successful bootstrap run, required only for qualified policy
@@ -59,7 +60,7 @@ on:
         required: false
         type: string
       authorization:
-        description: Enter SIGN-NATIVE-PACKAGES-NO-PUBLISH
+        description: Enter SIGN-NATIVE-PACKAGES-NO-PUBLISH, or REQUALIFY-NATIVE-BOOTSTRAP-NO-PUBLISH for recovery
         required: true
         type: string
 
@@ -195,9 +196,13 @@ jobs:
             echo "ERROR: native signing requires one owner-dispatched attempt." >&2
             exit 1
           fi
+          expected_authorization="SIGN-NATIVE-PACKAGES-NO-PUBLISH"
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-recovery" ]]; then
+            expected_authorization="REQUALIFY-NATIVE-BOOTSTRAP-NO-PUBLISH"
+          fi
           if [[ "${RELEASE_TAG}" != "v4.10.0" || \
                 ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
-                "${AUTHORIZATION}" != "SIGN-NATIVE-PACKAGES-NO-PUBLISH" ]]; then
+                "${AUTHORIZATION}" != "${expected_authorization}" ]]; then
             echo "ERROR: v4.10.0 signing inputs or no-publication authorization are invalid." >&2
             exit 1
           fi
@@ -221,7 +226,7 @@ jobs:
             }
           done
           case "${QUALIFICATION_MODE}" in
-            bootstrap-qualification)
+            bootstrap-qualification|bootstrap-recovery)
               if [[ -n "${BOOTSTRAP_RELEASE_SHA}" || \
                     -n "${BOOTSTRAP_SIGNING_RUN_ID}" || \
                     -n "${BOOTSTRAP_SIGNED_ARTIFACT_ID}" || \
@@ -307,10 +312,14 @@ jobs:
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           test "$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")" = "${RELEASE_TAG}"
           policy="scripts/ci/native_package_signature_policy_v4100.json"
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-recovery" ]]; then
+            policy="scripts/ci/native_package_signature_foundation_v4100.json"
+          fi
           as_of="$(date -u +%F)"
           PYTHONDONTWRITEBYTECODE=1 python3 - "${policy}" "${as_of}" \
             "${RPM_KEY_ID}" "${APK_KEY_ID}" "${DEB_KEY_ID}" \
-            "${APK_SIGNER_IMAGE}" "${QUALIFICATION_MODE}" <<'PY'
+            "${APK_SIGNER_IMAGE}" "${QUALIFICATION_MODE}" \
+            scripts/ci/native_package_signature_policy_v4100.json <<'PY'
           import sys
           from pathlib import Path
           from scripts.ci import native_package_signature_gate as gate
@@ -323,6 +332,7 @@ jobs:
               deb_key_id,
               signer_image,
               qualification_mode,
+              current_policy_path,
           ) = sys.argv[1:]
           document = gate.load_json(Path(policy_path), "signature policy")
           day = gate.parse_day(as_of, "signing date")
@@ -334,7 +344,17 @@ jobs:
               "apk": apk_key_id,
               "deb": deb_key_id,
           }
-          if qualification_mode == "bootstrap-qualification":
+          if qualification_mode == "bootstrap-recovery":
+              from scripts.ci import native_package_signing_bundle as bundle
+
+              foundation_bytes = bundle.regular_bytes(
+                  Path(policy_path), bundle.MAX_JSON_BYTES, "recovery foundation policy"
+              )
+              current_policy = gate.load_json(Path(current_policy_path), "current signature policy")
+              bundle.validate_policy_transition(
+                  foundation_bytes, current_policy, bundle.FOUNDATION_POLICY_SHA256, day
+              )
+          if qualification_mode in {"bootstrap-qualification", "bootstrap-recovery"}:
               if (
                   document["status"] != "foundation-not-qualified"
                   or document["publishing"] is not False
@@ -358,6 +378,7 @@ jobs:
           else:
               raise SystemExit("native signing qualification mode is invalid")
           PY
+          printf 'SIGNING_POLICY_PATH=%s\n' "${policy}" >> "${GITHUB_ENV}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py \
             --repository "${GITHUB_WORKSPACE}" capture \
             --output "${SIGNING_ROOT}/repository-state.json"
@@ -421,6 +442,10 @@ jobs:
                 .workflow_run.head_branch == "main"
               )
             ]' <<< "${artifacts}")"
+          if [[ "$(jq --argjson id "${REQUESTED_ARTIFACT_ID}" '[.[] | .artifacts[]? | select(.id == $id and .expired == true)] | length' <<< "${artifacts}")" == "1" ]]; then
+            echo "ERROR: approved bootstrap artifact has expired; rerunning cannot recover it. Use the reviewed bootstrap recovery procedure." >&2
+            exit 1
+          fi
           artifact_digest="$(jq -r '.[0].digest // ""' <<< "${match}")"
           artifact_size="$(jq -r '.[0].size_in_bytes | tostring' <<< "${match}")"
           if [[ "$(jq 'length' <<< "${match}")" != "1" || \
@@ -721,7 +746,7 @@ jobs:
             return "${cleanup_status}"
           }
           trap cleanup_rpm_secret EXIT
-          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          policy="${SIGNING_POLICY_PATH:?validated signing policy is required}"
           version="${RELEASE_TAG#v}"
           rpm_name="syswarden-${version}-1.x86_64.rpm"
           rhel_rpm_name="syswarden-${version}-1.rhelpo.x86_64.rpm"
@@ -945,7 +970,7 @@ jobs:
             return "${cleanup_status}"
           }
           trap cleanup_deb_secret EXIT
-          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          policy="${SIGNING_POLICY_PATH:?validated signing policy is required}"
           version="${RELEASE_TAG#v}"
           deb_name="syswarden_${version}_amd64.deb"
           install -m 0600 "${UNSIGNED_DIR}/${deb_name}" "${SIGNED_DIR}/${deb_name}"
@@ -1052,7 +1077,7 @@ jobs:
             return "${cleanup_status}"
           }
           trap cleanup_apk_secret EXIT
-          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          policy="${SIGNING_POLICY_PATH:?validated signing policy is required}"
           if [[ "$(jq -er '.apk.signer_image' "${policy}")" != "${APK_SIGNER_IMAGE}" ]]; then
             echo "ERROR: APK signer image differs from the committed signature policy." >&2
             exit 1
@@ -1165,9 +1190,9 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          policy="${SIGNING_POLICY_PATH:?validated signing policy is required}"
           bootstrap_args=()
-          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" ]]; then
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" || "${QUALIFICATION_MODE}" == "bootstrap-recovery" ]]; then
             bootstrap_args+=(--bootstrap-qualification)
           elif [[ "${QUALIFICATION_MODE}" != "qualified-policy" ]]; then
             echo "ERROR: native signing qualification mode is invalid." >&2
@@ -1265,7 +1290,7 @@ jobs:
           bundle_root="${SIGNING_ROOT}/bundle"
           bootstrap_args=()
           prior_bootstrap_args=()
-          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" ]]; then
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" || "${QUALIFICATION_MODE}" == "bootstrap-recovery" ]]; then
             bootstrap_args+=(--bootstrap-qualification)
           elif [[ "${QUALIFICATION_MODE}" == "qualified-policy" ]]; then
             prior_bootstrap_args+=(
@@ -1300,7 +1325,7 @@ jobs:
             --signing-workflow-sha "${WORKFLOW_SHA}" \
             --source-date-epoch "${SOURCE_DATE_EPOCH}" \
             --signer-image "${APK_SIGNER_IMAGE}" \
-            --policy scripts/ci/native_package_signature_policy_v4100.json \
+            --policy "${SIGNING_POLICY_PATH:?validated signing policy is required}" \
             --as-of "${SIGNING_DATE}" --rpm-proof "${PROOF_DIR}/rpm-proof.json" \
             --rpm-verification "${PROOF_DIR}/rpm-verification.json" \
             --rhel-rpm-proof "${PROOF_DIR}/rhel-rpm-proof.json" \
@@ -1312,7 +1337,7 @@ jobs:
             "${prior_bootstrap_args[@]}" \
             --output "${bundle_root}"
           verify_args=()
-          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" ]]; then
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" || "${QUALIFICATION_MODE}" == "bootstrap-recovery" ]]; then
             verify_args+=(--mode bootstrap)
           fi
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py verify \
@@ -1321,7 +1346,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py \
             --repository "${GITHUB_WORKSPACE}" verify \
             --snapshot "${SIGNING_ROOT}/repository-state.json"
-          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" ]]; then
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" || "${QUALIFICATION_MODE}" == "bootstrap-recovery" ]]; then
             artifact_name="syswarden-native-signed-packages-${RELEASE_TAG#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
           else
             artifact_name="syswarden-native-signed-packages-qualified-${RELEASE_TAG#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
@@ -1336,7 +1361,7 @@ jobs:
           name: ${{ steps.bundle.outputs.artifact_name }}
           path: ${{ steps.bundle.outputs.bundle_root }}
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
           compression-level: 0
 
       - name: Validate Uploaded Signed Artifact Identity
