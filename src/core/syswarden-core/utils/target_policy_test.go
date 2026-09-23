@@ -2,7 +2,9 @@ package utils
 
 import (
 	"errors"
+	"net"
 	"net/netip"
+	"reflect"
 	"testing"
 )
 
@@ -117,6 +119,44 @@ func TestCanonicalFirewallNetworkEntryEnforcesPrefixAndProtectedRanges_SW_SEC_M1
 	} {
 		if got, _, err := CanonicalFirewallNetworkEntry(input, policy); err != nil || got != want {
 			t.Fatalf("CanonicalFirewallNetworkEntry(%q) = %q, %v; want %q", input, got, err, want)
+		}
+	}
+}
+
+func TestLocalInterfaceAddressesCanonicalInventoryAndRefresh(t *testing.T) {
+	addresses := []net.Addr{
+		&net.IPAddr{IP: net.ParseIP("::ffff:192.0.2.1")},
+		&net.IPNet{IP: net.ParseIP("2001:db8::1"), Mask: net.CIDRMask(64, 128)},
+		&net.IPNet{IP: net.ParseIP("192.0.2.1"), Mask: net.CIDRMask(24, 32)},
+	}
+	enumerate := func() ([]net.Addr, error) { return addresses, nil }
+	got, err := localInterfaceAddresses(enumerate)
+	want := []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("2001:db8::1")}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("inventory = %v, %v; want %v", got, err, want)
+	}
+	addresses = []net.Addr{&net.IPAddr{IP: net.ParseIP("192.0.2.2")}}
+	got, err = localInterfaceAddresses(enumerate)
+	if err != nil || len(got) != 1 || got[0] != netip.MustParseAddr("192.0.2.2") {
+		t.Fatalf("fresh inventory = %v, %v", got, err)
+	}
+}
+
+func TestLocalInterfaceAddressesRejectsIncompleteInventory(t *testing.T) {
+	failure := errors.New("incomplete kernel dump")
+	valid := &net.IPAddr{IP: net.ParseIP("192.0.2.1")}
+	got, err := localInterfaceAddresses(func() ([]net.Addr, error) {
+		return []net.Addr{valid}, failure
+	})
+	if got != nil || !errors.Is(err, failure) {
+		t.Fatalf("enumeration failure returned %v, %v", got, err)
+	}
+	for _, invalid := range []net.Addr{nil, &net.IPAddr{IP: net.IP{1, 2}}, &net.UnixAddr{Name: "unsupported"}} {
+		got, err := localInterfaceAddresses(func() ([]net.Addr, error) {
+			return []net.Addr{valid, invalid}, nil
+		})
+		if got != nil || err == nil {
+			t.Fatalf("invalid inventory returned %v, %v", got, err)
 		}
 	}
 }

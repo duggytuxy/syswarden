@@ -141,8 +141,16 @@ func (store *runtimeLifecycleStore) readFile(name string, destination any) (bool
 	if err != nil {
 		return false, err
 	}
-	if err := rejectHADuplicateJSONKeys(wire); err != nil {
-		return false, err
+	switch destination.(type) {
+	case *runtimeLifecycleModel, *runtimeLifecycleAnchor, *runtimeLifecycleJournal:
+		// These closed schemas contain no raw JSON. Their canonical encoding
+		// below cannot preserve duplicate or aliased keys, even when nested,
+		// so byte equality rejects them without a second tokenization pass.
+	default:
+		// Raw publications and future schemas must retain explicit checking.
+		if err := rejectHADuplicateJSONKeys(wire); err != nil {
+			return false, err
+		}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(wire))
 	decoder.DisallowUnknownFields()
