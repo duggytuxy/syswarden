@@ -33,12 +33,16 @@ func encodeRuntimeIntentFrame(frame runtimeIntentFrame) ([]byte, error) {
 		return nil, fmt.Errorf("unsupported runtime intent frame")
 	}
 	payload, err := json.Marshal(frame)
-	if err != nil || len(payload) > runtimeIntentSlotSize-runtimeIntentHeader {
+	if err != nil {
+		return nil, err
+	}
+	payloadSize := len(payload)
+	if payloadSize < 1 || payloadSize > runtimeIntentSlotSize-runtimeIntentHeader {
 		return nil, fmt.Errorf("runtime intent frame exceeds its fixed bound")
 	}
 	wire := make([]byte, runtimeIntentSlotSize)
 	copy(wire, "SWINT001")
-	binary.BigEndian.PutUint32(wire[8:12], uint32(len(payload)))
+	binary.BigEndian.PutUint32(wire[8:12], uint32(payloadSize))
 	copy(wire[runtimeIntentHeader:], payload)
 	digest := sha256.Sum256(wire)
 	copy(wire[12:runtimeIntentHeader], digest[:])

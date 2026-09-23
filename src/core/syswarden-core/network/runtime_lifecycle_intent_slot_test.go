@@ -87,7 +87,12 @@ func TestRuntimeIntentFrameRejectsRehashedAmbiguousPayload(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			wire := make([]byte, runtimeIntentSlotSize)
 			copy(wire, "SWINT001")
-			binary.BigEndian.PutUint32(wire[8:12], uint32(len(corrupt)))
+			payloadSize := len(corrupt)
+			if payloadSize < 1 || payloadSize > runtimeIntentSlotSize-runtimeIntentHeader {
+				t.Fatal("corrupt test payload exceeds frame bounds")
+				return
+			}
+			binary.BigEndian.PutUint32(wire[8:12], uint32(payloadSize))
 			copy(wire[runtimeIntentHeader:], corrupt)
 			digest := sha256.Sum256(wire)
 			copy(wire[12:runtimeIntentHeader], digest[:])
