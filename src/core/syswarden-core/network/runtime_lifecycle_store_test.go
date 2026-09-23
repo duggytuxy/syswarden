@@ -1,6 +1,7 @@
 package network
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +9,77 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRuntimeLifecycleCanonicalReadRejectsAmbiguousTypedAndRawJSON(t *testing.T) {
+	model, now := lifecycleModelFixture()
+	model, err := model.verifiedBan("192.0.2.7", now, runtimeLifecycleWitness{Complete: true, Present: true, Permanent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := lifecycleAnchor(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := runtimeLifecycleJournal{Version: 1, Before: &model, Intent: &runtimeLifecycleIntent{
+		Entry: "192.0.2.7", Present: true, Permanent: true, PreparedAt: now.Format(time.RFC3339Nano),
+	}}
+	for _, schema := range []struct {
+		name        string
+		value       any
+		destination func() any
+	}{
+		{"state", model, func() any { return new(runtimeLifecycleModel) }},
+		{"anchor", anchor, func() any { return new(runtimeLifecycleAnchor) }},
+		{"journal", journal, func() any { return new(runtimeLifecycleJournal) }},
+		{"raw", journal, func() any { return new(json.RawMessage) }},
+	} {
+		t.Run(schema.name, func(t *testing.T) {
+			store := openLifecycleTestStore(t, lifecyclePrivateTestDirectory(t))
+			wire, err := json.Marshal(schema.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonical := string(wire) + "\n"
+			if err := store.root.WriteFile("fixture.json", []byte(canonical), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if exists, err := store.readFile("fixture.json", schema.destination()); err != nil || !exists {
+				t.Fatalf("canonical fixture rejected: %v", err)
+			}
+			firstKeyEnd := strings.Index(canonical, ":1,")
+			if firstKeyEnd < 0 {
+				t.Fatal("fixture must begin with version 1")
+			}
+			firstField := canonical[1 : firstKeyEnd+3]
+			cases := map[string]string{
+				"duplicate-top-level": "{" + firstField + canonical[1:],
+				"trailing-document":   canonical + "{}\n",
+			}
+			if strings.Contains(canonical, `"entry":"192.0.2.7"`) {
+				cases["duplicate-nested"] = strings.Replace(canonical, `"entry":"192.0.2.7"`, `"entry":"192.0.2.7","entry":"192.0.2.7"`, 1)
+				cases["escaped-duplicate-nested"] = strings.Replace(canonical, `"entry":"192.0.2.7"`, `"\u0065ntry":"192.0.2.8","entry":"192.0.2.7"`, 1)
+			}
+			if schema.name != "raw" {
+				cases["unknown-field"] = `{"extra":true,` + canonical[1:]
+				cases["case-alias"] = strings.Replace(canonical, `"sequence":`, `"Sequence":`, 1)
+				cases["missing-field"] = "{" + canonical[firstKeyEnd+3:]
+			}
+			for name, corrupt := range cases {
+				t.Run(name, func(t *testing.T) {
+					if corrupt == canonical {
+						t.Fatal("corruption was not exercised")
+					}
+					if err := store.root.WriteFile("fixture.json", []byte(corrupt), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := store.readFile("fixture.json", schema.destination()); err == nil {
+						t.Fatal("ambiguous or noncanonical JSON was accepted")
+					}
+				})
+			}
+		})
+	}
+}
 
 func lifecyclePrivateTestDirectory(t *testing.T) string {
 	t.Helper()

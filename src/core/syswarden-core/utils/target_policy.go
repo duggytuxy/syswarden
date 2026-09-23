@@ -207,24 +207,26 @@ func networkPrefixesOverlap(first, second netip.Prefix) bool {
 // to local interfaces. An enumeration or parsing failure is returned so a
 // privileged caller can fail closed rather than mutate with incomplete state.
 func LocalInterfaceAddresses() ([]netip.Addr, error) {
-	interfaces, err := net.Interfaces()
+	return localInterfaceAddresses(net.InterfaceAddrs)
+}
+
+func localInterfaceAddresses(enumerate func() ([]net.Addr, error)) ([]netip.Addr, error) {
+	// One fresh inventory includes all interfaces without repeatedly dumping
+	// the same kernel address table for each interface. Do not cache it: a
+	// newly assigned local address must be protected on the next decision.
+	addresses, err := enumerate()
 	if err != nil {
-		return nil, fmt.Errorf("enumerate local interfaces: %w", err)
+		return nil, fmt.Errorf("enumerate local interface addresses: %w", err)
 	}
 	seen := make(map[netip.Addr]struct{})
-	for _, networkInterface := range interfaces {
-		addresses, err := networkInterface.Addrs()
+	for _, raw := range addresses {
+		address, err := interfaceAddress(raw)
 		if err != nil {
-			return nil, fmt.Errorf("enumerate addresses for interface %q: %w", networkInterface.Name, err)
+			return nil, fmt.Errorf("parse local interface address: %w", err)
 		}
-		for _, raw := range addresses {
-			address, err := interfaceAddress(raw)
-			if err != nil {
-				return nil, fmt.Errorf("parse address for interface %q: %w", networkInterface.Name, err)
-			}
-			seen[address] = struct{}{}
-		}
+		seen[address] = struct{}{}
 	}
+
 	result := make([]netip.Addr, 0, len(seen))
 	for address := range seen {
 		result = append(result, address)
