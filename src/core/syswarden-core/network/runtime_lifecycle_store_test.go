@@ -125,7 +125,7 @@ func TestRuntimeLifecycleStoreRecoversEveryWitnessedPublicationBoundary(t *testi
 				}
 				return nil
 			}
-			if err := store.commit(candidate); err == nil {
+			if err := store.commit(&candidate); err == nil {
 				t.Fatal("publication fault was not exercised")
 			}
 			store.close()

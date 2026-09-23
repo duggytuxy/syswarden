@@ -141,7 +141,7 @@ func (manager *runtimeLifecycleManager) mutate(mutation firewall.RecoverableMuta
 			}
 			return err
 		},
-		Persist: func() error { return manager.store.commit(candidate) },
+		Persist: func() error { return manager.store.commit(&candidate) },
 		Commit:  func() error { return nil },
 	})
 }
@@ -202,7 +202,7 @@ func (manager *runtimeLifecycleManager) RuntimeLifecycleStateSnapshot(limit int)
 			}
 		}
 		if candidate.Sequence != model.Sequence {
-			if err := manager.store.commit(candidate); err != nil {
+			if err := manager.store.commit(&candidate); err != nil {
 				return err
 			}
 		}

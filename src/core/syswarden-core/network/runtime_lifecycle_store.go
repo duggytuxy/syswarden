@@ -45,14 +45,18 @@ type runtimeLifecycleJournal struct {
 // The caller serializes operations and holds this store's instance lease
 // until shutdown. Separate instances cannot concurrently publish a head.
 type runtimeLifecycleStore struct {
-	root         *os.Root
-	parent       *os.Root
-	name         string
-	lease        *os.File
-	path         string
-	ownerUID     int
-	observedHead string
-	afterPublish func(string) error
+	root           *os.Root
+	parent         *os.Root
+	name           string
+	lease          *os.File
+	path           string
+	ownerUID       int
+	observedHead   string
+	observedIntent string
+	intentSlot     *os.File
+	afterPublish   func(string) error
+	writeSlot      func(*os.File, []byte) (int, error)
+	syncSlot       func(*os.File) error
 }
 
 func openRuntimeLifecycleStore(directory string, ownerUID int) (*runtimeLifecycleStore, error) {
@@ -89,6 +93,10 @@ func openRuntimeLifecycleStore(directory string, ownerUID int) (*runtimeLifecycl
 }
 
 func (store *runtimeLifecycleStore) close() {
+	if store.intentSlot != nil {
+		_ = store.intentSlot.Close()
+		store.intentSlot = nil
+	}
 	if store.lease != nil {
 		_ = syscall.Flock(int(store.lease.Fd()), syscall.LOCK_UN)
 		_ = store.lease.Close()
@@ -202,6 +210,9 @@ func (journal runtimeLifecycleJournal) validate() error {
 	if journal.Initializing && (journal.Intent != nil || journal.Candidate.Sequence != 1 || len(journal.Candidate.Records) != 0) {
 		return fmt.Errorf("runtime lifecycle genesis is invalid")
 	}
+	if journal.Initializing && journal.Candidate.RetiredIntent != "" {
+		return fmt.Errorf("runtime lifecycle genesis cannot retire an earlier intent")
+	}
 	if journal.Before != nil {
 		if err := journal.Before.validate(); err != nil {
 			return err
@@ -216,8 +227,28 @@ func (journal runtimeLifecycleJournal) validate() error {
 			afterTime, _ := runtimeLifecycleTime(journal.Candidate.UpdatedAt)
 			beforeDigest, _ := journal.Before.digest()
 			afterDigest, _ := journal.Candidate.digest()
+			if journal.Before.IntentFormat == 1 {
+				expected := journal.Before.RetiredIntent
+				if journal.Intent != nil || expected == "" {
+					anchor := runtimeLifecycleAnchor{Version: 1, Identity: journal.Before.Identity, Sequence: journal.Before.Sequence, Digest: beforeDigest}
+					wire, err := encodeRuntimeIntentFrame(runtimeIntentFrame{Version: 1, Anchor: anchor, Intent: journal.Intent})
+					if err != nil {
+						return err
+					}
+					expected = runtimeIntentWireDigest(wire)
+				}
+				if journal.Candidate.RetiredIntent != expected {
+					return fmt.Errorf("runtime lifecycle candidate does not retire the exact prior frame")
+				}
+				// A native no-op may retire a new intent without changing claims.
+				if journal.Intent != nil && journal.Candidate.Sequence == journal.Before.Sequence {
+					projection := *journal.Before
+					projection.RetiredIntent = journal.Candidate.RetiredIntent
+					beforeDigest, _ = projection.digest()
+				}
+			}
 			noOp := journal.Intent != nil && beforeDigest == afterDigest
-			if journal.Before.Identity != journal.Candidate.Identity || !noOp && journal.Candidate.Sequence <= journal.Before.Sequence || afterTime.Before(beforeTime) {
+			if journal.Before.Identity != journal.Candidate.Identity || journal.Before.IntentFormat != journal.Candidate.IntentFormat || !noOp && journal.Candidate.Sequence <= journal.Before.Sequence || afterTime.Before(beforeTime) {
 				return fmt.Errorf("runtime lifecycle candidate does not advance the same history")
 			}
 		}
@@ -245,6 +276,7 @@ func (journal runtimeLifecycleJournal) validate() error {
 // load finishes only a previously witnessed candidate. An intent without a
 // candidate is returned for native recovery; it never becomes a ban claim.
 func (store *runtimeLifecycleStore) load() (runtimeLifecycleModel, *runtimeLifecycleJournal, error) {
+	store.observedIntent = ""
 	var state runtimeLifecycleModel
 	var anchor runtimeLifecycleAnchor
 	var journal runtimeLifecycleJournal
@@ -282,6 +314,9 @@ func (store *runtimeLifecycleStore) load() (runtimeLifecycleModel, *runtimeLifec
 			}
 			return *journal.Candidate, nil, nil
 		}
+		if journal.Before.IntentFormat != 0 {
+			return state, nil, fmt.Errorf("fixed-slot runtime intent cannot be replaced by an unwitnessed atomic journal")
+		}
 		beforeAnchor, _ := lifecycleAnchor(*journal.Before)
 		if store.observedHead != "" && store.observedHead != beforeAnchor.Digest {
 			return state, nil, fmt.Errorf("runtime lifecycle head changed outside this instance")
@@ -297,6 +332,30 @@ func (store *runtimeLifecycleStore) load() (runtimeLifecycleModel, *runtimeLifec
 		return state, nil, fmt.Errorf("runtime lifecycle head and anchor disagree or changed unexpectedly")
 	}
 	store.observedHead = expected.Digest
+	if state.IntentFormat == 1 {
+		frame, err := store.readIntentSlot()
+		if err != nil {
+			return state, nil, err
+		}
+		if state.RetiredIntent != "" && store.observedIntent == state.RetiredIntent {
+			return state, nil, nil
+		}
+		if frame.Anchor != expected {
+			return state, nil, fmt.Errorf("runtime intent slot does not bind the current head")
+		}
+		if frame.Intent != nil {
+			journal := runtimeLifecycleJournal{Version: 1, Before: &state, Intent: frame.Intent}
+			if err := journal.validate(); err != nil {
+				return state, nil, err
+			}
+			return state, &journal, nil
+		}
+		if state.RetiredIntent != "" || state.Sequence != 1 || len(state.Records) != 0 {
+			return state, nil, fmt.Errorf("runtime idle intent frame is only valid for genesis")
+		}
+	} else if _, err := store.root.Lstat(runtimeIntentSlotName); !errors.Is(err, fs.ErrNotExist) {
+		return state, nil, fmt.Errorf("legacy runtime history has an unexpected intent slot")
+	}
 	return state, nil, nil
 }
 
@@ -331,6 +390,9 @@ func validateRuntimeLifecycleHead(state runtimeLifecycleModel, stateExists bool,
 // initialize is permitted only by the caller that just created the private
 // directory. An existing empty directory must never silently reset history.
 func (store *runtimeLifecycleStore) initialize(now time.Time) (runtimeLifecycleModel, error) {
+	if _, err := store.root.Lstat(runtimeIntentSlotName); !errors.Is(err, fs.ErrNotExist) {
+		return runtimeLifecycleModel{}, fmt.Errorf("runtime lifecycle initialization found an unexpected intent slot")
+	}
 	for _, name := range []string{"state.json", "anchor.json", "pending.json"} {
 		var existing json.RawMessage
 		present, err := store.readFile(name, &existing)
@@ -342,7 +404,7 @@ func (store *runtimeLifecycleStore) initialize(now time.Time) (runtimeLifecycleM
 	if _, err := rand.Read(identity); err != nil {
 		return runtimeLifecycleModel{}, err
 	}
-	model := runtimeLifecycleModel{SchemaVersion: 1, Identity: hex.EncodeToString(identity), Sequence: 1,
+	model := runtimeLifecycleModel{SchemaVersion: 1, IntentFormat: 1, Identity: hex.EncodeToString(identity), Sequence: 1,
 		UpdatedAt: now.UTC().Format(time.RFC3339Nano), Records: []runtimeLifecycleRecord{}}
 	journal := runtimeLifecycleJournal{Version: 1, Initializing: true, Candidate: &model}
 	if err := journal.validate(); err != nil {
@@ -366,18 +428,33 @@ func (store *runtimeLifecycleStore) prepare(intent runtimeLifecycleIntent) error
 	if err := journal.validate(); err != nil {
 		return err
 	}
+	if model.IntentFormat == 1 {
+		anchor := runtimeLifecycleAnchor{Version: 1, Identity: model.Identity, Sequence: model.Sequence, Digest: store.observedHead}
+		return store.writeIntentSlot(runtimeIntentFrame{Version: 1, Anchor: anchor, Intent: &intent})
+	}
 	return store.publish("pending.json", journal)
 }
 
-func (store *runtimeLifecycleStore) commit(candidate runtimeLifecycleModel) error {
+// commit binds the exact consumed frame into the caller's candidate before
+// publication. That durable binding retires the intent without rewriting it.
+func (store *runtimeLifecycleStore) commit(candidate *runtimeLifecycleModel) error {
+	if candidate == nil {
+		return fmt.Errorf("runtime lifecycle candidate is missing")
+	}
 	model, pending, err := store.load()
 	if err != nil {
 		return err
 	}
-	journal := runtimeLifecycleJournal{Version: 1, Before: &model, Candidate: &candidate}
+	if candidate.IntentFormat == 1 {
+		if store.observedIntent == "" {
+			return fmt.Errorf("runtime intent frame was not observed")
+		}
+		candidate.RetiredIntent = store.observedIntent
+	}
+	journal := runtimeLifecycleJournal{Version: 1, Before: &model, Candidate: candidate}
 	if pending != nil {
 		journal = *pending
-		journal.Candidate = &candidate
+		journal.Candidate = candidate
 	}
 	if err := journal.validate(); err != nil {
 		return err
@@ -396,6 +473,22 @@ func (store *runtimeLifecycleStore) finish(journal runtimeLifecycleJournal) erro
 		return fmt.Errorf("runtime lifecycle intent has no witnessed candidate")
 	}
 	anchor, _ := lifecycleAnchor(*journal.Candidate)
+	if journal.Candidate.IntentFormat == 1 {
+		if err := store.ensureIntentSlot(journal, anchor); err != nil {
+			return err
+		}
+		frame, err := store.readIntentSlot()
+		if err != nil {
+			return err
+		}
+		if journal.Initializing {
+			if frame.Intent != nil || frame.Anchor != anchor {
+				return fmt.Errorf("runtime genesis intent frame differs")
+			}
+		} else if store.observedIntent != journal.Candidate.RetiredIntent {
+			return fmt.Errorf("runtime candidate lost its exact consumed intent frame")
+		}
+	}
 	if err := store.publish("state.json", journal.Candidate); err != nil {
 		return err
 	}
