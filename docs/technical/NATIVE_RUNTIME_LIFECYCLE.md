@@ -81,6 +81,32 @@ journal. The directory requires mode `0700`; records require owner-only regular
 files with a single link. A process lease prevents concurrent store instances.
 Publication synchronizes files and directories before retiring the journal.
 
+New histories also declare `intent_format: 1` and create a private, fixed-size
+`intent.slot` file. Its 4,096-byte frame binds a bounded canonical intent to the
+current state anchor. Before native mutation, the core writes the complete
+frame, synchronizes it, verifies the bytes by reading them back, and rechecks
+the file identity and permissions. An in-place write is never assumed atomic.
+An incomplete or inconsistent frame fences recovery rather than inventing a
+completed operation.
+
+The witnessed candidate records the exact consumed frame digest in
+`retired_intent_sha256`. State and anchor publication still use the atomic
+journal and file/directory synchronization. The slot is not cleared after
+commit: its exact durable retirement binding prevents replay, including when
+an operation makes no change to the native claims. A later intent overwrites
+the slot only after the preceding transition has completed. A required slot
+cannot be recreated from a non-genesis journal if it is missing or damaged.
+The digest detects inconsistent storage; it is not authentication against an
+administrator able to replace the complete history.
+
+Existing histories without `intent_format` retain their atomic intent journal
+and are not converted implicitly. Older v4.10.0 candidate binaries do not
+understand the new fields and must not reopen a new-format history. A binary
+rollback therefore requires a compatible complete recovery point, not manual
+removal of fields or of the slot. Preserve all files in the private history
+directory when exporting or restoring evidence. The v4.04.3 updater and native
+downgrade paths still require their separate release qualification.
+
 Native mutation observations, journal preparation, verified enforcement, and
 durable publication run under the shared host firewall lock. A completed
 witnessed candidate can finish publication after an interrupted process. An

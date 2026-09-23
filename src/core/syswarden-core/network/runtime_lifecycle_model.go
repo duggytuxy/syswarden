@@ -31,6 +31,8 @@ type runtimeLifecycleRecord struct {
 
 type runtimeLifecycleModel struct {
 	SchemaVersion int                      `json:"schema_version"`
+	IntentFormat  int                      `json:"intent_format,omitempty"`
+	RetiredIntent string                   `json:"retired_intent_sha256,omitempty"`
 	Identity      string                   `json:"identity"`
 	Sequence      uint64                   `json:"sequence"`
 	UpdatedAt     string                   `json:"updated_at"`
@@ -64,10 +66,14 @@ func runtimeLifecycleTime(value string) (time.Time, error) {
 
 func (model runtimeLifecycleModel) validate() error {
 	identity, identityErr := hex.DecodeString(model.Identity)
-	if model.SchemaVersion != runtimeLifecycleVersion || identityErr != nil || len(identity) != 32 ||
+	retired, retiredErr := hex.DecodeString(model.RetiredIntent)
+	if model.SchemaVersion != runtimeLifecycleVersion || model.IntentFormat < 0 || model.IntentFormat > 1 || identityErr != nil || len(identity) != 32 ||
 		hex.EncodeToString(identity) != model.Identity || model.Sequence == 0 || model.Records == nil ||
 		len(model.Records) > runtimeLifecycleMaximumRecords {
 		return fmt.Errorf("runtime lifecycle model identity or bounds are invalid")
+	}
+	if model.RetiredIntent != "" && (model.IntentFormat != 1 || retiredErr != nil || len(retired) != 32 || hex.EncodeToString(retired) != model.RetiredIntent) {
+		return fmt.Errorf("runtime lifecycle retired intent binding is invalid")
 	}
 	updated, err := runtimeLifecycleTime(model.UpdatedAt)
 	if err != nil {
