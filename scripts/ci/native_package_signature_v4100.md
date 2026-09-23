@@ -80,9 +80,10 @@ signed bundle must be rebuilt from the new exact `main` SHA. A fresh
 `native-signatures-verified-not-release-qualified`. Bootstrap package bytes and
 bootstrap evidence are never reused as phase 2 release evidence.
 
-Phase 2 is machine-bound to the reviewed phase 1 result. Its dispatch inputs
-must match the following immutable identity, which is also pinned independently
-in the workflow and bundle verifier:
+Phase 2 is machine-bound to one reviewed phase 1 result. The following original
+identity is retained for historical traceability. Its artifact has expired;
+new dispatches use the recovered identity below, pinned independently in the
+workflow and bundle verifier:
 
 | Field | Exact value |
 | --- | --- |
@@ -94,6 +95,35 @@ in the workflow and bundle verifier:
 | Signed artifact size | `63065295` bytes |
 | Signed artifact digest | `sha256:a76917630d5d5a90bddcf936d47ec75a987f098c9048bce0d320d1ffda131ad3` |
 | Foundation policy SHA-256 | `6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d` |
+
+The recovery bootstrap completed successfully in
+[run 35822833447](https://github.com/duggytuxy/syswarden/actions/runs/35822833447).
+Its exact archive passed transport, bootstrap provenance and seal verification,
+then independent native verification of RPM, RHEL package-owned RPM, APK and DEB.
+Two owner-controlled archive copies were reread and checked, including a copy
+outside temporary worktrees. Both copies are on the same PC; they do not protect
+against loss of that machine.
+
+| Current dispatch field | Exact value |
+| --- | --- |
+| Repository | `duggytuxy/syswarden` |
+| Source SHA | `c741c775e990ac6c877847b3a99ca3a5c392e35b` |
+| Signing run | `35822833447`, attempt `1` |
+| Signed artifact ID | `10734465160` |
+| Signed artifact name | `syswarden-native-signed-packages-4.10.0-35822833447-1-c741c775e990ac6c877847b3a99ca3a5c392e35b` |
+| Signed artifact size | `64068607` bytes |
+| Signed artifact digest | `sha256:e06ab6cf35c0c71a512588867e13715e7d754dc70e0ce2fb4c8c073b36429d1a` |
+| Foundation policy SHA-256 | `6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d` |
+| Foundation Git path at that source | `scripts/ci/native_package_signature_foundation_v4100.json` |
+| GitHub expiry observed at verification | `2026-12-22T05:32:33Z` |
+
+The recovered source already contains a qualified production policy. Therefore,
+phase 2 extracts the separate immutable foundation file from the exact recovery
+commit. It compares that historical policy with the current production policy;
+substituting the qualified policy as the foundation fails its pinned digest.
+The public keys, validity windows, signer image, production policy and
+publication requirements are unchanged. Bootstrap packages remain ineligible
+for lifecycle or release qualification.
 
 The first phase 2 proof was independently reviewed before publication
 eligibility was approved:
@@ -176,9 +206,11 @@ bootstrap reference. Complete the following separate steps:
 4. After promotion, rebuild packages from the new exact `main` SHA and perform
    a fresh `qualified-policy` signing run followed by the required qualification.
 
-Until that separate promotion is reviewed, the normal qualified path remains
-bound to the original reference and rejects its expired artifact. Signed
-artifacts now request 90 days of retention. This is a retention window, not
+The current reviewed-reference table records the completed recovery and its
+explicit promotion. Future recoveries must repeat these separate steps; the
+workflow never discovers and accepts a replacement automatically. The expired
+original identity remains historical and is rejected for new qualified runs.
+Signed artifacts request 90 days of retention. This is a retention window, not
 permanent evidence storage, and does not restore any expired artifact.
 
 ## Protected workflow
