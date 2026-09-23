@@ -1,11 +1,17 @@
 {
-  "schema_version": 1,
-  "contract_id": "syswarden-performance/v1",
+  "schema_version": 2,
+  "contract_id": "syswarden-performance/v2",
   "target_release": "v4.10.0",
   "baseline_release": "v4.04.3",
   "baseline_commit": "381c1f8d91459a9b20605629c725900abd81dee8",
   "minimum_campaigns": 3,
   "stable_regression_percent": 10.0,
+  "latency_budget": {
+    "metric": "event_to_rule_milliseconds",
+    "median_max_milliseconds": 10,
+    "p95_max_milliseconds": 20,
+    "percentile_method": "nearest-rank"
+  },
   "metrics": {
     "idle_cpu_percent": {"unit": "percent", "direction": "lower", "minimum_samples": 30},
     "loaded_cpu_percent": {"unit": "percent", "direction": "lower", "minimum_samples": 30},

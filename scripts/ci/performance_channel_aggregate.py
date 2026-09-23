@@ -143,15 +143,10 @@ def aggregate(
 ) -> dict[str, Any]:
     if SHA_PATTERN.fullmatch(candidate_commit) is None:
         raise PerformanceAggregateError("candidate commit is not canonical")
-    _exact(
-        native_contract,
-        {
-            "schema_version", "contract_id", "target_release", "baseline_release",
-            "baseline_commit", "minimum_campaigns", "stable_regression_percent",
-            "metrics",
-        },
-        "native performance contract",
-    )
+    try:
+        native_contract, metric_contracts = native_gate.validate_contract(native_contract)
+    except native_gate.PerformanceGateError as exc:
+        raise PerformanceAggregateError(f"native performance contract is invalid: {exc}") from exc
     _exact(
         allocation_contract,
         {
@@ -177,18 +172,6 @@ def aggregate(
     if allocation_contract.get("schemas", {}).get("aggregate") != "syswarden-performance-aggregate/v1":
         raise PerformanceAggregateError("source allocation aggregate schema binding is invalid")
 
-    metric_contracts: dict[str, native_gate.MetricContract] = {}
-    for name, raw_metric in native_metrics.items():
-        metric = _exact(
-            raw_metric,
-            {"unit", "direction", "minimum_samples"},
-            f"native contract metric {name}",
-        )
-        metric_contracts[name] = native_gate.MetricContract(
-            unit=metric["unit"],
-            direction=metric["direction"],
-            minimum_samples=metric["minimum_samples"],
-        )
     try:
         expected_native_report = native_gate.evaluate(
             native_evidence,
