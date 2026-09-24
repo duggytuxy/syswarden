@@ -1217,27 +1217,31 @@ func restartOpenRCRsyslogForPackageRemovalUsing(run managedServiceRunner) error 
 }
 
 func restartSystemdRsyslogForPackageRemovalUsing(run managedServiceRunner) error {
+	return restartAndAttestSystemdRsyslogUsing(run)
+}
+
+func restartAndAttestSystemdRsyslogUsing(run managedServiceRunner) error {
 	validationOutput, validationErr := run(
 		trustedRsyslogdPath, "-N1", "-f", "/etc/rsyslog.conf",
 	)
 	if validationErr != nil {
 		return newManagedServiceDiagnosticError(
 			fmt.Sprintf(
-				"validate complete rsyslog configuration before systemd package-removal restart: %s",
+				"validate complete rsyslog configuration before systemd restart: %s",
 				managedServiceEvidence(validationErr, validationOutput),
 			),
 			validationErr,
 		)
 	}
 
-	firstErr := attemptAttestedSystemdRsyslogRestartForPackageRemovalUsing(run)
+	firstErr := attemptAttestedSystemdRsyslogRestartUsing(run)
 	if firstErr == nil {
 		return nil
 	}
 	resetOutput, resetErr := run(trustedSystemctlPath, "reset-failed", "rsyslog")
-	retryErr := attemptAttestedSystemdRsyslogRestartForPackageRemovalUsing(run)
+	retryErr := attemptAttestedSystemdRsyslogRestartUsing(run)
 	if retryErr == nil {
-		fmt.Println("[WARN] Initial rsyslog package-removal restart or identity attestation failed; recovered after one bounded retry.")
+		fmt.Println("[WARN] Initial rsyslog restart or identity attestation failed; recovered after one bounded retry.")
 		return nil
 	}
 	journalOutput, journalErr := run(
@@ -1245,7 +1249,7 @@ func restartSystemdRsyslogForPackageRemovalUsing(run managedServiceRunner) error
 	)
 	return newManagedServiceDiagnosticError(
 		fmt.Sprintf(
-			"restart and attest systemd rsyslog for package removal failed after one bounded retry: first=%s; reset_failed=%s; retry=%s; journal=%s",
+			"restart and attest systemd rsyslog failed after one bounded retry: first=%s; reset_failed=%s; retry=%s; journal=%s",
 			managedServiceEvidence(firstErr, nil),
 			managedServiceEvidence(resetErr, resetOutput),
 			managedServiceEvidence(retryErr, nil),
@@ -1258,7 +1262,7 @@ func restartSystemdRsyslogForPackageRemovalUsing(run managedServiceRunner) error
 	)
 }
 
-func attemptAttestedSystemdRsyslogRestartForPackageRemovalUsing(run managedServiceRunner) error {
+func attemptAttestedSystemdRsyslogRestartUsing(run managedServiceRunner) error {
 	before, beforeErr := readSystemdRsyslogIdentityUsing(run)
 	restartOutput, restartErr := run(trustedSystemctlPath, "restart", "rsyslog")
 	activeOutput, activeErr := run(trustedSystemctlPath, "is-active", "--quiet", "rsyslog")
@@ -1274,7 +1278,7 @@ func attemptAttestedSystemdRsyslogRestartForPackageRemovalUsing(run managedServi
 	}
 	return newManagedServiceDiagnosticError(
 		fmt.Sprintf(
-			"systemd rsyslog package-removal restart was not attested: before=%s; restart=%s; active=%s; after=%s; transition=%s",
+			"systemd rsyslog restart was not attested: before=%s; restart=%s; active=%s; after=%s; transition=%s",
 			systemdRsyslogIdentityEvidence(before, beforeErr),
 			managedServiceEvidence(restartErr, restartOutput),
 			managedServiceEvidence(activeErr, activeOutput),
@@ -1361,86 +1365,10 @@ func systemdRsyslogIdentityEvidence(identity systemdRsyslogIdentity, err error) 
 }
 
 func restartSystemdRsyslogUsing(run managedServiceRunner) error {
-	validationOutput, validationErr := run(
-		trustedRsyslogdPath, "-N1", "-f", "/etc/rsyslog.conf",
-	)
-	if validationErr != nil {
-		return newManagedServiceDiagnosticError(
-			fmt.Sprintf(
-				"validate complete rsyslog configuration before systemd activation: %s",
-				managedServiceEvidence(validationErr, validationOutput),
-			),
-			validationErr,
-		)
-	}
-
-	initialActiveOutput, initialActiveErr := run(
-		trustedSystemctlPath, "is-active", "--quiet", "rsyslog",
-	)
-	reloadEvidence := "not-attempted"
-	reloadActiveEvidence := "not-attempted"
-	var reloadErr, reloadActiveErr error
-	if initialActiveErr == nil {
-		// Reload even exact content to recover a crash after atomic publication
-		// but before the previous setup attempt reached service activation.
-		reloadOutput, currentReloadErr := run(trustedSystemctlPath, "reload", "rsyslog")
-		reloadErr = currentReloadErr
-		reloadEvidence = managedServiceEvidence(reloadErr, reloadOutput)
-		reloadActiveOutput, currentReloadActiveErr := run(
-			trustedSystemctlPath, "is-active", "--quiet", "rsyslog",
-		)
-		reloadActiveErr = currentReloadActiveErr
-		reloadActiveEvidence = managedServiceEvidence(reloadActiveErr, reloadActiveOutput)
-		if reloadErr == nil && reloadActiveErr == nil {
-			return nil
-		}
-	}
-
-	firstOutput, firstErr := run(trustedSystemctlPath, "restart", "rsyslog")
-	firstActiveOutput, firstActiveErr := run(
-		trustedSystemctlPath, "is-active", "--quiet", "rsyslog",
-	)
-	if firstErr == nil && firstActiveErr == nil {
-		fmt.Println("[WARN] Rsyslog required one bounded restart fallback after reload or active-state attestation.")
-		return nil
-	}
-
-	resetOutput, resetErr := run(trustedSystemctlPath, "reset-failed", "rsyslog")
-	retryOutput, retryErr := run(trustedSystemctlPath, "restart", "rsyslog")
-	retryActiveOutput, retryActiveErr := run(
-		trustedSystemctlPath, "is-active", "--quiet", "rsyslog",
-	)
-	if retryErr == nil && retryActiveErr == nil {
-		fmt.Println("[WARN] Initial rsyslog restart or active-state attestation failed; recovered after one bounded retry.")
-		return nil
-	}
-
-	journalOutput, journalErr := run(
-		trustedJournalctlPath, "--no-pager", "--quiet", "--boot", "--unit", "rsyslog.service", "--lines=40",
-	)
-	return newManagedServiceDiagnosticError(
-		fmt.Sprintf(
-			"activate systemd service rsyslog failed after one bounded retry following reload or active-state attestation: initial_active=%s; reload=%s; reload_active=%s; first_restart=%s; first_active=%s; reset_failed=%s; retry_restart=%s; retry_active=%s; journal=%s",
-			managedServiceEvidence(initialActiveErr, initialActiveOutput),
-			reloadEvidence,
-			reloadActiveEvidence,
-			managedServiceEvidence(firstErr, firstOutput),
-			managedServiceEvidence(firstActiveErr, firstActiveOutput),
-			managedServiceEvidence(resetErr, resetOutput),
-			managedServiceEvidence(retryErr, retryOutput),
-			managedServiceEvidence(retryActiveErr, retryActiveOutput),
-			managedServiceEvidence(journalErr, journalOutput),
-		),
-		initialActiveErr,
-		reloadErr,
-		reloadActiveErr,
-		firstErr,
-		firstActiveErr,
-		resetErr,
-		retryErr,
-		retryActiveErr,
-		journalErr,
-	)
+	// A successful HUP only reopens log files; it does not load the new bridge.
+	// Restart even exact content to recover an interrupted publication, and
+	// require a new process and activation timestamp before reporting success.
+	return restartAndAttestSystemdRsyslogUsing(run)
 }
 
 func managedServiceEvidence(err error, output []byte) string {
