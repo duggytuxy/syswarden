@@ -1965,6 +1965,9 @@ func managedLinuxWrapperActive(backend, path string) (bool, error) {
 		}
 		return parseUFWWrapperStatus(strings.Split(string(output), "\n"))
 	}
+	// Newer firewall-cmd versions print this progress notice before the final
+	// state while waiting for D-Bus. Keep all other diagnostics and exit checks.
+	state = strings.TrimSpace(strings.TrimPrefix(state, "Waiting on dbus connection...\n"))
 	if err == nil {
 		switch state {
 		case "running":
