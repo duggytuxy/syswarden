@@ -124,7 +124,7 @@ class ProtectedPerformanceWorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow.count('actions/attest-build-provenance@'),1)
         upload=self.step('Upload Public Performance Result Only')
         self.assertIn('path: ${{ steps.performance.outputs.output_root }}/PR257_PERFORMANCE_VERDICT.json',upload)
-        self.assertIn("input_root=Path('/var/lib/syswarden/native-release-evidence')/runtime/'pr257-performance'",self.workflow)
+        self.assertIn("input_root=Path.home()/'.local/share/syswarden/native-release-evidence'/runtime/'pr257-performance'",self.workflow)
         self.assertIn('ref: ${{ github.sha }}',self.workflow)
         self.assertIn('fetch-depth: 0',self.workflow)
 

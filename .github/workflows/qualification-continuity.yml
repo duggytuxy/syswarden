@@ -131,7 +131,7 @@ jobs:
               tooling_sha=os.environ['GITHUB_SHA'], workflow='.github/workflows/qualification-continuity.yml',
               event=os.environ)
           result = inputs.verify_staged_performance(repository=repository,
-              input_root=Path('/var/lib/syswarden/native-release-evidence')/runtime/'pr257-performance')
+              input_root=Path.home()/'.local/share/syswarden/native-release-evidence'/runtime/'pr257-performance')
           context.continuity.require(result['measurement_verdict'] == 'pass' and result['waivers'] == 0
               and result['release_qualified'] is False, 'performance evidence did not pass')
           private_wire = (json.dumps(result, indent=2, sort_keys=True, allow_nan=False)+'\n').encode('utf-8')
