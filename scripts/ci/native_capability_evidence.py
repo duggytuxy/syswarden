@@ -2645,6 +2645,107 @@ def validate_evidence_file(
     }
 
 
+def _validate_verdict_document(
+    raw: dict[str, Any],
+    *,
+    candidate_commit: str,
+    contract: dict[str, Any],
+    contract_sha256: str,
+    package_bindings: dict[str, dict[str, Any]],
+    index: int,
+    seen_profiles: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Validate one verdict against its exact observed candidate and signed package.
+
+    This helper does not authorize cross-candidate continuity or aggregation.
+    Callers must load the pinned contract and verify the matching signing bundle.
+    """
+    _candidate_commit(candidate_commit)
+    expected_profiles = [profile["id"] for profile in contract["host_profiles"]]
+    expected_hosts = {
+        profile["id"]: profile["host_id"] for profile in contract["host_profiles"]
+    }
+    expected_capabilities = [item["id"] for item in contract["capabilities"]]
+    expected_lifecycle = [item["id"] for item in contract["lifecycle_sequences"]]
+    verdict = _exact_mapping(
+        raw,
+        {
+            "schema_version",
+            "schema_id",
+            "contract_id",
+            "contract_sha256",
+            "target_release",
+            "candidate_commit",
+            "campaign_id",
+            "host_id",
+            "profile_id",
+            "evidence_namespace",
+            "package_binding",
+            "host_attestation_sha256",
+            "signature_catalog_sha256",
+            "campaign_sha256",
+            "evidence_sha256",
+            "evidence_artifact_set_sha256",
+            "capabilities",
+            "lifecycle_sequences",
+            "verdict",
+            "blockers",
+        },
+        f"native verdict {index}",
+    )
+    expected = {
+        "schema_version": 1,
+        "schema_id": VERDICT_SCHEMA,
+        "contract_id": contract["contract_id"],
+        "contract_sha256": contract_sha256,
+        "target_release": contract["target_release"],
+        "candidate_commit": candidate_commit,
+        "capabilities": expected_capabilities,
+        "lifecycle_sequences": expected_lifecycle,
+        "verdict": "pass",
+        "blockers": [],
+    }
+    for key, value in expected.items():
+        if verdict[key] != value:
+            raise NativeCapabilityEvidenceError(f"native verdict {index} {key} is invalid")
+    if type(verdict["schema_version"]) is not int:
+        raise NativeCapabilityEvidenceError(f"native verdict {index} schema type is invalid")
+    for field in ("campaign_id", "host_id"):
+        _identifier(verdict[field], f"native verdict {index} {field}")
+    for field in (
+        "host_attestation_sha256",
+        "signature_catalog_sha256",
+        "campaign_sha256",
+        "evidence_sha256",
+        "evidence_artifact_set_sha256",
+    ):
+        _sha256(verdict[field], f"native verdict {index} {field}")
+    profile_id = verdict["profile_id"]
+    if profile_id not in expected_profiles or profile_id in seen_profiles:
+        raise NativeCapabilityEvidenceError("native verdict profiles are unknown or duplicated")
+    if verdict["host_id"] != expected_hosts[profile_id]:
+        raise NativeCapabilityEvidenceError(
+            "native verdict host is not bound to its profile"
+        )
+    profile = _profile_map(contract)[profile_id]
+    if verdict["evidence_namespace"] != profile["evidence_namespace"]:
+        raise NativeCapabilityEvidenceError(
+            "native verdict evidence namespace is not bound to its profile"
+        )
+    if not verdict["campaign_id"].startswith(
+        profile["evidence_namespace"] + "-"
+    ):
+        raise NativeCapabilityEvidenceError(
+            "native verdict campaign is outside its profile namespace"
+        )
+    _validate_package_binding(
+        verdict["package_binding"],
+        package_bindings[profile_id],
+        f"native verdict {index} package_binding",
+    )
+    return verdict
+
+
 def aggregate_verdicts(
     *,
     candidate_commit: str,
@@ -2659,9 +2760,6 @@ def aggregate_verdicts(
         signing_bundle_path, candidate_commit, contract
     )
     expected_profiles = [profile["id"] for profile in contract["host_profiles"]]
-    expected_hosts = {
-        profile["id"]: profile["host_id"] for profile in contract["host_profiles"]
-    }
     if len(verdict_paths) != len(expected_profiles):
         raise NativeCapabilityEvidenceError("native verdict profile inventory is incomplete")
     maximum = contract["limits"]["maximum_input_bytes"]
@@ -2676,82 +2774,12 @@ def aggregate_verdicts(
     signature_catalog_sha256 = ""
     for index, path in enumerate(verdict_paths):
         raw, _ = _load_json(path, maximum, f"native verdict {index}")
-        verdict = _exact_mapping(
-            raw,
-            {
-                "schema_version",
-                "schema_id",
-                "contract_id",
-                "contract_sha256",
-                "target_release",
-                "candidate_commit",
-                "campaign_id",
-                "host_id",
-                "profile_id",
-                "evidence_namespace",
-                "package_binding",
-                "host_attestation_sha256",
-                "signature_catalog_sha256",
-                "campaign_sha256",
-                "evidence_sha256",
-                "evidence_artifact_set_sha256",
-                "capabilities",
-                "lifecycle_sequences",
-                "verdict",
-                "blockers",
-            },
-            f"native verdict {index}",
+        verdict = _validate_verdict_document(
+            raw, candidate_commit=candidate_commit, contract=contract,
+            contract_sha256=contract_sha256, package_bindings=package_bindings,
+            index=index, seen_profiles=tuple(by_profile),
         )
-        expected = {
-            "schema_version": 1,
-            "schema_id": VERDICT_SCHEMA,
-            "contract_id": contract["contract_id"],
-            "contract_sha256": contract_sha256,
-            "target_release": contract["target_release"],
-            "candidate_commit": candidate_commit,
-            "capabilities": expected_capabilities,
-            "lifecycle_sequences": expected_lifecycle,
-            "verdict": "pass",
-            "blockers": [],
-        }
-        for key, value in expected.items():
-            if verdict[key] != value:
-                raise NativeCapabilityEvidenceError(f"native verdict {index} {key} is invalid")
-        if type(verdict["schema_version"]) is not int:
-            raise NativeCapabilityEvidenceError(f"native verdict {index} schema type is invalid")
-        for field in ("campaign_id", "host_id"):
-            _identifier(verdict[field], f"native verdict {index} {field}")
-        for field in (
-            "host_attestation_sha256",
-            "signature_catalog_sha256",
-            "campaign_sha256",
-            "evidence_sha256",
-            "evidence_artifact_set_sha256",
-        ):
-            _sha256(verdict[field], f"native verdict {index} {field}")
         profile_id = verdict["profile_id"]
-        if profile_id not in expected_profiles or profile_id in by_profile:
-            raise NativeCapabilityEvidenceError("native verdict profiles are unknown or duplicated")
-        if verdict["host_id"] != expected_hosts[profile_id]:
-            raise NativeCapabilityEvidenceError(
-                "native verdict host is not bound to its profile"
-            )
-        profile = _profile_map(contract)[profile_id]
-        if verdict["evidence_namespace"] != profile["evidence_namespace"]:
-            raise NativeCapabilityEvidenceError(
-                "native verdict evidence namespace is not bound to its profile"
-            )
-        if not verdict["campaign_id"].startswith(
-            profile["evidence_namespace"] + "-"
-        ):
-            raise NativeCapabilityEvidenceError(
-                "native verdict campaign is outside its profile namespace"
-            )
-        _validate_package_binding(
-            verdict["package_binding"],
-            package_bindings[profile_id],
-            f"native verdict {index} package_binding",
-        )
         if (
             verdict["campaign_id"] in campaign_ids
             or verdict["host_attestation_sha256"] in host_attestations

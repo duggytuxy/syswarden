@@ -1,0 +1,173 @@
+{
+  "base_candidate": "cd09e754852c2d7831222bb8ed8c620d9ffd4ec0",
+  "eligibility_is_release_acceptance": false,
+  "eligible_prior_scopes": {
+    "capability-DEB-U2604": {
+      "observed_candidate": "cd09e754852c2d7831222bb8ed8c620d9ffd4ec0",
+      "record": "capability-DEB-U2604.json"
+    },
+    "capability-RPM-A9-RHELPO": {
+      "observed_candidate": "cd09e754852c2d7831222bb8ed8c620d9ffd4ec0",
+      "record": "capability-RPM-A9-RHELPO.json"
+    },
+    "five-native-lifecycles": {
+      "observed_candidate": "cd09e754852c2d7831222bb8ed8c620d9ffd4ec0",
+      "record": "five-native-lifecycles.json"
+    },
+    "native-performance": {
+      "observed_candidate": "cd09e754852c2d7831222bb8ed8c620d9ffd4ec0",
+      "record": "native-performance.json"
+    },
+    "source-allocation": {
+      "observed_candidate": "cd09e754852c2d7831222bb8ed8c620d9ffd4ec0",
+      "record": "source-allocation.json"
+    }
+  },
+  "fresh_required": {
+    "capability_profiles": [
+      "DEB-13",
+      "RPM-A10",
+      "RPM-A10-RHELPO",
+      "APK-324"
+    ],
+    "other_gates": [
+      "main-ci",
+      "runtime-artifact-signatures",
+      "ha-campaigns",
+      "node01-migrations",
+      "native-update-feed",
+      "original-restorations",
+      "final-provenance"
+    ],
+    "performance_metrics": [
+      "install_milliseconds",
+      "startup_milliseconds",
+      "package_bytes",
+      "binary_bytes"
+    ],
+    "rpm_firewalld_profiles": [
+      "RPM-A9",
+      "RPM-A10",
+      "RPM-A9-RHELPO",
+      "RPM-A10-RHELPO"
+    ]
+  },
+  "future_candidate_reuse_allowed": false,
+  "packages": [
+    {
+      "base": {
+        "path": "packages/syswarden-4.10.0-1.x86_64.rpm",
+        "sha256": "38614ca0d73201285672b0ec35593224b21cba412c149398626b6069c57bde78",
+        "size": 16183086
+      },
+      "runtime": {
+        "path": "packages/syswarden-4.10.0-1.x86_64.rpm",
+        "sha256": "4fa4b12e89932cb54c1b283d44dcefecc366b309cf07674ab783ba5cdc8744c8",
+        "size": 16182893
+      }
+    },
+    {
+      "base": {
+        "path": "rhel-package-owned/packages/syswarden-4.10.0-1.rhelpo.x86_64.rpm",
+        "sha256": "7d4ff77934b0c6e15ebdc708883ff14874daf8f986165027029e6fc8dd3ef31e",
+        "size": 15881789
+      },
+      "runtime": {
+        "path": "rhel-package-owned/packages/syswarden-4.10.0-1.rhelpo.x86_64.rpm",
+        "sha256": "da351d370eceeeadfe8922f0df8c4e3522c1f404f58655dc0d7f4a5bd08a52b6",
+        "size": 15881636
+      }
+    },
+    {
+      "base": {
+        "path": "packages/syswarden_4.10.0_amd64.deb",
+        "sha256": "e01089231eabfc6003ed3debbe95c07c94b9e724fe624ebcdd4587a747b19ba9",
+        "size": 15893504
+      },
+      "runtime": {
+        "path": "packages/syswarden_4.10.0_amd64.deb",
+        "sha256": "0e8b4eb7d6787deac356f96758a21130c3e66edada2a50d34f980445c1253ac9",
+        "size": 15894024
+      }
+    },
+    {
+      "base": {
+        "path": "packages/syswarden_4.10.0_x86_64.apk",
+        "sha256": "b37afc598d8978f3ed0594452129e65b4692526492d82a6cab4d73f6da3385a7",
+        "size": 16119405
+      },
+      "runtime": {
+        "path": "packages/syswarden_4.10.0_x86_64.apk",
+        "sha256": "fd5dc3f8187a85867d424554b6a096f21cf8deb33a07939a197422b403c8834b",
+        "size": 16099738
+      }
+    }
+  ],
+  "records": {
+    "base-native-signatures.json": {
+      "sha256": "912186330906456638651f4a74ec4531ba2c8c6b736797261b589ff9a0536776",
+      "size": 7829
+    },
+    "capability-DEB-U2604.json": {
+      "sha256": "067be94bf0d0d7696ef7f2bf114132e944e4714ae474514307d1fb4b933c330b",
+      "size": 2153
+    },
+    "capability-RPM-A9-RHELPO.json": {
+      "sha256": "1d48a53ed9f31c7ba2e6154fd1da179f422569c120b34d63e91fe125bf434462",
+      "size": 2398
+    },
+    "core-tui-impact.json": {
+      "sha256": "a7d5251a2300e3da0cb4aa4e191f758caa40e0f3aafe95b89917449abfd46da8",
+      "size": 15295
+    },
+    "five-native-lifecycles.json": {
+      "sha256": "a2baf35c4e56902d980a1a930f5149f94e0bbd362fccb6c0f651577585b6307b",
+      "size": 159159
+    },
+    "native-performance.json": {
+      "sha256": "b54222c872da06433bc4e56a5275c1b2de5c5de3c14c637788e5ef9e7a90ad05",
+      "size": 7528
+    },
+    "owner-approval.json": {
+      "sha256": "ba785d680c955953af68f7436d6367a08eb3fe49d5764ddaceada8069cbe399d",
+      "size": 766
+    },
+    "owner-proposal.md": {
+      "sha256": "097143ae05ddedde23baf7236787668343005609f23472747eedc72b897b01b0",
+      "size": 4534
+    },
+    "package-impact.json": {
+      "sha256": "34b28614489d26fd744743f3cffcc1ad2a2e0a284be607eb822672a44ef3f20a",
+      "size": 66090
+    },
+    "package-metadata-review.json": {
+      "sha256": "b27995cec8aeb207667cd625b67049e5d221e66cc2d8c9a335385f4cfa7fe41c",
+      "size": 1486
+    },
+    "runtime-native-signatures.json": {
+      "sha256": "5179ec806e6f262c7cb78a12e1e85665c20d22e56c2b4696bab76a365f896613",
+      "size": 7829
+    },
+    "source-allocation.json": {
+      "sha256": "c34c601cb8dad776202f0abd3d1e47ee527cb38fb927dc9e092b6da7ccf91456",
+      "size": 673
+    }
+  },
+  "release": "v4.10.0",
+  "reviewed_head": "e83108cb5282b884ccef08fd3891feee86ac3e20",
+  "runtime_candidate": "380e90dd29b7db77f6914d5a4978740e33df2770",
+  "runtime_tree": "951abe7bfb190579e00212b81de719227f671fda",
+  "schema": "syswarden-pr257-continuity-policy/v1",
+  "source_changes": [
+    {
+      "after_blob": "dd28c552b7c4f05acf0626d419e010e3934c4975",
+      "before_blob": "86ba26709ef4117c47c3ef77af879e48bf86b933",
+      "path": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go"
+    },
+    {
+      "after_blob": "a890da73f8c77777fd71665ac96e7619220101fd",
+      "before_blob": "090480cbe4f4a0802077a09921671f52571ade95",
+      "path": "src/core/syswarden-cli/pkg/firewall/policy_values_linux_test.go"
+    }
+  ]
+}

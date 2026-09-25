@@ -1,0 +1,189 @@
+name: SysWarden PR257 Performance Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      authorization:
+        description: VERIFY-PR257-PERFORMANCE-NO-PUBLISH
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: syswarden-pr257-performance-evidence
+  cancel-in-progress: false
+
+jobs:
+  verify-pr257-performance:
+    runs-on: [self-hosted, linux, x64, syswarden-pr257-performance]
+    environment:
+      name: syswarden-release-qualification
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Require Exact Owner Dispatch
+        shell: bash
+        env:
+          AUTHORIZATION: ${{ inputs.authorization }}
+        run: |
+          set -euo pipefail
+          test "${AUTHORIZATION}" = "VERIFY-PR257-PERFORMANCE-NO-PUBLISH"
+          test "${GITHUB_REPOSITORY}" = "duggytuxy/syswarden"
+          test "${GITHUB_REPOSITORY_OWNER}" = "duggytuxy"
+          test "${GITHUB_ACTOR}" = "duggytuxy"
+          test "${GITHUB_TRIGGERING_ACTOR}" = "duggytuxy"
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "${GITHUB_EVENT_NAME}" = "workflow_dispatch"
+          test "${GITHUB_RUN_ATTEMPT}" = "1"
+
+      - name: Validate Exact Performance Environment Protection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          environment_name="syswarden-release-qualification"
+          environment_json="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/environments/${environment_name}")"
+          required_boolean() {
+            local field=${1:?field is required}
+            jq -er --arg field "${field}" '
+              .deployment_branch_policy[$field] |
+              if type == "boolean" then tostring
+              else error("deployment_branch_policy." + $field + " must be boolean") end
+            ' <<< "${environment_json}"
+          }
+          top_level_boolean() {
+            local field=${1:?field is required}
+            jq -er --arg field "${field}" '
+              .[$field] |
+              if type == "boolean" then tostring
+              else error($field + " must be boolean") end
+            ' <<< "${environment_json}"
+          }
+          reviewer_rule_count="$(jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' <<< "${environment_json}")"
+          reviewer_entry_count="$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "${environment_json}")"
+          owner_reviewer_count="$(jq --arg owner "${REPOSITORY_OWNER}" '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]? | select(.type == "User" and .reviewer.login == $owner)] | length' <<< "${environment_json}")"
+          prevent_self_review="$(jq -er '[.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | if length == 1 and .[0] == false then "false" else error("reviewer rule must allow owner approval") end' <<< "${environment_json}")"
+          if [[ "$(jq -r '.name // ""' <<< "${environment_json}")" != "${environment_name}" || \
+                "${reviewer_rule_count}" != "1" || \
+                "${reviewer_entry_count}" != "1" || \
+                "${owner_reviewer_count}" != "1" || \
+                "${prevent_self_review}" != "false" || \
+                "$(jq '[.protection_rules[]? | select(.type == "branch_policy")] | length' <<< "${environment_json}")" != "1" || \
+                "$(jq '[.protection_rules[]?] | length' <<< "${environment_json}")" != "2" || \
+                "$(required_boolean protected_branches)" != "false" || \
+                "$(required_boolean custom_branch_policies)" != "true" || \
+                "$(top_level_boolean can_admins_bypass)" != "false" ]]; then
+            echo "ERROR: native evidence requires the exact reviewed main-only qualification environment." >&2
+            exit 1
+          fi
+          policies_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/environments/${environment_name}/deployment-branch-policies" \
+            -f per_page=100)"
+          if [[ "$(jq -r '.[0].total_count' <<< "${policies_json}")" != "1" || \
+                "$(jq '[.[] | .branch_policies[]?] | length' <<< "${policies_json}")" != "1" || \
+                "$(jq '[.[] | .branch_policies[]? | select(.name == "main" and .type == "branch")] | length' <<< "${policies_json}")" != "1" ]]; then
+            echo "ERROR: native evidence environment must allow only the main branch." >&2
+            exit 1
+          fi
+
+      - name: Checkout Exact Qualification Tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Fetch Exact Reviewed PR Head for Tree Comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false fetch --no-tags origin e83108cb5282b884ccef08fd3891feee86ac3e20
+
+      - name: Revalidate Private Performance and Distinct Tooling Provenance
+        id: performance
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          umask 077
+          output_root="$(mktemp -d "${RUNNER_TEMP%/}/syswarden-pr257-performance.XXXXXXXXXX")"
+          chmod 0700 "${output_root}"
+          printf 'output_root=%s\n' "${output_root}" >> "${GITHUB_OUTPUT}"
+          python3 - "${output_root}" <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, sys
+          from scripts.ci import qualification_continuity_context as context
+          from scripts.ci import qualification_continuity_inputs as inputs
+          repository = Path(os.environ['GITHUB_WORKSPACE'])
+          output = Path(sys.argv[1])
+          runtime = '380e90dd29b7db77f6914d5a4978740e33df2770'
+          tooling = context.verify_context(repository=repository, runtime_sha=runtime,
+              tooling_sha=os.environ['GITHUB_SHA'], workflow='.github/workflows/qualification-continuity.yml',
+              event=os.environ)
+          result = inputs.verify_staged_performance(repository=repository,
+              input_root=Path.home()/'.local/share/syswarden/native-release-evidence'/runtime/'pr257-performance')
+          context.continuity.require(result['measurement_verdict'] == 'pass' and result['waivers'] == 0
+              and result['release_qualified'] is False, 'performance evidence did not pass')
+          private_wire = (json.dumps(result, indent=2, sort_keys=True, allow_nan=False)+'\n').encode('utf-8')
+          # Publish measured values and proof digests only. Private captures and paths stay on the runner.
+          public = {'schema': 'syswarden-pr257-protected-performance/v1', 'repository': 'duggytuxy/syswarden',
+              'release': 'v4.10.0', 'runtime_commit': runtime, 'tooling_commit': tooling['tooling_commit'],
+              'tooling_tree': tooling['tooling_tree'], 'workflow': tooling['workflow'],
+              'workflow_run_id': tooling['workflow_run_id'], 'workflow_run_attempt': 1,
+              'workflow_ref': tooling['workflow_ref'], 'continuity_policy_sha256': context.continuity.POLICY_SHA256,
+              'input_manifest_sha256': inputs.MANIFEST_SHA256,
+              'complete_private_result_sha256': hashlib.sha256(private_wire).hexdigest(),
+              'native_metrics': result['native_metrics'],
+              'source_allocation': result['source_allocation'],
+              'recomputed_result_digests': result['recomputed_result_digests'],
+              'performance_accepted': True, 'protected_environment_verified': True,
+              'private_raw_inputs_uploaded': False, 'historical_evidence_modified': False,
+              'samples_pooled_across_candidates': False, 'native_experiments_replayed': False,
+              'remaining_release_gates_required': True, 'release_qualified': False}
+          # The standalone allocation result retains its source-only scope and original candidate.
+          public['source_allocation'] = {key:value for key,value in public['source_allocation'].items()
+              if key != 'acceptance'}
+          context.continuity.bundle.write_json(output/'PR257_PERFORMANCE_VERDICT.json', public)
+          print('Exact PR257 performance evidence passed. Other release gates remain mandatory.')
+          PY
+
+      - name: Attest Exact Protected Performance Result
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.performance.outputs.output_root }}/PR257_PERFORMANCE_VERDICT.json
+
+      - name: Upload Public Performance Result Only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: syswarden-pr257-performance-${{ github.run_id }}-1-${{ github.sha }}
+          path: ${{ steps.performance.outputs.output_root }}/PR257_PERFORMANCE_VERDICT.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove Temporary Performance Output
+        if: ${{ always() }}
+        shell: bash
+        env:
+          OUTPUT_ROOT: ${{ steps.performance.outputs.output_root }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OUTPUT_ROOT}" ]]; then exit 0; fi
+          case "${OUTPUT_ROOT}" in
+            "${RUNNER_TEMP%/}"/syswarden-pr257-performance.*) ;;
+            *) echo "ERROR: refusing unsafe output cleanup." >&2; exit 1 ;;
+          esac
+          test -d "${OUTPUT_ROOT}"
+          test ! -L "${OUTPUT_ROOT}"
+          [[ -O "${OUTPUT_ROOT}" ]]
+          rm -rf -- "${OUTPUT_ROOT}"
+          test ! -e "${OUTPUT_ROOT}"
