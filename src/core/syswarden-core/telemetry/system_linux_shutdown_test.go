@@ -5,8 +5,8 @@ package telemetry
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Exercise the actual platform commands with inert readers. The test follows
@@ -83,7 +85,7 @@ func TestLinuxTelemetryCancellationClosesReaders(t *testing.T) {
 				}
 				eof <- scanner.Err()
 			}()
-			var children []*os.Process
+			var childFDs []int
 			for range tc.readers {
 				select {
 				case line := <-ready:
@@ -95,7 +97,14 @@ func TestLinuxTelemetryCancellationClosesReaders(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					children = append(children, child)
+					fd, err := unix.PidfdOpen(pid, 0)
+					if err != nil {
+						_ = child.Kill()
+						_ = child.Release()
+						t.Fatal(err)
+					}
+					childFDs = append(childFDs, fd)
+					t.Cleanup(func() { _ = unix.Close(fd) })
 					t.Cleanup(func() { _ = child.Kill(); _ = child.Release() })
 				case <-time.After(3 * time.Second):
 					t.Fatal("reader did not produce its native stream readiness line")
@@ -114,19 +123,33 @@ func TestLinuxTelemetryCancellationClosesReaders(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("context cancelled but a descendant still holds stdout open")
 			}
-			for _, child := range children {
-				// A killed child may remain a zombie until the container's init reaps it.
-				// Cleanup uses the captured process handle rather than a new PID lookup.
-				data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", child.Pid))
-				if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
-					continue
+			for _, fd := range childFDs {
+				if fd < 0 || fd > math.MaxInt32 {
+					t.Fatal("reader pidfd is outside poll descriptor range")
+					return
 				}
-				if err != nil {
-					t.Fatal(err)
-				}
-				fields := strings.Fields(string(data)[strings.LastIndexByte(string(data), ')')+1:])
-				if len(fields) == 0 || (fields[0] != "Z" && fields[0] != "X") {
-					t.Fatalf("owned reader %d is still running", child.Pid)
+				// EOF can precede the final exit transition. Poll the captured
+				// pidfd, not a reusable PID or a transient /proc state.
+				deadline := time.Now().Add(2 * time.Second)
+				for {
+					remaining := time.Until(deadline)
+					if remaining <= 0 {
+						t.Fatal("owned reader did not exit after cancellation")
+					}
+					fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+					n, err := unix.Poll(fds, int((remaining+time.Millisecond-1)/time.Millisecond))
+					if err == unix.EINTR {
+						continue
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if n > 0 {
+						if fds[0].Revents&unix.POLLIN == 0 {
+							t.Fatalf("invalid reader exit event: %v", fds[0].Revents)
+						}
+						break
+					}
 				}
 			}
 			if err := neighbour.Process.Signal(syscall.Signal(0)); err != nil {
