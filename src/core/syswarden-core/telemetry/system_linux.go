@@ -9,8 +9,25 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
+
+// ownLogReaderCommand owns both the shell and its readers. CommandContext's
+// default cancellation kills only the shell, leaving descendants holding the
+// stdout pipe open while the telemetry workers wait for EOF before Wait.
+func ownLogReaderCommand(cmd *exec.Cmd) *exec.Cmd {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// The fresh process group excludes the core, other collectors and services.
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	return cmd
+}
 
 func allowedEventsCommand(ctx context.Context) *exec.Cmd {
 	const script = `
@@ -22,7 +39,7 @@ func allowedEventsCommand(ctx context.Context) *exec.Cmd {
 			wait
 		}
 	`
-	return exec.CommandContext(ctx, "bash", "-c", script)
+	return ownLogReaderCommand(exec.CommandContext(ctx, "bash", "-c", script))
 }
 
 func kernelDropsCommand(ctx context.Context) *exec.Cmd {
@@ -35,7 +52,7 @@ func kernelDropsCommand(ctx context.Context) *exec.Cmd {
 			dmesg -w 2>/dev/null
 		fi
 	`
-	return exec.CommandContext(ctx, "bash", "-c", script)
+	return ownLogReaderCommand(exec.CommandContext(ctx, "bash", "-c", script))
 }
 
 func collectPlatformSystemStats() platformSystemStats {
