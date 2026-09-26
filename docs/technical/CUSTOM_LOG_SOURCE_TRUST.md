@@ -41,6 +41,17 @@ ISO timestamp using `Z` or a numeric timezone offset and optional fractional
 seconds. The process identity remains anchored after the timestamp and host.
 Successful logins and connection-close records do not count as failed attempts.
 
+Alpine's native `YYYY-MM-DD HH:MM:SS auth.info sshd-session[PID]:` envelope is
+also accepted, including the `sshd` process name. This envelope has no hostname;
+the facility and severity must be exactly `auth.info`, with fixed-width date
+and time fields in their numeric ranges. Other facilities, extra envelope
+fields and embedded process labels are not accepted through this alternative.
+The terminal source address remains authoritative even when a username contains
+another address or process label. This format recognition does not authenticate
+a log writer and does not relax the collector ownership or socket credential
+checks. Paired delivery through the two collectors still counts one physical
+event, and four distinct native events must reach a threshold configured as four.
+
 On Linux the datagram socket grants write access to root and the private
 `syslog` group when its account and primary group agree. Every datagram must
 also carry kernel-generated sender credentials for root or that exact syslog
