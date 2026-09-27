@@ -504,7 +504,8 @@ func createHAFenceManifest(ctx context.Context, inventoryPath, outputPath string
 	if err != nil {
 		return nil, err
 	}
-	writers := append([]string(nil), inventory.LegacyWriterIDs...)
+	// Preserve the explicit empty inventory; nil means the operator omitted it.
+	writers := append([]string{}, inventory.LegacyWriterIDs...)
 	sort.Strings(writers)
 	membershipDigest, err := HAFenceMembershipDigest(members)
 	if err != nil {
