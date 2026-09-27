@@ -19,5 +19,5 @@ func TUICommand() *exec.Cmd {
 }
 
 func whitelistCommand(target, port string) *exec.Cmd {
-	return exec.Command(CLI, "whitelist", target, "--port", port)
+	return exec.Command(CLI, "whitelist", target, "--port", port) // #nosec G204 -- fixed packaged binary; WhitelistCommand validates canonical IP/CIDR and decimal TCP port; no shell
 }
