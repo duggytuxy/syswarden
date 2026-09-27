@@ -171,6 +171,21 @@ func (coordinator *haReplicationCoordinator) envelope(operation haReplicationOpe
 	if coordinator.state != haCoordinationHealthy && coordinator.state != haCoordinationDegraded {
 		return nil, fmt.Errorf("HA coordination cannot emit while %s", coordinator.state)
 	}
+	return coordinator.encodeEnvelope(operation, now)
+}
+
+func (coordinator *haReplicationCoordinator) retainedRecoveryEnvelope(operation haReplicationOperation, now time.Time) ([]byte, error) {
+	if coordinator.state != haCoordinationRecovering || coordinator.reason != haV2RecoveryPreparedReason {
+		return nil, fmt.Errorf("HA recovery delivery requires explicit preparation")
+	}
+	retained, exists := coordinator.model.outbox[operation.OperationID]
+	if !exists || retained != operation {
+		return nil, fmt.Errorf("HA recovery delivery requires the exact retained operation")
+	}
+	return coordinator.encodeEnvelope(operation, now)
+}
+
+func (coordinator *haReplicationCoordinator) encodeEnvelope(operation haReplicationOperation, now time.Time) ([]byte, error) {
 	if operation.ClusterID != coordinator.clusterID || operation.Epoch != coordinator.epoch || operation.NodeID != coordinator.localID {
 		coordinator.fence("local operation identity conflict")
 		return nil, fmt.Errorf("HA coordination local identity conflict")

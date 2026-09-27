@@ -89,6 +89,9 @@ type haRuntimeV2Adapter struct {
 	peerOutboxDepth         int
 	peerDeliveryBudget      int
 	pendingTransaction      bool
+	// Scope retained delivery to the last successfully persisted operator prepare.
+	// This grant is process-local: a restart requires a new explicit prepare.
+	preparedRecoveryOutbox map[string]haReplicationOperation
 }
 
 type haRuntimeV2Status struct {
@@ -414,6 +417,7 @@ func (adapter *haRuntimeV2Adapter) configureTransactions(ctx context.Context, ma
 func (adapter *haRuntimeV2Adapter) beginOperatorRecovery(peerID, expectedLocalDigest string) error {
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
+	adapter.preparedRecoveryOutbox = nil
 	if adapter.pendingTransaction {
 		return fmt.Errorf("HA v2 recovery requires restart recovery of the pending transaction")
 	}
@@ -421,7 +425,16 @@ func (adapter *haRuntimeV2Adapter) beginOperatorRecovery(peerID, expectedLocalDi
 		return errors.Join(err, adapter.persistCoordinationLocked())
 	}
 	adapter.recoveryGraceUntil = time.Time{}
-	return adapter.persistCoordinationLocked()
+	if err := adapter.persistCoordinationLocked(); err != nil {
+		return err
+	}
+	if adapter.role == haRuntimeV2Writer && adapter.transactionStore != nil && adapter.transactionManager != nil {
+		adapter.preparedRecoveryOutbox = make(map[string]haReplicationOperation, len(adapter.coordinator.model.outbox))
+		for id, operation := range adapter.coordinator.model.outbox {
+			adapter.preparedRecoveryOutbox[id] = operation
+		}
+	}
+	return nil
 }
 
 func (adapter *haRuntimeV2Adapter) activateAfterRecovery() error {
@@ -446,6 +459,7 @@ func (adapter *haRuntimeV2Adapter) activateAfterRecovery() error {
 	if err := adapter.coordinator.activate(); err != nil {
 		return err
 	}
+	adapter.preparedRecoveryOutbox = nil
 	adapter.recoveryGraceUntil = now.Add(adapter.heartbeatTimeout)
 	if err := adapter.persistCoordinationLocked(); err != nil {
 		adapter.recoveryGraceUntil = time.Time{}
@@ -478,6 +492,17 @@ func (adapter *haRuntimeV2Adapter) outboundOperations() []haReplicationOperation
 func (adapter *haRuntimeV2Adapter) outboundEnvelope(operation haReplicationOperation, now time.Time) ([]byte, error) {
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
+	if adapter.coordinator.state == haCoordinationRecovering {
+		prepared, exists := adapter.preparedRecoveryOutbox[operation.OperationID]
+		if adapter.role != haRuntimeV2Writer || adapter.pendingTransaction ||
+			adapter.transactionStore == nil || adapter.transactionManager == nil ||
+			!exists || prepared != operation || !adapter.recentPeerHeartbeatLocked(now) ||
+			adapter.peerState != haCoordinationRecovering || adapter.peerView != haCoordinationRecovering ||
+			adapter.peerOutboxDepth != 0 {
+			return nil, fmt.Errorf("HA v2 recovery delivery requires a prepared retained writer operation and a recent recovering peer")
+		}
+		return adapter.coordinator.retainedRecoveryEnvelope(operation, now)
+	}
 	return adapter.coordinator.envelope(operation, now)
 }
 
