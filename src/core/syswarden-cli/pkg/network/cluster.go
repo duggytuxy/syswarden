@@ -70,7 +70,7 @@ func failHASetupClosed(configureSyncCron func(bool) error, setupErr error) error
 }
 
 func setupHACluster(
-	whitelistCommand func(string) (*exec.Cmd, error),
+	whitelistCommand func(string, string) (*exec.Cmd, error),
 	configureSyncCron func(bool) error,
 ) error {
 	if !config.GlobalConfig.HAEnabled {
@@ -83,7 +83,7 @@ func setupHACluster(
 
 	peerPlan, err := planHAClusterPeers(config.GlobalConfig.HAPeerIP)
 	if err != nil {
-		return err
+		return failHASetupClosed(configureSyncCron, err)
 	}
 	peerPort := config.GlobalConfig.HAPeerPort
 	if len(peerPlan.Allowlist) == 0 {
@@ -96,11 +96,12 @@ func setupHACluster(
 
 	fmt.Printf("[INFO] Configuring HA peer allowlist: %v on port %s\n", peerPlan.Allowlist, peerPort)
 
-	// Auto-whitelist Peer IPs to allow HA traffic through the firewall
+	// HA needs only its TCP listener port. A global whitelist would also unban
+	// the peer and acquire the legacy writer fence before TLS bootstrap.
 	for _, ip := range peerPlan.Allowlist {
 		// Just call the binary to avoid cyclical imports or complex logic
 		fmt.Printf("[INFO] Auto-whitelisting HA Peer IP: %s\n", ip)
-		whitelistCmd, err := whitelistCommand(ip)
+		whitelistCmd, err := whitelistCommand(ip, peerPort)
 		if err != nil {
 			return failHASetupClosed(
 				configureSyncCron,
@@ -115,11 +116,15 @@ func setupHACluster(
 		}
 	}
 
-	if len(peerPlan.Dialable) == 0 {
+	if config.GlobalConfig.HAV2Enabled || len(peerPlan.Dialable) == 0 {
 		if err := configureSyncCron(false); err != nil {
 			return err
 		}
-		fmt.Println("[+] HA Cluster ENABLED in inbound-only mode (no dialable exact peer configured).")
+		if config.GlobalConfig.HAV2Enabled {
+			fmt.Println("[+] HA v2 peer access configured; legacy HA synchronization remains DISABLED.")
+		} else {
+			fmt.Println("[+] HA Cluster ENABLED in inbound-only mode (no dialable exact peer configured).")
+		}
 		return nil
 	}
 

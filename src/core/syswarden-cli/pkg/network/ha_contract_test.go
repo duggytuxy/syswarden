@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/platformpaths"
 )
 
 func TestSetupHAClusterFailsClosedWhenAutoWhitelistFails_SW2_M6(t *testing.T) {
@@ -39,9 +41,9 @@ func TestSetupHAClusterFailsClosedWhenAutoWhitelistFails_SW2_M6(t *testing.T) {
 
 	var cronCalls []bool
 	err := setupHACluster(
-		func(peer string) (*exec.Cmd, error) {
-			if peer != "8.8.8.8" {
-				t.Fatalf("auto-whitelist peer = %q", peer)
+		func(peer, port string) (*exec.Cmd, error) {
+			if peer != "8.8.8.8" || port != "62026" {
+				t.Fatalf("auto-whitelist peer/port = %q/%q", peer, port)
 			}
 			return exec.Command("false"), nil
 		},
@@ -70,7 +72,7 @@ func TestSetupHAClusterJoinsAutoWhitelistAndCronDisableFailures_SW2_M6(t *testin
 	whitelistErr := errors.New("whitelist failed")
 	cronErr := errors.New("cron disable failed")
 	err := setupHACluster(
-		func(string) (*exec.Cmd, error) {
+		func(string, string) (*exec.Cmd, error) {
 			return nil, whitelistErr
 		},
 		func(enable bool) error {
@@ -82,6 +84,72 @@ func TestSetupHAClusterJoinsAutoWhitelistAndCronDisableFailures_SW2_M6(t *testin
 	)
 	if !errors.Is(err, whitelistErr) || !errors.Is(err, cronErr) {
 		t.Fatalf("setupHACluster() error = %v, want joined whitelist and cron failures", err)
+	}
+}
+
+func TestSetupHAClusterScopesPeerAccessAndClosesLegacyWriters_SW_HA_001(t *testing.T) {
+	for _, test := range []struct {
+		name, peers, port string
+		v2, outbound      bool
+		wantPeers         []string
+	}{
+		{"legacy exact peer", "192.0.2.9", "62026", false, true, []string{"192.0.2.9"}},
+		{"bootstrap inbound only", "192.0.2.9/32 2001:db8::9/128", "62026", false, false, []string{"192.0.2.9/32", "2001:db8::9/128"}},
+		{"v2 exact peer", "192.0.2.9", "62026", true, false, []string{"192.0.2.9"}},
+		{"v2 custom port", "2001:db8::9", "8443", true, false, []string{"2001:db8::9"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			previous := config.GlobalConfig
+			t.Cleanup(func() { config.GlobalConfig = previous })
+			config.GlobalConfig = &config.Config{HAEnabled: true, HAV2Enabled: test.v2, HAPeerIP: test.peers, HAPeerPort: test.port}
+			var peers []string
+			var cronCalls []bool
+			err := setupHACluster(func(peer, port string) (*exec.Cmd, error) {
+				command, err := platformpaths.WhitelistCommand(peer, port)
+				if err != nil {
+					return nil, err
+				}
+				want := []string{platformpaths.CLI, "whitelist", peer, "--port", test.port}
+				if !reflect.DeepEqual(command.Args, want) {
+					t.Fatalf("HA setup would execute %q, want port-scoped %q", command.Args, want)
+				}
+				peers = append(peers, peer)
+				return exec.Command("true"), nil
+			}, func(enabled bool) error {
+				cronCalls = append(cronCalls, enabled)
+				return nil
+			})
+			if err != nil || !reflect.DeepEqual(peers, test.wantPeers) || !reflect.DeepEqual(cronCalls, []bool{test.outbound}) {
+				t.Fatalf("setup: error=%v peers=%q cron=%v", err, peers, cronCalls)
+			}
+		})
+	}
+}
+
+func TestSetupHAClusterInvalidScopeDisablesLegacyWriters_SW_HA_001(t *testing.T) {
+	for _, test := range []struct{ peer, port string }{
+		{"192.0.2.9", ""}, {"192.0.2.9", "0"}, {"192.0.2.9", "65536"},
+		{"192.0.2.9", "22;id"}, {"192.0.2.9;id", "62026"},
+	} {
+		t.Run(test.peer+"_"+test.port, func(t *testing.T) {
+			previous := config.GlobalConfig
+			t.Cleanup(func() { config.GlobalConfig = previous })
+			config.GlobalConfig = &config.Config{HAEnabled: true, HAPeerIP: test.peer, HAPeerPort: test.port}
+			var cronCalls []bool
+			err := setupHACluster(func(peer, port string) (*exec.Cmd, error) {
+				command, err := platformpaths.WhitelistCommand(peer, port)
+				if err == nil || command != nil {
+					t.Fatal("invalid configuration produced a peer mutation command")
+				}
+				return nil, err
+			}, func(enabled bool) error {
+				cronCalls = append(cronCalls, enabled)
+				return nil
+			})
+			if err == nil || !reflect.DeepEqual(cronCalls, []bool{false}) {
+				t.Fatalf("invalid setup: error=%v cron=%v", err, cronCalls)
+			}
+		})
 	}
 }
 

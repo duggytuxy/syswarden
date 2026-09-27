@@ -4,16 +4,22 @@ import (
 	"fmt"
 	"net/netip"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
-// WhitelistCommand returns a native CLI command for one canonical address or prefix.
-func WhitelistCommand(value string) (*exec.Cmd, error) {
+// WhitelistCommand permits one canonical address or prefix on one TCP port.
+// A port is mandatory: an unscoped whitelist also mutates global ban ownership.
+func WhitelistCommand(value, port string) (*exec.Cmd, error) {
 	target, err := canonicalWhitelistTarget(value)
 	if err != nil {
 		return nil, err
 	}
-	return whitelistCommand(target), nil
+	parsed, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || parsed == 0 || strconv.FormatUint(parsed, 10) != port {
+		return nil, fmt.Errorf("whitelist port must be canonical decimal in 1..65535")
+	}
+	return whitelistCommand(target, port), nil
 }
 
 func canonicalWhitelistTarget(value string) (string, error) {
