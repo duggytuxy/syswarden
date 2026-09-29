@@ -4,10 +4,12 @@ Status: approved release strategy, 29 September 2026. Version-derived track clas
 
 ## Two release tracks
 
+**IVV** means Integration, Verification and Validation. It is the required assurance level for intermediate `Patch`, `Minor` and `Major` releases. **IVVQ** adds Qualification and applies to `Upgrade` generation releases such as v5.00.0 and v6.00.0. These terms describe the required work; classifying a release does not mean that work has passed.
+
 | Track | Releases | Required assurance | Public claim |
 | --- | --- | --- | --- |
-| Generation qualification | `Upgrade` transitions, including v5.00.0 LTS and v6.00.0 | Complete IVVQ against a versioned qualification plan, including all supported native profiles, lifecycle, migrations, HA endurance, performance, protected acceptance and verified restoration | Fully qualified only after acceptance passes |
-| Intermediate release validation | `Patch`, `Minor` and `Major` transitions within a generation, including v4.10.0 | CI, security checks, package integrity, functional non-regression, installation/update coverage and tests selected by documented change impact | Validated for release under the named policy, with scope and limitations |
+| Upgrade IVVQ qualification | `Upgrade` transitions, including v5.00.0 LTS and v6.00.0 | Complete IVVQ against a versioned qualification plan, including all supported native profiles, lifecycle, migrations, HA endurance, performance, protected acceptance and verified restoration | Fully qualified only after acceptance passes |
+| Intermediate IVV validation | `Patch`, `Minor` and `Major` transitions within a generation, including v4.10.0 | IVV through CI, security checks, package integrity, functional non-regression, installation/update coverage and tests selected by documented change impact | Validated for release under the named policy, with scope and limitations |
 
 ## Exact distinction in auto-versioning
 
@@ -17,9 +19,9 @@ The release track follows the validated transition defined by `scripts/versionct
 
 | PR/commit prefix | Version effect | Example | Validation track |
 | --- | --- | --- | --- |
-| `Patch :` | Increment the last component | v0.00.0 to v0.00.1 | Intermediate |
-| `Minor :` | Increment the middle component; reset the last to zero | v0.00.0 to v0.01.0 | Intermediate |
-| `Major :` | Advance the middle component to its next multiple of ten; reset the last to zero | v0.00.0 to v0.10.0 | Intermediate |
+| `Patch :` | Increment the last component | v0.00.0 to v0.00.1 | IVV |
+| `Minor :` | Increment the middle component; reset the last to zero | v0.00.0 to v0.01.0 | IVV |
+| `Major :` | Advance the middle component to its next multiple of ten; reset the last to zero | v0.00.0 to v0.10.0 | IVV |
 | `Upgrade :` | Increment the first component; reset the other components to `00.0` | v0.00.0 to v1.00.0; subsequently v4.xx.y to v5.00.0 and v5.xx.y to v6.00.0 | Complete IVVQ qualification |
 
 `Major` is a distinct SysWarden auto-versioning operation and does not mean `Upgrade`. It remains in the same generation. `Patch`, `Minor` and `Major` cannot overflow the middle component into the next generation; the version validator requires an explicit `Upgrade` instead.
@@ -28,7 +30,7 @@ Record the originating release PR, its recognized prefix, previous version and r
 
 The LTS label and the approximate three-month v5 development estimate do not select the track. The estimate is not an acceptance criterion or a promised release date.
 
-## Minimum checks for every intermediate release
+## IVV checks for every intermediate release
 
 1. Identify the previously published release, the exact candidate commit, source tree, build inputs, package hashes and policy revision. Freeze the release payload while validating it.
 2. Require the applicable CI and security workflows to pass for that exact candidate. Preserve regression tests, provenance, package checks and security scanning. Record unresolved findings and their release disposition.

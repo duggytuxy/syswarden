@@ -2,9 +2,9 @@
 
 Product baseline: `f334beaddc5c6005f40d79c7bab4e43598bfc5ed`.
 
-This change implements the approved distinction in version history and records it in Auto-Versioning, full qualification, release coordination and privileged publication. It adds no release verdict and does not yet activate intermediate acceptance or replace the existing publisher contract.
+This change implements the approved IVV/IVVQ distinction in version history and records it in Auto-Versioning, full qualification, release coordination and privileged publication. It adds no release verdict and does not yet activate intermediate acceptance or replace the existing publisher contract.
 
-The original v4.10.0 transition is `76535e03ee10b78f9c6ed1665d7fbeb8c2b8ee68`, from v4.04.3 using `Major`. On the product baseline, the resolver traversed 74 non-versioning follow-ups and selected `intermediate-validation`. An Upgrade from v4 to v5 or v5 to v6 selects `full-qualification`, even after corrective follow-ups.
+The original v4.10.0 transition is `76535e03ee10b78f9c6ed1665d7fbeb8c2b8ee68`, from v4.04.3 using `Major`. On the product baseline, the resolver traversed 74 non-versioning follow-ups and selected `intermediate-validation`. The intermediate track requires IVV (Integration, Verification and Validation). An Upgrade from v4 to v5 or v5 to v6 selects `full-qualification`, requiring IVVQ with Qualification added, even after corrective follow-ups.
 
 No runtime, catalogue, package recipe, native qualification contract, signature validator or historical verdict changes. The version-chain validation implementation is shared between the existing tagged-release command and the new read-only pre-tag classification command. Existing tagged-release requirements remain tested.
 
