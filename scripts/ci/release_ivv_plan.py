@@ -22,7 +22,7 @@ except ModuleNotFoundError:
     import native_package_signing_bundle as bundle
 
 PLAN = Path(__file__).with_name("release_ivv_plan_v4.10.0.json")
-PLAN_SHA256 = "0aa14136104664baacedf5966bad16e1b4a4ce73b1662e9548e603bcea1bec2a"
+PLAN_SHA256 = "931e079fb9f04671e0c2379b81de2d29d452ea174c05cfb230abd50035fa2878"
 SHA = re.compile(r"[0-9a-f]{40}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 MAX_JSON = 4 * 1024 * 1024

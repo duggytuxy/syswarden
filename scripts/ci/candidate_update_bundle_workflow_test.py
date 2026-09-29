@@ -88,8 +88,8 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
         for contract in (
             '"${EVENT_REF_NAME}" != "main"',
             '"${EVENT_REF}" != "refs/heads/main"',
-            '"${EVENT_SHA}" != "${RELEASE_SHA}"',
-            '"${WORKFLOW_SHA}" != "${RELEASE_SHA}"',
+            '"${EVENT_SHA}" != "${PUBLICATION_SHA}"',
+            '"${WORKFLOW_SHA}" != "${PUBLICATION_SHA}"',
             '"${EVENT_ACTOR}" != "${REPOSITORY_OWNER}"',
             '"${EVENT_TRIGGERING_ACTOR}" != "${REPOSITORY_OWNER}"',
             '"${RUN_ATTEMPT}" != "1"',
@@ -212,6 +212,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             "Validate Exact Untagged Candidate Source",
             "Enforce One Successful Candidate Producer Per Commit",
             "Verify Exact Qualified Native Package Source",
+            "Bind Frozen IVV Product to Producer",
             "Stage Exact Candidate Manifest Packages",
             "Build and Test Candidate Manifest Tool",
             "Revalidate Candidate Manifest Tool Before Secret Exposure",
@@ -328,8 +329,8 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             "subject-path: ${{ steps.bundle.outputs.descriptor }}",
             'gh attestation download "${BUNDLE_ROOT}/CANDIDATE_UPDATE_BUNDLE.json"',
             '--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/candidate-update-bundle.yml"',
-            '--signer-digest "${RELEASE_SHA}"',
-            '--source-digest "${RELEASE_SHA}"',
+            '--signer-digest "${PUBLICATION_SHA}"',
+            '--source-digest "${PUBLICATION_SHA}"',
             '--source-ref "refs/heads/main"',
             "--deny-self-hosted-runners",
             'test "$(wc -l < "${source_bundle}")" -eq 1',
@@ -365,6 +366,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             "Resolve Exact Qualified Native Signing Bundle",
             "Download Exact Native Signing Bundle by Artifact ID",
             "Verify Exact Qualified Native Package Source",
+            "Bind Frozen IVV Product to Producer",
             "Stage Exact Candidate Manifest Packages",
             "Build and Test Candidate Manifest Tool",
             "Revalidate Candidate Manifest Tool Before Secret Exposure",
@@ -388,9 +390,56 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
         self.assertIn("needs: [produce-candidate-update]", self.workflow)
         self.assertIn('test "${PRODUCER_RESULT}" = "success"', self.workflow)
 
+    def test_actual_context_accepts_only_exact_owner_main_producer(self) -> None:
+        block, = literal_run_blocks(workflow_step(self.workflow, "Validate Protected Manual Candidate Context"))
+        base = {
+            "AUTHORIZATION": "SIGN-CANDIDATE-UPDATE-NO-PUBLISH",
+            "EVENT_ACTOR": "duggytuxy", "EVENT_TRIGGERING_ACTOR": "duggytuxy",
+            "REPOSITORY_OWNER": "duggytuxy", "EVENT_NAME": "workflow_dispatch",
+            "EVENT_REF_TYPE": "branch", "EVENT_REF_NAME": "main", "EVENT_REF": "refs/heads/main",
+            "EVENT_SHA": "a" * 40, "WORKFLOW_SHA": "a" * 40, "PUBLICATION_SHA": "a" * 40,
+            "RELEASE_SHA": "b" * 40, "RELEASE_TAG": "v4.10.0", "RUN_ATTEMPT": "1",
+            "RUNNER_ENVIRONMENT_CONTEXT": "github-hosted", "RUNNER_OS_CONTEXT": "Linux",
+            "RUNNER_ARCH_CONTEXT": "X64", "NATIVE_RUN_ID": "123", "NATIVE_ARTIFACT_ID": "456",
+        }
+        def run(update):
+            return subprocess.run(["bash", "-euo", "pipefail", "-c", block],
+                                  env={**os.environ, **base, **update}, capture_output=True)
+        self.assertEqual(run({}).returncode, 0)
+        self.assertEqual(run({"RELEASE_SHA": "a" * 40}).returncode, 0)
+        for update in [
+            {"EVENT_NAME": "pull_request"}, {"EVENT_REF": "refs/tags/v4.10.0"},
+            {"EVENT_REF_NAME": "unreviewed"}, {"EVENT_REF_TYPE": "tag"},
+            {"EVENT_SHA": "c" * 40}, {"WORKFLOW_SHA": "c" * 40},
+            {"PUBLICATION_SHA": ""}, {"RELEASE_SHA": "not-a-commit"},
+            {"EVENT_ACTOR": "other"}, {"EVENT_TRIGGERING_ACTOR": "other"},
+            {"RUN_ATTEMPT": "2"}, {"RUNNER_ENVIRONMENT_CONTEXT": "self-hosted"},
+            {"NATIVE_RUN_ID": "0"}, {"AUTHORIZATION": "PUBLISH"},
+        ]:
+            with self.subTest(update=update):
+                self.assertNotEqual(run(update).returncode, 0)
+
+    def test_distinct_product_is_pinned_before_secret_and_sealed_as_v2(self) -> None:
+        source = workflow_step(self.workflow, "Bind Frozen IVV Product to Producer")
+        presecret = workflow_step(self.workflow, "Revalidate Candidate Manifest Tool Before Secret Exposure")
+        seal = workflow_step(self.workflow, "Seal Candidate Descriptor and Exact Inventory")
+        for block in [source, presecret]:
+            self.assertIn('if [[ "${PUBLICATION_SHA}" != "${RELEASE_SHA}" ]]', block)
+            self.assertIn('python3 scripts/ci/candidate_update_binding.py', block)
+            self.assertIn('--product-sha "${RELEASE_SHA}"', block)
+            self.assertIn('--packages "${NATIVE_SIGNING_DIR}"', block)
+        self.assertIn('if workflow_sha != release_sha:', seal)
+        self.assertIn('descriptor["schema_version"] = 2', seal)
+        self.assertIn('descriptor["profile"] = "syswarden-candidate-update-bundle/v2"', seal)
+        self.assertIn('descriptor["source_binding"] = bound', seal)
+        self.assertIn('binding.verify_binding(', seal)
+        self.assertIn('"workflow_sha": workflow_sha', seal)
+        self.assertIn('"release_sha": release_sha', seal)
+        self.assertIn('ref: ${{ inputs.publication_sha || inputs.release_sha }}', self.workflow)
+
     def test_critical_static_mutations_are_rejected(self) -> None:
         def assert_contract(workflow: str) -> None:
-            self.assertIn('"${WORKFLOW_SHA}" != "${RELEASE_SHA}"', workflow)
+            self.assertIn('"${WORKFLOW_SHA}" != "${PUBLICATION_SHA}"', workflow)
             self.assertIn('"${RUN_ATTEMPT}" != "1"', workflow)
             self.assertIn('$(top_level_boolean can_admins_bypass)" != "false"', workflow)
             self.assertIn(
@@ -407,7 +456,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             )
 
         mutations = (
-            ('"${WORKFLOW_SHA}" != "${RELEASE_SHA}"', '"${WORKFLOW_SHA}" != ""'),
+            ('"${WORKFLOW_SHA}" != "${PUBLICATION_SHA}"', '"${WORKFLOW_SHA}" != ""'),
             ('"${RUN_ATTEMPT}" != "1"', '"${RUN_ATTEMPT}" != "2"'),
             ('$(top_level_boolean can_admins_bypass)" != "false"', '"false" != "false"'),
             (
