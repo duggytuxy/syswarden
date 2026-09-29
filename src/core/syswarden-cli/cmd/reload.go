@@ -13,6 +13,7 @@ import (
 var noRestart bool
 var applyPoliciesForReload = firewall.ApplyPolicies
 var ensurePersistentBlocklistPairForReload = firewall.EnsurePersistentBlocklistPair
+var ensurePersistentWhitelistPairForReload = firewall.EnsurePersistentWhitelistPair
 var recoverPendingWireGuardForwardingForReload = network.RecoverPendingWireGuardForwardingState
 var recoverPendingWireGuardForReload = network.RecoverPendingWireguardState
 var preflightWireGuardForReload = network.PreflightWireguard
@@ -41,6 +42,9 @@ var reloadCmd = &cobra.Command{
 		}
 		if err := ensurePersistentBlocklistPairForReload(); err != nil {
 			return fmt.Errorf("persistent blocklist initialization failed before policy reload: %w", err)
+		}
+		if err := ensurePersistentWhitelistPairForReload(); err != nil {
+			return fmt.Errorf("persistent whitelist initialization failed before policy reload: %w", err)
 		}
 		fmt.Println("[*] Reloading SYSWARDEN configuration from memory...")
 		var failures []error

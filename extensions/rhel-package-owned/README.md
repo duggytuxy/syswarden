@@ -179,12 +179,20 @@ not replace those files and do not re-enable a service disabled by the image
 owner. Dynamic nftables policy is compiled only when the packaged firewall
 service starts on the real system.
 
-That first policy reload initializes and attests both persistent blocklist
-files, including an empty address family, before applying the firewall policy.
-Existing entries are preserved. Once the durable initialization marker exists,
-a missing or unsafe file stops reload; it is never silently recreated as empty.
-This gives the GRC reader explicit empty-state evidence on a fresh image while
-preserving its refusal of incomplete policy state after initialization.
+That first policy reload initializes and attests the IPv4 and IPv6 files for
+both persistent blocklists and whitelists before applying the firewall policy.
+A family absent at first initialization becomes an explicit empty file; existing
+operator entries and metadata are preserved. New files use mode `0600`.
+Preseeded whitelists may also retain mode `0640`, with the same owner, group,
+single-link and regular-file checks. No infrastructure discovery or automatic
+whitelist expansion is performed by this initialization.
+
+Blocklists and whitelists have separate durable initialization markers. Once a
+pair's marker exists, a missing or unsafe file stops reload before policy
+application; it is never silently recreated as empty. Both families are checked
+before either missing file is created and before the marker is published.
+This gives the GRC and runtime readers explicit empty-family evidence on a fresh
+image while preserving refusal of incomplete state after initialization.
 
 On a configured host, do not erase this variant directly. Run
 `syswarden uninstall` first and require its package-owned erase-ready result,
