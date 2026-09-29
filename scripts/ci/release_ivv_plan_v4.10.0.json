@@ -16,12 +16,19 @@
   },
   "publication_source_change_allowlist": [
     ".github/workflows/auto-versioning.yml",
+    ".github/workflows/candidate-update-bundle.yml",
     ".github/workflows/release-manager.yml",
     ".github/workflows/release-qualification.yml",
     "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md",
     "docs/maintainers/RELEASE_VALIDATION_POLICY.md",
     "docs/qualification/INTERMEDIATE_IVV_V4.10.0.md",
+    "docs/qualification/INTERMEDIATE_UPDATE_BINDING_V4.10.0.md",
     "docs/qualification/RELEASE_TRACK_CLASSIFICATION_IMPACT.md",
+    "scripts/ci/candidate_update_binding.py",
+    "scripts/ci/candidate_update_binding_test.py",
+    "scripts/ci/candidate_update_bundle_verify.py",
+    "scripts/ci/candidate_update_bundle_verify_test.py",
+    "scripts/ci/candidate_update_bundle_workflow_test.py",
     "scripts/ci/record_release_track.sh",
     "scripts/ci/release_ivv_plan.py",
     "scripts/ci/release_ivv_plan_test.py",
@@ -187,5 +194,11 @@
     "No guarantee of absence of all defects.",
     "Historical measurements retain their original candidate and scope."
   ],
-  "preflight_is_acceptance": false
+  "preflight_is_acceptance": false,
+  "product_native_signing": {
+    "run_id": 36566566296,
+    "artifact_id": 11032022930,
+    "artifact_name": "syswarden-native-signed-packages-qualified-4.10.0-36566566296-1-f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+    "artifact_digest": "sha256:7b87c0f6bb816384a11bd7d4233c841dd44de5aeaa15938c0e68f1e2b54b2842"
+  }
 }

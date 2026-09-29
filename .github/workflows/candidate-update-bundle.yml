@@ -8,8 +8,13 @@ on:
         required: true
         type: string
       release_sha:
-        description: Exact full commit SHA on main
+        description: Exact product commit SHA for the signed package bytes
         required: true
+        type: string
+      publication_sha:
+        description: Optional reviewed IVV producer commit on main; empty keeps identical product and producer
+        required: false
+        default: ''
         type: string
       native_signing_run_id:
         description: Exact successful protected native-signing run ID
@@ -45,6 +50,10 @@ jobs:
       name: syswarden-release-qualification
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      PUBLICATION_SHA: ${{ inputs.publication_sha || inputs.release_sha }}
+      BOUND_NATIVE_RUN_ID: ${{ inputs.native_signing_run_id }}
+      BOUND_NATIVE_ARTIFACT_ID: ${{ inputs.native_signing_artifact_id }}
     permissions:
       actions: read
       attestations: write
@@ -79,8 +88,8 @@ jobs:
                 "${EVENT_REF_TYPE}" != "branch" || \
                 "${EVENT_REF_NAME}" != "main" || \
                 "${EVENT_REF}" != "refs/heads/main" || \
-                "${EVENT_SHA}" != "${RELEASE_SHA}" || \
-                "${WORKFLOW_SHA}" != "${RELEASE_SHA}" || \
+                "${EVENT_SHA}" != "${PUBLICATION_SHA}" || \
+                "${WORKFLOW_SHA}" != "${PUBLICATION_SHA}" || \
                 "${EVENT_ACTOR}" != "${REPOSITORY_OWNER}" || \
                 "${EVENT_TRIGGERING_ACTOR}" != "${REPOSITORY_OWNER}" || \
                 "${RUN_ATTEMPT}" != "1" || \
@@ -92,6 +101,7 @@ jobs:
           fi
           if [[ "${RELEASE_TAG}" != "v4.10.0" || \
                 ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
+                ! "${PUBLICATION_SHA}" =~ ^[0-9a-f]{40}$ || \
                 "${AUTHORIZATION}" != "SIGN-CANDIDATE-UPDATE-NO-PUBLISH" ]]; then
             echo "ERROR: candidate updater inputs or no-publication authorization are invalid." >&2
             exit 1
@@ -160,7 +170,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ inputs.release_sha }}
+          ref: ${{ inputs.publication_sha || inputs.release_sha }}
 
       - name: Set Up Pinned Go for Candidate Manifest
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -175,8 +185,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${RELEASE_SHA}"
-          test "$(git rev-parse --verify 'origin/main^{commit}')" = "${RELEASE_SHA}"
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${PUBLICATION_SHA}"
+          test "$(git rev-parse --verify 'origin/main^{commit}')" = "${PUBLICATION_SHA}"
           test "$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")" = "${RELEASE_TAG}"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
@@ -209,8 +219,8 @@ jobs:
           runs_json="$(gh api --paginate --slurp --method GET \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/candidate-update-bundle.yml/runs" \
             -f event=workflow_dispatch -f branch=main \
-            -f head_sha="${RELEASE_SHA}" -f per_page=100)"
-          successful_prior_runs="$(jq --arg sha "${RELEASE_SHA}" \
+            -f head_sha="${PUBLICATION_SHA}" -f per_page=100)"
+          successful_prior_runs="$(jq --arg sha "${PUBLICATION_SHA}" \
             --argjson current "${GITHUB_RUN_ID}" '[
               .[] | .workflow_runs[]? | select(
                 .id != $current and .head_sha == $sha and
@@ -338,6 +348,24 @@ jobs:
             ([.rpm.trusted_keys[], .apk.trusted_keys[], .deb.trusted_keys[]] | length == 3)
           ' "${policy}" >/dev/null
 
+      - name: Bind Frozen IVV Product to Producer
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${PUBLICATION_SHA}" != "${RELEASE_SHA}" ]]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/candidate_update_binding.py \
+              --repository "${GITHUB_WORKSPACE}" --publication-sha "${PUBLICATION_SHA}" \
+              --native-run-id "${BOUND_NATIVE_RUN_ID}" --native-artifact-id "${BOUND_NATIVE_ARTIFACT_ID}" \
+              --product-sha "${RELEASE_SHA}" --output "${CANDIDATE_ROOT}/source-binding.json"
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/candidate_update_binding.py \
+              --repository "${GITHUB_WORKSPACE}" --publication-sha "${PUBLICATION_SHA}" \
+              --native-run-id "${BOUND_NATIVE_RUN_ID}" --native-artifact-id "${BOUND_NATIVE_ARTIFACT_ID}" \
+              --product-sha "${RELEASE_SHA}" --binding "${CANDIDATE_ROOT}/source-binding.json" \
+              --packages "${NATIVE_SIGNING_DIR}"
+          fi
+
       - name: Stage Exact Candidate Manifest Packages
         shell: bash
         env:
@@ -382,7 +410,7 @@ jobs:
           RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${RELEASE_SHA}"
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${PUBLICATION_SHA}"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           GOFLAGS=-mod=readonly go test \
             ./scripts/ci/update_manifest.go \
@@ -401,6 +429,7 @@ jobs:
         id: verified_manifest_tool
         shell: bash
         env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
           EXPECTED_TOOL_SHA256: ${{ steps.manifest_tool.outputs.sha256 }}
         run: |
           set -euo pipefail
@@ -415,6 +444,13 @@ jobs:
                 "${actual_tool_sha256}" != "${EXPECTED_TOOL_SHA256}" ]]; then
             echo "ERROR: candidate manifest tool changed after its validated build." >&2
             exit 1
+          fi
+          if [[ "${PUBLICATION_SHA}" != "${RELEASE_SHA}" ]]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/candidate_update_binding.py \
+              --repository "${GITHUB_WORKSPACE}" --publication-sha "${PUBLICATION_SHA}" \
+              --native-run-id "${BOUND_NATIVE_RUN_ID}" --native-artifact-id "${BOUND_NATIVE_ARTIFACT_ID}" \
+              --product-sha "${RELEASE_SHA}" --binding "${CANDIDATE_ROOT}/source-binding.json" \
+              --packages "${NATIVE_SIGNING_DIR}"
           fi
           printf 'verified=true\n' >> "${GITHUB_OUTPUT}"
 
@@ -478,7 +514,7 @@ jobs:
             "${GITHUB_REPOSITORY}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${WORKFLOW_SHA}" \
             "${GITHUB_RUN_ID}" "${NATIVE_RUN_ID}" "${NATIVE_ARTIFACT_ID}" \
             "${NATIVE_ARTIFACT_NAME}" "${NATIVE_ARTIFACT_DIGEST}" <<'PY'
-          import hashlib, json, pathlib, sys
+          import hashlib, json, os, pathlib, sys
 
           root = pathlib.Path(sys.argv[1])
           provenance = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
@@ -560,6 +596,17 @@ jobs:
                   "bundle_path": "verification/producer-attestation.jsonl",
               },
           }
+          if workflow_sha != release_sha:
+              from scripts.ci import candidate_update_binding as binding
+              bound_path = pathlib.Path(os.environ["CANDIDATE_ROOT"]) / "source-binding.json"
+              bound = binding.ivv.strict_json(binding.ivv.bundle.regular_bytes(
+                  bound_path, binding.ivv.MAX_JSON, "candidate source binding"))
+              binding.verify_binding(bound, pathlib.Path(os.environ["GITHUB_WORKSPACE"]),
+                                     workflow_sha, release_sha,
+                                     pathlib.Path(os.environ["NATIVE_SIGNING_DIR"]))
+              descriptor["schema_version"] = 2
+              descriptor["profile"] = "syswarden-candidate-update-bundle/v2"
+              descriptor["source_binding"] = bound
           (root / "CANDIDATE_UPDATE_BUNDLE.json").write_text(
               json.dumps(descriptor, sort_keys=True, separators=(",", ":")) + "\n",
               encoding="utf-8",
@@ -630,7 +677,7 @@ jobs:
           gh attestation verify "${BUNDLE_ROOT}/CANDIDATE_UPDATE_BUNDLE.json" \
             --bundle "${source_bundle}" --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/candidate-update-bundle.yml" \
-            --signer-digest "${RELEASE_SHA}" --source-digest "${RELEASE_SHA}" \
+            --signer-digest "${PUBLICATION_SHA}" --source-digest "${PUBLICATION_SHA}" \
             --source-ref "refs/heads/main" --deny-self-hosted-runners --format json \
             > "${verification_json}"
           jq -e --arg sha256 "${DESCRIPTOR_SHA256}" '
