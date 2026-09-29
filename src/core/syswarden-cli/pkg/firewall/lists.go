@@ -175,12 +175,40 @@ func EnsurePersistentBlocklistPair() error {
 }
 
 func ensurePersistentBlocklistPairAt(targets []approvedListFile, beforeCreate func(approvedListFile) error) error {
+	return ensurePersistentListPairAt(targets, beforeCreate, false)
+}
+
+// EnsurePersistentWhitelistPair supplies explicit empty-family state on a fresh
+// image. Existing operator lists are preserved; loss after initialization fails.
+func EnsurePersistentWhitelistPair() error {
+	return ensurePersistentWhitelistPairAt([]approvedListFile{
+		{directory: filepath.Dir(WhitelistV4), name: filepath.Base(WhitelistV4)},
+		{directory: filepath.Dir(WhitelistV6), name: filepath.Base(WhitelistV6)},
+	}, nil)
+}
+
+func ensurePersistentWhitelistPairAt(targets []approvedListFile, beforeCreate func(approvedListFile) error) error {
+	return ensurePersistentListPairAt(targets, beforeCreate, true)
+}
+
+const persistentWhitelistPairMarkerName = ".syswarden_whitelist_pair_v1"
+const persistentWhitelistPairMarkerBytes = "SYSWARDEN_PERSISTENT_WHITELIST_PAIR_V1\n"
+
+func ensurePersistentListPairAt(targets []approvedListFile, beforeCreate func(approvedListFile) error, whitelist bool) error {
+	kind := "blocklist"
+	names := [2]string{persistentBlocklistIPv4Name, persistentBlocklistIPv6Name}
+	markerName, markerBytes := persistentBlocklistPairMarkerName, persistentBlocklistPairMarkerBytes
+	if whitelist {
+		kind = "whitelist"
+		names = [2]string{"syswarden_whitelist.ipv4", "syswarden_whitelist.ipv6"}
+		markerName, markerBytes = persistentWhitelistPairMarkerName, persistentWhitelistPairMarkerBytes
+	}
 	if len(targets) != 2 {
-		return fmt.Errorf("persistent blocklist pair inventory is incomplete")
+		return fmt.Errorf("persistent %s pair inventory is incomplete", kind)
 	}
 	expectedNames := map[string]struct{}{
-		persistentBlocklistIPv4Name: {},
-		persistentBlocklistIPv6Name: {},
+		names[0]: {},
+		names[1]: {},
 	}
 	directoryPath := targets[0].directory
 	seen := make(map[string]struct{}, len(targets))
@@ -189,13 +217,13 @@ func ensurePersistentBlocklistPairAt(targets []approvedListFile, beforeCreate fu
 			return err
 		}
 		if target.directory != directoryPath {
-			return fmt.Errorf("persistent blocklist files must share one directory")
+			return fmt.Errorf("persistent %s files must share one directory", kind)
 		}
 		if _, approved := expectedNames[target.name]; !approved {
-			return fmt.Errorf("persistent blocklist file name is not approved: %s", target.name)
+			return fmt.Errorf("persistent %s file name is not approved: %s", kind, target.name)
 		}
 		if _, duplicate := seen[target.name]; duplicate {
-			return fmt.Errorf("persistent blocklist pair contains a duplicate target")
+			return fmt.Errorf("persistent %s pair contains a duplicate target", kind)
 		}
 		seen[target.name] = struct{}{}
 	}
@@ -213,13 +241,22 @@ func ensurePersistentBlocklistPairAt(targets []approvedListFile, beforeCreate fu
 	if err := attestPersistentBlocklistDirectory(directory); err != nil {
 		return err
 	}
-	markerExists, err := attestPersistentBlocklistPairMarker(directory)
+	markerExists, err := attestPersistentListPairMarker(directory, markerName, markerBytes)
 	if err != nil {
 		return err
 	}
 
 	for _, target := range targets {
-		exists, err := attestPersistentBlocklistFile(directory, target.name)
+		exists, err := attestPersistentListFile(directory, target.name, whitelist)
+		if err != nil {
+			return err
+		}
+		if markerExists && !exists {
+			return fmt.Errorf("persistent %s file %s is unexpectedly missing after pair initialization", kind, target.name)
+		}
+	}
+	for _, target := range targets {
+		exists, err := attestPersistentListFile(directory, target.name, whitelist)
 		if err != nil {
 			return err
 		}
@@ -227,7 +264,7 @@ func ensurePersistentBlocklistPairAt(targets []approvedListFile, beforeCreate fu
 			continue
 		}
 		if markerExists {
-			return fmt.Errorf("persistent blocklist file %s is unexpectedly missing after pair initialization", target.name)
+			return fmt.Errorf("persistent %s file %s is unexpectedly missing after pair initialization", kind, target.name)
 		}
 		if beforeCreate != nil {
 			if err := beforeCreate(target); err != nil {
@@ -237,29 +274,40 @@ func ensurePersistentBlocklistPairAt(targets []approvedListFile, beforeCreate fu
 		if err := createPersistentBlocklistInitializationFile(directory, target, nil); err != nil {
 			return err
 		}
-		if exists, err := attestPersistentBlocklistFile(directory, target.name); err != nil || !exists {
+		if exists, err := attestPersistentListFile(directory, target.name, whitelist); err != nil || !exists {
 			if err == nil {
-				err = fmt.Errorf("persistent blocklist file is missing after initialization")
+				err = fmt.Errorf("persistent %s file is missing after initialization", kind)
 			}
-			return fmt.Errorf("attest initialized persistent blocklist file %s: %w", target.name, err)
+			return fmt.Errorf("attest initialized persistent %s file %s: %w", kind, target.name, err)
 		}
 	}
 	if !markerExists {
-		marker := approvedListFile{directory: directoryPath, name: persistentBlocklistPairMarkerName}
+		marker := approvedListFile{directory: directoryPath, name: markerName}
 		if beforeCreate != nil {
 			if err := beforeCreate(marker); err != nil {
 				return err
 			}
 		}
-		if err := createPersistentBlocklistInitializationFile(directory, marker, []byte(persistentBlocklistPairMarkerBytes)); err != nil {
+		// Recheck both families immediately before publishing initialization.
+		for _, target := range targets {
+			if exists, err := attestPersistentListFile(directory, target.name, whitelist); err != nil || !exists {
+				return fmt.Errorf("persistent %s file %s changed before marker publication: %v", kind, target.name, err)
+			}
+		}
+		if err := createPersistentBlocklistInitializationFile(directory, marker, []byte(markerBytes)); err != nil {
 			return err
 		}
 	}
-	if exists, err := attestPersistentBlocklistPairMarker(directory); err != nil || !exists {
+	if exists, err := attestPersistentListPairMarker(directory, markerName, markerBytes); err != nil || !exists {
 		if err == nil {
-			err = fmt.Errorf("persistent blocklist pair marker is missing after initialization")
+			err = fmt.Errorf("persistent %s pair marker is missing after initialization", kind)
 		}
 		return err
+	}
+	for _, target := range targets {
+		if exists, err := attestPersistentListFile(directory, target.name, whitelist); err != nil || !exists {
+			return fmt.Errorf("persistent %s file %s changed after initialization: %v", kind, target.name, err)
+		}
 	}
 	if err := attestPersistentBlocklistDirectory(directory); err != nil {
 		return err
@@ -301,19 +349,19 @@ func createPersistentBlocklistInitializationFile(directory *os.Root, target appr
 	return nil
 }
 
-func attestPersistentBlocklistPairMarker(directory *os.Root) (bool, error) {
-	exists, err := attestPersistentBlocklistFile(directory, persistentBlocklistPairMarkerName)
+func attestPersistentListPairMarker(directory *os.Root, markerName, markerBytes string) (bool, error) {
+	exists, err := attestPersistentBlocklistFile(directory, markerName)
 	if err != nil || !exists {
 		return exists, err
 	}
-	wire, err := readListFileInDirectory(directory, approvedListFile{name: persistentBlocklistPairMarkerName})
+	wire, err := readListFileInDirectory(directory, approvedListFile{name: markerName})
 	if err != nil {
 		return false, fmt.Errorf("read persistent blocklist pair marker: %w", err)
 	}
-	if string(wire) != persistentBlocklistPairMarkerBytes {
+	if string(wire) != markerBytes {
 		return false, fmt.Errorf("persistent blocklist pair marker content is invalid")
 	}
-	if exists, err := attestPersistentBlocklistFile(directory, persistentBlocklistPairMarkerName); err != nil || !exists {
+	if exists, err := attestPersistentBlocklistFile(directory, markerName); err != nil || !exists {
 		if err == nil {
 			err = fmt.Errorf("persistent blocklist pair marker disappeared during attestation")
 		}
@@ -336,6 +384,10 @@ func attestPersistentBlocklistDirectory(directory *os.Root) error {
 }
 
 func attestPersistentBlocklistFile(directory *os.Root, name string) (bool, error) {
+	return attestPersistentListFile(directory, name, false)
+}
+
+func attestPersistentListFile(directory *os.Root, name string, allowGroupRead bool) (bool, error) {
 	info, err := directory.Lstat(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -344,7 +396,7 @@ func attestPersistentBlocklistFile(directory *os.Root, name string) (bool, error
 		return false, fmt.Errorf("inspect persistent blocklist file %s: %w", name, err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || !info.Mode().IsRegular() || info.Mode() != 0600 || int64(stat.Uid) != int64(os.Geteuid()) ||
+	if !ok || !info.Mode().IsRegular() || (info.Mode() != 0600 && !(allowGroupRead && info.Mode() == 0640)) || int64(stat.Uid) != int64(os.Geteuid()) ||
 		int64(stat.Gid) != int64(os.Getegid()) || stat.Nlink != 1 || info.Size() < 0 || info.Size() > maximumPersistentBlocklistEvidenceBytes {
 		return false, fmt.Errorf("persistent blocklist file %s must be an EUID/EGID-owned regular 0600 file with one link and bounded size", name)
 	}
