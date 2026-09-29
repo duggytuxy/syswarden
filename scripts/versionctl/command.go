@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -27,7 +28,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 func (app application) run(args []string, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: versionctl <inspect|dry-run|apply|validate-commit|validate-release|validate-tag> [options]")
+		return errors.New("usage: versionctl <inspect|dry-run|apply|validate-commit|validate-release|release-track|validate-tag> [options]")
 	}
 	switch args[0] {
 	case "inspect":
@@ -38,10 +39,12 @@ func (app application) run(args []string, stderr io.Writer) error {
 		return app.runValidateCommit(args[1:], stderr)
 	case "validate-release":
 		return app.runValidateRelease(args[1:], stderr)
+	case "release-track":
+		return app.runReleaseContract(args[1:], stderr, true)
 	case "validate-tag":
 		return app.runValidateTag(args[1:], stderr)
 	case "help", "--help", "-h":
-		fmt.Fprintln(app.out, "usage: versionctl <inspect|dry-run|apply|validate-commit|validate-release|validate-tag> [options]")
+		fmt.Fprintln(app.out, "usage: versionctl <inspect|dry-run|apply|validate-commit|validate-release|release-track|validate-tag> [options]")
 		return nil
 	default:
 		return fmt.Errorf("unknown mode %q", args[0])
@@ -49,14 +52,22 @@ func (app application) run(args []string, stderr io.Writer) error {
 }
 
 func (app application) runValidateRelease(args []string, stderr io.Writer) error {
-	set := newFlagSet("validate-release", stderr)
+	return app.runReleaseContract(args, stderr, false)
+}
+
+func (app application) runReleaseContract(args []string, stderr io.Writer, trackOnly bool) error {
+	mode := "validate-release"
+	if trackOnly {
+		mode = "release-track"
+	}
+	set := newFlagSet(mode, stderr)
 	repoFlag := set.String("repo", ".", "repository root")
 	tag := set.String("tag", "", "candidate Git tag")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if set.NArg() != 0 {
-		return errors.New("validate-release accepts options only")
+		return fmt.Errorf("%s accepts options only", mode)
 	}
 	repo, err := cleanRepoPath(*repoFlag)
 	if err != nil {
@@ -79,15 +90,17 @@ func (app application) runValidateRelease(args []string, stderr io.Writer) error
 	if err != nil {
 		return err
 	}
-	if !exists {
+	if !exists && !trackOnly {
 		return fmt.Errorf("Git tag %s does not exist in the checked-out repository", expected)
 	}
-	matchesHead, err := app.git.tagMatchesHead(repo, expected.String())
-	if err != nil {
-		return err
-	}
-	if !matchesHead {
-		return fmt.Errorf("Git tag %s does not resolve to the checked-out HEAD commit", expected)
+	if exists {
+		matchesHead, err := app.git.tagMatchesHead(repo, expected.String())
+		if err != nil {
+			return err
+		}
+		if !matchesHead {
+			return fmt.Errorf("Git tag %s does not resolve to the checked-out HEAD commit", expected)
+		}
 	}
 
 	headContents, err := readSnapshotAtRef(app.git, repo, "HEAD")
@@ -128,6 +141,7 @@ func (app application) runValidateRelease(args []string, stderr io.Writer) error
 	if err != nil {
 		return err
 	}
+	candidateCommit := currentRef
 	currentVersion := headVersion
 	currentChangelog := headChangelog
 	followups := 0
@@ -232,6 +246,19 @@ func (app application) runValidateRelease(args []string, stderr io.Writer) error
 			rewritePolicy,
 		); err != nil {
 			return fmt.Errorf("invalid changelog transition at %s: %w", currentRef, err)
+		}
+		if trackOnly {
+			track, err := releaseTrackForBump(bump)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(app.out).Encode(releaseTrackDecision{
+				Schema: "syswarden-release-track/v1", CandidateCommit: candidateCommit,
+				Release: currentVersion.String(), PreviousVersion: parentVersion.String(),
+				TransitionCommit: currentRef, TransitionParent: parentRef,
+				Prefix: bump, Track: track, FollowupCommits: followups,
+				QualificationPassed: false, PublicationAuthorized: false,
+			})
 		}
 		fmt.Fprintf(app.out, "Release validation passed: %s -> %s (%s), %d non-versioning follow-up commit(s)\n", parentVersion, currentVersion, bump, followups)
 		return nil

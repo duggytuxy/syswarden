@@ -249,6 +249,24 @@ jobs:
           git merge-base --is-ancestor "${previous_sha}" "${RELEASE_SHA}"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
+      - name: Record Version-Derived Release Validation Track
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          track_report="${RUNNER_TEMP}/syswarden-release-track.json"
+          bash scripts/ci/record_release_track.sh \
+            "${GITHUB_WORKSPACE}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${track_report}"
+          {
+            echo '### Required release validation track'
+            echo '```json'
+            cat "${track_report}"
+            echo '```'
+            echo 'Classification only. Required validation, signatures and publication gates remain mandatory.'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Validate Frozen Package Qualification Matrix
         shell: bash
         env:
