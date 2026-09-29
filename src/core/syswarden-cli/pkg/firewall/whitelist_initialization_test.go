@@ -28,9 +28,10 @@ func TestWhitelistPairPreservesImageOwnerPolicyAndCreatesEmptyFamily(t *testing.
 			}
 			if seeded != "" {
 				path := filepath.Join(directory, seeded)
-				if err := os.WriteFile(path, []byte(content), 0640); err != nil {
+				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 					t.Fatal(err)
 				}
+				// #nosec G302 -- Test-only 0640 image-owner policy under t.TempDir verifies preservation of the supported group-readable mode.
 				if err := os.Chmod(path, 0640); err != nil {
 					t.Fatal(err)
 				}
