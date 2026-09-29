@@ -335,3 +335,7 @@ a tag object whose signature GitHub does not report as valid.
 A technical lot may close after its exact merged SHA passes the required
 protected gates. Tagging and publication remain separate decisions and require
 their own protected approvals.
+
+## Release validation tracks
+
+The [release validation policy](RELEASE_VALIDATION_POLICY.md) distinguishes `Upgrade` generation changes from `Patch`, `Minor` and `Major` intermediate changes. Use `./scripts/versioning.sh release-track --repo . --tag <version>` before creating a tag to identify the originating transition, including across corrective PRs. This classification is recorded by CI but does not satisfy acceptance or authorize publication. The intermediate evidence and publishing contract must be integrated separately; existing qualification and signing gates are still enforced.

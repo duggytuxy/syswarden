@@ -102,6 +102,25 @@ jobs:
           go-version: '1.26.6'
           cache: false
 
+      - name: Record Version-Derived Release Validation Track
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          track_report="${RUNNER_TEMP}/syswarden-release-track.json"
+          bash scripts/ci/record_release_track.sh \
+            "${GITHUB_WORKSPACE}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${track_report}"
+          {
+            echo '### Required release validation track'
+            echo '```json'
+            cat "${track_report}"
+            echo '```'
+            echo 'Classification only. Required validation, signatures and publication gates remain mandatory.'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Resolve Versioned Qualification Matrix for Coordination
         id: qualification_matrix
         if: ${{ steps.context.outputs.candidate == 'true' }}
@@ -482,6 +501,25 @@ jobs:
           GOFLAGS=-mod=readonly go test \
             ./scripts/ci/update_manifest.go \
             ./scripts/ci/update_manifest_test.go
+
+      - name: Record Version-Derived Release Validation Track
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          track_report="${RUNNER_TEMP}/syswarden-release-track.json"
+          bash scripts/ci/record_release_track.sh \
+            "${GITHUB_WORKSPACE}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${track_report}"
+          {
+            echo '### Required release validation track'
+            echo '```json'
+            cat "${track_report}"
+            echo '```'
+            echo 'Classification only. Required validation, signatures and publication gates remain mandatory.'
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Resolve Exact Successful Upstream Runs
         id: upstream
@@ -1179,6 +1217,24 @@ jobs:
         with:
           go-version: '1.26.6'
           cache: false
+
+      - name: Record Version-Derived Release Validation Track
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.validate-and-stage.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          track_report="${RUNNER_TEMP}/syswarden-release-track.json"
+          bash scripts/ci/record_release_track.sh \
+            "${GITHUB_WORKSPACE}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${track_report}"
+          {
+            echo '### Required release validation track'
+            echo '```json'
+            cat "${track_report}"
+            echo '```'
+            echo 'Classification only. Required validation, signatures and publication gates remain mandatory.'
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Download Validated Release Payload
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

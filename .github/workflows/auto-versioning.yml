@@ -65,6 +65,32 @@ jobs:
             --base-ref "${BASE_REF}" \
             --commit-message "${COMMIT_MESSAGE}"
 
+      - name: Record Version-Derived Release Validation Track
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")"
+          track_report="${RUNNER_TEMP}/syswarden-release-track.json"
+          bash scripts/ci/record_release_track.sh \
+            "${GITHUB_WORKSPACE}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${track_report}"
+          {
+            echo '### Required release validation track'
+            echo '```json'
+            cat "${track_report}"
+            echo '```'
+            echo 'Classification only. Required validation, signatures and publication gates remain mandatory.'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Preserve Release Track Classification
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: syswarden-release-track-${{ github.sha }}
+          path: ${{ runner.temp }}/syswarden-release-track.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: "Prove validator did not mutate the repository"
         if: always()
         shell: bash
