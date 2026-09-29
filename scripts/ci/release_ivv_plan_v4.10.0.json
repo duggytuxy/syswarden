@@ -1,0 +1,191 @@
+{
+  "schema": "syswarden-intermediate-ivv-plan/v1",
+  "release": "v4.10.0",
+  "required_assurance": "IVV",
+  "product_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+  "historical_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+  "last_public_release": {
+    "tag": "v4.04.3",
+    "commit": "381c1f8d91459a9b20605629c725900abd81dee8",
+    "release_id": 384037482
+  },
+  "originating_transition": {
+    "commit": "76535e03ee10b78f9c6ed1665d7fbeb8c2b8ee68",
+    "prefix": "Major",
+    "previous_version": "v4.04.3"
+  },
+  "publication_source_change_allowlist": [
+    ".github/workflows/auto-versioning.yml",
+    ".github/workflows/release-manager.yml",
+    ".github/workflows/release-qualification.yml",
+    "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md",
+    "docs/maintainers/RELEASE_VALIDATION_POLICY.md",
+    "docs/qualification/INTERMEDIATE_IVV_V4.10.0.md",
+    "docs/qualification/RELEASE_TRACK_CLASSIFICATION_IMPACT.md",
+    "scripts/ci/record_release_track.sh",
+    "scripts/ci/release_ivv_plan.py",
+    "scripts/ci/release_ivv_plan_test.py",
+    "scripts/ci/release_ivv_plan_v4.10.0.json",
+    "scripts/ci/release_track_workflow_test.py",
+    "scripts/versionctl/command.go",
+    "scripts/versionctl/release_track.go",
+    "scripts/versionctl/release_track_test.go"
+  ],
+  "product_packages": [
+    {
+      "path": "packages/syswarden-4.10.0-1.x86_64.rpm",
+      "sha256": "0bb88722d8129c1016c00992418d64b423d786f96e5992272a95570e76f8fc86",
+      "size": 16183845
+    },
+    {
+      "path": "packages/syswarden_4.10.0_amd64.deb",
+      "sha256": "ef211f5f0d81836bad5bf5dfc8eebd70be3ab838362bca2ab4ceba7afb396449",
+      "size": 15899262
+    },
+    {
+      "path": "packages/syswarden_4.10.0_amd64.deb.asc",
+      "sha256": "dddf1ef5540c2e27adc13fb19a46f9e8e6ec6fc22aa74d4d8e3498bfc8ad272d",
+      "size": 833
+    },
+    {
+      "path": "packages/syswarden_4.10.0_x86_64.apk",
+      "sha256": "6be1ec92480547eae68456349ea1208767f5ba507d58b7f2655c62a56d8ad978",
+      "size": 16119608
+    },
+    {
+      "path": "rhel-package-owned/packages/syswarden-4.10.0-1.rhelpo.x86_64.rpm",
+      "sha256": "8162cbe064229954965596349f2d0a9526c1457ace2ce23b02b18f392618dcff",
+      "size": 15882627
+    }
+  ],
+  "retained_records": [
+    {
+      "id": "rhelpo-a10",
+      "candidate_commit": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+      "sha256": "ac89faf69d635f1ffbe6a1624e5855a51475d21859b2e94d044906b396bbd9f2",
+      "size": 2401,
+      "relation": "exact-product-evidence"
+    },
+    {
+      "id": "apk-324",
+      "candidate_commit": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+      "sha256": "90879242dd45fa794019b1d41d1f852b2f308de9f0ba890a893d7cbdb9301d94",
+      "size": 2170,
+      "relation": "historical-support-only"
+    },
+    {
+      "id": "rpm-a10",
+      "candidate_commit": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+      "sha256": "5b0db7d926ce6ae88afd345009539309c98a3644b84165ce297bdd9f121b2679",
+      "size": 2306,
+      "relation": "historical-support-only"
+    },
+    {
+      "id": "ha-endurance",
+      "candidate_commit": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+      "sha256": "a89d706b611511e02b00089da64426f4d89a814b5d8e6f134cafc5ed00176923",
+      "size": 1291,
+      "relation": "historical-support-only"
+    },
+    {
+      "id": "lifecycle",
+      "candidate_commit": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+      "sha256": "c6e242a00c0fc0d3863a195cf1f404f5ae29c99ebd7e2d7ebc738e62f9aada19",
+      "size": 627,
+      "relation": "historical-support-only"
+    },
+    {
+      "id": "feed",
+      "candidate_commit": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+      "sha256": "d9ed925ad2e18fb45ab935e2146c63e43f73bdb09f055e4df1e81af7404ac995",
+      "size": 636,
+      "relation": "historical-support-only"
+    },
+    {
+      "id": "allocation",
+      "candidate_commit": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+      "sha256": "31a9f2729bad1c7fb7fbcb18194487507729c0d77d20fe56ef3630aa651fb40c",
+      "size": 673,
+      "relation": "historical-support-only"
+    }
+  ],
+  "required_checks": [
+    {
+      "id": "candidate-ci",
+      "binding": "publication",
+      "requirement": "Exact publication CI/security results plus product CI provenance; no unresolved release blocker."
+    },
+    {
+      "id": "native-signatures",
+      "binding": "product",
+      "requirement": "Revalidate all four signed packages and selected production trust roots against the frozen hashes."
+    },
+    {
+      "id": "source-payload-continuity",
+      "binding": "publication",
+      "requirement": "Reviewed tooling-only source diff, frozen build inputs and unchanged signed package bytes; bind product and publication commits separately."
+    },
+    {
+      "id": "changed-list-unit-regressions",
+      "binding": "product",
+      "requirement": "Positive and negative IPv4/IPv6 whitelist and shared blocklist cases, unsafe files, seeded entries, lost family after initialization and first reload."
+    },
+    {
+      "id": "changed-activation-native",
+      "binding": "product",
+      "requirement": "Targeted activation, real expected SSH block, allowed operator access, reload and restart persistence on DEB-U2604, RPM-A9, RPM-A10, RPM-A9-RHELPO and APK-324. RPM-A10-RHELPO exact-product full PASS is retained."
+    },
+    {
+      "id": "alpine-ssh-provenance",
+      "binding": "product",
+      "requirement": "Positive native Alpine authentication and negative untrusted lookalike envelopes, plus native APK-324 activation coverage."
+    },
+    {
+      "id": "native-lifecycle-continuity",
+      "binding": "historical-plus-fresh",
+      "requirement": "Verify retained five-profile lifecycle evidence on its original commit; pair with changed-activation checks. No old verdict relabeling."
+    },
+    {
+      "id": "node01-migrations",
+      "binding": "product",
+      "requirement": "Complete the two missing native migration paths and verify configuration, ownership, service activation, recovery and restoration."
+    },
+    {
+      "id": "offline-update",
+      "binding": "product",
+      "requirement": "Complete independent native signed offline candidate update with exact package and installed CLI binding, refusal of substituted inputs and no network fallback."
+    },
+    {
+      "id": "ha-functional",
+      "binding": "historical-plus-fresh",
+      "requirement": "Revalidate historical two 30-minute campaigns and signed statement; verify final-package peer bootstrap, replication, restart/recovery and allowlist preservation. Repeat endurance only for an affected mechanism or observed regression."
+    },
+    {
+      "id": "feed-allocation-continuity",
+      "binding": "historical-plus-fresh",
+      "requirement": "Retain original feed/allocation measurements; verify unchanged mechanism and list integration. No new performance or full-qualification claim."
+    },
+    {
+      "id": "restorations",
+      "binding": "product",
+      "requirement": "Verify all modified native hosts and their network protections after the final targeted tests."
+    },
+    {
+      "id": "protected-ivv-acceptance",
+      "binding": "publication",
+      "requirement": "Protected producer, independent consumer revalidation, reviewed evidence admissions and no missing required check."
+    },
+    {
+      "id": "release-authenticity",
+      "binding": "publication",
+      "requirement": "Signed annotated tag, exact immutable assets and update manifest, Sigstore subject and approved identity, followed by downloaded-asset verification."
+    }
+  ],
+  "long_campaign_policy": "No automatic full endurance or broad performance replay. An affected mechanism, observed regression or published release claim requires a documented replay decision.",
+  "claim_limits": [
+    "Not full IVVQ qualification.",
+    "No guarantee of absence of all defects.",
+    "Historical measurements retain their original candidate and scope."
+  ],
+  "preflight_is_acceptance": false
+}
