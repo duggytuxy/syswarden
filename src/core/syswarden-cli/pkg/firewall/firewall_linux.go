@@ -2039,6 +2039,12 @@ func resolveUniqueActiveFirewalldZone(path string) (string, error) {
 			continue
 		}
 		fields := strings.Fields(line)
+		// firewalld 2.4 annotates the default zone in --get-active-zones.
+		// This is display metadata, not authority to select a zone: an
+		// interface binding and an unambiguous zone are still required.
+		if len(fields) == 2 && fields[1] == "(default)" {
+			fields = fields[:1]
+		}
 		if len(fields) != 1 {
 			return "", fmt.Errorf("active firewalld zone line %d is malformed", lineNumber+1)
 		}
