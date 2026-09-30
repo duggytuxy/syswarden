@@ -23,6 +23,9 @@
   <a href="https://github.com/duggytuxy/syswarden/blob/main/LICENSE">
     <img src="https://img.shields.io/github/license/duggytuxy/syswarden?style=flat-square&amp;logo=opensourceinitiative&amp;logoColor=white" alt="GitHub license">
   </a>
+  <a href="https://discord.gg/M7RzNFp9vm">
+    <img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=flat-square&amp;logo=discord&amp;logoColor=white" alt="Join the official SysWarden Discord">
+  </a>
 </div>
 
 # SysWarden
@@ -156,6 +159,21 @@ Operational procedures are centralized in the
 | Operate, audit or remove SysWarden | [Command and lifecycle reference](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#11-command-inventory) |
 | Review bounded deployment scenarios | [Use cases](https://github.com/duggytuxy/syswarden/wiki/Use-cases) |
 | Configure the BunkerWeb integration | [BunkerWeb integration](https://github.com/duggytuxy/syswarden/wiki/BunkerWeb-Integration) |
+
+## Community
+
+[Join the official SysWarden Discord](https://discord.gg/M7RzNFp9vm) for practical
+exchanges, project updates and community support in French and English.
+The official invitation does not expire.
+
+New members complete Discord verification, accept the rules and wait ten minutes
+before channels open. Choose one or more roles in `roles`: `users`, `testers`
+and `funders`. News and funding channels are read-only, with reactions enabled;
+the private testing discussion requires the `testers` role.
+
+Use `help-fr` or `help-en` to open a focused support post with the exact version,
+reproduction steps and anonymised logs. Never post credentials or confidential
+data. Report vulnerabilities privately through the [security policy](SECURITY.md).
 
 ## Project
 
