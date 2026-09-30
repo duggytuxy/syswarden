@@ -23,7 +23,7 @@
   <a href="https://github.com/duggytuxy/syswarden/blob/main/LICENSE">
     <img src="https://img.shields.io/github/license/duggytuxy/syswarden?style=flat-square&amp;logo=opensourceinitiative&amp;logoColor=white" alt="GitHub license">
   </a>
-  <a href="https://discord.gg/yTCmd9Qp">
+  <a href="https://discord.gg/M7RzNFp9vm">
     <img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=flat-square&amp;logo=discord&amp;logoColor=white" alt="Join the official SysWarden Discord">
   </a>
 </div>
@@ -162,9 +162,9 @@ Operational procedures are centralized in the
 
 ## Community
 
-[Join the official SysWarden Discord](https://discord.gg/yTCmd9Qp) for practical
+[Join the official SysWarden Discord](https://discord.gg/M7RzNFp9vm) for practical
 exchanges, project updates and community support in French and English.
-This invitation expires on **7 October 2026** and must be renewed by the maintainer.
+The official invitation does not expire.
 
 New members complete Discord verification, accept the rules and wait ten minutes
 before channels open. Choose one or more roles in `roles`: `users`, `testers`
