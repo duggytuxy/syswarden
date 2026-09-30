@@ -10,6 +10,7 @@ import argparse
 import copy
 from pathlib import Path
 import subprocess
+import zipfile
 
 try:
     from scripts.ci import release_ivv_plan as ivv
@@ -80,17 +81,69 @@ def preflight(repository: Path, publication: str, evidence_root: Path, package_r
         qualification_passed=False, publication_authorized=False)
 
 
+def verify_original_updater(repository: Path, publication: str, frozen_consumer: Path,
+                            producer: Path, native: Path, updater: Path, archive: Path) -> dict:
+    """Execute the unchanged verifier; never accept a supplied success receipt.
+
+    Its original consumer checkout remains at ORIGINAL_CONSUMER. The separately
+    checked publication checkout may contain the reviewed additions above.
+    """
+    source = source_binding(repository, publication)
+    frozen_source = original_updater.publication_binding(frozen_consumer, ORIGINAL_CONSUMER, producer)
+    # source_binding pins this imported verification module and all its original
+    # dependencies. verify() actually invokes the producer-era signature consumer.
+    receipt = original_updater.verify(frozen_consumer, ORIGINAL_CONSUMER, producer,
+                                      native, updater, archive)
+    expected = dict(schema='syswarden-intermediate-updater-revalidation/v1',
+        status='original-updater-reverified-native-acceptance-pending',
+        source_binding=frozen_source, updater_artifact_id=original_updater.ARTIFACT,
+        updater_archive_sha256=original_updater.ARCHIVE_SHA256,
+        native_update_accepted=False, intermediate_release_validated=False,
+        qualification_passed=False, publication_authorized=False)
+    for key, value in expected.items():
+        assurance.equal(receipt[key], value, 'original updater result differs: ' + key)
+    assurance.equal(source_binding(repository, publication), source,
+                    'publication changed during original updater verification')
+    assurance.equal(original_updater.publication_binding(frozen_consumer, ORIGINAL_CONSUMER, producer),
+                    frozen_source, 'frozen verifier source changed during verification')
+    return dict(schema='syswarden-publication-updater-binding/v1',
+        source_binding=source, original_consumer_commit=ORIGINAL_CONSUMER,
+        original_producer_commit=original_updater.PRODUCER,
+        original_updater_result=receipt, native_update_accepted=False,
+        intermediate_release_validated=False, qualification_passed=False,
+        publication_authorized=False)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('repository', 'evidence-root', 'package-root', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--publication-sha', required=True)
+    for name in ('original-consumer-repository', 'original-producer-repository',
+                 'candidate-bundle', 'candidate-archive'):
+        parser.add_argument('--' + name, type=Path)
     args = parser.parse_args()
+    updater_inputs = (args.original_consumer_repository, args.original_producer_repository,
+                      args.candidate_bundle, args.candidate_archive)
+    if any(value is not None for value in updater_inputs) and not all(
+            value is not None for value in updater_inputs):
+        parser.error('original updater verification requires all four original updater inputs')
     try:
         result = preflight(args.repository, args.publication_sha, args.evidence_root, args.package_root)
+        if all(value is not None for value in updater_inputs):
+            updater_result = verify_original_updater(
+                args.repository, args.publication_sha, args.original_consumer_repository,
+                args.original_producer_repository, args.package_root,
+                args.candidate_bundle, args.candidate_archive)
+            assurance.equal(updater_result['source_binding'], result['source_binding'],
+                            'publication changed between input and updater verification')
+            assurance.equal(preflight(args.repository, args.publication_sha,
+                                      args.evidence_root, args.package_root), result,
+                            'frozen inputs changed during original updater verification')
+            result['original_updater_reverification'] = updater_result
         ivv.write_new(args.output, result)
     except (ivv.PlanError, ivv.bundle.SigningBundleError, OSError, KeyError, TypeError,
-            subprocess.SubprocessError) as exc:
+            zipfile.BadZipFile, subprocess.SubprocessError) as exc:
         parser.exit(1, f'Publication input continuity rejected: {exc}\n')
     print('Frozen product inputs retained; protected IVV acceptance remains mandatory.')
     return 0

@@ -119,5 +119,114 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaises(gate.ivv.PlanError):self.verify()
 
 
+class OriginalUpdaterIntegrationTests(unittest.TestCase):
+    """Synthetic control-flow tests; real signature verification is a separate check."""
+    def setUp(self):
+        self.paths = [Path('/synthetic/' + name) for name in
+                      ('publication', 'consumer', 'producer', 'native', 'updater', 'archive')]
+        self.publication = 'a' * 40
+        self.source = {'publication_commit': self.publication,
+                       'product_candidate': gate.original_updater.PRODUCT}
+        self.frozen = {'publication_commit': gate.ORIGINAL_CONSUMER,
+                       'updater_producer_commit': gate.original_updater.PRODUCER}
+        self.receipt = dict(schema='syswarden-intermediate-updater-revalidation/v1',
+            status='original-updater-reverified-native-acceptance-pending',
+            source_binding=self.frozen, updater_artifact_id=gate.original_updater.ARTIFACT,
+            updater_archive_sha256=gate.original_updater.ARCHIVE_SHA256,
+            native_update_accepted=False, intermediate_release_validated=False,
+            qualification_passed=False, publication_authorized=False)
+        self.source_patch = patch.object(gate, 'source_binding', return_value=self.source)
+        self.frozen_patch = patch.object(gate.original_updater, 'publication_binding', return_value=self.frozen)
+        self.verify_patch = patch.object(gate.original_updater, 'verify', return_value=self.receipt)
+        self.source_call = self.source_patch.start();self.addCleanup(self.source_patch.stop)
+        self.frozen_call = self.frozen_patch.start();self.addCleanup(self.frozen_patch.stop)
+        self.verify_call = self.verify_patch.start();self.addCleanup(self.verify_patch.stop)
+
+    def run_check(self):
+        return gate.verify_original_updater(self.paths[0], self.publication, *self.paths[1:])
+
+    def test_executes_original_verifier_once_and_keeps_three_source_identities(self):
+        result = self.run_check()
+        self.verify_call.assert_called_once_with(self.paths[1], gate.ORIGINAL_CONSUMER, *self.paths[2:])
+        self.assertEqual(result['source_binding']['publication_commit'], self.publication)
+        self.assertEqual(result['original_consumer_commit'], gate.ORIGINAL_CONSUMER)
+        self.assertEqual(result['original_producer_commit'], gate.original_updater.PRODUCER)
+        self.assertEqual(result['original_updater_result'], self.receipt)
+        for field in ('native_update_accepted', 'intermediate_release_validated',
+                      'qualification_passed', 'publication_authorized'):
+            self.assertIs(result[field], False)
+        self.assertEqual(self.source_call.call_count, 2)
+        self.assertEqual(self.frozen_call.call_count, 2)
+
+    def test_verifier_failure_does_not_produce_a_bound_result(self):
+        self.verify_call.side_effect = gate.ivv.PlanError('signature rejected')
+        with self.assertRaisesRegex(gate.ivv.PlanError, 'signature rejected'):self.run_check()
+
+    def test_original_verifier_result_cannot_claim_acceptance_or_another_artifact(self):
+        for field, value in [('native_update_accepted', True), ('intermediate_release_validated', True),
+                             ('qualification_passed', True), ('publication_authorized', True),
+                             ('schema', 'supplied-pass'), ('status', 'pass'),
+                             ('updater_artifact_id', 1), ('updater_archive_sha256', 'f' * 64),
+                             ('source_binding', {'publication_commit': self.publication})]:
+            with self.subTest(field=field):
+                self.verify_call.return_value = dict(self.receipt, **{field: value})
+                with self.assertRaisesRegex(gate.ivv.PlanError, 'original updater result differs'):
+                    self.run_check()
+
+    def test_publication_mutation_during_verification_is_rejected(self):
+        self.source_call.side_effect = [self.source, dict(self.source, publication_commit='b' * 40)]
+        with self.assertRaisesRegex(gate.ivv.PlanError, 'publication changed'):self.run_check()
+
+    def test_original_consumer_mutation_during_verification_is_rejected(self):
+        self.frozen_call.side_effect = [self.frozen, dict(self.frozen, publication_commit='b' * 40)]
+        with self.assertRaisesRegex(gate.ivv.PlanError, 'frozen verifier source changed'):self.run_check()
+
+    def test_cli_rechecks_frozen_inputs_after_signature_verification(self):
+        import contextlib
+        import io
+        import sys
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for changed in (False, True):
+                with self.subTest(changed=changed):
+                    output = root / ('output-' + str(changed) + '.json')
+                    argv = ['release_ivv_publication.py', '--repository', str(root),
+                        '--publication-sha', self.publication, '--evidence-root', str(root),
+                        '--package-root', str(root), '--output', str(output)]
+                    for option in ('original-consumer-repository', 'original-producer-repository',
+                                   'candidate-bundle', 'candidate-archive'):
+                        argv.extend(['--' + option, str(root)])
+                    initial = {'source_binding': self.source, 'frozen': 'original bytes'}
+                    final = dict(initial, frozen='substituted') if changed else dict(initial)
+                    with patch.object(sys, 'argv', argv), patch.object(gate, 'preflight',
+                            side_effect=[initial, final]) as input_checks, patch.object(gate,
+                            'verify_original_updater', return_value={'source_binding': self.source}) as verifier, \
+                            contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        if changed:
+                            with self.assertRaises(SystemExit) as caught:gate.main()
+                            self.assertEqual(caught.exception.code, 1)
+                            self.assertFalse(output.exists())
+                        else:
+                            self.assertEqual(gate.main(), 0)
+                            self.assertIn('original_updater_reverification', json.loads(output.read_text()))
+                        self.assertEqual(input_checks.call_count, 2)
+                        verifier.assert_called_once()
+
+    def test_cli_rejects_partial_updater_inputs_before_reading_or_writing(self):
+        import sys
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary);output = root / 'must-not-exist.json'
+            for option in ('original-consumer-repository', 'original-producer-repository',
+                           'candidate-bundle', 'candidate-archive'):
+                result = subprocess.run([sys.executable, str(Path(gate.__file__)),
+                    '--repository', str(root), '--publication-sha', self.publication,
+                    '--evidence-root', str(root), '--package-root', str(root),
+                    '--output', str(output), '--' + option, str(root)],
+                    capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('requires all four original updater inputs', result.stderr)
+                self.assertFalse(output.exists())
+
+
 if __name__=='__main__':
     unittest.main()

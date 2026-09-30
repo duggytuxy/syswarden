@@ -34,6 +34,22 @@ These are metadata checks only. A real consumer must additionally authenticate
 the producer attestation, inspect the exact report and verify all required checks
 and frozen asset bytes.
 
+## Revalidate the original updater from publication tooling
+
+Supply all four optional updater inputs to the publication preflight:
+`--original-consumer-repository`, `--original-producer-repository`,
+`--candidate-bundle` and `--candidate-archive`. The consumer checkout must stay
+at `3e66ea18` and the producer checkout at `2b35616c`. The package root is the
+complete original native-signed bundle. Partial input sets are rejected.
+
+This path executes the unchanged updater verifier, including the producer-era
+consumer, GitHub run and artifact checks, Sigstore provenance and Ed25519 manifest
+verification. It binds that fresh result to the separately verified publication
+checkout. The original verifier dependencies stay pinned; a supplied success
+receipt cannot replace execution. Source identities are rechecked afterwards.
+Without these four inputs, the output remains only a source/input preflight.
+Neither output grants native-update acceptance or release acceptance.
+
 ## Integration still required
 
 These helpers do not modify or enable the publisher. The protected IVV producer,
