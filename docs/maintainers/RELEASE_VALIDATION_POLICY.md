@@ -1,6 +1,6 @@
 # SysWarden release validation policy
 
-Status: approved release strategy, 29 September 2026. Version-derived track classification is implemented. The separate intermediate acceptance and publication path remains pending; the current publisher still requires its existing qualification evidence. Track classification grants no release verdict.
+Status: approved release strategy, 29 September 2026. The v4.10.0 intermediate IVV producer and independent publisher consumers implement the current acceptance plan. A merged implementation is not an acceptance result: the exact protected producer must complete successfully before publication can proceed. Track classification grants no release verdict.
 
 ## Two release tracks
 
@@ -65,7 +65,7 @@ Adapt both release coordination and the privileged publishing job to verify the 
 
 Regression tests for this workflow change must reject a wrong candidate, substituted package, untrusted signer, missing required check, old verdict relabeled as current, unapproved evidence continuity and an `Upgrade` using intermediate validation. Include valid cases for all four prefixes, v4 to v5 and v5 to v6 Upgrade transitions, rejection of a `Major` generation change, and preservation of the Upgrade track across subsequent corrective PRs.
 
-The existing frozen qualification contracts and their historical verdicts remain unchanged. The new track changes the release assurance claim prospectively. Publication remains unavailable through the current workflow until this implementation has been reviewed and merged and the selected track has passed.
+The existing frozen qualification contracts and their historical verdicts remain unchanged. The new track changes the release assurance claim prospectively. Publication remains unavailable until the implementation has been reviewed and merged, the selected protected track has passed, and each independent publisher boundary has verified its original report and artifact. The current v4.10.0 implementation is documented in [the current intermediate acceptance plan](../qualification/INTERMEDIATE_CURRENT_ACCEPTANCE_V4.10.0.md).
 
 ## Read-only implementation
 

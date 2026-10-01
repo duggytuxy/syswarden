@@ -1,0 +1,292 @@
+{
+  "schema": "syswarden-current-intermediate-ivv-plan/v1",
+  "release": "v4.10.0",
+  "required_assurance": "IVV",
+  "product_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+  "previous_product_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+  "originating_transition": {
+    "commit": "76535e03ee10b78f9c6ed1665d7fbeb8c2b8ee68",
+    "prefix": "Major",
+    "previous_version": "v4.04.3"
+  },
+  "last_public_release": {
+    "tag": "v4.04.3",
+    "commit": "381c1f8d91459a9b20605629c725900abd81dee8",
+    "release_id": 384037482
+  },
+  "publication_source_change_allowlist": [
+    ".github/workflows/release-ivv.yml",
+    ".github/workflows/release-manager.yml",
+    "README.md",
+    "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md",
+    "docs/maintainers/RELEASE_VALIDATION_POLICY.md",
+    "docs/qualification/INTERMEDIATE_CURRENT_ACCEPTANCE_V4.10.0.md",
+    "scripts/ci/current_candidate_update_verify.py",
+    "scripts/ci/current_candidate_update_verify_test.py",
+    "scripts/ci/ivv_native_apk.py",
+    "scripts/ci/ivv_native_rpmkeys.py",
+    "scripts/ci/release_assurance_contract.py",
+    "scripts/ci/release_assurance_contract_test.py",
+    "scripts/ci/release_gate_test.py",
+    "scripts/ci/release_ivv_consumer.py",
+    "scripts/ci/release_ivv_consumer_test.py",
+    "scripts/ci/release_ivv_current.py",
+    "scripts/ci/release_ivv_current_inputs.json",
+    "scripts/ci/release_ivv_current_test.py",
+    "scripts/ci/release_ivv_current_v4.10.0.json",
+    "scripts/ci/release_ivv_native_signatures.py",
+    "scripts/ci/release_ivv_producer.py",
+    "scripts/ci/release_ivv_producer_test.py",
+    "scripts/ci/release_ivv_support.py",
+    "scripts/ci/release_ivv_support_test.py",
+    "scripts/ci/release_ivv_workflow_test.py"
+  ],
+  "product_packages": [
+    {
+      "path": "packages/syswarden-4.10.0-1.x86_64.rpm",
+      "sha256": "5d70d52cbaf637630c3eddb63ed1f0175e441ecb32e36b28827e30c3f7abc640",
+      "size": 16183829
+    },
+    {
+      "path": "packages/syswarden_4.10.0_amd64.deb",
+      "sha256": "a61bde0fb49b052e39fb5ab56477d2c02aed6cfaeb3f683330f8c432bbca0553",
+      "size": 15897842
+    },
+    {
+      "path": "packages/syswarden_4.10.0_amd64.deb.asc",
+      "sha256": "33463a7c397e69d64b6434c02c53eca1961ea41ddbc82498dca47af51cf05081",
+      "size": 833
+    },
+    {
+      "path": "packages/syswarden_4.10.0_x86_64.apk",
+      "sha256": "634f6b0fa7ad6b9fb07abc841c238c9f5e97b589e102bf4bec6d30d2ad3e8d4d",
+      "size": 16110898
+    },
+    {
+      "path": "rhel-package-owned/packages/syswarden-4.10.0-1.rhelpo.x86_64.rpm",
+      "sha256": "21dc2993c109e0e1d3556a46a905f8cf02a2ed9ebc5188550ca6ccbf8f6e873c",
+      "size": 15882677
+    }
+  ],
+  "private_input_manifest_sha256": "ca7b71603aa2758ee140daaa467d1a8fa39a8d50a7e3b3cbec1107d09f033567",
+  "historical_plan_sha256": "931e079fb9f04671e0c2379b81de2d29d452ea174c05cfb230abd50035fa2878",
+  "product_native_signing": {
+    "run_id": 36813812232,
+    "artifact_id": 11140952643,
+    "artifact_name": "syswarden-native-signed-packages-qualified-4.10.0-36813812232-1-8c3405758a9b369924f466d12652e99d3a84dc56",
+    "artifact_digest": "sha256:e9b29c7ee9b0b3b14a9c1e8f1af1849306718748361c5f0dc0998a6ab5137e41"
+  },
+  "updater_producer": {
+    "commit": "8c3405758a9b369924f466d12652e99d3a84dc56",
+    "run_id": 36842481776,
+    "artifact_id": 11152415554,
+    "archive_sha256": "42ec67e5a82bbaff436c4483279d6579cb5e9135ccb76a6e18d59a8be382ed02"
+  },
+  "required_input_ids": [
+    "RPM-A10",
+    "RPM-A10-RHELPO",
+    "RPM-A9",
+    "RPM-A9-RHELPO",
+    "alpine-activation",
+    "current-payload-comparison",
+    "current-product-ci",
+    "current-source-closures",
+    "current-updater",
+    "ha-final-restoration",
+    "ha-functional",
+    "historical-allocation",
+    "historical-feed",
+    "historical-ha-endurance",
+    "historical-lifecycle",
+    "historical-recomputed-gates",
+    "node01-final-restoration",
+    "node01-migration-one",
+    "node01-migration-two",
+    "node01-offline-update",
+    "node01-original-snapshot",
+    "node01-updater-purge",
+    "node01-updater-reboot",
+    "node03-final-restoration",
+    "node03-intermediate-restoration",
+    "node04-final-restoration",
+    "node05-final-restoration",
+    "node05-intermediate-restoration",
+    "ubuntu-activation"
+  ],
+  "continuity_scope": [
+    "DEB-U2604 activation on f334",
+    "APK-324 activation on f334",
+    "NODE01 two migrations and independent offline DEB updater on f334"
+  ],
+  "fresh_scope": [
+    "RPM-A9",
+    "RPM-A10",
+    "RPM-A9-RHELPO",
+    "RPM-A10-RHELPO",
+    "HA functional on 8c340575"
+  ],
+  "claim_limits": [
+    "Intermediate IVV only; not full IVVQ.",
+    "Historical native observations keep their original candidate and package identity.",
+    "The private APK3 qualification-bundle path is not accepted by this plan; the native offline updater observation is DEB only.",
+    "IPv6 list persistence and kernel membership were tested; real inter-node activation probes were IPv4.",
+    "The prior two 30-minute HA campaigns remain historical support on 24c3; the new replay is functional."
+  ],
+  "preflight_is_acceptance": false,
+  "required_acceptance_checks": [
+    "candidate-ci",
+    "native-signatures",
+    "source-payload-continuity",
+    "changed-list-unit-regressions",
+    "changed-activation-native",
+    "alpine-ssh-provenance",
+    "native-lifecycle-continuity",
+    "node01-migrations",
+    "offline-update",
+    "ha-functional",
+    "feed-allocation-continuity",
+    "restorations"
+  ],
+  "post_acceptance_requirements": [
+    "signed-annotated-tag",
+    "independent-publisher-consumers",
+    "immutable-exact-assets",
+    "Sigstore-release-authenticity",
+    "downloaded-release-verification"
+  ],
+  "product_ci": [
+    {
+      "run_id": 36813024252,
+      "workflow": ".github/workflows/auto-versioning.yml"
+    },
+    {
+      "run_id": 36813024270,
+      "workflow": ".github/workflows/scorecard.yml"
+    },
+    {
+      "run_id": 36813024300,
+      "workflow": ".github/workflows/compliance.yml"
+    },
+    {
+      "run_id": 36813024204,
+      "workflow": ".github/workflows/package.yml"
+    },
+    {
+      "run_id": 36813024209,
+      "workflow": ".github/workflows/security-audit.yml"
+    }
+  ],
+  "acceptance_basis": {
+    "candidate-ci": [
+      "current-product-ci"
+    ],
+    "native-signatures": [],
+    "source-payload-continuity": [
+      "current-source-closures",
+      "current-payload-comparison"
+    ],
+    "changed-list-unit-regressions": [
+      "current-product-ci"
+    ],
+    "changed-activation-native": [
+      "RPM-A9",
+      "RPM-A9-RHELPO",
+      "RPM-A10",
+      "RPM-A10-RHELPO",
+      "ubuntu-activation",
+      "alpine-activation"
+    ],
+    "alpine-ssh-provenance": [
+      "alpine-activation",
+      "current-product-ci"
+    ],
+    "native-lifecycle-continuity": [
+      "historical-lifecycle",
+      "historical-recomputed-gates",
+      "current-source-closures",
+      "current-payload-comparison"
+    ],
+    "node01-migrations": [
+      "node01-migration-one",
+      "node01-migration-two",
+      "current-source-closures",
+      "current-payload-comparison"
+    ],
+    "offline-update": [
+      "node01-offline-update",
+      "node01-updater-reboot",
+      "node01-updater-purge",
+      "current-updater",
+      "current-source-closures",
+      "current-payload-comparison"
+    ],
+    "ha-functional": [
+      "ha-functional",
+      "historical-ha-endurance",
+      "historical-recomputed-gates"
+    ],
+    "feed-allocation-continuity": [
+      "historical-feed",
+      "historical-allocation",
+      "historical-recomputed-gates"
+    ],
+    "restorations": [
+      "node01-final-restoration",
+      "node01-original-snapshot",
+      "ha-final-restoration",
+      "node03-final-restoration",
+      "node03-intermediate-restoration",
+      "node04-final-restoration",
+      "node05-final-restoration",
+      "node05-intermediate-restoration"
+    ]
+  },
+  "product_release_support": [
+    {
+      "id": 11140158652,
+      "name": "syswarden-attested-bundle",
+      "size_in_bytes": 15838997,
+      "digest": "sha256:b52a0a5f3c4568e2d1babcff3b7fae8be36077899ccfd835f2d68678266a7f59",
+      "run_id": 36813024209,
+      "file": {
+        "path": "syswarden-release.tar.gz",
+        "size": 15916755,
+        "sha256": "b72d0237eb70e56df47ed82e43912df893c2557f6cca93b2a23132ad5f48105a"
+      }
+    },
+    {
+      "id": 11140151652,
+      "name": "syswarden-sbom",
+      "size_in_bytes": 4056,
+      "digest": "sha256:d395756e925045ca3867e177a30e5e584c704ca21735fa6af93abbf0f585715e",
+      "run_id": 36813024209,
+      "file": {
+        "path": "syswarden-sbom.spdx.json",
+        "size": 79280,
+        "sha256": "20ad78271b5df3b6022823dfa29125edfaea5320d2ef046f8d4a4bd79099bf81"
+      }
+    }
+  ],
+  "product_bundle_members": [
+    {
+      "path": "signatures.json",
+      "size": 22231,
+      "sha256": "955687624840ba52b6f9d08b37971dfc69a784faa30ffeb7b4d7215d16f546b6"
+    },
+    {
+      "path": "bin/syswarden-cli",
+      "size": 19853614,
+      "sha256": "5d32056edf182060513a73a734a35c278d24e2c7ca6eeed0340decc729f28d79"
+    },
+    {
+      "path": "bin/syswarden-core",
+      "size": 12284206,
+      "sha256": "27fcb8781b94c0951f7172186594fc1ecb7331da7431f5d05c749acdc4321321"
+    },
+    {
+      "path": "bin/syswarden-tui",
+      "size": 8651054,
+      "sha256": "5d90bc17cb38032990850d7544db17c9485a44b6e4a46c7c39c01172ca1ea320"
+    }
+  ]
+}
