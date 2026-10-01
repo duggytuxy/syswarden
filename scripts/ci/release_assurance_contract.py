@@ -15,13 +15,15 @@ import sys
 
 try:
     from scripts.ci import release_ivv_plan as ivv
+    from scripts.ci import release_ivv_current as current
 except ModuleNotFoundError:
     import release_ivv_plan as ivv
+    import release_ivv_current as current
 
 REPOSITORY = 'duggytuxy/syswarden'
 REPOSITORY_ID = 1153695079
 OWNER_ID = 61513268
-PRODUCT_V4100 = 'f334beaddc5c6005f40d79c7bab4e43598bfc5ed'
+PRODUCT_V4100 = '8c3405758a9b369924f466d12652e99d3a84dc56'
 VERSION = re.compile(r'v(?:0|[1-9][0-9]*)\.[0-9]{2}\.(?:0|[1-9][0-9]*)')
 TRACK_KEYS = frozenset({'schema', 'candidate_commit', 'release', 'previous_version',
     'transition_commit', 'transition_parent', 'prefix', 'track', 'followup_commits',
@@ -84,7 +86,7 @@ def from_classification(document: dict, release: str, publication: str) -> Assur
     # A future intermediate release needs its own reviewed product plan.
     # Do not silently borrow the frozen v4.10.0 product or evidence.
     require(release == 'v4.10.0', 'no reviewed intermediate product plan for this release')
-    plan = ivv.load_plan()
+    plan = current.load_plan()
     ivv.verify_track(document, publication, plan)
     equal(plan['product_candidate'], PRODUCT_V4100, 'unreviewed frozen product')
     return AssuranceContract('intermediate-validation', 'IVV', release, publication, PRODUCT_V4100,

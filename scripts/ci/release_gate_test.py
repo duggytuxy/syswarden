@@ -1626,15 +1626,15 @@ class ReleaseGateTests(unittest.TestCase):
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         comparisons = (
             (
-                "release_payload/assets/RELEASE_SHA256SUMS.txt",
+                "tmp/release_payload/assets/RELEASE_SHA256SUMS.txt",
                 "existing_release_assets/RELEASE_SHA256SUMS.txt",
             ),
             (
-                "release_payload/assets/RELEASE_SHA256SUMS.txt",
+                "tmp/release_payload/assets/RELEASE_SHA256SUMS.txt",
                 "draft_release_assets/RELEASE_SHA256SUMS.txt",
             ),
             (
-                "release_payload/assets/RELEASE_SHA256SUMS.txt",
+                "tmp/release_payload/assets/RELEASE_SHA256SUMS.txt",
                 "published_release_assets/RELEASE_SHA256SUMS.txt",
             ),
         )
@@ -1900,7 +1900,7 @@ class ReleaseGateTests(unittest.TestCase):
         )
         self.assertNotIn(RETIRED_PLATFORM, workflow.lower())
         self.assertNotIn(RETIRED_PACKAGE_SUFFIX, workflow)
-        self.assertEqual(workflow.count('--repository "${GITHUB_WORKSPACE}"'), 7)
+        self.assertEqual(workflow.count('--repository "${GITHUB_WORKSPACE}"'), 13)
         self.assertNotIn('if [[ "${RELEASE_TAG}" != "v4.02.8" ]]', workflow)
         self.assertEqual(workflow.count("requires-signed-update --tag"), 3)
         self.assertEqual(workflow.count('if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]'), 6)
@@ -2625,10 +2625,10 @@ exit 64
                 self.assertIn(f'"{package_template}"', section)
 
         self.assertIn(
-            '"incoming/syswarden-packages-${VERSION}/${package_name}"', validate
+            '"tmp/incoming/syswarden-packages-${VERSION}/${package_name}"', validate
         )
         self.assertIn(
-            '"release_payload/assets/${package_name}"', privileged
+            '"tmp/release_payload/assets/${package_name}"', privileged
         )
 
         self.assertLess(
@@ -2662,17 +2662,17 @@ exit 64
         validated_payload_upload = validate.split(
             "      - name: Upload Validated Release Payload", 1
         )[1]
-        self.assertIn("path: release_payload/", validated_payload_upload)
+        self.assertIn("path: tmp/release_payload/", validated_payload_upload)
         self.assertNotIn("path: ${RUNNER_TEMP}", validated_payload_upload)
         attestation_step = privileged.split(
             "      - name: Generate GitHub Build Provenance Attestations", 1
         )[1].split("      - name: Create Private Draft Release", 1)[0]
-        self.assertIn("subject-path: release_payload/assets/*", attestation_step)
+        self.assertIn("subject-path: tmp/release_payload/assets/*", attestation_step)
         self.assertNotIn("syswarden-release-qualification", attestation_step)
         release_creation = privileged.split(
             "      - name: Create Private Draft Release", 1
         )[1].split("      - name: Verify Private Draft Assets Before Publication", 1)[0]
-        self.assertIn("release_payload/assets/*", release_creation)
+        self.assertIn("tmp/release_payload/assets/*", release_creation)
         self.assertNotIn("syswarden-release-qualification", release_creation)
 
     def test_release_manager_adapter_calls_match_the_live_cli_contract(self) -> None:
@@ -2907,18 +2907,18 @@ exit 64
             "      - name: Validate and Assemble Exact Release Inventory", 1
         )[1].split("      - name: Upload Validated Release Payload", 1)[0]
         self.assertIn(
-            '--packages "${RUNNER_TEMP}/syswarden-release-qualification-stage/packages/candidate"',
+            '--packages "${qualification_root}/packages/candidate"',
             stage,
         )
         self.assertIn(
-            '--deb-signature "${RUNNER_TEMP}/syswarden-release-qualification-stage/native-signing/packages/syswarden_${VERSION}_amd64.deb.asc"',
+            '--deb-signature "${qualification_root}/native-signing/packages/syswarden_${VERSION}_amd64.deb.asc"',
             stage,
         )
         self.assertIn(
-            '--rhel-package-owned-rpm "${RUNNER_TEMP}/syswarden-release-qualification-stage/native-signing/rhel-package-owned/packages/syswarden-${VERSION}-1.rhelpo.x86_64.rpm"',
+            '--rhel-package-owned-rpm "${qualification_root}/native-signing/rhel-package-owned/packages/syswarden-${VERSION}-1.rhelpo.x86_64.rpm"',
             stage,
         )
-        self.assertNotIn('--packages "incoming/syswarden-packages-${VERSION}"', stage)
+        self.assertNotIn('--packages "tmp/incoming/syswarden-packages-${VERSION}"', stage)
         revalidation = workflow.split(
             "      - name: Revalidate Exact Pre-Tag Qualification and Candidate Packages",
             1,
@@ -2931,7 +2931,7 @@ exit 64
             privileged,
         )
         self.assertIn(
-            'release_payload/assets/syswarden-${VERSION}-1.rhelpo.x86_64.rpm',
+            'tmp/release_payload/assets/syswarden-${VERSION}-1.rhelpo.x86_64.rpm',
             privileged,
         )
 
