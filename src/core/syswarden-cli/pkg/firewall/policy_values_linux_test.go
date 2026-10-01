@@ -1301,6 +1301,15 @@ func TestFirewalldPortRefusesZeroOrMultipleActiveZonesBeforeNftCommit_SW_FW_001(
 	}{
 		{name: "no active zone", activeZones: " ", wantFragment: "has no active interface-bound zone"},
 		{name: "multiple active zones", activeZones: "public\n  interfaces: eth0\nwork\n  interfaces: eth1", wantFragment: "has multiple active interface-bound zones"},
+		{name: "annotated default without interface", activeZones: "public (default)\n  sources: 192.0.2.0/24", wantFragment: "has no active interface-bound zone"},
+		{name: "annotated default does not resolve ambiguity", activeZones: "public (default)\n  interfaces: eth0\nwork\n  interfaces: eth1", wantFragment: "has multiple active interface-bound zones"},
+		{name: "unknown annotation", activeZones: "public (active)\n  interfaces: eth0", wantFragment: "is malformed"},
+		{name: "list-all annotation is not active-zones syntax", activeZones: "public (default, active)\n  interfaces: eth0", wantFragment: "is malformed"},
+		{name: "extra token after default", activeZones: "public (default) extra\n  interfaces: eth0", wantFragment: "is malformed"},
+		{name: "duplicate annotation", activeZones: "public (default) (default)\n  interfaces: eth0", wantFragment: "is malformed"},
+		{name: "default annotation without zone", activeZones: "(default)\n  interfaces: eth0", wantFragment: "active firewalld zone line"},
+		{name: "unsafe annotated zone", activeZones: "public; (default)\n  interfaces: eth0", wantFragment: "active firewalld zone line"},
+		{name: "orphan interface", activeZones: "  interfaces: eth0\npublic (default)", wantFragment: "has no zone header"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2218,6 +2227,54 @@ func TestApplyPoliciesRejectsInjectedValuesBeforeTransaction_SW_FW_001(t *testin
 			err := ApplyPolicies()
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("ApplyPolicies() error = %v, want validation error containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestFirewalldDefaultZoneAnnotationKeepsInterfaceBinding_SW_FW_001(t *testing.T) {
+	tests := []struct {
+		name        string
+		activeZones string
+		wantZone    string
+	}{
+		{
+			name:        "native AlmaLinux default header with source-only trusted zone",
+			activeZones: "public (default)\n  interfaces: eth0\ntrusted\n  sources: 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16\n",
+			wantZone:    "public",
+		},
+		{
+			name:        "source-only default does not replace interface-bound zone",
+			activeZones: "trusted (default)\n  sources: 192.0.2.0/24\nwork\n  interfaces: eth0\n",
+			wantZone:    "work",
+		},
+		{
+			name:        "default header without details does not replace interface-bound zone",
+			activeZones: "public (default)\nwork\n  interfaces: eth0\n",
+			wantZone:    "work",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			statePath := filepath.Join(directory, "ownership.state")
+			useLinuxWrapperStateFile(t, statePath)
+			logPath := filepath.Join(directory, "commands.log")
+			writeRootedExecutableTestFile(t, filepath.Join(directory, "firewall-cmd"), []byte(statefulFirewalldWrapperTestScript))
+			t.Setenv("PATH", directory)
+			t.Setenv("SYSWARDEN_WRAPPER_STATE", filepath.Join(directory, "rules"))
+			t.Setenv("SYSWARDEN_WRAPPER_LOG", logPath)
+			t.Setenv("SYSWARDEN_ACTIVE_ZONES_OUTPUT", test.activeZones)
+			if err := applyLinuxFirewallWrappers(nil, []string{"62026"}); err != nil {
+				t.Fatalf("resolve native annotated zone header: %v", err)
+			}
+			wantOwnership := linuxWrapperStateVersion + "\nfirewalld\tport\t62026\t" + test.wantZone + "\towned\n"
+			if got := string(readRootedTestFile(t, statePath)); got != wantOwnership {
+				t.Fatalf("zone ownership = %q, want %q", got, wantOwnership)
+			}
+			calls := string(readRootedTestFile(t, logPath))
+			if !strings.Contains(calls, "--permanent --zone="+test.wantZone+" --add-port=62026/tcp") || strings.Contains(calls, "--get-default-zone") {
+				t.Fatalf("port was not bound explicitly to the unique interface zone:\n%s", calls)
 			}
 		})
 	}
