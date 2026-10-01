@@ -715,7 +715,8 @@ func TestLegacyWireGuardRecoveryRejectsIncoherentAbsentOpenRCState_SW2_WGRECOVER
 	}
 }
 
-func TestLegacyWireGuardRecoveryAcceptsVerifiedModernManifestEvidence_SW2_WGRECOVERY_014(t *testing.T) {
+func newManifestLegacyWireGuardTestHost(t *testing.T) (legacyWireGuardRecoveryHost, *fakeLegacyWireGuardNFTState) {
+	t.Helper()
 	root := t.TempDir()
 	for _, directory := range []string{"etc", "etc/wireguard", "etc/wireguard/clients", "etc/sysctl.d"} {
 		if err := os.Mkdir(filepath.Join(root, directory), 0755); err != nil { // #nosec G301 -- fixture reproduces the protected system directory modes required by manifest attestation
@@ -770,6 +771,11 @@ func TestLegacyWireGuardRecoveryAcceptsVerifiedModernManifestEvidence_SW2_WGRECO
 		nftRunner:     state, nftBatch: state.apply,
 		guard: func() (func() error, error) { return func() error { return nil }, nil },
 	}
+	return host, state
+}
+
+func TestLegacyWireGuardRecoveryAcceptsVerifiedModernManifestEvidence_SW2_WGRECOVERY_014(t *testing.T) {
+	host, _ := newManifestLegacyWireGuardTestHost(t)
 	plan, err := host.inspect()
 	if err != nil {
 		t.Fatal(err)

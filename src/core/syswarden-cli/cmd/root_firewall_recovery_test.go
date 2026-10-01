@@ -8,6 +8,9 @@ import (
 )
 
 func TestRootRunsFirewallRecoveryBeforeAutomaticConfigLoad_SW_FW_005(t *testing.T) {
+	previousInspect := inspectRemovalTombstone
+	inspectRemovalTombstone = func() (bool, error) { return false, nil }
+	t.Cleanup(func() { inspectRemovalTombstone = previousInspect })
 	previousRecovery := recoverPendingFirewallTransactionHook
 	previousInit := initConfigHook
 	t.Cleanup(func() {

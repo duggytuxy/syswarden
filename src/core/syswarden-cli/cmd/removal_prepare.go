@@ -11,7 +11,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var beginRemoval = system.BeginRemoval
+var beginRemoval = func() error {
+	if err := network.PreflightWireGuardRemoval(); err != nil {
+		return err
+	}
+	return system.BeginRemoval()
+}
 var removeOwnedCronStateForRemoval = system.RemoveOwnedCronStateForRemoval
 var prepareFirewallStateForRemoval = system.PrepareFirewallStateForRemoval
 var cleanupFirewallStateForRemoval = firewall.CleanupOwnedCompatibilityRulesForUninstall
@@ -19,7 +24,7 @@ var removeOwnedWireGuardStateForRemoval = func() error {
 	return system.RemoveOwnedWireGuardArtifactsForRemoval(
 		network.RecoverPendingWireGuardForwardingState,
 		network.CleanupOwnedWireGuardNFTState,
-		network.CleanupAttestedStaleWireGuardNFTStateForRemoval,
+		network.CleanupAttestedStaleOrLegacyWireGuardNFTStateForRemoval,
 		network.CleanupAttestedOrphanedWireGuardNFTStateForRemoval,
 	)
 }
@@ -37,7 +42,7 @@ func prepareVerifiedFirewallRemoval() error {
 	}
 	if err := prepareFirewallStateForRemoval(); err != nil {
 		return fmt.Errorf(
-			"refusing removal before managed firewall services are stopped; the durable removal barrier is retained: %w",
+			"refusing removal before managed firewall services are stopped; the durable removal barrier is retained; inspect WireGuard evidence with 'sudo syswarden recover-wireguard' and retry 'sudo syswarden uninstall' after resolving the reported cause: %w",
 			err,
 		)
 	}
@@ -49,7 +54,7 @@ func prepareVerifiedFirewallRemoval() error {
 	}
 	if err := removeOwnedWireGuardStateForRemoval(); err != nil {
 		return fmt.Errorf(
-			"refusing removal before exact WireGuard cleanup; the durable removal tombstone is retained: %w",
+			"refusing removal before exact WireGuard cleanup; the durable removal tombstone is retained; inspect exact historical state with 'sudo syswarden recover-wireguard' before explicit recovery, then retry 'sudo syswarden uninstall': %w",
 			err,
 		)
 	}

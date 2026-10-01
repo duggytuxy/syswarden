@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "v4.10.0"
+var Version = "v4.10.1"
 
 const (
 	latestReleaseAPI             = "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
@@ -249,6 +249,7 @@ func newProductionUpdater() (*updater, error) {
 		packageTimeout:  packageDownloadTimeout,
 		installTimeout:  packageInstallationTimeout,
 		attestRPM:       attestInstalledStandardRPMRelease,
+		attestInstalled: attestInstalledQualificationVersion,
 		retireWebTUI: func() error {
 			return config.RemoveRetiredWebTUIConfiguration("/etc/syswarden/config")
 		},
@@ -284,7 +285,24 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return fmt.Errorf("compare release versions: %w", err)
 	}
 	if comparison == 0 {
-		fmt.Fprintln(u.stdout, "[SUCCESS] You are already using the latest version of SYSWARDEN!")
+		if u.attestInstalled == nil {
+			return errors.New("current release cannot be confirmed without installed-package attestation")
+		}
+		target, err := detectPackageTarget(u.goos, u.goarch, latestVersion, u.lookPath)
+		if err != nil {
+			return err
+		}
+		attestationCtx, cancel := context.WithTimeout(ctx, u.metadataTimeout)
+		defer cancel()
+		evidence, err := u.attestInstalled(attestationCtx, target, u.effectiveUID)
+		if err != nil {
+			return fmt.Errorf("release version is current, but installed package state or integrity is not verified; inspect the native package manager and resolve any incomplete configuration: %w", err)
+		}
+		if evidence.version != u.currentVersion {
+			return fmt.Errorf("installed package version %s does not match running CLI %s", evidence.version, u.currentVersion)
+		}
+		fmt.Fprintln(u.stdout, "[SUCCESS] Release version is current and installed package state and integrity are verified.")
+		fmt.Fprintln(u.stdout, "[INFO] This update check does not verify service, firewall or WireGuard runtime health.")
 		return nil
 	}
 	if comparison > 0 {

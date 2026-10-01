@@ -21,6 +21,15 @@ var alertsCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, stop := alertSignalContext(cmd.Context())
 		defer stop()
+		present, removalErr := inspectRemovalTombstone()
+		if present || removalErr != nil {
+			fmt.Fprintln(cmd.ErrOrStderr(), "[WARN] Removal is incomplete; alert producers may be stopped. An empty stream does not establish host health. Inspect 'sudo syswarden recover-wireguard' and resume 'sudo syswarden uninstall' after resolving the cause.")
+			if removalErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "[WARN] Removal evidence inspection failed: %v\n", removalErr)
+			}
+			runTextModeFallback(ctx)
+			return nil
+		}
 		if !term.IsTerminal(int(os.Stdout.Fd())) {
 			runTextModeFallback(ctx)
 			return nil

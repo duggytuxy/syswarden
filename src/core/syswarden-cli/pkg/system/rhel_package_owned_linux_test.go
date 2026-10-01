@@ -98,9 +98,10 @@ func testRHELPackageOwnedHost(t *testing.T, root string) rhelPackageOwnedAttesta
 	t.Helper()
 	uid, gid := testRHELPackageOwnedOwner(t, root)
 	return rhelPackageOwnedAttestationHost{
-		root:        root,
-		expectedUID: uid,
-		expectedGID: gid,
+		runningVersion: "v" + rhelPackageOwnedRPMVersion,
+		root:           root,
+		expectedUID:    uid,
+		expectedGID:    gid,
 		queryInstalled: func() ([]byte, error) {
 			return testRHELPackageOwnedIdentity(), nil
 		},
@@ -193,7 +194,8 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 		root := t.TempDir()
 		uid, gid := testRHELPackageOwnedOwner(t, root)
 		host := rhelPackageOwnedAttestationHost{
-			root: root, expectedUID: uid, expectedGID: gid,
+			runningVersion: "v" + rhelPackageOwnedRPMVersion,
+			root:           root, expectedUID: uid, expectedGID: gid,
 			skipAbsentPackageQuery: true,
 			queryInstalled: func() ([]byte, error) {
 				t.Fatal("standard package preun queried rpm")
@@ -225,7 +227,8 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 		}
 		uid, gid := testRHELPackageOwnedOwner(t, root)
 		host := rhelPackageOwnedAttestationHost{
-			root: root, expectedUID: uid, expectedGID: gid,
+			runningVersion: "v" + rhelPackageOwnedRPMVersion,
+			root:           root, expectedUID: uid, expectedGID: gid,
 			skipAbsentPackageQuery: true,
 			queryInstalled: func() ([]byte, error) {
 				t.Fatal("partial package preun payload queried rpm")
@@ -978,5 +981,14 @@ func TestPrepareRHELPackageOwnedRuntimeForEraseRejectsPresetRecoveryBeforeCleanu
 				t.Fatalf("erase marker was published after preset recovery refusal: %v", err)
 			}
 		})
+	}
+}
+
+func TestRHELPackageOwnedIdentityRejectsDifferentRunningRelease(t *testing.T) {
+	if err := exactRHELPackageOwnedRPMIdentity(testRHELPackageOwnedIdentity(), "v4.10.1"); err == nil {
+		t.Fatal("v4.10.0-only RHELPO profile accepted a different running release")
+	}
+	if host := productionRHELPackageOwnedAttestationHost(); host.runningVersion != Version {
+		t.Fatal("production RHELPO attestation is not bound to running release")
 	}
 }

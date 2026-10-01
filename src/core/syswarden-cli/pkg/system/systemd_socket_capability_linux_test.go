@@ -86,9 +86,9 @@ func TestCoreSocketPolicySelectionRequiresExactStablePackageOwnership(t *testing
 						mustWriteFile(t, path, systemdCoreSocketCapabilityDropIn+"# changed\n")
 					}
 					if manager == "rpm" {
-						return "4.10.0-1"
+						return "4.10.1-1"
 					}
-					return "4.10.0"
+					return "4.10.1"
 				})
 			switch scenario {
 			case "absent", "symlink":
