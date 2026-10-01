@@ -1,0 +1,1168 @@
+{
+  "accepted_at": "2026-10-01T11:11:36.474016+00:00",
+  "artifact_files": [
+    {
+      "path": "native-signing/SIGNED_ARTIFACT_SHA256SUMS.txt",
+      "sha256": "74a82ee5008ca093574961dd11ddf06739e5992b079e290d73ee5a4dcc6ddd2c",
+      "size": 1953
+    },
+    {
+      "path": "native-signing/evidence/APK_NATIVE_VERIFICATION.json",
+      "sha256": "1d06d894783bc463268642531b7ad5b4a17f7c7ab95c1129a5ffb11cab909c9f",
+      "size": 783
+    },
+    {
+      "path": "native-signing/evidence/DEB_NATIVE_VERIFICATION.json",
+      "sha256": "b4c855613001d8cea0c7dda747109e0b8b3b496dee7348204c113fd75b365333",
+      "size": 968
+    },
+    {
+      "path": "native-signing/evidence/NATIVE_SIGNING_PROVENANCE.json",
+      "sha256": "4f9b2a6e4375bb530c5f305b30b21be20479934865bbe65f4ad44961164ef023",
+      "size": 4571
+    },
+    {
+      "path": "native-signing/evidence/RPM_NATIVE_VERIFICATION.json",
+      "sha256": "41672ee8451366f7991c8ebcecf7a3795d6f4ac4107f35647231aff7b94f1988",
+      "size": 758
+    },
+    {
+      "path": "native-signing/evidence/RPM_PAYLOAD_PROOF.json",
+      "sha256": "450642ad0c3ad7ce5639c0c8e18cf0c0bd8febb261fd678c471dae0a7f274044",
+      "size": 536
+    },
+    {
+      "path": "native-signing/evidence/UNSIGNED_SHA256SUMS.txt",
+      "sha256": "7dc8a215a897b4a8c2b190c576e16c9496be7f4246027c0fa5deb80f436e4bae",
+      "size": 283
+    },
+    {
+      "path": "native-signing/packages/SHA256SUMS.txt",
+      "sha256": "b373861dbcc138404843eec18dcdc950cf1a8799fd48484d0d519b607f890a84",
+      "size": 380
+    },
+    {
+      "path": "native-signing/packages/syswarden-4.10.0-1.x86_64.rpm",
+      "sha256": "5d70d52cbaf637630c3eddb63ed1f0175e441ecb32e36b28827e30c3f7abc640",
+      "size": 16183829
+    },
+    {
+      "path": "native-signing/packages/syswarden_4.10.0_amd64.deb",
+      "sha256": "a61bde0fb49b052e39fb5ab56477d2c02aed6cfaeb3f683330f8c432bbca0553",
+      "size": 15897842
+    },
+    {
+      "path": "native-signing/packages/syswarden_4.10.0_amd64.deb.asc",
+      "sha256": "33463a7c397e69d64b6434c02c53eca1961ea41ddbc82498dca47af51cf05081",
+      "size": 833
+    },
+    {
+      "path": "native-signing/packages/syswarden_4.10.0_x86_64.apk",
+      "sha256": "634f6b0fa7ad6b9fb07abc841c238c9f5e97b589e102bf4bec6d30d2ad3e8d4d",
+      "size": 16110898
+    },
+    {
+      "path": "native-signing/rhel-package-owned/SIGNED_ARTIFACT_SHA256SUMS.txt",
+      "sha256": "f3af639428da8ade07dc7d2113b2437976029dc5518bfee0c9d7e74b68665de3",
+      "size": 602
+    },
+    {
+      "path": "native-signing/rhel-package-owned/evidence/RPM_NATIVE_VERIFICATION.json",
+      "sha256": "08a8cc6f57a57d27fa4f233c391484e12e9afddf54ace3df044d05b3a97c9f26",
+      "size": 765
+    },
+    {
+      "path": "native-signing/rhel-package-owned/evidence/RPM_PAYLOAD_PROOF.json",
+      "sha256": "2773b2fdb06d8dd386fd6d16ac6a7618b641e9f248ba948431c17cc7c89852f7",
+      "size": 536
+    },
+    {
+      "path": "native-signing/rhel-package-owned/evidence/SIGNING_PROVENANCE.json",
+      "sha256": "5d4055d64b8a75f27ebfe9d5808c744139972e9d1c42ba4bce957c1f80a66a96",
+      "size": 2773
+    },
+    {
+      "path": "native-signing/rhel-package-owned/evidence/UNSIGNED_SHA256SUMS.txt",
+      "sha256": "83a032d909729492f2e0d9b051d526f156f0db789d4e8efc7355de9b05e5663e",
+      "size": 103
+    },
+    {
+      "path": "native-signing/rhel-package-owned/packages/SHA256SUMS.txt",
+      "sha256": "832f7ca18df45cf5ea5e4fa73bcb34663755447d32ec714eda57b6b4bf7cec28",
+      "size": 103
+    },
+    {
+      "path": "native-signing/rhel-package-owned/packages/syswarden-4.10.0-1.rhelpo.x86_64.rpm",
+      "sha256": "21dc2993c109e0e1d3556a46a905f8cf02a2ed9ebc5188550ca6ccbf8f6e873c",
+      "size": 15882677
+    },
+    {
+      "path": "product-support/syswarden-release.tar.gz",
+      "sha256": "b72d0237eb70e56df47ed82e43912df893c2557f6cca93b2a23132ad5f48105a",
+      "size": 15916755
+    },
+    {
+      "path": "product-support/syswarden-sbom.spdx.json",
+      "sha256": "20ad78271b5df3b6022823dfa29125edfaea5320d2ef046f8d4a4bd79099bf81",
+      "size": 79280
+    },
+    {
+      "path": "updater/CANDIDATE_UPDATE_BUNDLE.json",
+      "sha256": "74a012dc89f4b137b372d4dc7f081e336caa49fa1fa6d7126be6129d577ee11a",
+      "size": 2635
+    },
+    {
+      "path": "updater/CANDIDATE_UPDATE_SHA256SUMS.txt",
+      "sha256": "4ab928042495a6d944aff75c8c9209e34c937fc9791b4d78e3e24b4076ba25b7",
+      "size": 629
+    },
+    {
+      "path": "updater/node01/syswarden-update-manifest-v1.json",
+      "sha256": "e5b987ecbae2d3de75b3a1c80236dbb0aaf4f7cf1dc5eda538b520dcd3dabee8",
+      "size": 671
+    },
+    {
+      "path": "updater/node01/syswarden-update-manifest-v1.json.sig",
+      "sha256": "de77f6fc3c653506f50f3b3780a236db0ebeea36ad22771478c44eafd1f4c76f",
+      "size": 89
+    },
+    {
+      "path": "updater/node01/syswarden_4.10.0_amd64.deb",
+      "sha256": "a61bde0fb49b052e39fb5ab56477d2c02aed6cfaeb3f683330f8c432bbca0553",
+      "size": 15897842
+    },
+    {
+      "path": "updater/verification/producer-attestation.jsonl",
+      "sha256": "ab5fcaff37e23d8d5f022a7494fd667134c6aa478ddedbad0f6e0af48b6dff97",
+      "size": 11483
+    },
+    {
+      "path": "updater/verification/syswarden_4.10.0_amd64.deb.asc",
+      "sha256": "33463a7c397e69d64b6434c02c53eca1961ea41ddbc82498dca47af51cf05081",
+      "size": 833
+    }
+  ],
+  "ci_verification": {
+    "product": [
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "id": 36813024252,
+        "path": ".github/workflows/auto-versioning.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "id": 36813024270,
+        "path": ".github/workflows/scorecard.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "id": 36813024300,
+        "path": ".github/workflows/compliance.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "id": 36813024204,
+        "path": ".github/workflows/package.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "id": 36813024209,
+        "path": ".github/workflows/security-audit.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      }
+    ],
+    "publication": [
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "3cc06b62d42b5adadc46fc9a252fece5adf670c1",
+        "id": 36851849471,
+        "path": ".github/workflows/auto-versioning.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "3cc06b62d42b5adadc46fc9a252fece5adf670c1",
+        "id": 36851849422,
+        "path": ".github/workflows/package.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "3cc06b62d42b5adadc46fc9a252fece5adf670c1",
+        "id": 36851849655,
+        "path": ".github/workflows/security-audit.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "3cc06b62d42b5adadc46fc9a252fece5adf670c1",
+        "id": 36851849474,
+        "path": ".github/workflows/compliance.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "3cc06b62d42b5adadc46fc9a252fece5adf670c1",
+        "id": 36851849394,
+        "path": ".github/workflows/scorecard.yml",
+        "run_attempt": 1,
+        "status": "completed"
+      }
+    ]
+  },
+  "claim_limits": [
+    "Intermediate IVV only; not full IVVQ.",
+    "Historical native observations keep their original candidate and package identity.",
+    "The private APK3 qualification-bundle path is not accepted by this plan; the native offline updater observation is DEB only.",
+    "IPv6 list persistence and kernel membership were tested; real inter-node activation probes were IPv4.",
+    "The prior two 30-minute HA campaigns remain historical support on 24c3; the new replay is functional."
+  ],
+  "context": {
+    "environment": "syswarden-release-qualification",
+    "event": "workflow_dispatch",
+    "owner_id": 61513268,
+    "publication_commit": "3cc06b62d42b5adadc46fc9a252fece5adf670c1",
+    "repository": "duggytuxy/syswarden",
+    "repository_id": 1153695079,
+    "runner_environment": "self-hosted",
+    "source_ref": "refs/heads/main",
+    "workflow": ".github/workflows/release-ivv.yml",
+    "workflow_ref": "duggytuxy/syswarden/.github/workflows/release-ivv.yml@refs/heads/main",
+    "workflow_run_attempt": 1,
+    "workflow_run_id": 36853355288
+  },
+  "continuity_admitted_under_named_plan": true,
+  "full_qualification_passed": false,
+  "historical_verdicts_transferred": false,
+  "input_verification": {
+    "historical_verdicts_transferred": false,
+    "input_manifest_sha256": "ca7b71603aa2758ee140daaa467d1a8fa39a8d50a7e3b3cbec1107d09f033567",
+    "intermediate_release_validated": false,
+    "object_count": 1184,
+    "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+    "private_raw_inputs_uploaded": false,
+    "product_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+    "publication_authorized": false,
+    "qualification_passed": false,
+    "reviewed_observations": [
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "RPM-A10",
+        "input_sha256": "2082ebac3db26f1f6c1a6334bea49477bdb48b46bd75b1fd08d550e087ec94c8",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "current-targeted-observation"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "RPM-A10-RHELPO",
+        "input_sha256": "1781e28e7c73009b4eafb2ac0933d3b45fdbef37894056cead3f15d7cf79550c",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "current-targeted-observation"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "RPM-A9",
+        "input_sha256": "8bef130769c7c5df6c4e845778f98201c863e3bd5596ff960b73c6fdb36f30d9",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "current-targeted-observation"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "RPM-A9-RHELPO",
+        "input_sha256": "7f725c558ea5e46d2fab62e18e8c69f14e4b45d9fc9a79bd940fe677fac47ab2",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "current-targeted-observation"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "ha-functional",
+        "input_sha256": "a7fdf1238e75b257c8796747a07f04ec0f8213466c314dadfb225ff1b820ba5a",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "current-targeted-observation"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node03-final-restoration",
+        "input_sha256": "a32b05a4f0d79457e2e8deb871b18aebea9b805319b0433b8e71a10dc7f25014",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "final-restoration"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node05-final-restoration",
+        "input_sha256": "337b361da3671618cd0bbaaa195677fcdf88eb2d56c7cdefd36c9c5f9181f873",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "final-restoration"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "ha-final-restoration",
+        "input_sha256": "d53d784d87c68b5b0818396563007f8f171a0deb69a528123e6694886d0f722b",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "final-restoration"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "ubuntu-activation",
+        "input_sha256": "974113c27f53c5c4b589d59291e79137508284c8f9415772ad515ea956fb85f0",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "continuity-review-required"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "alpine-activation",
+        "input_sha256": "9841a9b960259aa0faa7cf237baafa1615cb2a7f163805d1d867fd583404cc19",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "continuity-review-required"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node01-migration-one",
+        "input_sha256": "351035ab7abb8bcb6041d3b9e0ad479eca02e14ce4b1d4d3463e4877b1ac3ab1",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "continuity-review-required"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node01-migration-two",
+        "input_sha256": "52d50e63f7ef0b664b3f9f5028192368744c7ca1104e2f4e6bc09f10c00397c3",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "continuity-review-required"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node01-offline-update",
+        "input_sha256": "d6a8fe5a0e3a6e0eb4c711a7639d9cb01897520c6eaa5423620ac47a0d2ee2eb",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "continuity-review-required"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node01-updater-reboot",
+        "input_sha256": "5a82c2dc10c9694503b4241463dae56fa6b3ad2a11fb7e0d3285726e6c2e3a84",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "continuity-review-required"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node01-updater-purge",
+        "input_sha256": "8543c42dcdee38cfdc8ad4ead2a4bfcfdab6ce86058e515afccd58ec472e4259",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "continuity-review-required"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node01-final-restoration",
+        "input_sha256": "cdd14950dd13cc9d90f22bde749b75d650268b919a79ffc2ddeb4f25ac32fa93",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "final-restoration"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node01-original-snapshot",
+        "input_sha256": "fc38358de92acca74ea6e7292be36d8483b940f7e51d259176add851649cdf24",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "final-restoration"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node04-final-restoration",
+        "input_sha256": "4cf90c1e426624a57838ec022a6067e252471b7e68477c7278cfb47900555d55",
+        "original_bytes_verified": true,
+        "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+        "relation": "final-restoration"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node03-intermediate-restoration",
+        "input_sha256": "343df28347bb6d80ac8b2b9c346ad059683c284d6618f03e8f6f6489e11e0789",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "final-restoration"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "node05-intermediate-restoration",
+        "input_sha256": "7ad79ddac40baf309188880b78555be0383a1d0ef7dc3446a9990e885a481e47",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "final-restoration"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "historical-ha-endurance",
+        "input_sha256": "a89d706b611511e02b00089da64426f4d89a814b5d8e6f134cafc5ed00176923",
+        "original_bytes_verified": true,
+        "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+        "relation": "historical-support-only"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "historical-lifecycle",
+        "input_sha256": "c6e242a00c0fc0d3863a195cf1f404f5ae29c99ebd7e2d7ebc738e62f9aada19",
+        "original_bytes_verified": true,
+        "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+        "relation": "historical-support-only"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "historical-feed",
+        "input_sha256": "d9ed925ad2e18fb45ab935e2146c63e43f73bdb09f055e4df1e81af7404ac995",
+        "original_bytes_verified": true,
+        "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+        "relation": "historical-support-only"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "historical-allocation",
+        "input_sha256": "31a9f2729bad1c7fb7fbcb18194487507729c0d77d20fe56ef3630aa651fb40c",
+        "original_bytes_verified": true,
+        "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+        "relation": "historical-support-only"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "current-source-closures",
+        "input_sha256": "929adafbe09e3831144f448dd9986b7e5f5d047bcb0687049aaf379287d57107",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "source-review"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "current-payload-comparison",
+        "input_sha256": "43eda0119f4da9a4cb3e2aff876e980a2e8e43b6692680573102c3ed8220628d",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "payload-review"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "current-product-ci",
+        "input_sha256": "2498fe200e4112516cfac1e33811ad423a6414f674bc60236e80836fc194b421",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "product-ci"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "current-updater",
+        "input_sha256": "4e7cd3b5f87b55f286ba1886e027bd14e64738d8367e1d6a8311a51245554d52",
+        "original_bytes_verified": true,
+        "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+        "relation": "cryptographic-prerequisite"
+      },
+      {
+        "admitted_as_current_native_pass": false,
+        "id": "historical-recomputed-gates",
+        "input_sha256": "8fbd443043b5fffe15eeb38e98217c7d238cc5089044e376fe0f8ec4979d4417",
+        "original_bytes_verified": true,
+        "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+        "relation": "historical-support-only"
+      }
+    ],
+    "schema": "syswarden-reviewed-ivv-input-verification/v1"
+  },
+  "intermediate_release_validated": true,
+  "native_signature_verification": {
+    "as_of": "2026-10-01",
+    "checks": [
+      {
+        "name": "rhel-inventory",
+        "returncode": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "rpm",
+        "returncode": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "fe4d8996fd9c771f81856059aa6aec7d4631b81e1260db70f9b3b1c708611963"
+      },
+      {
+        "name": "rhel-rpm",
+        "returncode": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "fe4d8996fd9c771f81856059aa6aec7d4631b81e1260db70f9b3b1c708611963"
+      },
+      {
+        "name": "deb",
+        "returncode": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "63f4fde625effb18b8c1e21afaaba6111d2f10ce177bbe30ec313b26f8214687"
+      },
+      {
+        "name": "apk",
+        "returncode": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "88d4469e5e7ac898e31aff7c44b61a7dd8a0489082191d7fdb2463f57162273a"
+      }
+    ],
+    "four_native_signatures_verified": true,
+    "offline_verification": true,
+    "product_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+    "publication_authorized": false,
+    "purpose": "publishing",
+    "runtime": "rootless-podman-pinned-images-stdin-without-host-mounts",
+    "schema": "syswarden-current-native-signature-revalidation/v1"
+  },
+  "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+  "post_acceptance_requirements": [
+    "signed-annotated-tag",
+    "independent-publisher-consumers",
+    "immutable-exact-assets",
+    "Sigstore-release-authenticity",
+    "downloaded-release-verification"
+  ],
+  "private_raw_inputs_uploaded": false,
+  "product_support_verification": {
+    "binary_members": [
+      {
+        "path": "signatures.json",
+        "sha256": "955687624840ba52b6f9d08b37971dfc69a784faa30ffeb7b4d7215d16f546b6",
+        "size": 22231
+      },
+      {
+        "path": "bin/syswarden-cli",
+        "sha256": "5d32056edf182060513a73a734a35c278d24e2c7ca6eeed0340decc729f28d79",
+        "size": 19853614
+      },
+      {
+        "path": "bin/syswarden-core",
+        "sha256": "27fcb8781b94c0951f7172186594fc1ecb7331da7431f5d05c749acdc4321321",
+        "size": 12284206
+      },
+      {
+        "path": "bin/syswarden-tui",
+        "sha256": "5d90bc17cb38032990850d7544db17c9485a44b6e4a46c7c39c01172ca1ea320",
+        "size": 8651054
+      }
+    ],
+    "files": [
+      {
+        "path": "syswarden-release.tar.gz",
+        "sha256": "b72d0237eb70e56df47ed82e43912df893c2557f6cca93b2a23132ad5f48105a",
+        "size": 15916755
+      },
+      {
+        "path": "syswarden-sbom.spdx.json",
+        "sha256": "20ad78271b5df3b6022823dfa29125edfaea5320d2ef046f8d4a4bd79099bf81",
+        "size": 79280
+      }
+    ],
+    "original_build_attestation_verified": true,
+    "product_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+    "publication_authorized": false,
+    "run_id": 36813024209,
+    "schema": "syswarden-original-product-support/v1"
+  },
+  "publication_authorized": false,
+  "release": "v4.10.0",
+  "release_published": false,
+  "required_assurance": "IVV",
+  "required_checks": [
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "candidate-ci",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-product-ci",
+          "input_sha256": "2498fe200e4112516cfac1e33811ad423a6414f674bc60236e80836fc194b421",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "product-ci"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": true,
+      "id": "native-signatures",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "source-payload-continuity",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-source-closures",
+          "input_sha256": "929adafbe09e3831144f448dd9986b7e5f5d047bcb0687049aaf379287d57107",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "source-review"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-payload-comparison",
+          "input_sha256": "43eda0119f4da9a4cb3e2aff876e980a2e8e43b6692680573102c3ed8220628d",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "payload-review"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "changed-list-unit-regressions",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-product-ci",
+          "input_sha256": "2498fe200e4112516cfac1e33811ad423a6414f674bc60236e80836fc194b421",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "product-ci"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "changed-activation-native",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "RPM-A9",
+          "input_sha256": "8bef130769c7c5df6c4e845778f98201c863e3bd5596ff960b73c6fdb36f30d9",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "current-targeted-observation"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "RPM-A9-RHELPO",
+          "input_sha256": "7f725c558ea5e46d2fab62e18e8c69f14e4b45d9fc9a79bd940fe677fac47ab2",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "current-targeted-observation"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "RPM-A10",
+          "input_sha256": "2082ebac3db26f1f6c1a6334bea49477bdb48b46bd75b1fd08d550e087ec94c8",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "current-targeted-observation"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "RPM-A10-RHELPO",
+          "input_sha256": "1781e28e7c73009b4eafb2ac0933d3b45fdbef37894056cead3f15d7cf79550c",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "current-targeted-observation"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "ubuntu-activation",
+          "input_sha256": "974113c27f53c5c4b589d59291e79137508284c8f9415772ad515ea956fb85f0",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "continuity-review-required"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "alpine-activation",
+          "input_sha256": "9841a9b960259aa0faa7cf237baafa1615cb2a7f163805d1d867fd583404cc19",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "continuity-review-required"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "alpine-ssh-provenance",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "alpine-activation",
+          "input_sha256": "9841a9b960259aa0faa7cf237baafa1615cb2a7f163805d1d867fd583404cc19",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "continuity-review-required"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-product-ci",
+          "input_sha256": "2498fe200e4112516cfac1e33811ad423a6414f674bc60236e80836fc194b421",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "product-ci"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "native-lifecycle-continuity",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "historical-lifecycle",
+          "input_sha256": "c6e242a00c0fc0d3863a195cf1f404f5ae29c99ebd7e2d7ebc738e62f9aada19",
+          "original_bytes_verified": true,
+          "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+          "relation": "historical-support-only"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "historical-recomputed-gates",
+          "input_sha256": "8fbd443043b5fffe15eeb38e98217c7d238cc5089044e376fe0f8ec4979d4417",
+          "original_bytes_verified": true,
+          "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+          "relation": "historical-support-only"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-source-closures",
+          "input_sha256": "929adafbe09e3831144f448dd9986b7e5f5d047bcb0687049aaf379287d57107",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "source-review"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-payload-comparison",
+          "input_sha256": "43eda0119f4da9a4cb3e2aff876e980a2e8e43b6692680573102c3ed8220628d",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "payload-review"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "node01-migrations",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node01-migration-one",
+          "input_sha256": "351035ab7abb8bcb6041d3b9e0ad479eca02e14ce4b1d4d3463e4877b1ac3ab1",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "continuity-review-required"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node01-migration-two",
+          "input_sha256": "52d50e63f7ef0b664b3f9f5028192368744c7ca1104e2f4e6bc09f10c00397c3",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "continuity-review-required"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-source-closures",
+          "input_sha256": "929adafbe09e3831144f448dd9986b7e5f5d047bcb0687049aaf379287d57107",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "source-review"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-payload-comparison",
+          "input_sha256": "43eda0119f4da9a4cb3e2aff876e980a2e8e43b6692680573102c3ed8220628d",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "payload-review"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": true,
+      "fresh_native_signature_check": false,
+      "id": "offline-update",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node01-offline-update",
+          "input_sha256": "d6a8fe5a0e3a6e0eb4c711a7639d9cb01897520c6eaa5423620ac47a0d2ee2eb",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "continuity-review-required"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node01-updater-reboot",
+          "input_sha256": "5a82c2dc10c9694503b4241463dae56fa6b3ad2a11fb7e0d3285726e6c2e3a84",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "continuity-review-required"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node01-updater-purge",
+          "input_sha256": "8543c42dcdee38cfdc8ad4ead2a4bfcfdab6ce86058e515afccd58ec472e4259",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "continuity-review-required"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-updater",
+          "input_sha256": "4e7cd3b5f87b55f286ba1886e027bd14e64738d8367e1d6a8311a51245554d52",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "cryptographic-prerequisite"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-source-closures",
+          "input_sha256": "929adafbe09e3831144f448dd9986b7e5f5d047bcb0687049aaf379287d57107",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "source-review"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "current-payload-comparison",
+          "input_sha256": "43eda0119f4da9a4cb3e2aff876e980a2e8e43b6692680573102c3ed8220628d",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "payload-review"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "ha-functional",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "ha-functional",
+          "input_sha256": "a7fdf1238e75b257c8796747a07f04ec0f8213466c314dadfb225ff1b820ba5a",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "current-targeted-observation"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "historical-ha-endurance",
+          "input_sha256": "a89d706b611511e02b00089da64426f4d89a814b5d8e6f134cafc5ed00176923",
+          "original_bytes_verified": true,
+          "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+          "relation": "historical-support-only"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "historical-recomputed-gates",
+          "input_sha256": "8fbd443043b5fffe15eeb38e98217c7d238cc5089044e376fe0f8ec4979d4417",
+          "original_bytes_verified": true,
+          "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+          "relation": "historical-support-only"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "feed-allocation-continuity",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "historical-feed",
+          "input_sha256": "d9ed925ad2e18fb45ab935e2146c63e43f73bdb09f055e4df1e81af7404ac995",
+          "original_bytes_verified": true,
+          "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+          "relation": "historical-support-only"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "historical-allocation",
+          "input_sha256": "31a9f2729bad1c7fb7fbcb18194487507729c0d77d20fe56ef3630aa651fb40c",
+          "original_bytes_verified": true,
+          "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+          "relation": "historical-support-only"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "historical-recomputed-gates",
+          "input_sha256": "8fbd443043b5fffe15eeb38e98217c7d238cc5089044e376fe0f8ec4979d4417",
+          "original_bytes_verified": true,
+          "original_candidate": "24c3c6e1548b8db0ccf64c37a33e05b351be5a18",
+          "relation": "historical-support-only"
+        }
+      ],
+      "status": "pass"
+    },
+    {
+      "assurance": "IVV",
+      "fresh_manifest_signature_check": false,
+      "fresh_native_signature_check": false,
+      "id": "restorations",
+      "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+      "reviewed_inputs": [
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node01-final-restoration",
+          "input_sha256": "cdd14950dd13cc9d90f22bde749b75d650268b919a79ffc2ddeb4f25ac32fa93",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "final-restoration"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node01-original-snapshot",
+          "input_sha256": "fc38358de92acca74ea6e7292be36d8483b940f7e51d259176add851649cdf24",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "final-restoration"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "ha-final-restoration",
+          "input_sha256": "d53d784d87c68b5b0818396563007f8f171a0deb69a528123e6694886d0f722b",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "final-restoration"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node03-final-restoration",
+          "input_sha256": "a32b05a4f0d79457e2e8deb871b18aebea9b805319b0433b8e71a10dc7f25014",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "final-restoration"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node03-intermediate-restoration",
+          "input_sha256": "343df28347bb6d80ac8b2b9c346ad059683c284d6618f03e8f6f6489e11e0789",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "final-restoration"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node04-final-restoration",
+          "input_sha256": "4cf90c1e426624a57838ec022a6067e252471b7e68477c7278cfb47900555d55",
+          "original_bytes_verified": true,
+          "original_candidate": "f334beaddc5c6005f40d79c7bab4e43598bfc5ed",
+          "relation": "final-restoration"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node05-final-restoration",
+          "input_sha256": "337b361da3671618cd0bbaaa195677fcdf88eb2d56c7cdefd36c9c5f9181f873",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "final-restoration"
+        },
+        {
+          "admitted_as_current_native_pass": false,
+          "id": "node05-intermediate-restoration",
+          "input_sha256": "7ad79ddac40baf309188880b78555be0383a1d0ef7dc3446a9990e885a481e47",
+          "original_bytes_verified": true,
+          "original_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+          "relation": "final-restoration"
+        }
+      ],
+      "status": "pass"
+    }
+  ],
+  "schema": "syswarden-protected-intermediate-ivv/v1",
+  "source_binding": {
+    "classification": {
+      "candidate_commit": "3cc06b62d42b5adadc46fc9a252fece5adf670c1",
+      "followup_commits": 82,
+      "prefix": "Major",
+      "previous_version": "v4.04.3",
+      "publication_authorized": false,
+      "qualification_passed": false,
+      "release": "v4.10.0",
+      "schema": "syswarden-release-track/v1",
+      "track": "intermediate-validation",
+      "transition_commit": "76535e03ee10b78f9c6ed1665d7fbeb8c2b8ee68",
+      "transition_parent": "b87012843a9146c1948619944357a6b47ccc6561"
+    },
+    "frozen_package_bytes": [
+      {
+        "path": "packages/syswarden-4.10.0-1.x86_64.rpm",
+        "sha256": "5d70d52cbaf637630c3eddb63ed1f0175e441ecb32e36b28827e30c3f7abc640",
+        "size": 16183829
+      },
+      {
+        "path": "packages/syswarden_4.10.0_amd64.deb",
+        "sha256": "a61bde0fb49b052e39fb5ab56477d2c02aed6cfaeb3f683330f8c432bbca0553",
+        "size": 15897842
+      },
+      {
+        "path": "packages/syswarden_4.10.0_amd64.deb.asc",
+        "sha256": "33463a7c397e69d64b6434c02c53eca1961ea41ddbc82498dca47af51cf05081",
+        "size": 833
+      },
+      {
+        "path": "packages/syswarden_4.10.0_x86_64.apk",
+        "sha256": "634f6b0fa7ad6b9fb07abc841c238c9f5e97b589e102bf4bec6d30d2ad3e8d4d",
+        "size": 16110898
+      },
+      {
+        "path": "rhel-package-owned/packages/syswarden-4.10.0-1.rhelpo.x86_64.rpm",
+        "sha256": "21dc2993c109e0e1d3556a46a905f8cf02a2ed9ebc5188550ca6ccbf8f6e873c",
+        "size": 15882677
+      }
+    ],
+    "plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+    "product_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+    "publication_commit": "3cc06b62d42b5adadc46fc9a252fece5adf670c1",
+    "source_changes": [
+      ".github/workflows/release-ivv.yml",
+      ".github/workflows/release-manager.yml",
+      "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md",
+      "docs/maintainers/RELEASE_VALIDATION_POLICY.md",
+      "docs/qualification/INTERMEDIATE_CURRENT_ACCEPTANCE_V4.10.0.md",
+      "scripts/ci/current_candidate_update_verify.py",
+      "scripts/ci/current_candidate_update_verify_test.py",
+      "scripts/ci/ivv_native_apk.py",
+      "scripts/ci/ivv_native_rpmkeys.py",
+      "scripts/ci/release_assurance_contract.py",
+      "scripts/ci/release_gate_test.py",
+      "scripts/ci/release_ivv_consumer.py",
+      "scripts/ci/release_ivv_consumer_test.py",
+      "scripts/ci/release_ivv_current.py",
+      "scripts/ci/release_ivv_current_inputs.json",
+      "scripts/ci/release_ivv_current_test.py",
+      "scripts/ci/release_ivv_current_v4.10.0.json",
+      "scripts/ci/release_ivv_native_signatures.py",
+      "scripts/ci/release_ivv_producer.py",
+      "scripts/ci/release_ivv_producer_test.py",
+      "scripts/ci/release_ivv_support.py",
+      "scripts/ci/release_ivv_support_test.py",
+      "scripts/ci/release_ivv_workflow_test.py"
+    ]
+  },
+  "status": "ivv-accepted-for-release",
+  "updater_verification": {
+    "artifact_id": 11152415554,
+    "artifact_metadata_sha256": "d78180bb48ff17f82d0609c0a5bf40ecbd0391e5fa6d3b972498aa136fbdce96",
+    "artifact_sha256": "42ec67e5a82bbaff436c4483279d6579cb5e9135ccb76a6e18d59a8be382ed02",
+    "attestation_verification_sha256": "4f24fa2c35eb98aeb85c6ab1ca5aae4477a8df9961dc53388b747b3e634e30e2",
+    "descriptor_sha256": "74a012dc89f4b137b372d4dc7f081e336caa49fa1fa6d7126be6129d577ee11a",
+    "historical_verdicts_transferred": false,
+    "intermediate_release_validated": false,
+    "manifest_sha256": "e5b987ecbae2d3de75b3a1c80236dbb0aaf4f7cf1dc5eda538b520dcd3dabee8",
+    "manifest_signature_sha256": "de77f6fc3c653506f50f3b3780a236db0ebeea36ad22771478c44eafd1f4c76f",
+    "native_update_replayed": false,
+    "packages": [
+      {
+        "name": "syswarden-4.10.0-1.x86_64.rpm",
+        "sha256": "5d70d52cbaf637630c3eddb63ed1f0175e441ecb32e36b28827e30c3f7abc640",
+        "size": 16183829
+      },
+      {
+        "name": "syswarden_4.10.0_amd64.deb",
+        "sha256": "a61bde0fb49b052e39fb5ab56477d2c02aed6cfaeb3f683330f8c432bbca0553",
+        "size": 15897842
+      },
+      {
+        "name": "syswarden_4.10.0_x86_64.apk",
+        "sha256": "634f6b0fa7ad6b9fb07abc841c238c9f5e97b589e102bf4bec6d30d2ad3e8d4d",
+        "size": 16110898
+      }
+    ],
+    "producer_commit": "8c3405758a9b369924f466d12652e99d3a84dc56",
+    "producer_run_id": 36842481776,
+    "product_candidate": "8c3405758a9b369924f466d12652e99d3a84dc56",
+    "publication_authorized": false,
+    "qualification_passed": false,
+    "run_metadata_sha256": "655dd92880ec0bbe4a7ba18efa6fad7d02e40f8310b4a71a59641dbf2baf7400",
+    "schema": "syswarden-current-candidate-updater-verification/v1",
+    "status": "current-candidate-manifest-cryptographically-verified"
+  }
+}

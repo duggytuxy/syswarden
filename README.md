@@ -35,8 +35,8 @@
 Host-local Linux defense with auditable, fail-closed enforcement.
 
 [Website](https://syswarden.io/) |
-[Documentation](https://github.com/duggytuxy/syswarden/wiki) |
-[Build from source](https://github.com/duggytuxy/syswarden/wiki/Build-and-Install-from-Source) |
+[Documentation](https://syswarden.io/docs/) |
+[Build from source](https://syswarden.io/docs/build-from-source/) |
 [Roadmap](https://github.com/duggytuxy/syswarden/issues/222)
 
 SysWarden is an open-source Linux security orchestrator that combines an
@@ -50,13 +50,19 @@ certification product.
 
 Current source version: **v4.10.0**.
 
-The latest qualified, stable public release is
-[v4.04.3](https://github.com/duggytuxy/syswarden/releases/tag/v4.04.3).
+The latest IVV-validated, stable public release is
+[v4.10.0](https://github.com/duggytuxy/syswarden/releases/tag/v4.10.0).
 
-The source version identifies the development candidate; it does not mean that
-its native packages have completed release qualification. Check the applicability
-notice in each [technical document](docs/technical/) before using it on a stable
-installation. In particular, HA v2 settings require the v4.10.0 candidate.
+Published on 1 October 2026 with a signed tag, four signed Linux package
+variants and twelve verified release assets. The
+[publication record and verification evidence](docs/releases/v4.10.0/README.md)
+identify the exact tested product, publication commit and Sigstore signatures.
+
+Intermediate `Patch`, `Minor` and `Major` releases follow IVV (Integration,
+Verification and Validation). Version-specific `Upgrade` generations such as v5.00.0 require
+full IVVQ, including Qualification. v4.10.0 is an IVV release and does not claim
+full IVVQ qualification. Later source builds do not inherit its verdict.
+Check each [technical document](docs/technical/) for its exact version and scope.
 
 ## Observe, decide, enforce
 
@@ -101,14 +107,14 @@ individual capabilities remain subject to their documented version and scope.
 
 Use the optional BunkerWeb integration plugin to connect supported BunkerWeb
 security events to SysWarden host enforcement through the authenticated HTTPS
-API. The [integration guide](https://github.com/duggytuxy/syswarden/wiki/BunkerWeb-Integration)
+API. The [integration guide](https://syswarden.io/docs/bunkerweb-integration/)
 covers configuration and compatibility. Follow the version-specific prerequisites
 before enabling synchronization or HA v2.
 
 ## Release inventory and verification
 
-The stable v4.04.3 release publishes a machine-readable SPDX software bill of
-materials, [syswarden-sbom.spdx.json](https://github.com/duggytuxy/syswarden/releases/download/v4.04.3/syswarden-sbom.spdx.json),
+The stable v4.10.0 release publishes a machine-readable SPDX software bill of
+materials, [syswarden-sbom.spdx.json](https://github.com/duggytuxy/syswarden/releases/download/v4.10.0/syswarden-sbom.spdx.json),
 for dependency review. An SBOM is an inventory, not a vulnerability-free claim.
 
 `SHA256SUMS.txt` checks package integrity against the downloaded inventory.
@@ -138,27 +144,30 @@ between package authentication and the SBOM inventory.
 - **Operator control.** Existing firewall service ownership is preserved, and
   host mutation remains explicit and reviewable.
 - **Auditable delivery.** Source, package, security, compliance and release
-  qualification gates expose the evidence behind each release decision.
+  assurance gates expose the evidence behind each release decision.
 - **Open source.** The implementation and its operational boundaries can be
   inspected, tested and improved by the community.
 
 ## Documentation
 
 Operational procedures are centralized in the
-[SysWarden wiki](https://github.com/duggytuxy/syswarden/wiki).
+[SysWarden documentation](https://syswarden.io/docs/).
+The former wiki pages are preserved there with search, copyable commands and
+explicit version badges. Historical v4.04.3 procedures retain their original
+scope; use the current getting-started page for the v4.10.0 release.
 
 | Goal | Documentation |
 | --- | --- |
-| Verify and install a package | [Installation procedure](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#4-verify-and-install-one-package) |
-| Build and install the latest source | [Build and install from source](https://github.com/duggytuxy/syswarden/wiki/Build-and-Install-from-Source) |
+| Verify and install v4.10.0 | [Get started with the signed release](https://syswarden.io/docs/getting-started/) |
+| Build from an exact reviewed source revision | [Build and install from source](https://syswarden.io/docs/build-from-source/) |
 | Diagnose SSH detection, RHEL CLI paths and HA trust | [Version-aware operator guidance](docs/technical/OPERATOR_VERSION_AND_DIAGNOSTICS.md) |
 | Configure BunkerWeb log inputs | [BunkerWeb log configuration](examples/bunkerweb/README.md) |
-| Upgrade from historical v4.02.8 to v4.03.2 | [Migration procedure](https://github.com/duggytuxy/syswarden/wiki/Migration-v4.02.8-to-v4.03.2) |
-| Configure SysWarden | [Configuration guide](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#7-configuration-layout) |
-| Integrate SysWarden into RHEL 9+ images | [RHEL 9+ image integration](https://github.com/duggytuxy/syswarden/wiki/RHEL-9-Image-Extensions) |
-| Operate, audit or remove SysWarden | [Command and lifecycle reference](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#11-command-inventory) |
-| Review bounded deployment scenarios | [Use cases](https://github.com/duggytuxy/syswarden/wiki/Use-cases) |
-| Configure the BunkerWeb integration | [BunkerWeb integration](https://github.com/duggytuxy/syswarden/wiki/BunkerWeb-Integration) |
+| Upgrade from historical v4.02.8 to v4.03.2 | [Migration procedure](https://syswarden.io/docs/migration-v4-02-8-to-v4-03-2/) |
+| Review the historical configuration layout | [Configuration guide](https://syswarden.io/docs/deployment-reference/#7-configuration-layout) |
+| Integrate SysWarden into RHEL 9+ images | [RHEL 9+ image integration](https://syswarden.io/docs/rhel-image-extensions/) |
+| Review the historical command and lifecycle contract | [Command and lifecycle reference](https://syswarden.io/docs/deployment-reference/#11-command-inventory) |
+| Review bounded deployment scenarios | [Use cases](https://syswarden.io/docs/use-cases/) |
+| Configure the BunkerWeb integration | [BunkerWeb integration](https://syswarden.io/docs/bunkerweb-integration/) |
 
 ## Community
 
