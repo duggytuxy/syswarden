@@ -47,6 +47,10 @@ jobs:
           cd scripts/versionctl
           GOWORK=off go test ./...
 
+      - name: "Test push release context"
+        shell: bash
+        run: python3 -B -m unittest discover -s scripts/ci -p 'push_release_context_test.py'
+
       - name: "Validate commit version contract"
         shell: bash
         env:
@@ -65,7 +69,36 @@ jobs:
             --base-ref "${BASE_REF}" \
             --commit-message "${COMMIT_MESSAGE}"
 
+      - name: Identify Push Release Context
+        id: push-context
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")"
+          context_report="${RUNNER_TEMP}/syswarden-push-context.json"
+          bash scripts/ci/push_release_context.sh \
+            "${GITHUB_WORKSPACE}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${context_report}"
+          echo "release_track_required=$(jq -r '.release_track_required' "${context_report}")" >> "${GITHUB_OUTPUT}"
+          {
+            echo '### Push and existing release context'
+            echo '```json'
+            cat "${context_report}"
+            echo '```'
+            echo 'Post-tag follow-ups keep the published tag unchanged and inherit no release verdict. Commit validation remains mandatory.'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Preserve Push Release Context
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: syswarden-push-context-${{ github.sha }}
+          path: ${{ runner.temp }}/syswarden-push-context.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Record Version-Derived Release Validation Track
+        if: steps.push-context.outputs.release_track_required == 'true'
         shell: bash
         env:
           RELEASE_SHA: ${{ github.sha }}
@@ -84,6 +117,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Preserve Release Track Classification
+        if: steps.push-context.outputs.release_track_required == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: syswarden-release-track-${{ github.sha }}
