@@ -21,7 +21,7 @@ import release_gate
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_CANDIDATE_VERSION = "v4.10.0"
-STABLE_PUBLIC_VERSION = "v4.04.3"
+STABLE_PUBLIC_VERSION = "v4.10.0"
 PUBLIC_REPORT_VERSION = "v4.03.3"
 OPERATIONAL_WIKI_BASELINE_VERSION = "v4.04.3"
 REPORT = REPO_ROOT / (
@@ -137,7 +137,7 @@ class DocumentationGateTest(unittest.TestCase):
         contract = documentation_gate.load_contract(REPO_ROOT)
         required = contract["required_wiki_phrases"]["Home.md"]
         self.assertIn(
-            "{stable_public_version} is the latest qualified, stable public release.",
+            "{stable_public_version} is the latest IVV-validated, stable public release.",
             required,
         )
         self.assertIn(
@@ -171,7 +171,7 @@ class DocumentationGateTest(unittest.TestCase):
             1,
         )
         self.assertIn(
-            "The latest qualified, stable public release is "
+            "The latest IVV-validated, stable public release is "
             f"[{STABLE_PUBLIC_VERSION}](https://github.com/duggytuxy/syswarden/"
             f"releases/tag/{STABLE_PUBLIC_VERSION}).",
             documentation_gate.normalized(readme),
@@ -252,8 +252,8 @@ class DocumentationGateTest(unittest.TestCase):
             [],
         )
         for report_version, wiki_version, key in (
-            ("v4.04.4", OPERATIONAL_WIKI_BASELINE_VERSION, "public_report_version"),
-            (PUBLIC_REPORT_VERSION, "v4.04.4", "operational_wiki_baseline_version"),
+            ("v4.10.1", OPERATIONAL_WIKI_BASELINE_VERSION, "public_report_version"),
+            (PUBLIC_REPORT_VERSION, "v4.10.1", "operational_wiki_baseline_version"),
         ):
             errors = documentation_gate.validate_documentation_version_order(
                 SOURCE_CANDIDATE_VERSION,

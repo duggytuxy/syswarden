@@ -4,7 +4,7 @@ Applies to: stable v4.04.3 and the v4.10.0 source candidate, as distinguished
 below. Candidate behavior and regression tests do not establish native release
 qualification.
 
-This reference complements the [deployment tutorial](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial).
+This reference complements the [deployment tutorial](https://syswarden.io/docs/deployment-reference/).
 It incorporates independent Debian 13 and AlmaLinux feedback from
 [Stephane Robert's installation guide](https://blog.stephane-robert.info/docs/securiser/reseaux/syswarden/).
 Always identify the installed version before following documentation from main.
@@ -19,7 +19,7 @@ Always identify the installed version before following documentation from main.
 | Native runtime history | Do not apply the candidate lifecycle contract | Separate verified lifecycle history described in the candidate reference |
 
 Do not copy `v2_enabled`, `peer_cert_sha256` or `v2_secret_file` into a v4.04.3
-installation. Use the [stable configuration procedure](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#7-configuration-layout)
+installation. Use the [stable configuration procedure](https://syswarden.io/docs/deployment-reference/#7-configuration-layout)
 and the installed configuration schema. The
 [HA v2 prerequisites](HA_V2_OPERATOR_PREREQUISITES.md) and
 [native runtime lifecycle](NATIVE_RUNTIME_LIFECYCLE.md) describe the candidate.
@@ -100,7 +100,7 @@ uses `/etc/syswarden/config/config.toml` and
 `/etc/syswarden/config/modules/*.toml`. When the modules directory exists,
 the CLI selects that modular root ahead of the legacy flag path. The absence
 of the historical file alone does not indicate a broken installation. Follow the
-[configuration layout](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#7-configuration-layout)
+[configuration layout](https://syswarden.io/docs/deployment-reference/#7-configuration-layout)
 and use `syswarden config validate --path /etc/syswarden/config` to inspect the
 modular configuration. Do not create a legacy file simply to match the help
 text. This documentation does not change configuration precedence or defaults.
@@ -118,8 +118,8 @@ bundle and its directory protected, and retain certificate name/IP validation.
 The file must be regular, not a symlink, owned by root or the effective CLI
 user, and not writable by group or others. This does not require installing a
 CA into the system-wide trust store and does not replace the HA bearer token.
-See the [HA deployment procedure](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial)
-for provisioning and [BunkerWeb integration](https://github.com/duggytuxy/syswarden/wiki/BunkerWeb-Integration)
+See the [HA deployment procedure](https://syswarden.io/docs/deployment-reference/)
+for provisioning and [BunkerWeb integration](https://syswarden.io/docs/bunkerweb-integration/)
 for its separate client configuration. HA v2 has additional mutual-TLS and
 identity requirements; the legacy bundle alone does not satisfy them.
 
@@ -170,7 +170,7 @@ GOFLAGS=-mod=readonly go run ./scripts/ci/update_manifest.go verify \
 Stop on any nonzero result. The tool verifies the complete three-package
 inventory even when only one package will be installed. After successful
 authentication, install only the package appropriate for the host using the
-[installation procedure](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial#4-verify-and-install-one-package).
+[installation procedure](https://syswarden.io/docs/deployment-reference/#4-verify-and-install-one-package).
 Do not run a newly downloaded CLI as the bootstrap verifier for itself.
 An already trusted installation uses its embedded release keys during the
 normal signed update flow.
