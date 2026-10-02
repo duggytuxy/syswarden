@@ -345,10 +345,12 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         post_uninstall = (EXTENSION_ROOT / "scriptlets/post-uninstall.sh").read_text(
             encoding="utf-8"
         )
-        for document in (readme, qualification, pre_uninstall, post_uninstall):
+        for document in (readme, pre_uninstall, post_uninstall):
             self.assertIn("/var/lib/.syswarden-rhelpo-postun-recovery-v1", document)
             self.assertIn(f"0:0:700:1:{len(recovery_helper)}", document)
             self.assertIn(recovery_digest, document)
+        self.assertIn("v4.10.0", qualification)
+        self.assertIn("cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63", qualification)
         preset = (REPOSITORY_ROOT / "src/init/systemd/90-syswarden-rhel-image.preset").read_text(
             encoding="utf-8"
         )
@@ -356,6 +358,17 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
             preset,
             "enable syswarden-firewall.service\nenable syswarden-core.service\n",
         )
+
+    def test_current_rpm_and_erase_record_digests_match_source_version(self) -> None:
+        version = verify_contract.PACKAGE_VERSION
+        identity = f"syswarden\t0\t{version}\t1.rhelpo\tx86_64\n".encode()
+        identity_digest = hashlib.sha256(identity).hexdigest()
+        marker = f"SYSWARDEN_RHELPO_ERASE_READY_V1\nnevra=syswarden-{version}-1.rhelpo.x86_64\n".encode()
+        marker_digest = hashlib.sha256(marker).hexdigest()
+        for name in ("pre-install.sh", "post-install.sh", "pre-uninstall.sh"):
+            self.assertIn(identity_digest, (EXTENSION_ROOT / "scriptlets" / name).read_text())
+        for name in ("pre-uninstall.sh", "postun-recovery.sh"):
+            self.assertIn(marker_digest, (EXTENSION_ROOT / "scriptlets" / name).read_text())
 
     def test_flat_init_sources_match_current_runtime_templates_byte_for_byte(self) -> None:
         go_source = (

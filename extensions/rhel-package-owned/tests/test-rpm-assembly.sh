@@ -71,7 +71,9 @@ chroot_admin() {
         sudo -n "$@"
         return
     fi
-    "$@"
+    # Fixture administration needs the same namespace-root capabilities as RPM,
+    # including when the modeled shared /usr/lib parent intentionally uses 0555.
+    unshare -Ur "$@"
 }
 
 python3 "${EXTENSION_DIRECTORY}/stage.py" \
@@ -551,7 +553,7 @@ assert_exact_erase_ready_marker() {
     assert_exact_chroot_regular_file "$1" \
         /var/lib/.syswarden-rhelpo-erase-ready-v1 \
         600 71 \
-        3c429337c31a5c397da09b2976dc6cb759d0ae44f986dc19aa4e25f47a2970c8 \
+        30af7d69819cc05aed32cd93d570cad2623276077e264590b3b00bd1fe8d2f9e \
         'RHEL package-owned erase-ready marker'
 }
 
@@ -567,7 +569,7 @@ assert_exact_postun_recovery_helper() {
     assert_exact_chroot_regular_file "$1" \
         /var/lib/.syswarden-rhelpo-postun-recovery-v1 \
         700 9923 \
-        cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63 \
+        de79df4cfb15554453f3643520e413893202346f8edac49360c15b334f388715 \
         'RHEL package-owned post-uninstall recovery helper'
 }
 
@@ -1490,6 +1492,39 @@ assert_rhel_authority "${CHROOT_ROOT}"
 prepare_exact_erase_state "${CHROOT_ROOT}"
 rpm_at_root "${CHROOT_ROOT}" --erase syswarden
 assert_final_absence "${CHROOT_ROOT}"
+
+# Metadata fixtures seed only an installed RPM owner; they do not claim to
+# replay historical scriptlets. The candidate's real PREIN/POSTIN/erase paths
+# must accept the exact previous profile and reject an unknown profile owner.
+for identity_version in 4.10.0 4.10.2; do
+    identity_package="${PACKAGE_DIRECTORY}/syswarden-${identity_version}-1.rhelpo.x86_64.rpm"
+    assemble_profile_rpm "${identity_version}" "${identity_package}"
+    rpm_at_root "${CLEAN_CHROOT_ROOT}" --install --noscripts --nodeps --nosignature --nodigest --nocontexts \
+        "${identity_package}"
+    assert_package_identity "${CLEAN_CHROOT_ROOT}" "syswarden-${identity_version}-1.rhelpo.x86_64"
+    if [ "${identity_version}" = 4.10.0 ]; then
+        printf '%s\n' '# operator configuration retained across profile upgrade' > "${TEST_WORKSPACE}/previous-profile-config"
+        chroot_admin install -m 0640 -- "${TEST_WORKSPACE}/previous-profile-config" \
+            "${CLEAN_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
+        rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --nodeps --nosignature --nodigest --nocontexts \
+            "${PACKAGE_PATH}"
+        assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.1-1.rhelpo.x86_64
+        assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
+        chroot_admin cmp -s "${TEST_WORKSPACE}/previous-profile-config" \
+            "${CLEAN_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
+        prepare_exact_erase_state "${CLEAN_CHROOT_ROOT}"
+        rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase syswarden
+        assert_final_absence "${CLEAN_CHROOT_ROOT}"
+    else
+        if rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --oldpackage --nodeps --nosignature --nodigest --nocontexts \
+            "${PACKAGE_PATH}" >/dev/null 2>&1; then
+            printf '%s\n' 'RHEL profile upgrade accepted an unknown installed version.' >&2
+            exit 1
+        fi
+        assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.2-1.rhelpo.x86_64
+        rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
+    fi
+done
 
 for root in "${CLEAN_CHROOT_ROOT}" "${CHROOT_ROOT}"; do
     [[ "$(run_in_chroot "${root}" /usr/bin/stat -Lc '%u:%g:%a' -- /usr/lib)" == 0:0:555 ]]

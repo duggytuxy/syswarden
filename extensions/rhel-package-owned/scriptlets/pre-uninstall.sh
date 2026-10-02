@@ -49,7 +49,7 @@ exact_payload_file() {
     [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$owner_file")" = '0:0:600:1:35' ] || \
         fail "RPM ownership output is not canonical and bounded: $path"
     [ "$(/usr/bin/sha256sum -- "$owner_file" | /usr/bin/awk '{print $1}')" = \
-        a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247 ] || \
+        9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e ] || \
         fail "Refusing payload without exact RHEL package ownership: $path"
     cleanup_owner
     trap - 0 1 2 3 15
@@ -82,7 +82,7 @@ exact_owned_payload_file() {
     [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$owner_file")" = '0:0:600:1:35' ] || \
         fail "RPM ownership output is not canonical and bounded: $path"
     [ "$(/usr/bin/sha256sum -- "$owner_file" | /usr/bin/awk '{print $1}')" = \
-        a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247 ] || \
+        9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e ] || \
         fail "Refusing product payload without exact RHEL package ownership: $path"
     cleanup_owner
     trap - 0 1 2 3 15
@@ -94,7 +94,7 @@ exact_recovery_helper() {
     [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$path")" = '0:0:700:1:9923' ] || \
         fail "Refusing modified post-uninstall recovery helper metadata: $path"
     [ "$(/usr/bin/sha256sum -- "$path" | /usr/bin/awk '{print $1}')" = \
-        cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63 ] || \
+        de79df4cfb15554453f3643520e413893202346f8edac49360c15b334f388715 ] || \
         fail "Refusing modified post-uninstall recovery helper content: $path"
 }
 
@@ -186,7 +186,7 @@ exact_owned_payload_symlink() {
     [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$owner_file")" = '0:0:600:1:35' ] || \
         fail "RPM ownership output is not canonical and bounded: $path"
     [ "$(/usr/bin/sha256sum -- "$owner_file" | /usr/bin/awk '{print $1}')" = \
-        a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247 ] || \
+        9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e ] || \
         fail "Refusing product link without exact RHEL package ownership: $path"
     cleanup_owner
     trap - 0 1 2 3 15
@@ -288,7 +288,7 @@ if [ "$1" -eq 0 ]; then
     [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h' -- "$marker")" = '0:0:600:1' ] || \
         fail 'Refusing modified RHEL package-owned erase authorization metadata.'
     [ "$(/usr/bin/sha256sum -- "$marker" | /usr/bin/awk '{print $1}')" = \
-        3c429337c31a5c397da09b2976dc6cb759d0ae44f986dc19aa4e25f47a2970c8 ] || \
+        30af7d69819cc05aed32cd93d570cad2623276077e264590b3b00bd1fe8d2f9e ] || \
         fail 'Refusing modified RHEL package-owned erase authorization content.'
     tombstone=/var/lib/syswarden/removal-in-progress-v1
     [ -f "$tombstone" ] && [ ! -L "$tombstone" ] || \
@@ -350,7 +350,7 @@ if [ "$1" -eq 0 ]; then
         [ "$entry" = /usr/libexec/syswarden/rhelpo-postun-recovery-v1 ] || \
             fail "Refusing unexpected RHEL package-owned helper payload: $entry"
         exact_owned_payload_file "$entry" 755 \
-            cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63
+            de79df4cfb15554453f3643520e413893202346f8edac49360c15b334f388715
         recovery_children=$((recovery_children + 1))
     done
     [ "$recovery_children" -eq 1 ] || fail 'RPM-owned recovery helper inventory is incomplete.'
