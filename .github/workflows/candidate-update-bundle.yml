@@ -99,15 +99,15 @@ jobs:
             echo "ERROR: candidate updater signing requires one owner-dispatched exact-main GitHub-hosted run." >&2
             exit 1
           fi
-          if [[ ( "${RELEASE_TAG}" != "v4.10.0" && "${RELEASE_TAG}" != "v4.10.1" ) || \
+          if [[ ( "${RELEASE_TAG}" != "v4.10.0" && "${RELEASE_TAG}" != "v4.10.1" && "${RELEASE_TAG}" != "v4.10.2" ) || \
                 ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
                 ! "${PUBLICATION_SHA}" =~ ^[0-9a-f]{40}$ || \
                 "${AUTHORIZATION}" != "SIGN-CANDIDATE-UPDATE-NO-PUBLISH" ]]; then
             echo "ERROR: candidate updater inputs or no-publication authorization are invalid." >&2
             exit 1
           fi
-          if [[ "${RELEASE_TAG}" == "v4.10.1" && "${PUBLICATION_SHA}" != "${RELEASE_SHA}" ]]; then
-            echo "ERROR: v4.10.1 candidate signing requires identical product and producer commits." >&2
+          if [[ "${RELEASE_TAG}" != "v4.10.0" && "${PUBLICATION_SHA}" != "${RELEASE_SHA}" ]]; then
+            echo "ERROR: intermediate candidate signing requires identical product and producer commits." >&2
             exit 1
           fi
           for identifier in "${NATIVE_RUN_ID}" "${NATIVE_ARTIFACT_ID}"; do
