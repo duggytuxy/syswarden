@@ -70,6 +70,7 @@ func TestRemovalTombstoneKeepsReadOnlyAndRemovalRecoveryCommandsUsable_SW2_FWBAC
 		{"check"},
 		{"completion"},
 		{"config-get"},
+		{"config", "validate"},
 		{"help"},
 		{"list"},
 		{"manual"},
@@ -99,5 +100,33 @@ func TestUnsafeRemovalEvidenceFailsClosedForMutation_SW2_FWBACKEND_001(t *testin
 	err := enforceRemovalState(syntheticCommandPath("reload"))
 	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "removal state is unsafe") {
 		t.Fatalf("unsafe evidence guard = %v", err)
+	}
+}
+
+func TestRemovalBarrierPrecedesEveryGenericMutationHook(t *testing.T) {
+	previousInspect, previousInit, previousRecovery := inspectRemovalTombstone, initConfigHook, recoverPendingFirewallTransactionHook
+	t.Cleanup(func() {
+		inspectRemovalTombstone = previousInspect
+		initConfigHook = previousInit
+		recoverPendingFirewallTransactionHook = previousRecovery
+	})
+	for _, unsafe := range []bool{false, true} {
+		inspectRemovalTombstone = func() (bool, error) {
+			if unsafe {
+				return true, errors.New("unsafe barrier")
+			}
+			return true, nil
+		}
+		calls := 0
+		initConfigHook = func() { calls++ }
+		recoverPendingFirewallTransactionHook = func() error { calls++; return nil }
+		for _, command := range []*cobra.Command{tuiCmd, configCmd, updateCmd, reloadCmd, installCmd} {
+			if err := rootCmd.PersistentPreRunE(command, nil); err == nil {
+				t.Fatalf("%s accepted removal barrier", command.Name())
+			}
+		}
+		if calls != 0 {
+			t.Fatalf("blocked command ran %d mutation hooks", calls)
+		}
 	}
 }

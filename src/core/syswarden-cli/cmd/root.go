@@ -38,6 +38,10 @@ var rootCmd = &cobra.Command{
 			// The removal tombstone remains a mandatory read-only safety gate.
 			return enforceRemovalState(cmd)
 		}
+		// Reject removal-blocked commands before firewall recovery or config normalization can mutate the host.
+		if err := enforceRemovalState(cmd); err != nil {
+			return err
+		}
 		if commandRequiresEarlyFirewallRecovery(cmd) {
 			if err := recoverPendingFirewallTransactionHook(); err != nil {
 				return fmt.Errorf("[ERROR] authoritative firewall recovery failed before command preparation: %w", err)
@@ -45,9 +49,6 @@ var rootCmd = &cobra.Command{
 		}
 		if commandRequiresAutomaticConfigLoad(cmd) {
 			initConfigHook()
-		}
-		if err := enforceRemovalState(cmd); err != nil {
-			return err
 		}
 		return enforceValidatedConfiguration(cmd)
 	},
@@ -159,6 +160,9 @@ func topLevelCommand(cmd *cobra.Command) *cobra.Command {
 }
 
 func commandAllowedDuringRemoval(cmd *cobra.Command) bool {
+	if cmd != nil && cmd.CommandPath() == "syswarden config validate" {
+		return true
+	}
 	topLevel := topLevelCommand(cmd)
 	if topLevel == nil || topLevel.Parent() == nil {
 		return true
@@ -189,7 +193,7 @@ func enforceRemovalState(cmd *cobra.Command) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"[ERROR] refusing operational mutation while %s is present; resume verified removal or inspect the retained evidence",
+		"[ERROR] refusing operational mutation while %s is present; removal is incomplete; inspect WireGuard evidence with 'sudo syswarden recover-wireguard', validate configuration with 'sudo syswarden config validate', then resume 'sudo syswarden uninstall'; retain the barrier and ownership files",
 		system.RemovalTombstonePath,
 	)
 }

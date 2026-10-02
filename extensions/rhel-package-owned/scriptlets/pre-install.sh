@@ -135,14 +135,11 @@ exact_migration_temporary() {
         fail "Refusing unexpected interrupted enablement target: $path"
     [ "$transaction_count" -gt 1 ] || \
         fail 'Refusing interrupted enablement migration during clean installation.'
-    attest_installed_identity 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
+    attest_installed_identity 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
 }
 
 attest_installed_identity() {
-    expected_size="$1"
-    expected_digest="$2"
-    alternate_size="${3:-}"
-    alternate_digest="${4:-}"
+    case "$#" in 2|4|6) ;; *) fail 'Invalid exact RPM identity allowlist.' ;; esac
     [ -x /usr/bin/rpm ] && [ -x /usr/bin/timeout ] && [ -x /usr/bin/mktemp ] || \
         fail 'RPM identity attestation is unavailable during RHEL package-owned migration.'
     identity_file="$(/usr/bin/mktemp /tmp/syswarden-rhelpo-prein.XXXXXXXXXX)" || \
@@ -160,13 +157,18 @@ attest_installed_identity() {
     fi
     identity_metadata="$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$identity_file")"
     identity_digest="$(/usr/bin/sha256sum -- "$identity_file" | /usr/bin/awk '{print $1}')"
-    if [ "$identity_metadata" != "0:0:600:1:${expected_size}" ] || \
-       [ "$identity_digest" != "$expected_digest" ]; then
-        [ -n "$alternate_size" ] && [ -n "$alternate_digest" ] && \
-            [ "$identity_metadata" = "0:0:600:1:${alternate_size}" ] && \
-            [ "$identity_digest" = "$alternate_digest" ] || \
-            fail 'Installed RPM identity does not match the authorized migration source.'
-    fi
+    identity_authorized=0
+    while [ "$#" -gt 0 ]; do
+        expected_size="$1"
+        expected_digest="$2"
+        shift 2
+        if [ "$identity_metadata" = "0:0:600:1:${expected_size}" ] && \
+           [ "$identity_digest" = "$expected_digest" ]; then
+            identity_authorized=1
+        fi
+    done
+    [ "$identity_authorized" -eq 1 ] || \
+        fail 'Installed RPM identity does not match the authorized migration source.'
     cleanup_identity
     trap - 0 1 2 3 15
 }
@@ -191,7 +193,8 @@ attest_payload_owner() {
     owner_digest="$(/usr/bin/sha256sum -- "$owner_file" | /usr/bin/awk '{print $1}')"
     owner_is_rhelpo=0
     if [ "$owner_metadata" = '0:0:600:1:35' ] && \
-       [ "$owner_digest" = a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247 ]; then
+       { [ "$owner_digest" = 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e ] || \
+         [ "$owner_digest" = a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247 ]; }; then
         owner_is_rhelpo=1
     fi
     owner_is_standard=0
@@ -336,7 +339,7 @@ for preset_candidate in "$preset_marker" "$preset_temporary"; do
     preset_recovery=1
 done
 if [ "$preset_recovery" -eq 1 ]; then
-    attest_installed_identity 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
+    attest_installed_identity 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
 fi
 
 exact_systemd_directory /etc/systemd/system 1
@@ -363,6 +366,7 @@ if [ "$1" -gt 1 ]; then
     if [ "$core_present" -eq 1 ] && [ "$firewall_present" -eq 1 ]; then
         attest_installed_identity \
             28 c3dd1e8df980ad039e7ba1c3c7a82625048df88a5636bdb039da6cc1c06de7c9 \
+            35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e \
             35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
         exact_legacy_source_unit /etc/systemd/system/syswarden-core.service \
             8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd \
@@ -370,9 +374,9 @@ if [ "$1" -gt 1 ]; then
         exact_legacy_source_unit /etc/systemd/system/syswarden-firewall.service \
             989be4b60c43bba830333ef30949376e57658222a48947194395393794e328c1
     elif [ "$core_present" -eq 0 ] && [ "$firewall_present" -eq 0 ]; then
-        attest_installed_identity 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
+        attest_installed_identity 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
     else
-        attest_installed_identity 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
+        attest_installed_identity 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
         if [ "$core_present" -eq 1 ]; then
             exact_legacy_source_unit /etc/systemd/system/syswarden-core.service \
                 8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd \

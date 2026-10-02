@@ -14,7 +14,7 @@ import (
 )
 
 func testRHELPackageOwnedIdentity() []byte {
-	return []byte("syswarden\t0\t4.10.0\t1.rhelpo\tx86_64\n")
+	return []byte("syswarden\t0\t4.10.1\t1.rhelpo\tx86_64\n")
 }
 
 func testRHELPackageOwnedOwner(t *testing.T, root string) (uint32, uint32) {
@@ -98,9 +98,10 @@ func testRHELPackageOwnedHost(t *testing.T, root string) rhelPackageOwnedAttesta
 	t.Helper()
 	uid, gid := testRHELPackageOwnedOwner(t, root)
 	return rhelPackageOwnedAttestationHost{
-		root:        root,
-		expectedUID: uid,
-		expectedGID: gid,
+		runningVersion: "v" + rhelPackageOwnedRPMVersion,
+		root:           root,
+		expectedUID:    uid,
+		expectedGID:    gid,
 		queryInstalled: func() ([]byte, error) {
 			return testRHELPackageOwnedIdentity(), nil
 		},
@@ -181,7 +182,7 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 		root := t.TempDir()
 		host := testRHELPackageOwnedHost(t, root)
 		host.queryInstalled = func() ([]byte, error) {
-			return []byte("syswarden\t0\t4.10.0\t1\tx86_64\n"), nil
+			return []byte("syswarden\t0\t4.10.1\t1\tx86_64\n"), nil
 		}
 		present, err := host.attest()
 		if err != nil || present {
@@ -193,7 +194,8 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 		root := t.TempDir()
 		uid, gid := testRHELPackageOwnedOwner(t, root)
 		host := rhelPackageOwnedAttestationHost{
-			root: root, expectedUID: uid, expectedGID: gid,
+			runningVersion: "v" + rhelPackageOwnedRPMVersion,
+			root:           root, expectedUID: uid, expectedGID: gid,
 			skipAbsentPackageQuery: true,
 			queryInstalled: func() ([]byte, error) {
 				t.Fatal("standard package preun queried rpm")
@@ -225,7 +227,8 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 		}
 		uid, gid := testRHELPackageOwnedOwner(t, root)
 		host := rhelPackageOwnedAttestationHost{
-			root: root, expectedUID: uid, expectedGID: gid,
+			runningVersion: "v" + rhelPackageOwnedRPMVersion,
+			root:           root, expectedUID: uid, expectedGID: gid,
 			skipAbsentPackageQuery: true,
 			queryInstalled: func() ([]byte, error) {
 				t.Fatal("partial package preun payload queried rpm")
@@ -335,7 +338,7 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 			mutate: func(t *testing.T, _ string, host *rhelPackageOwnedAttestationHost) {
 				t.Helper()
 				host.queryInstalled = func() ([]byte, error) {
-					return []byte("syswarden\t0\t4.10.0\t1\tx86_64\n"), nil
+					return []byte("syswarden\t0\t4.10.1\t1\tx86_64\n"), nil
 				}
 			},
 		},
@@ -344,7 +347,7 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 			mutate: func(t *testing.T, _ string, host *rhelPackageOwnedAttestationHost) {
 				t.Helper()
 				host.queryFileOwner = func(string) ([]byte, error) {
-					return []byte("syswarden\t0\t4.10.0\t2.rhelpo\tx86_64\n"), nil
+					return []byte("syswarden\t0\t4.10.1\t2.rhelpo\tx86_64\n"), nil
 				}
 			},
 		},
@@ -978,5 +981,27 @@ func TestPrepareRHELPackageOwnedRuntimeForEraseRejectsPresetRecoveryBeforeCleanu
 				t.Fatalf("erase marker was published after preset recovery refusal: %v", err)
 			}
 		})
+	}
+}
+
+func TestRHELPackageOwnedIdentityRejectsDifferentRunningRelease(t *testing.T) {
+	if err := exactRHELPackageOwnedRPMIdentity(testRHELPackageOwnedIdentity(), "v4.10.2"); err == nil {
+		t.Fatal("v4.10.1-only RHELPO profile accepted a different running release")
+	}
+	if host := productionRHELPackageOwnedAttestationHost(); host.runningVersion != Version {
+		t.Fatal("production RHELPO attestation is not bound to running release")
+	}
+}
+
+func TestRHELPackageOwnedIdentityMatchesCurrentRelease(t *testing.T) {
+	if Version != "v"+rhelPackageOwnedRPMVersion {
+		t.Fatalf("RHEL package identity %q differs from current source %q", rhelPackageOwnedRPMVersion, Version)
+	}
+	if err := exactRHELPackageOwnedRPMIdentity(testRHELPackageOwnedIdentity(), Version); err != nil {
+		t.Fatal(err)
+	}
+	expectedRecord := "SYSWARDEN_RHELPO_ERASE_READY_V1\nnevra=" + strings.TrimSuffix(rhelPackageOwnedRPMFilename, ".rpm") + "\n"
+	if rhelPackageOwnedEraseReadyRecord != expectedRecord {
+		t.Fatalf("erase marker is not bound to current package identity")
 	}
 }

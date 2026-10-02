@@ -18,7 +18,7 @@ const (
 	rhelPackageOwnedProfilePath      = "/usr/share/doc/syswarden/rhel-package-owned-profile.json"
 
 	rhelPackageOwnedEraseReadyPath        = "/var/lib/.syswarden-rhelpo-erase-ready-v1"
-	rhelPackageOwnedEraseReadyRecord      = "SYSWARDEN_RHELPO_ERASE_READY_V1\nnevra=syswarden-4.10.0-1.rhelpo.x86_64\n"
+	rhelPackageOwnedEraseReadyRecord      = "SYSWARDEN_RHELPO_ERASE_READY_V1\nnevra=syswarden-4.10.1-1.rhelpo.x86_64\n"
 	rhelPackageOwnedPresetPendingPath     = "/var/lib/.syswarden-rhelpo-preset-pending-v1"
 	rhelPackageOwnedPresetPendingTempPath = rhelPackageOwnedPresetPendingPath + ".new"
 
@@ -203,6 +203,7 @@ var rhelPackageOwnedAdditionalOwnedPayloadLinks = []struct {
 }
 
 type rhelPackageOwnedAttestationHost struct {
+	runningVersion          string
 	root                    string
 	expectedUID             uint32
 	expectedGID             uint32
@@ -249,7 +250,7 @@ var rhelPackageOwnedConflictingRecoveryPaths = []string{
 	"/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service.syswarden-rhelpo-migration",
 }
 
-func exactRHELPackageOwnedRPMIdentity(output []byte) error {
+func exactRHELPackageOwnedRPMIdentity(output []byte, runningVersion string) error {
 	identity, err := parseInstalledRPMIdentity(output)
 	if err != nil {
 		return err
@@ -260,19 +261,19 @@ func exactRHELPackageOwnedRPMIdentity(output []byte) error {
 	}) {
 		return fmt.Errorf("installed RPM identity is not exact RHEL package-owned NEVRA")
 	}
-	if Version != "v"+rhelPackageOwnedRPMVersion {
-		return fmt.Errorf("running SysWarden release %q is not the RHEL package-owned release", Version)
+	if runningVersion != "v"+rhelPackageOwnedRPMVersion {
+		return fmt.Errorf("running SysWarden release %q is not the RHEL package-owned release", runningVersion)
 	}
 	return nil
 }
 
-func exactStandardRPMIdentity(output []byte) error {
+func exactStandardRPMIdentity(output []byte, runningVersion string) error {
 	identity, err := parseInstalledRPMIdentity(output)
 	if err != nil {
 		return err
 	}
 	if identity != (installedRPMIdentity{
-		name: installedRPMPackageName, epoch: "0", version: strings.TrimPrefix(Version, "v"),
+		name: installedRPMPackageName, epoch: "0", version: strings.TrimPrefix(runningVersion, "v"),
 		release: standardRPMPackageRelease, architecture: installedRPMArchitecture,
 	}) {
 		return fmt.Errorf("installed RPM identity is not exact standard SysWarden")
@@ -376,9 +377,9 @@ func (host rhelPackageOwnedAttestationHost) attest() (bool, error) {
 		}
 		return false, fmt.Errorf("query installed RHEL package-owned RPM: %w", err)
 	}
-	rhelIdentityErr := exactRHELPackageOwnedRPMIdentity(installedBefore)
+	rhelIdentityErr := exactRHELPackageOwnedRPMIdentity(installedBefore, host.runningVersion)
 	if rhelIdentityErr != nil {
-		if standardErr := exactStandardRPMIdentity(installedBefore); standardErr == nil && !present {
+		if standardErr := exactStandardRPMIdentity(installedBefore, host.runningVersion); standardErr == nil && !present {
 			return false, nil
 		}
 		return false, errors.Join(
@@ -410,7 +411,7 @@ func (host rhelPackageOwnedAttestationHost) attest() (bool, error) {
 			return false, errors.Join(fmt.Errorf("RHEL package-owned file is not exact: %s", expected.path), err)
 		}
 		ownerBefore, err := host.queryFileOwner(expected.path)
-		ownerIdentityErr := exactRHELPackageOwnedRPMIdentity(ownerBefore)
+		ownerIdentityErr := exactRHELPackageOwnedRPMIdentity(ownerBefore, host.runningVersion)
 		if err != nil || ownerIdentityErr != nil {
 			return false, errors.Join(
 				fmt.Errorf("attest RHEL package ownership for %s", expected.path), err, ownerIdentityErr,
@@ -530,7 +531,7 @@ func (host rhelPackageOwnedAttestationHost) attestRequiredDirectories() error {
 func (host rhelPackageOwnedAttestationHost) attestAdditionalPayloadOwnership() error {
 	queryStableOwner := func(path string) error {
 		before, err := host.queryFileOwner(path)
-		identityErr := exactRHELPackageOwnedRPMIdentity(before)
+		identityErr := exactRHELPackageOwnedRPMIdentity(before, host.runningVersion)
 		if err != nil || identityErr != nil {
 			return errors.Join(fmt.Errorf("attest RHEL package ownership for %s", path), err, identityErr)
 		}
@@ -699,7 +700,8 @@ func productionRHELPackageOwnedAttestationHost() rhelPackageOwnedAttestationHost
 		)
 	}
 	return rhelPackageOwnedAttestationHost{
-		root: "/", expectedUID: 0, expectedGID: 0,
+		runningVersion: Version,
+		root:           "/", expectedUID: 0, expectedGID: 0,
 		skipAbsentPackageQuery: os.Getenv("SYSWARDEN_PKG_INSTALL") == "1",
 		queryInstalled:         queryInstalled, queryFileOwner: queryFileOwner,
 		verifyInstalledPayload:  verifyInstalledPayload,

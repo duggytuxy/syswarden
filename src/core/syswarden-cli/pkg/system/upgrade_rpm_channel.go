@@ -16,9 +16,9 @@ const (
 	installedRPMPackageName          = "syswarden"
 	installedRPMArchitecture         = "x86_64"
 	standardRPMPackageRelease        = "1"
-	rhelPackageOwnedRPMVersion       = "4.10.0"
+	rhelPackageOwnedRPMVersion       = "4.10.1"
 	rhelPackageOwnedRPMRelease       = "1.rhelpo"
-	rhelPackageOwnedRPMFilename      = "syswarden-4.10.0-1.rhelpo.x86_64.rpm"
+	rhelPackageOwnedRPMFilename      = "syswarden-4.10.1-1.rhelpo.x86_64.rpm"
 	installedRPMQueryFormat          = "%{NAME}\t%{EPOCHNUM}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n"
 	maximumInstalledRPMIdentityBytes = 1024
 	installedRPMReleaseTimeout       = 15 * time.Second

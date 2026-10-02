@@ -48,7 +48,7 @@ defense layer without placing another proxy in the application data path.
 SysWarden is not an inline HTTP proxy, a traffic sanitizer or a regulatory
 certification product.
 
-Current source version: **v4.10.0**.
+Current source version: **v4.10.1**.
 
 The latest IVV-validated, stable public release is
 [v4.10.0](https://github.com/duggytuxy/syswarden/releases/tag/v4.10.0).

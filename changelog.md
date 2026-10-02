@@ -1,3 +1,26 @@
+# Release v4.10.1
+
+### FIXED
+
+- **Historical WireGuard removal:** During verified removal, recover the exact
+  unmarked historical NAT table and remaining shared forward rules when a
+  retained current manifest proves their configuration and egress identity.
+  Recheck stopped services and the durable removal barrier under the firewall
+  lock before the atomic handle-bound cleanup. Preserve administrator rules,
+  ambiguous historical state and ownership evidence.
+- **Unmanifested legacy state:** Reject removal before creating a new durable
+  barrier when historical WireGuard files have no ownership manifest; preserve
+  configuration and keys and point to read-only recovery inspection.
+- **Interrupted removal diagnostics:** Check the removal barrier before generic
+  firewall recovery or configuration normalization, keep `config validate`
+  available, and show concrete recovery and retry commands. Explain why an
+  empty alert stream during removal does not establish host health.
+- **Current-version checks:** Verify native package state and integrity before
+  reporting that the current release is installed successfully. An incomplete
+  package configuration can no longer pass solely because CLI versions match.
+
+---
+
 # Release v4.10.0
 
 > Candidate status: v4.10.0 is the active Major development line. This block

@@ -613,7 +613,7 @@ func SendBanAlertContext(ctx context.Context, ip, jail, action string) {
 					{Name: "NODE", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v4.10.0 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v4.10.1 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
@@ -660,7 +660,7 @@ func SendDetectedAlertContext(ctx context.Context, ip, jail, action string) {
 					{Name: "NODE", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v4.10.0 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v4.10.1 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
@@ -800,7 +800,7 @@ func SendComplianceAlertContext(ctx context.Context, msg, status string) {
 					{Name: "Status", Value: status, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v4.10.0 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v4.10.1 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},

@@ -139,7 +139,7 @@ func (tail wireGuardRemovalTail) remove() error {
 		if err := tail.cleanupOwnedNFT(); err != nil {
 			if staleErr := tail.cleanupStaleNFT(); staleErr != nil {
 				return fmt.Errorf(
-					"remove exact owned WireGuard nftables state before ownership evidence; manifest-bound cleanup failed: %v; exact tokenized stale-table recovery failed and the durable removal tombstone and WireGuard manifest are retained: %w",
+					"remove exact owned WireGuard nftables state before ownership evidence; manifest-bound cleanup failed: %v; exact stale or historical table recovery failed and the durable removal tombstone and WireGuard manifest are retained: %w",
 					err,
 					staleErr,
 				)
