@@ -130,7 +130,7 @@ jobs:
 
       - name: Resolve Versioned Qualification Matrix for Coordination
         id: qualification_matrix
-        if: ${{ steps.context.outputs.candidate == 'true' }}
+        if: ${{ steps.context.outputs.candidate == 'true' && steps.assurance.outputs.assurance == 'IVVQ' }}
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
@@ -196,6 +196,10 @@ jobs:
           pending=false
 
           if [[ "${REQUIRED_ASSURANCE}" == "IVV" ]]; then
+            if [[ "${RELEASE_TAG}" == "v4.10.1" ]]; then
+              git fetch --no-tags --no-recurse-submodules https://github.com/duggytuxy/syswarden.git 1ac64bc56ee4b4ea9233713f94f415719b9f5ec0
+              test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "1ac64bc56ee4b4ea9233713f94f415719b9f5ec0"
+            fi
             PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_ivv_consumer.py \
               --repository "${GITHUB_WORKSPACE}" --release "${RELEASE_TAG}" \
               --publication-sha "${RELEASE_SHA}" \
@@ -568,6 +572,10 @@ jobs:
           declare -A run_ids=()
 
           if [[ "${REQUIRED_ASSURANCE}" == "IVV" ]]; then
+            if [[ "${RELEASE_TAG}" == "v4.10.1" ]]; then
+              git fetch --no-tags --no-recurse-submodules https://github.com/duggytuxy/syswarden.git 1ac64bc56ee4b4ea9233713f94f415719b9f5ec0
+              test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "1ac64bc56ee4b4ea9233713f94f415719b9f5ec0"
+            fi
             PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_ivv_consumer.py \
               --repository "${GITHUB_WORKSPACE}" --release "${RELEASE_TAG}" \
               --publication-sha "${RELEASE_SHA}" \
@@ -1317,6 +1325,10 @@ jobs:
           fi
 
           if [[ "${REQUIRED_ASSURANCE}" == "IVV" ]]; then
+            if [[ "${RELEASE_TAG}" == "v4.10.1" ]]; then
+              git fetch --no-tags --no-recurse-submodules https://github.com/duggytuxy/syswarden.git 1ac64bc56ee4b4ea9233713f94f415719b9f5ec0
+              test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "1ac64bc56ee4b4ea9233713f94f415719b9f5ec0"
+            fi
             PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_ivv_consumer.py \
               --repository "${GITHUB_WORKSPACE}" --release "${RELEASE_TAG}" \
               --publication-sha "${RELEASE_SHA}" --producer-run-id "${QUALIFICATION_RUN_ID}" \

@@ -1,0 +1,1759 @@
+{
+  "status": "PREPARATION_NOT_ACCEPTANCE",
+  "release": "v4.10.1",
+  "required_assurance": "IVV",
+  "prefix": "Patch",
+  "product_candidate": "8611c84cb8c245195dd5456bebad13a52b1d7217",
+  "native_tested_candidate": "1ac64bc56ee4b4ea9233713f94f415719b9f5ec0",
+  "last_publication_commit": "4ca15287a2ef71658e73ee672db6e1798e526c4c",
+  "source_differences_from_public_release": [
+    {
+      "path": ".github/workflows/candidate-update-bundle.yml",
+      "original_sha256": "ecbb3ebc25bc69a1b3b58d03ff59c5c56a013b26500dca48f5a67540dbf72aee",
+      "product_sha256": "9d70ddf5b875615e541f64b3c3de60416541a48c8895858bb865a33744bb678f"
+    },
+    {
+      "path": ".github/workflows/native-package-signing.yml",
+      "original_sha256": "35e216ad48378e181a0ea9ef5e3a2e082aa3939026038bc6bf121d357804ff43",
+      "product_sha256": "c791e1459c3677a223122b83b49bb7d01c51309d9af5a41377c6e8f4d5aa3c3e"
+    },
+    {
+      "path": "README.md",
+      "original_sha256": "4a4ad6ec12c92c025007d19eaa153a4f6cafdf2fbda0f4403814d9ddc01bb1c2",
+      "product_sha256": "aff9f948e7fb605df176bad9e3d39c125c124b0be7b58850bafc9a40b4a6a8a5"
+    },
+    {
+      "path": "changelog.md",
+      "original_sha256": "defc336ef48123c6ae936bda26b43a300c9a7b1ee2954f014468f44dd5d7f8d3",
+      "product_sha256": "103aead13370048c9687dd4ea18613225bd8dce2adb0f9e20b149245b2004990"
+    },
+    {
+      "path": "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md",
+      "original_sha256": "d37b37135e13192329db61b094f6f2f496f119af9d11380272b8900379cfa767",
+      "product_sha256": "f5c6e072a75ded7345e278a27b5bb45107b0073495bc5aa3eabcda0fb5aa3bb5"
+    },
+    {
+      "path": "extensions/rhel-package-owned/README.md",
+      "original_sha256": "36d1e66b0b7566a67fbc694b0ad52a505f99832415de2cd8ef01ec642da00659",
+      "product_sha256": "f204fb765b35060dc673bcd3978b9b0859f7697bf638f9c7136cc3389b2d3368"
+    },
+    {
+      "path": "extensions/rhel-package-owned/inventory.json",
+      "original_sha256": "83ebd2d2d4eff3a06c8160db00077d3e00e054cc4e6e876acdfe7918a9cfff76",
+      "product_sha256": "c21542a247efb0d0df2b5cf3dde91ef10094f37ab57db4b30c1f0ff20baa3b3b"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/post-install.sh",
+      "original_sha256": "71fee0eb80f300dd0e95ee7c540ac3a93e1cac3f24fa8928760f59afe118970e",
+      "product_sha256": "ca8940281de2c5c185e17b33ca75e8bbc3b3ed3da32375a5c1389ae83b819c5a"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/post-uninstall.sh",
+      "original_sha256": "9440a20ac1495fb90901acbf06fa6454683b5824048ac1ac49c12cebf26f05e0",
+      "product_sha256": "136f9fbe488b85025f6bffa9f74185ae02e7475b141f3f63576a60509df6af0b"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/postun-recovery.sh",
+      "original_sha256": "cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63",
+      "product_sha256": "de79df4cfb15554453f3643520e413893202346f8edac49360c15b334f388715"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/pre-install.sh",
+      "original_sha256": "76f713ff11676693e7faac93c8b7a2cfac6f6155a97d5727d8033b1124300c9b",
+      "product_sha256": "65f17f86fc97969e3c4876744f88cdd81351f109c8ffd56813f03aff8560e629"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/pre-uninstall.sh",
+      "original_sha256": "61cf5ae7cf6beb24d7f0c3202be5617bd881fac648c9ac939a6dfdea437ae1fe",
+      "product_sha256": "12f44033208cf3487d38a9a2c8c804373a2c0ba8b386e99bbf835e086218df67"
+    },
+    {
+      "path": "extensions/rhel-package-owned/tests/test-rpm-assembly.sh",
+      "original_sha256": "fc9132d39b5bc5f30655f2b96321b1dabc7ffd00d19af4c9daa315cc86449244",
+      "product_sha256": "d26e7291fcbbacf59e4550ae24d1253967b6271c4a30e39ddb0a1ffe2777301b"
+    },
+    {
+      "path": "extensions/rhel-package-owned/tests/test_stage.py",
+      "original_sha256": "c97817e581992f069247290a70595f44b6ec293eb25277fc23bd3c9fcb7b16d4",
+      "product_sha256": "fe3cf5d18ff0a49110f029c2d902c9e7d89faca7a9266d356ce33a5d7d479dd4"
+    },
+    {
+      "path": "extensions/rhel-package-owned/verify-rpm.py",
+      "original_sha256": "853e5b3dc95a6cf42559b838c87c8ffa32f16d12de672c716837b299d9488b26",
+      "product_sha256": "716908e67eb94fb1ccf33aba9b2b32b40115fe1045fbff4a08fda693e36203c3"
+    },
+    {
+      "path": "scripts/ci/candidate_update_bundle_workflow_test.py",
+      "original_sha256": "fb0740a7e4d545f5b8a8caf43baed3cbc5d71076bd9edb304176d9513fa299b3",
+      "product_sha256": "d8ec3ad530cc53b7ba578822c33b97508998430e454652c04248de8f2011adab"
+    },
+    {
+      "path": "scripts/ci/documentation_contract.json",
+      "original_sha256": "197dee9786c73f0b1daf8851a49179681f9f7b7b7716a56cbcb4d9cd4838f4c6",
+      "product_sha256": "9cbd72dc470776e458d78a66e4f08f8c4203d84a7897d3d10726f558a837d420"
+    },
+    {
+      "path": "scripts/ci/documentation_gate_test.py",
+      "original_sha256": "3262b7a18664a31aa7a66dc45dcf5b62c0982ad1d8846bd3f997631aa5016ac4",
+      "product_sha256": "abf093abbb8ed19d33d7920472c629d2d52ec78b3f0f7c72852429c8eeea6900"
+    },
+    {
+      "path": "scripts/ci/native_package_signing_bundle.py",
+      "original_sha256": "5a76e1e1ffd62cc2bbd078acdcc81169ec62eea42c55667fb310e7b9fc04d3bc",
+      "product_sha256": "95f6a2b8f2a69e11ed0a81f15543a76b1d8de8a3aacaf29f083df5499087f145"
+    },
+    {
+      "path": "scripts/ci/native_package_signing_bundle_test.py",
+      "original_sha256": "3eaf9449ebb5620151123997c242b479fbc73bdc36dcaca34be5db34bfbdca00",
+      "product_sha256": "db064d26fc212b5bc511d5d7161f032e79b478e619aa9ccb3fefa9b0aa63fd2f"
+    },
+    {
+      "path": "scripts/ci/native_package_signing_workflow_test.py",
+      "original_sha256": "38540b72b582c4bcaad5b167f3a4378fae8a15a091a6dcd8f21398de0098982a",
+      "product_sha256": "b2808d622057fba57eb4406269d761cc004bdd24ee5cfedd6901aea4dacb3676"
+    },
+    {
+      "path": "src/core/syswarden-cli/cmd/alerts.go",
+      "original_sha256": "27610aa3ee525cb3a83f3f721ca5a13c19c4f209e21f2310d143a4c9d6e01a04",
+      "product_sha256": "e9fb3dfe910379b997c3a49c2344c382ec305f07917f3190f611c1cd60f9a333"
+    },
+    {
+      "path": "src/core/syswarden-cli/cmd/alerts_removal_test.go",
+      "original_sha256": null,
+      "product_sha256": "8f5adf52526bd72c7a548ad14e956c38c07c7adc0dc55b54ba8ddce7b0ee829f"
+    },
+    {
+      "path": "src/core/syswarden-cli/cmd/install.go",
+      "original_sha256": "7fce4c36031c1341dad7c631e9a4c093c0449d3a7a6f084b6ea99ce5aeb4e296",
+      "product_sha256": "107548e1fc0281713143e71b349363837f6fc7ed30a8c1d634d5553b17fac806"
+    },
+    {
+      "path": "src/core/syswarden-cli/cmd/removal_guard_test.go",
+      "original_sha256": "bdb7b7f18740a9772622f8f5608c86727955b8e8125e11861d531ff1f8bf613a",
+      "product_sha256": "419f4e6b8f397d045243db4679d47e86abd1954e8081a83ef7b71de357f8f7ac"
+    },
+    {
+      "path": "src/core/syswarden-cli/cmd/removal_prepare.go",
+      "original_sha256": "9a752db0d33cecc8da387e0b739e352ef04ecca9596e2ba2eb792755c3611b46",
+      "product_sha256": "8031d7139053e7d211f8d6fb443a292688cae2ad7c8da7d3c119bd179b697f2b"
+    },
+    {
+      "path": "src/core/syswarden-cli/cmd/root.go",
+      "original_sha256": "b721ad0d8ef80abf9e001379589fe9dbca069c0a8b235886970e78c4ece71c3f",
+      "product_sha256": "5757f7aa0ed18193a83f83a2d206385ac4d2e8c5859287fafcfe8fdabcb17eb5"
+    },
+    {
+      "path": "src/core/syswarden-cli/cmd/root_firewall_recovery_test.go",
+      "original_sha256": "39242043cc73a59769e38f39a13ec3733d816fa9d749659f44bab82950e7abb3",
+      "product_sha256": "d3d2fa3eba581243370f11d4a7b9c66c3c4b3aabe2d2f1c42ba4e6dc69ef1d4e"
+    },
+    {
+      "path": "src/core/syswarden-cli/config/default.go",
+      "original_sha256": "6e5ac31fc6f1271fe9e5c64fc13cbe15a576ee575b874b4800f959ef271aed63",
+      "product_sha256": "7a0891b10284f6de8fc5f0f806e0ebf52891c35f67f2bec6476c0b3b06dc4509"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/integration/webhook.go",
+      "original_sha256": "81dd5bbccd22699d64d4f8b61f8076cf234ef144ff9485e27fdb0be8d4dc9366",
+      "product_sha256": "a9f69fad257d4f7112873b514257d5b81cd71db3c22f000c1ee85ee9f961376c"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/network/wireguard_legacy_recovery_linux_test.go",
+      "original_sha256": "a6054911d10e61270a712db447faacedfe5f1e716ba8f991f69c2b20d29cf59a",
+      "product_sha256": "428394dc45d4a2b7a3f889bc6114b19f032f25725e58ad6e24b95a3a513554d1"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/network/wireguard_legacy_removal_kernel_linux_test.go",
+      "original_sha256": null,
+      "product_sha256": "8cffbd3ca64713ae06e2a2ec966e960995f0d81267253f51e02e704a511384ea"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/network/wireguard_legacy_removal_linux.go",
+      "original_sha256": null,
+      "product_sha256": "816c4c7fb73d49766f94c4e48ce2a4aab4b2016e6ab14cca46cfe800cdf2ba7e"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/network/wireguard_legacy_removal_linux_test.go",
+      "original_sha256": null,
+      "product_sha256": "4729b8451ee18199f45fc9bf244cb55d251a67847cbeeef5452cb8a5143ffe1d"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/removal_wireguard_linux.go",
+      "original_sha256": "9323532894c0f14ae4b944c4006bcb882ecb9466b839d1e1837062f9666ca27b",
+      "product_sha256": "25b157de9a0d52bbcd1975d0d387f805239f1deb22cab07d68d09c9fd21de706"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/rhel_package_owned_linux.go",
+      "original_sha256": "f3e08f7d81d0bab3962bb77e445cae2d791e96d5db7ad9bf0c9ec03de188faff",
+      "product_sha256": "427cda973057acb99d870e854f82ce1184e2dcda26dd98ac0fd8828aebca5d86"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/rhel_package_owned_linux_test.go",
+      "original_sha256": "29baceb71575f342b3d0045af89f26b91aa06b0324a7988c4bbaef145b553e8f",
+      "product_sha256": "ef58ac2172db9c8fc52df42791211fdf3d732e3122793337e911a6b74b6ebc37"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/systemd_socket_capability_linux_test.go",
+      "original_sha256": "290d4842e0e21e9eb70cde68b60fc914919cdb018e31af61e5cd895f9998da18",
+      "product_sha256": "bdd57155b72311ca8d21afd20a3c627b7f932b7c3ba843586218a7e83e86b22a"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/systemd_vendor_dropin_linux_test.go",
+      "original_sha256": "4c33ac6d7e63b7025a16f7a8b6ece9bbc41bad7a2e5d3480b7653577849a207a",
+      "product_sha256": "b5788d1c3f7dcab9951c4c7af0bc2115bfbb62d81760427739bfbd6f7ca6cc82"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/upgrade.go",
+      "original_sha256": "19c8d50c4d1f28c440de60beade1ad3b20ac2d7e954d20d1f49fb88b8aee35e6",
+      "product_sha256": "4cdf31cdadd08d1a4ed64deff5fd32fae682703368f3eaa9c507e9b8384172e3"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/upgrade_current_test.go",
+      "original_sha256": null,
+      "product_sha256": "cc44b39c65232a93a840373877c6378f8c248dbcb1002aaa46ffb6272dfeeccb"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/upgrade_rpm_channel.go",
+      "original_sha256": "77b64377c664de5d310385981f5ee607274e03c965cf4885a0d61ac73987d23a",
+      "product_sha256": "72280387b2a37fcc9f8b467fe4a9302972a84f9b0a4f53c3f956cb4032216c4a"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/upgrade_rpm_channel_test.go",
+      "original_sha256": "3942d78ccc8f88979898471a280a84023aa64771de2b9e3ca2eaddb98d6f8eca",
+      "product_sha256": "0519c91ef58b944865968acd3571bad5f306f18da04dd850456d168500cd0978"
+    },
+    {
+      "path": "src/core/syswarden-core/webhook/discord.go",
+      "original_sha256": "9a137f54165f107b03078876aec690c6a1956f5ccd5ccc3fecfe0c2154849bdc",
+      "product_sha256": "356fca478dd0dd984d9a156103571f2de1787fe438f848eee18607c5eaefeef2"
+    },
+    {
+      "path": "src/core/syswarden-tui/main.go",
+      "original_sha256": "695d869998a43eda57bf9324cc540952d990423416e663687710b2f4ef8b767e",
+      "product_sha256": "c2a943a57fc970397e458318137e3bf7671708447d67aa88f152159fd51eb828"
+    }
+  ],
+  "source_differences_from_native_tested_candidate": [
+    {
+      "path": ".github/workflows/candidate-update-bundle.yml",
+      "original_sha256": "ecbb3ebc25bc69a1b3b58d03ff59c5c56a013b26500dca48f5a67540dbf72aee",
+      "product_sha256": "9d70ddf5b875615e541f64b3c3de60416541a48c8895858bb865a33744bb678f"
+    },
+    {
+      "path": ".github/workflows/native-package-signing.yml",
+      "original_sha256": "35e216ad48378e181a0ea9ef5e3a2e082aa3939026038bc6bf121d357804ff43",
+      "product_sha256": "c791e1459c3677a223122b83b49bb7d01c51309d9af5a41377c6e8f4d5aa3c3e"
+    },
+    {
+      "path": "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md",
+      "original_sha256": "d37b37135e13192329db61b094f6f2f496f119af9d11380272b8900379cfa767",
+      "product_sha256": "f5c6e072a75ded7345e278a27b5bb45107b0073495bc5aa3eabcda0fb5aa3bb5"
+    },
+    {
+      "path": "extensions/rhel-package-owned/README.md",
+      "original_sha256": "36d1e66b0b7566a67fbc694b0ad52a505f99832415de2cd8ef01ec642da00659",
+      "product_sha256": "f204fb765b35060dc673bcd3978b9b0859f7697bf638f9c7136cc3389b2d3368"
+    },
+    {
+      "path": "extensions/rhel-package-owned/inventory.json",
+      "original_sha256": "83ebd2d2d4eff3a06c8160db00077d3e00e054cc4e6e876acdfe7918a9cfff76",
+      "product_sha256": "c21542a247efb0d0df2b5cf3dde91ef10094f37ab57db4b30c1f0ff20baa3b3b"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/post-install.sh",
+      "original_sha256": "71fee0eb80f300dd0e95ee7c540ac3a93e1cac3f24fa8928760f59afe118970e",
+      "product_sha256": "ca8940281de2c5c185e17b33ca75e8bbc3b3ed3da32375a5c1389ae83b819c5a"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/post-uninstall.sh",
+      "original_sha256": "9440a20ac1495fb90901acbf06fa6454683b5824048ac1ac49c12cebf26f05e0",
+      "product_sha256": "136f9fbe488b85025f6bffa9f74185ae02e7475b141f3f63576a60509df6af0b"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/postun-recovery.sh",
+      "original_sha256": "cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63",
+      "product_sha256": "de79df4cfb15554453f3643520e413893202346f8edac49360c15b334f388715"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/pre-install.sh",
+      "original_sha256": "76f713ff11676693e7faac93c8b7a2cfac6f6155a97d5727d8033b1124300c9b",
+      "product_sha256": "65f17f86fc97969e3c4876744f88cdd81351f109c8ffd56813f03aff8560e629"
+    },
+    {
+      "path": "extensions/rhel-package-owned/scriptlets/pre-uninstall.sh",
+      "original_sha256": "61cf5ae7cf6beb24d7f0c3202be5617bd881fac648c9ac939a6dfdea437ae1fe",
+      "product_sha256": "12f44033208cf3487d38a9a2c8c804373a2c0ba8b386e99bbf835e086218df67"
+    },
+    {
+      "path": "extensions/rhel-package-owned/tests/test-rpm-assembly.sh",
+      "original_sha256": "fc9132d39b5bc5f30655f2b96321b1dabc7ffd00d19af4c9daa315cc86449244",
+      "product_sha256": "d26e7291fcbbacf59e4550ae24d1253967b6271c4a30e39ddb0a1ffe2777301b"
+    },
+    {
+      "path": "extensions/rhel-package-owned/tests/test_stage.py",
+      "original_sha256": "c97817e581992f069247290a70595f44b6ec293eb25277fc23bd3c9fcb7b16d4",
+      "product_sha256": "fe3cf5d18ff0a49110f029c2d902c9e7d89faca7a9266d356ce33a5d7d479dd4"
+    },
+    {
+      "path": "extensions/rhel-package-owned/verify-rpm.py",
+      "original_sha256": "853e5b3dc95a6cf42559b838c87c8ffa32f16d12de672c716837b299d9488b26",
+      "product_sha256": "716908e67eb94fb1ccf33aba9b2b32b40115fe1045fbff4a08fda693e36203c3"
+    },
+    {
+      "path": "scripts/ci/candidate_update_bundle_workflow_test.py",
+      "original_sha256": "fb0740a7e4d545f5b8a8caf43baed3cbc5d71076bd9edb304176d9513fa299b3",
+      "product_sha256": "d8ec3ad530cc53b7ba578822c33b97508998430e454652c04248de8f2011adab"
+    },
+    {
+      "path": "scripts/ci/documentation_contract.json",
+      "original_sha256": "197dee9786c73f0b1daf8851a49179681f9f7b7b7716a56cbcb4d9cd4838f4c6",
+      "product_sha256": "9cbd72dc470776e458d78a66e4f08f8c4203d84a7897d3d10726f558a837d420"
+    },
+    {
+      "path": "scripts/ci/native_package_signing_bundle.py",
+      "original_sha256": "5a76e1e1ffd62cc2bbd078acdcc81169ec62eea42c55667fb310e7b9fc04d3bc",
+      "product_sha256": "95f6a2b8f2a69e11ed0a81f15543a76b1d8de8a3aacaf29f083df5499087f145"
+    },
+    {
+      "path": "scripts/ci/native_package_signing_bundle_test.py",
+      "original_sha256": "3eaf9449ebb5620151123997c242b479fbc73bdc36dcaca34be5db34bfbdca00",
+      "product_sha256": "db064d26fc212b5bc511d5d7161f032e79b478e619aa9ccb3fefa9b0aa63fd2f"
+    },
+    {
+      "path": "scripts/ci/native_package_signing_workflow_test.py",
+      "original_sha256": "38540b72b582c4bcaad5b167f3a4378fae8a15a091a6dcd8f21398de0098982a",
+      "product_sha256": "b2808d622057fba57eb4406269d761cc004bdd24ee5cfedd6901aea4dacb3676"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/rhel_package_owned_linux.go",
+      "original_sha256": "6d9b14648558990c8ede87586013e2dd21f6e61655833e0a0efee6d3468f2864",
+      "product_sha256": "427cda973057acb99d870e854f82ce1184e2dcda26dd98ac0fd8828aebca5d86"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/rhel_package_owned_linux_test.go",
+      "original_sha256": "05ee7db44c30d01145ea15abcdcf812b5d11b64793068e8f8ee25f1ed6bae8c7",
+      "product_sha256": "ef58ac2172db9c8fc52df42791211fdf3d732e3122793337e911a6b74b6ebc37"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/upgrade_rpm_channel.go",
+      "original_sha256": "77b64377c664de5d310385981f5ee607274e03c965cf4885a0d61ac73987d23a",
+      "product_sha256": "72280387b2a37fcc9f8b467fe4a9302972a84f9b0a4f53c3f956cb4032216c4a"
+    },
+    {
+      "path": "src/core/syswarden-cli/pkg/system/upgrade_rpm_channel_test.go",
+      "original_sha256": "3942d78ccc8f88979898471a280a84023aa64771de2b9e3ca2eaddb98d6f8eca",
+      "product_sha256": "0519c91ef58b944865968acd3571bad5f306f18da04dd850456d168500cd0978"
+    }
+  ],
+  "protected_signatures": "PASS, run36978920291 artifact11214948349, four offline signatures reverified locally; protected IVV still required",
+  "updater": "PASS, same product/producer8611, run36980486519 artifact11215198424, original archive/provenance and Ed25519 manifest locally reverified",
+  "native_scope": "Hardened Debian 13 relevant subset, direct v4.02.8 to signed v4.10.0 migration, reconstructed manifested historical residue, candidate positive and ambiguous refusal/retry, six real-kernel namespace cases, verified final restoration. Not the reporter exact historical machine.",
+  "required_impact_review": [
+    "Review these explicit selective-continuity decisions together with the original observation identities and limitations; do not transfer a historical native verdict."
+  ],
+  "upgrade_contract": "IVVQ remains complete, selected from original Upgrade transition across follow-up commits; no bypass or skip flag.",
+  "tag_created": false,
+  "publication_authorized": false,
+  "private_inputs_uploaded": false,
+  "native_source_closure": {
+    "complete_module_inputs": [
+      {
+        "path": "src/core/syswarden-cli/cmd/alerts.go",
+        "native_sha256": "e9fb3dfe910379b997c3a49c2344c382ec305f07917f3190f611c1cd60f9a333",
+        "product_sha256": "e9fb3dfe910379b997c3a49c2344c382ec305f07917f3190f611c1cd60f9a333",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/alerts_kernel_stream.go",
+        "native_sha256": "4870d258ddd30c3518c4d23dc5adda543097a6edc10fe96c22eef595abf01d11",
+        "product_sha256": "4870d258ddd30c3518c4d23dc5adda543097a6edc10fe96c22eef595abf01d11",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/alerts_linux.go",
+        "native_sha256": "1a4d5c189d8ef6258bd22a5c0218918c49c2b91c2b12885b357c241d90a72649",
+        "product_sha256": "1a4d5c189d8ef6258bd22a5c0218918c49c2b91c2b12885b357c241d90a72649",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/alerts_waf.go",
+        "native_sha256": "e6db9fc75afcffbe39fcebaeb1393bde3a1f5dd4a3a22f3d88b5609ede63f2a1",
+        "product_sha256": "e6db9fc75afcffbe39fcebaeb1393bde3a1f5dd4a3a22f3d88b5609ede63f2a1",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/allow_ssh.go",
+        "native_sha256": "b316b6afa6bc0f201b6629229ec808d6c28f21aa1cb2c6bbf9c1abafcf4054fc",
+        "product_sha256": "b316b6afa6bc0f201b6629229ec808d6c28f21aa1cb2c6bbf9c1abafcf4054fc",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/audit.go",
+        "native_sha256": "fd78c7caaf7b9c17c79cc068e17364c288ca67cc53601ef1f0e63d5db993155a",
+        "product_sha256": "fd78c7caaf7b9c17c79cc068e17364c288ca67cc53601ef1f0e63d5db993155a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/block.go",
+        "native_sha256": "d84bec9769910029d806a52745fef30c3a41601b4120d9cff37e86bd89ede7ca",
+        "product_sha256": "d84bec9769910029d806a52745fef30c3a41601b4120d9cff37e86bd89ede7ca",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/check.go",
+        "native_sha256": "c3a5d7a89b1cdd92f202588453f349392511054fa655cd205ff51c74e2eba172",
+        "product_sha256": "c3a5d7a89b1cdd92f202588453f349392511054fa655cd205ff51c74e2eba172",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/config_cmd.go",
+        "native_sha256": "f42da8b26dd7f6a376da100588d331896ee24acde926f2728bf83c014237e8b1",
+        "product_sha256": "f42da8b26dd7f6a376da100588d331896ee24acde926f2728bf83c014237e8b1",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/config_get.go",
+        "native_sha256": "f81cbe075175466d56e46607a1b1a9be214a39a33777a5315bf2e5239ef1eb69",
+        "product_sha256": "f81cbe075175466d56e46607a1b1a9be214a39a33777a5315bf2e5239ef1eb69",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/ha_fence.go",
+        "native_sha256": "17c77e363e321970be8f46ab6859f4ba6105e1c477b7419902c14d2fb783e565",
+        "product_sha256": "17c77e363e321970be8f46ab6859f4ba6105e1c477b7419902c14d2fb783e565",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/ha_sync.go",
+        "native_sha256": "97612b63c99462fe561b52a6e1c8cefb629e0ce33eaafd3688e3fae2398f87f9",
+        "product_sha256": "97612b63c99462fe561b52a6e1c8cefb629e0ce33eaafd3688e3fae2398f87f9",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/infra.go",
+        "native_sha256": "bd2e46b519bdd464fc5035c8e05a857f51165714d8418e485942754a89894669",
+        "product_sha256": "bd2e46b519bdd464fc5035c8e05a857f51165714d8418e485942754a89894669",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/install.go",
+        "native_sha256": "107548e1fc0281713143e71b349363837f6fc7ed30a8c1d634d5553b17fac806",
+        "product_sha256": "107548e1fc0281713143e71b349363837f6fc7ed30a8c1d634d5553b17fac806",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/list.go",
+        "native_sha256": "e135b21a6701f804a76c19407700b3a0a40ca6021ac5d62650879aad385bbe81",
+        "product_sha256": "e135b21a6701f804a76c19407700b3a0a40ca6021ac5d62650879aad385bbe81",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/manual.go",
+        "native_sha256": "ad024c28ffd093053bcde47602ea4b221d657f69469f5913863348ea87b83d40",
+        "product_sha256": "ad024c28ffd093053bcde47602ea4b221d657f69469f5913863348ea87b83d40",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/migrate_config.go",
+        "native_sha256": "5e3d7f84429cd20f981b660a0f129a1a725e6e063abe4bafd8fe1867a400789b",
+        "product_sha256": "5e3d7f84429cd20f981b660a0f129a1a725e6e063abe4bafd8fe1867a400789b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/recover_wireguard.go",
+        "native_sha256": "c2bb78e6c15315ab7550ab0cd85f1c5778574d18fd699a3359df550c6bcd8c24",
+        "product_sha256": "c2bb78e6c15315ab7550ab0cd85f1c5778574d18fd699a3359df550c6bcd8c24",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/reload.go",
+        "native_sha256": "abc34a93b3edc49427d2b7e541c65d5134e58a0e725d0e4f0b17fa7b18a01313",
+        "product_sha256": "abc34a93b3edc49427d2b7e541c65d5134e58a0e725d0e4f0b17fa7b18a01313",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/reload_service_default.go",
+        "native_sha256": "06b6d59e143a778466cb2704ba4b547a468e885f5ce3ffc274f5f5fbd8d3c270",
+        "product_sha256": "06b6d59e143a778466cb2704ba4b547a468e885f5ce3ffc274f5f5fbd8d3c270",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/removal_prepare.go",
+        "native_sha256": "8031d7139053e7d211f8d6fb443a292688cae2ad7c8da7d3c119bd179b697f2b",
+        "product_sha256": "8031d7139053e7d211f8d6fb443a292688cae2ad7c8da7d3c119bd179b697f2b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/revoke_ssh.go",
+        "native_sha256": "d823306f7cfa5bf6c82396cf77889fdf683e93d519b640ff511941df8c4903cf",
+        "product_sha256": "d823306f7cfa5bf6c82396cf77889fdf683e93d519b640ff511941df8c4903cf",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/root.go",
+        "native_sha256": "5757f7aa0ed18193a83f83a2d206385ac4d2e8c5859287fafcfe8fdabcb17eb5",
+        "product_sha256": "5757f7aa0ed18193a83f83a2d206385ac4d2e8c5859287fafcfe8fdabcb17eb5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/runtime_unblock_linux.go",
+        "native_sha256": "1323d467539809c69cbcb734b81fd7130b963a11f37542b6d67a3f1ae6302e6c",
+        "product_sha256": "1323d467539809c69cbcb734b81fd7130b963a11f37542b6d67a3f1ae6302e6c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/tui.go",
+        "native_sha256": "d92c824a17ca6baa6b1285b7f015b17fc7c336767a2aca914da6bb3737699966",
+        "product_sha256": "d92c824a17ca6baa6b1285b7f015b17fc7c336767a2aca914da6bb3737699966",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/tui_flush_linux.go",
+        "native_sha256": "3bf2ff5c1354e52592629a89dfa65a8f4e6c0eaa2b34e203022999375a0355b4",
+        "product_sha256": "3bf2ff5c1354e52592629a89dfa65a8f4e6c0eaa2b34e203022999375a0355b4",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/tui_flush_others.go",
+        "native_sha256": "00e7a4bfae423fecf651b03d14e267b45886c770772c7188a5e85135234970de",
+        "product_sha256": "00e7a4bfae423fecf651b03d14e267b45886c770772c7188a5e85135234970de",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/unblock.go",
+        "native_sha256": "556ebddd0e9f7d0892adad5a1a5f555d7347a4817515d0e1c666245b76f30df5",
+        "product_sha256": "556ebddd0e9f7d0892adad5a1a5f555d7347a4817515d0e1c666245b76f30df5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/uninstall.go",
+        "native_sha256": "44b11e89c2c1ac201db9308e5d11854f9ae6ebd3d633a7ec5b289dccc014353b",
+        "product_sha256": "44b11e89c2c1ac201db9308e5d11854f9ae6ebd3d633a7ec5b289dccc014353b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/unwhitelist.go",
+        "native_sha256": "c5294b701f0b369fcb8e00c9bc32a7fee10e35304643169bbaee0de37df2d8e2",
+        "product_sha256": "c5294b701f0b369fcb8e00c9bc32a7fee10e35304643169bbaee0de37df2d8e2",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/update.go",
+        "native_sha256": "57b52467df1d1e15f6ef2476bac32f3dd94d016dd258a04379518fc3a43502f7",
+        "product_sha256": "57b52467df1d1e15f6ef2476bac32f3dd94d016dd258a04379518fc3a43502f7",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/update_feeds.go",
+        "native_sha256": "02469dbee8f7578fb4a6fa977c97cd337278c88b1f004db04e756a6301c402a8",
+        "product_sha256": "02469dbee8f7578fb4a6fa977c97cd337278c88b1f004db04e756a6301c402a8",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/cmd/whitelist.go",
+        "native_sha256": "561069f994c4a60f538d62bbac063a4fa9ca8fa8ae3e86641a983bb2f6458404",
+        "product_sha256": "561069f994c4a60f538d62bbac063a4fa9ca8fa8ae3e86641a983bb2f6458404",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/compat_normalization.go",
+        "native_sha256": "63ae971b6fd3089d68c1b021bf44ebc066dda96f631da343e7ce1a2c4f65275c",
+        "product_sha256": "63ae971b6fd3089d68c1b021bf44ebc066dda96f631da343e7ce1a2c4f65275c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/config.go",
+        "native_sha256": "76d9a3b26b4f609e7001128079fe70ff400394ed30a06ccb0c6fcc6c6b59c030",
+        "product_sha256": "76d9a3b26b4f609e7001128079fe70ff400394ed30a06ccb0c6fcc6c6b59c030",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/config_loader.go",
+        "native_sha256": "eaf37105c37553d1ed4858087e216388c6d729f392371308ac0bea44e824f26f",
+        "product_sha256": "eaf37105c37553d1ed4858087e216388c6d729f392371308ac0bea44e824f26f",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/core.go",
+        "native_sha256": "ae95e7cc1a1fa7128776b2ef3c7edfda8647ed1b08b6d282e826fab849264500",
+        "product_sha256": "ae95e7cc1a1fa7128776b2ef3c7edfda8647ed1b08b6d282e826fab849264500",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/default.go",
+        "native_sha256": "7a0891b10284f6de8fc5f0f806e0ebf52891c35f67f2bec6476c0b3b06dc4509",
+        "product_sha256": "7a0891b10284f6de8fc5f0f806e0ebf52891c35f67f2bec6476c0b3b06dc4509",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/integrations.go",
+        "native_sha256": "32d567754c8a691ad40f2efa8f23e053e03df56587fb1a7590144f2ec24b4094",
+        "product_sha256": "32d567754c8a691ad40f2efa8f23e053e03df56587fb1a7590144f2ec24b4094",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/migration_transaction.go",
+        "native_sha256": "a9ee6906d13fbd1feb32df033a4af7be7a84c38fd91d69d7328799d722ee1fa2",
+        "product_sha256": "a9ee6906d13fbd1feb32df033a4af7be7a84c38fd91d69d7328799d722ee1fa2",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/migrator.go",
+        "native_sha256": "a139d2adf0539c874aab3664941e586f8bb7a97956eb692d2f3ec74ca62f2be2",
+        "product_sha256": "a139d2adf0539c874aab3664941e586f8bb7a97956eb692d2f3ec74ca62f2be2",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/modular.go",
+        "native_sha256": "f32ea08181d1a5b23a0d00533176f1c1ced97bc2749aa5e618ffed4cac882cfa",
+        "product_sha256": "f32ea08181d1a5b23a0d00533176f1c1ced97bc2749aa5e618ffed4cac882cfa",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/network.go",
+        "native_sha256": "ba5f980f1061228fb2dfd2efd3701f6a696ed076b5b08fe901ea0d7843bbcd14",
+        "product_sha256": "ba5f980f1061228fb2dfd2efd3701f6a696ed076b5b08fe901ea0d7843bbcd14",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/operator_policy.go",
+        "native_sha256": "b470964d08398f781be183edf0c0f5e0ce3539a79da3132622071f984c424ec9",
+        "product_sha256": "b470964d08398f781be183edf0c0f5e0ce3539a79da3132622071f984c424ec9",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/parser.go",
+        "native_sha256": "c1fc1c9de8800ec4eaf04c8d9b983ecdd061f01c1417673944c0ffb94bb291c5",
+        "product_sha256": "c1fc1c9de8800ec4eaf04c8d9b983ecdd061f01c1417673944c0ffb94bb291c5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/secure_path.go",
+        "native_sha256": "a11064b05ab04c14dd66dd3c3d54190055a62db0fcf04de1a9172a22c82f3345",
+        "product_sha256": "a11064b05ab04c14dd66dd3c3d54190055a62db0fcf04de1a9172a22c82f3345",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/security.go",
+        "native_sha256": "b0b7010211da4fab2e0143e2465299fef7cd3659489b405b78864ec1ac124e26",
+        "product_sha256": "b0b7010211da4fab2e0143e2465299fef7cd3659489b405b78864ec1ac124e26",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/user.go",
+        "native_sha256": "d1133943cdc90f46eef730201ae2be41b5149cc703b51ee719cb9d82ec31a2c5",
+        "product_sha256": "d1133943cdc90f46eef730201ae2be41b5149cc703b51ee719cb9d82ec31a2c5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/user_module.go",
+        "native_sha256": "60d02e3e1eb580bbab9af9ecdf8583125fc92a8ab17827dd61c437470c3cdc4e",
+        "product_sha256": "60d02e3e1eb580bbab9af9ecdf8583125fc92a8ab17827dd61c437470c3cdc4e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/v4028_firewall_compat.go",
+        "native_sha256": "d9fb01d1837546c561f3fb2eb76e0324a6845f8828888bf7e0312f459ba500f5",
+        "product_sha256": "d9fb01d1837546c561f3fb2eb76e0324a6845f8828888bf7e0312f459ba500f5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/validation_report.go",
+        "native_sha256": "3fa39fadd32811f76233ef5ac0d8be889e27511f33bacac38bb70559794c3a64",
+        "product_sha256": "3fa39fadd32811f76233ef5ac0d8be889e27511f33bacac38bb70559794c3a64",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/validator.go",
+        "native_sha256": "c33b13f12d487497ebbb83639c7e99b4c4e31da16054a020f5ea6c4949aad60d",
+        "product_sha256": "c33b13f12d487497ebbb83639c7e99b4c4e31da16054a020f5ea6c4949aad60d",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/waap.go",
+        "native_sha256": "dc02d9114108930a080668fa6bd3e580fa7bdf3fa5b28d1f21d7fa8bbc61a87c",
+        "product_sha256": "dc02d9114108930a080668fa6bd3e580fa7bdf3fa5b28d1f21d7fa8bbc61a87c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/config/web_tui_retirement.go",
+        "native_sha256": "3262a31e46f031cbbe69eaf3f46c2d0ba3b9625a614222b1c755ae35af11da82",
+        "product_sha256": "3262a31e46f031cbbe69eaf3f46c2d0ba3b9625a614222b1c755ae35af11da82",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/go.mod",
+        "native_sha256": "0a645dd0a3b6464846bb15830746d617109432a1d6f8fcc7c32d1e193c8d43fe",
+        "product_sha256": "0a645dd0a3b6464846bb15830746d617109432a1d6f8fcc7c32d1e193c8d43fe",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/go.sum",
+        "native_sha256": "00c629a706b09a8f3857f4294f6a2521adb478f735cdf5476cf4be3d758e1414",
+        "product_sha256": "00c629a706b09a8f3857f4294f6a2521adb478f735cdf5476cf4be3d758e1414",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/main.go",
+        "native_sha256": "15ebeab65e99f692e0dfa55bfaf05a3bbfdb96448204e977b59299e81dd9371f",
+        "product_sha256": "15ebeab65e99f692e0dfa55bfaf05a3bbfdb96448204e977b59299e81dd9371f",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/cronstate/state_linux.go",
+        "native_sha256": "8542645448d86dc5cfb9422c513f0eddf9ad4a30d12daebf3fc09056f55fb527",
+        "product_sha256": "8542645448d86dc5cfb9422c513f0eddf9ad4a30d12daebf3fc09056f55fb527",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/asn_policy_linux.go",
+        "native_sha256": "30b5e9a79fdae29638f6c88fedf5255cf32d5c23f646081194357048cdbbe7ac",
+        "product_sha256": "30b5e9a79fdae29638f6c88fedf5255cf32d5c23f646081194357048cdbbe7ac",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/auto_whitelist.go",
+        "native_sha256": "d09bd20d4918f0dd4214b443c0d32f17eaa499d7505a43c952ba3807edc54506",
+        "product_sha256": "d09bd20d4918f0dd4214b443c0d32f17eaa499d7505a43c952ba3807edc54506",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/auto_whitelist_linux.go",
+        "native_sha256": "d4431d6ff35588bd3fd9960ca2a6bf42df214cd66d960d3e518f37513cb7fa22",
+        "product_sha256": "d4431d6ff35588bd3fd9960ca2a6bf42df214cd66d960d3e518f37513cb7fa22",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/committed_policy_error.go",
+        "native_sha256": "c9fce55a8a86042043150ef97c89e0e688712f9baefeb2a27560b5eb41270079",
+        "product_sha256": "c9fce55a8a86042043150ef97c89e0e688712f9baefeb2a27560b5eb41270079",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
+        "native_sha256": "907636f926089db9eadfa90ce66be3f4e6bcb6d35050baccf1a051815460dde1",
+        "product_sha256": "907636f926089db9eadfa90ce66be3f4e6bcb6d35050baccf1a051815460dde1",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/geoip_linux.go",
+        "native_sha256": "2f7d00433c221fb2f4cc6a9e703de7473acc8f8e2c5eaf4fb2fc06be9b23954e",
+        "product_sha256": "2f7d00433c221fb2f4cc6a9e703de7473acc8f8e2c5eaf4fb2fc06be9b23954e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/honeyports.go",
+        "native_sha256": "ea2d2087cca0065e92e2dd9346c95f16bf0a710097b0a828e286bdf2daaef84c",
+        "product_sha256": "ea2d2087cca0065e92e2dd9346c95f16bf0a710097b0a828e286bdf2daaef84c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/list_values.go",
+        "native_sha256": "93019c67655ec16cd44b26254030746ad8dd0dab41a7c9f5d3aa923533553d56",
+        "product_sha256": "93019c67655ec16cd44b26254030746ad8dd0dab41a7c9f5d3aa923533553d56",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/lists.go",
+        "native_sha256": "437a84f3e6d516143dcdec3d54ceadbd39d6216194f18254d106a7a7a7e83b52",
+        "product_sha256": "437a84f3e6d516143dcdec3d54ceadbd39d6216194f18254d106a7a7a7e83b52",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/nft_recovery_linux.go",
+        "native_sha256": "cc57f47f676d8532bf289da6d7ca5fd84844fbf98cf74c43e46fa02d7acf5902",
+        "product_sha256": "cc57f47f676d8532bf289da6d7ca5fd84844fbf98cf74c43e46fa02d7acf5902",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/nft_runtime_preservation_linux.go",
+        "native_sha256": "1b126512378df3aefce3af27fa67a783eecc5b217b44e5f6943988274a2e1950",
+        "product_sha256": "1b126512378df3aefce3af27fa67a783eecc5b217b44e5f6943988274a2e1950",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/nft_transaction_linux.go",
+        "native_sha256": "3a166dae8869504108aa7a9022b156cdea864ee5545d6564a99ba69c7f5933ca",
+        "product_sha256": "3a166dae8869504108aa7a9022b156cdea864ee5545d6564a99ba69c7f5933ca",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/operator_policy_linux.go",
+        "native_sha256": "4f77a2a36f0407b6029ca181b6bd653cc12cbdf3ea5e6ceeb9da4d7e2f1f99ed",
+        "product_sha256": "4f77a2a36f0407b6029ca181b6bd653cc12cbdf3ea5e6ceeb9da4d7e2f1f99ed",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/policy_values.go",
+        "native_sha256": "d9a3e198e9840f6c5d6ae5f63f96248ee7c5628cf1f3079580658fb03aec34e5",
+        "product_sha256": "d9a3e198e9840f6c5d6ae5f63f96248ee7c5628cf1f3079580658fb03aec34e5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/runtime_unban_linux.go",
+        "native_sha256": "9b78bafe8b85095e06afa45ff95cdfe5cba1dc813278eb67be199c9ac2f921d2",
+        "product_sha256": "9b78bafe8b85095e06afa45ff95cdfe5cba1dc813278eb67be199c9ac2f921d2",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/firewall/runtime_unban_others.go",
+        "native_sha256": "6224900a0d433578574310c62281fac622d2ffd0b89ca97bb72619a55eec1200",
+        "product_sha256": "6224900a0d433578574310c62281fac622d2ffd0b89ca97bb72619a55eec1200",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/geoip/geoip.go",
+        "native_sha256": "eb5079a903de0a4c02d4b1c6ea0f12eea27afdf9034bc6e706cad9fc81cb755d",
+        "product_sha256": "eb5079a903de0a4c02d4b1c6ea0f12eea27afdf9034bc6e706cad9fc81cb755d",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/abuseipdb.go",
+        "native_sha256": "71f2c7a7759304df86bae051c126bc4494449bfc7930d7d6bcce508cbb250a2f",
+        "product_sha256": "71f2c7a7759304df86bae051c126bc4494449bfc7930d7d6bcce508cbb250a2f",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/apparmor_socket_linux.go",
+        "native_sha256": "ac49975718d6ffb4f8a8851b8ef4868f073af21ee9aecfc5767eb738d05a78eb",
+        "product_sha256": "ac49975718d6ffb4f8a8851b8ef4868f073af21ee9aecfc5767eb738d05a78eb",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/removal_linux.go",
+        "native_sha256": "d21d38a1d9045f8ca6ecde3ff3804742ff294bdbe0405756dd9d73b7f473d906",
+        "product_sha256": "d21d38a1d9045f8ca6ecde3ff3804742ff294bdbe0405756dd9d73b7f473d906",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/rsyslog_linux.go",
+        "native_sha256": "e136de0f2544c59986a6bb6f256bdc06a3e41151df095d6c5046124f9fdaff12",
+        "product_sha256": "e136de0f2544c59986a6bb6f256bdc06a3e41151df095d6c5046124f9fdaff12",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/rsyslog_provenance_linux.go",
+        "native_sha256": "c60abde741449a0d3254bdc6c05c5a805afb6c656a182147000d18810dad4e83",
+        "product_sha256": "c60abde741449a0d3254bdc6c05c5a805afb6c656a182147000d18810dad4e83",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/selinux_policy_provenance_linux.go",
+        "native_sha256": "fed52d94f37a0b6ec79a1badd666b5d569d58838e6ce60c85954a7568578887d",
+        "product_sha256": "fed52d94f37a0b6ec79a1badd666b5d569d58838e6ce60c85954a7568578887d",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/siem_linux.go",
+        "native_sha256": "90e9100369f71d1ae3c46aed1871cdab8855fbf3d00ec37d9c2ea63ce9d667eb",
+        "product_sha256": "90e9100369f71d1ae3c46aed1871cdab8855fbf3d00ec37d9c2ea63ce9d667eb",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
+        "native_sha256": "d0b551d1f7d5b24014c7f5839715df0f3a169da0aae60dbac9c4ee54a9e62f6a",
+        "product_sha256": "d0b551d1f7d5b24014c7f5839715df0f3a169da0aae60dbac9c4ee54a9e62f6a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/wazuh.go",
+        "native_sha256": "2aa1f95dd8236635cf133d7fded275d2c57df90523786c550a02a037615ee9ae",
+        "product_sha256": "2aa1f95dd8236635cf133d7fded275d2c57df90523786c550a02a037615ee9ae",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/integration/webhook.go",
+        "native_sha256": "a9f69fad257d4f7112873b514257d5b81cd71db3c22f000c1ee85ee9f961376c",
+        "product_sha256": "a9f69fad257d4f7112873b514257d5b81cd71db3c22f000c1ee85ee9f961376c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/cluster.go",
+        "native_sha256": "357ca6de32ef09f6159b38d6fc3f971ff4fcfd21ae24cae837c6c1efa4f1a131",
+        "product_sha256": "357ca6de32ef09f6159b38d6fc3f971ff4fcfd21ae24cae837c6c1efa4f1a131",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/downloader.go",
+        "native_sha256": "517bfc735b7431a67b11f3485ac1c9a6dfd0463f859f0aa34e09e5f53c812c9a",
+        "product_sha256": "517bfc735b7431a67b11f3485ac1c9a6dfd0463f859f0aa34e09e5f53c812c9a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/feed_provenance.go",
+        "native_sha256": "e6f22ec1e02b1c4df3469c78f03b74baa8813b7c45fad07c1f7ce8659555b5b5",
+        "product_sha256": "e6f22ec1e02b1c4df3469c78f03b74baa8813b7c45fad07c1f7ce8659555b5b5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/feed_publication.go",
+        "native_sha256": "69fb2c3533346256597460c1975b74c80bb4922784fcdd04ca476421fa14e507",
+        "product_sha256": "69fb2c3533346256597460c1975b74c80bb4922784fcdd04ca476421fa14e507",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/feed_publication_unix.go",
+        "native_sha256": "b28cbcf671a0dd320f5fe69fe7b6d2e98bc1998a89ed7c775009f6bf8eab4ef3",
+        "product_sha256": "b28cbcf671a0dd320f5fe69fe7b6d2e98bc1998a89ed7c775009f6bf8eab4ef3",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/ha_fence_admin.go",
+        "native_sha256": "0bd12ec2fb3078d8a679e13768c97be995481724dd11ff4edfeda635dc504b2c",
+        "product_sha256": "0bd12ec2fb3078d8a679e13768c97be995481724dd11ff4edfeda635dc504b2c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/ha_fence_manifest.go",
+        "native_sha256": "7934abc7a2e3739eb8df7662fcd4c75e88d35397ddd9808f55009015750b946a",
+        "product_sha256": "7934abc7a2e3739eb8df7662fcd4c75e88d35397ddd9808f55009015750b946a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/ha_fence_state.go",
+        "native_sha256": "61d119197edee698be173c26b409a99f1e3bd937076baf3a12daf750c0458986",
+        "product_sha256": "61d119197edee698be173c26b409a99f1e3bd937076baf3a12daf750c0458986",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/ha_ledger.go",
+        "native_sha256": "85e3d8012014f00f012d07d91b45b2de5629bc198d442dd5b1c383e582b90e10",
+        "product_sha256": "85e3d8012014f00f012d07d91b45b2de5629bc198d442dd5b1c383e582b90e10",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/ha_unban_lease.go",
+        "native_sha256": "8baf0c7355f621cdc12453080852d3826fa9b6efbf682f5273a1045fa57a6e3a",
+        "product_sha256": "8baf0c7355f621cdc12453080852d3826fa9b6efbf682f5273a1045fa57a6e3a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/runtime_control_linux.go",
+        "native_sha256": "ed0ef9fc2b25f5883d562138fce926de81f2a47674e9cb4e54f57b3f854b2e07",
+        "product_sha256": "ed0ef9fc2b25f5883d562138fce926de81f2a47674e9cb4e54f57b3f854b2e07",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/secure_directory.go",
+        "native_sha256": "02345fecbbe5adbeeabe49995b6ac7b3e33a9b2d6e91025c0a007d32df618f45",
+        "product_sha256": "02345fecbbe5adbeeabe49995b6ac7b3e33a9b2d6e91025c0a007d32df618f45",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/sync.go",
+        "native_sha256": "99117e268c33a7ad9bcc67c3286d8e89dd775b31c09ccf19b9770b930f30ae0b",
+        "product_sha256": "99117e268c33a7ad9bcc67c3286d8e89dd775b31c09ccf19b9770b930f30ae0b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/wireguard_disable_linux.go",
+        "native_sha256": "5fef224e6703dad077d6fd332763e95dd65a9cba69ba24a997159c259d62db6c",
+        "product_sha256": "5fef224e6703dad077d6fd332763e95dd65a9cba69ba24a997159c259d62db6c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/wireguard_forwarding_persistence_linux.go",
+        "native_sha256": "044eb4d3d503770c6b4b341b3d7ffde9fba26cf64e29c0674aa5ef479e0e5464",
+        "product_sha256": "044eb4d3d503770c6b4b341b3d7ffde9fba26cf64e29c0674aa5ef479e0e5464",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/wireguard_legacy_recovery_linux.go",
+        "native_sha256": "8b30d9800bd76105a4297e69c8e3d8f90464f89f9276f1afa5ff3cf9a122665c",
+        "product_sha256": "8b30d9800bd76105a4297e69c8e3d8f90464f89f9276f1afa5ff3cf9a122665c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/wireguard_legacy_removal_linux.go",
+        "native_sha256": "816c4c7fb73d49766f94c4e48ce2a4aab4b2016e6ab14cca46cfe800cdf2ba7e",
+        "product_sha256": "816c4c7fb73d49766f94c4e48ce2a4aab4b2016e6ab14cca46cfe800cdf2ba7e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
+        "native_sha256": "0eca464a7e0c403aba89da8c1b9405803f379da64fa4bea0244999c4affe81b2",
+        "product_sha256": "0eca464a7e0c403aba89da8c1b9405803f379da64fa4bea0244999c4affe81b2",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/wireguard_preflight_linux.go",
+        "native_sha256": "b67f27b8dc66356fccb94c9162f6377624a936ce20daba1c0c53003e621d1f86",
+        "product_sha256": "b67f27b8dc66356fccb94c9162f6377624a936ce20daba1c0c53003e621d1f86",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/network/wireguard_recovery_linux.go",
+        "native_sha256": "4c61ffa2cf429ecec8708559ab32436d9f6f9c48c4be4395cd31eb6adf2c301e",
+        "product_sha256": "4c61ffa2cf429ecec8708559ab32436d9f6f9c48c4be4395cd31eb6adf2c301e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/platformpaths/cron.go",
+        "native_sha256": "f466769c08efb1641ff580070eee75727dab6729d1341e51c83c58ee7db56337",
+        "product_sha256": "f466769c08efb1641ff580070eee75727dab6729d1341e51c83c58ee7db56337",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/platformpaths/paths_default.go",
+        "native_sha256": "0abafc7d3b2c61d6e242b4073db83f630f7d5e012b0aac769c94c61377b6f9e4",
+        "product_sha256": "0abafc7d3b2c61d6e242b4073db83f630f7d5e012b0aac769c94c61377b6f9e4",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/platformpaths/whitelist.go",
+        "native_sha256": "7878d253a6167ff412b5dee859d37b3d7c07acf0c047a9053ad382e4913063a5",
+        "product_sha256": "7878d253a6167ff412b5dee859d37b3d7c07acf0c047a9053ad382e4913063a5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/security/auth_log_writer_linux.go",
+        "native_sha256": "d130d77baeb48fe4f98853a4a6c8a5be35d9a2b7465cb3dea9c667ab7daf8793",
+        "product_sha256": "d130d77baeb48fe4f98853a4a6c8a5be35d9a2b7465cb3dea9c667ab7daf8793",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/security/cis_linux.go",
+        "native_sha256": "ff192674ff5445e828e61e2f1c0502dbe07d95a5054b3111f7c6801baa02fcd3",
+        "product_sha256": "ff192674ff5445e828e61e2f1c0502dbe07d95a5054b3111f7c6801baa02fcd3",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/security/cis_removal_linux.go",
+        "native_sha256": "4f5a364a8caccc3e82c02dc470662adbd89c5f4c58190f2ff7c7ff5175008c30",
+        "product_sha256": "4f5a364a8caccc3e82c02dc470662adbd89c5f4c58190f2ff7c7ff5175008c30",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/security/hardening_linux_helpers.go",
+        "native_sha256": "ba4966be54de637afeaa15217f664469a20e8692324fe3990f9ab1c77bc647b5",
+        "product_sha256": "ba4966be54de637afeaa15217f664469a20e8692324fe3990f9ab1c77bc647b5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/security/hardening_quarantine_linux.go",
+        "native_sha256": "ece326a5ef82a83eb524547591c5ed989d71ddcbc5ff1dfdf604f5124fcc0783",
+        "product_sha256": "ece326a5ef82a83eb524547591c5ed989d71ddcbc5ff1dfdf604f5124fcc0783",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
+        "native_sha256": "f89bfefd5c0de76c4b16d2198e9826b48c7ad943da8b44880eb5fc483c28d8bf",
+        "product_sha256": "f89bfefd5c0de76c4b16d2198e9826b48c7ad943da8b44880eb5fc483c28d8bf",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/security/secure_file.go",
+        "native_sha256": "29b11487719083b9c6bf4c8d8577d68f843dd0118350c31dfbc88d223987f27e",
+        "product_sha256": "29b11487719083b9c6bf4c8d8577d68f843dd0118350c31dfbc88d223987f27e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/audit_linux.go",
+        "native_sha256": "9efdf29dd5891a4bd8d941f75315b05df4283a38d9e1a9d5f4502bedefc0f93c",
+        "product_sha256": "9efdf29dd5891a4bd8d941f75315b05df4283a38d9e1a9d5f4502bedefc0f93c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/cron_contract.go",
+        "native_sha256": "985cdc8e6dc9d4dd1cea0f9cc4eeb59b2fdb0cfe5f6a0a3c9c70559362d874a6",
+        "product_sha256": "985cdc8e6dc9d4dd1cea0f9cc4eeb59b2fdb0cfe5f6a0a3c9c70559362d874a6",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/cron_provider_linux.go",
+        "native_sha256": "e75352c04ddc5e2c6b08fe6d4a725d1597cd8b37a7390a5e0974db541ca61067",
+        "product_sha256": "e75352c04ddc5e2c6b08fe6d4a725d1597cd8b37a7390a5e0974db541ca61067",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/dependencies.go",
+        "native_sha256": "1e3739ca18d41a215462e53de37f7d88c1cc56271cec2fa8df12c023dc2fe971",
+        "product_sha256": "1e3739ca18d41a215462e53de37f7d88c1cc56271cec2fa8df12c023dc2fe971",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
+        "native_sha256": "f579978c2c3921ed1a3963827914604cb680f4c758dc1d3845d1422546e46433",
+        "product_sha256": "f579978c2c3921ed1a3963827914604cb680f4c758dc1d3845d1422546e46433",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/mirror.go",
+        "native_sha256": "afc21247219ed3d3df72028fad834fe27ba31547efeb5dc6edb5b8bf718bd60e",
+        "product_sha256": "afc21247219ed3d3df72028fad834fe27ba31547efeb5dc6edb5b8bf718bd60e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/removal_artifacts_linux.go",
+        "native_sha256": "405a8a1f7547a7317e806fe5aaa3f7c56cad8a631dc9673d07edfd27d868ea48",
+        "product_sha256": "405a8a1f7547a7317e806fe5aaa3f7c56cad8a631dc9673d07edfd27d868ea48",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/removal_cron_linux.go",
+        "native_sha256": "1e4eee38821c6f4022c8b9dcf6e7dbe927128792695ecaf47b74b78bc44088f7",
+        "product_sha256": "1e4eee38821c6f4022c8b9dcf6e7dbe927128792695ecaf47b74b78bc44088f7",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/removal_mounts_linux.go",
+        "native_sha256": "818d6c1c30866c1488a6caaddf3e20fb9f7a518166de5afadec3aea0d42c9c80",
+        "product_sha256": "818d6c1c30866c1488a6caaddf3e20fb9f7a518166de5afadec3aea0d42c9c80",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/removal_runtime_lock_linux.go",
+        "native_sha256": "5690a5061b0bb974964c3ae574dec3c64de4d78afe05f1f6c409899d2e3307b6",
+        "product_sha256": "5690a5061b0bb974964c3ae574dec3c64de4d78afe05f1f6c409899d2e3307b6",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/removal_service_artifacts_linux.go",
+        "native_sha256": "a51b7b30e0fdb419f91c2d1ace0fff584bb7be80a734e135e981d9ac400d842f",
+        "product_sha256": "a51b7b30e0fdb419f91c2d1ace0fff584bb7be80a734e135e981d9ac400d842f",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/removal_socket_identity_linux.go",
+        "native_sha256": "a518015c019e01d7c7bf8b4a86cd78d7e21109e7d8827f51d387766968522155",
+        "product_sha256": "a518015c019e01d7c7bf8b4a86cd78d7e21109e7d8827f51d387766968522155",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/removal_tombstone_linux.go",
+        "native_sha256": "e3a12a1eaea58aaf9392a78b67303c811d99ac7c395d13dc67cba7cb546a3341",
+        "product_sha256": "e3a12a1eaea58aaf9392a78b67303c811d99ac7c395d13dc67cba7cb546a3341",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/removal_wireguard_linux.go",
+        "native_sha256": "25b157de9a0d52bbcd1975d0d387f805239f1deb22cab07d68d09c9fd21de706",
+        "product_sha256": "25b157de9a0d52bbcd1975d0d387f805239f1deb22cab07d68d09c9fd21de706",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/rhel_package_owned_linux.go",
+        "native_sha256": "6d9b14648558990c8ede87586013e2dd21f6e61655833e0a0efee6d3468f2864",
+        "product_sha256": "427cda973057acb99d870e854f82ce1184e2dcda26dd98ac0fd8828aebca5d86",
+        "byte_identical": false
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/secure_executable.go",
+        "native_sha256": "a5877dabbf833113f1ee9b5451b0a0cfb7c00db452826c0349d9e29263cb722d",
+        "product_sha256": "a5877dabbf833113f1ee9b5451b0a0cfb7c00db452826c0349d9e29263cb722d",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/service_linux.go",
+        "native_sha256": "4ab2738711cf5efda39e944f86550a12f3ab25adf3d48544fd5247c22589200a",
+        "product_sha256": "4ab2738711cf5efda39e944f86550a12f3ab25adf3d48544fd5247c22589200a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/ssh.go",
+        "native_sha256": "11a0fb267b3fdf97d0cf75fb5a1a2a3e2189b5c4afcb32594d671ac4f2074498",
+        "product_sha256": "11a0fb267b3fdf97d0cf75fb5a1a2a3e2189b5c4afcb32594d671ac4f2074498",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/ssh_config_transform.go",
+        "native_sha256": "54ef7a2779642f5022e0a97d5dcf771641367f2e24ee439d65df41ed2cb37c0b",
+        "product_sha256": "54ef7a2779642f5022e0a97d5dcf771641367f2e24ee439d65df41ed2cb37c0b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/ssh_runtime_linux.go",
+        "native_sha256": "dc6e4742bc6038164517d2430fcb80e6851cc6ce32496a4883f4be156b2d1251",
+        "product_sha256": "dc6e4742bc6038164517d2430fcb80e6851cc6ce32496a4883f4be156b2d1251",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/systemd_socket_capability_linux.go",
+        "native_sha256": "fad2de8cbea674eda81c11f22a7433200d1619c30786b1f42ed3da9b4d507f3a",
+        "product_sha256": "fad2de8cbea674eda81c11f22a7433200d1619c30786b1f42ed3da9b4d507f3a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/systemd_vendor_dropin_linux.go",
+        "native_sha256": "439c448a42dd43aac9a4dfa83e0e5fb1ba38b1721bb9cf9979bace9f9fc4a00d",
+        "product_sha256": "439c448a42dd43aac9a4dfa83e0e5fb1ba38b1721bb9cf9979bace9f9fc4a00d",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
+        "native_sha256": "c90475c6b7ef17a26cabc5fbd1ab9e2720a2e196ea61bf7a158907a35971ad00",
+        "product_sha256": "c90475c6b7ef17a26cabc5fbd1ab9e2720a2e196ea61bf7a158907a35971ad00",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/uninstall_process_linux.go",
+        "native_sha256": "5622dd19aee08b155edfbbf499d4d13b594e355401de400c790065b090536a87",
+        "product_sha256": "5622dd19aee08b155edfbbf499d4d13b594e355401de400c790065b090536a87",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/uninstall_service_attestation_linux.go",
+        "native_sha256": "91c8b513508855f1af9c5fcf1c3a41e7eb343fc5d3aeb26618458fea563d0c9b",
+        "product_sha256": "91c8b513508855f1af9c5fcf1c3a41e7eb343fc5d3aeb26618458fea563d0c9b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/upgrade.go",
+        "native_sha256": "4cdf31cdadd08d1a4ed64deff5fd32fae682703368f3eaa9c507e9b8384172e3",
+        "product_sha256": "4cdf31cdadd08d1a4ed64deff5fd32fae682703368f3eaa9c507e9b8384172e3",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/upgrade_download.go",
+        "native_sha256": "4fb5078dad61a5003f3cb4dd5e03b005dd1c94cb40aa5ce4c57ae02c1eaea4a5",
+        "product_sha256": "4fb5078dad61a5003f3cb4dd5e03b005dd1c94cb40aa5ce4c57ae02c1eaea4a5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/upgrade_manifest.go",
+        "native_sha256": "095761b99d4bf52f514b53ec43c5ed132cdf28d6bcb0c8abb9a5282656e58ddd",
+        "product_sha256": "095761b99d4bf52f514b53ec43c5ed132cdf28d6bcb0c8abb9a5282656e58ddd",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/upgrade_qualification.go",
+        "native_sha256": "841784939121ea58abd275391db18be921b90a962da8883c4c0f5e60179ea574",
+        "product_sha256": "841784939121ea58abd275391db18be921b90a962da8883c4c0f5e60179ea574",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/upgrade_rpm_channel.go",
+        "native_sha256": "77b64377c664de5d310385981f5ee607274e03c965cf4885a0d61ac73987d23a",
+        "product_sha256": "72280387b2a37fcc9f8b467fe4a9302972a84f9b0a4f53c3f956cb4032216c4a",
+        "byte_identical": false
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/utils_linux.go",
+        "native_sha256": "2124c9888c8b8d3d7ccc77eb2d59716ac6e99e92bcb1b56945081f535ef9954e",
+        "product_sha256": "2124c9888c8b8d3d7ccc77eb2d59716ac6e99e92bcb1b56945081f535ef9954e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/web_tui_retirement_linux.go",
+        "native_sha256": "2783931a4aea41eb16cfe786910fbcb013ecef1376c31ed8c920fa262eeaf67c",
+        "product_sha256": "2783931a4aea41eb16cfe786910fbcb013ecef1376c31ed8c920fa262eeaf67c",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/system/wireguard_service_definition_linux.go",
+        "native_sha256": "900e29a50d386a5772a95ab75f6e61d006df0c263eef97286544a58bdcc028a9",
+        "product_sha256": "900e29a50d386a5772a95ab75f6e61d006df0c263eef97286544a58bdcc028a9",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-cli/pkg/wireguardstate/state_linux.go",
+        "native_sha256": "0b84c37d131f85af3b8c3bf41d4f1f5b7c0c231f449ad0fcba06cca0d5879783",
+        "product_sha256": "0b84c37d131f85af3b8c3bf41d4f1f5b7c0c231f449ad0fcba06cca0d5879783",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/config/config.go",
+        "native_sha256": "111eae18d7e7f87c3c5150f9639301dbbbb4e5d74c827c9d679de0edda6530c0",
+        "product_sha256": "111eae18d7e7f87c3c5150f9639301dbbbb4e5d74c827c9d679de0edda6530c0",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/config/operator_policy.go",
+        "native_sha256": "c3fec0b980551f3ea6174724aef0953e37c943ba073328d8dfa3c4094b2fad9b",
+        "product_sha256": "c3fec0b980551f3ea6174724aef0953e37c943ba073328d8dfa3c4094b2fad9b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/engine/ahocorasick.go",
+        "native_sha256": "dde4cbcf7dab3bb761743db445e86d9882eb4812a0df85f430fc3403f4a1f5cf",
+        "product_sha256": "dde4cbcf7dab3bb761743db445e86d9882eb4812a0df85f430fc3403f4a1f5cf",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/engine/regex_prefilter.go",
+        "native_sha256": "ab2f46b562b0962765a41ce82e1e7e18039a41eb4f5aa5c8472be6d84f69b6eb",
+        "product_sha256": "ab2f46b562b0962765a41ce82e1e7e18039a41eb4f5aa5c8472be6d84f69b6eb",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/firewall/health.go",
+        "native_sha256": "245467a1d3d5a035ec05af25f4109e73ab5c062586e7c53ec66053afc76cf6e3",
+        "product_sha256": "245467a1d3d5a035ec05af25f4109e73ab5c062586e7c53ec66053afc76cf6e3",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/firewall/manager_linux.go",
+        "native_sha256": "1074800fe745eb505dbb07edeff1d1a8b50a895f8e5bfe400c6d00bab34954e3",
+        "product_sha256": "1074800fe745eb505dbb07edeff1d1a8b50a895f8e5bfe400c6d00bab34954e3",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/firewall/runtime_snapshot_linux.go",
+        "native_sha256": "55fa17573e7566be8116198e9be7f3750e9d977894fe9c1dc3a3cea22e0418b8",
+        "product_sha256": "55fa17573e7566be8116198e9be7f3750e9d977894fe9c1dc3a3cea22e0418b8",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/firewall/runtime_snapshot_validation.go",
+        "native_sha256": "7fa93734a8eafb8e0c34cf122793d84475643accb9dd8c1a40e6e015383ff28e",
+        "product_sha256": "7fa93734a8eafb8e0c34cf122793d84475643accb9dd8c1a40e6e015383ff28e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/go.mod",
+        "native_sha256": "825b404af354e61a3b0175679f0c89d4b030544a9079ee361ee0d48df69d550b",
+        "product_sha256": "825b404af354e61a3b0175679f0c89d4b030544a9079ee361ee0d48df69d550b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/go.sum",
+        "native_sha256": "48d1d0b36ce10f3683552216c46ef26ae24828af4e2b7e463a88401bd873b7ae",
+        "product_sha256": "48d1d0b36ce10f3683552216c46ef26ae24828af4e2b7e463a88401bd873b7ae",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/internal/runtimepaths/compliance_default.go",
+        "native_sha256": "40ce03eb1d17f8ab1f497d18bb9afc7aa8012b8ca2b444dbe237c213757456e5",
+        "product_sha256": "40ce03eb1d17f8ab1f497d18bb9afc7aa8012b8ca2b444dbe237c213757456e5",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/internal/runtimepaths/paths.go",
+        "native_sha256": "26ca6cf0c3a067c5618a48308ee3daefda4c1c3a8aa7868cc37dc1d5efb1523e",
+        "product_sha256": "26ca6cf0c3a067c5618a48308ee3daefda4c1c3a8aa7868cc37dc1d5efb1523e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/logger/logger.go",
+        "native_sha256": "50e9fcc2f86b82a4006639e6d5e958753f7f8fdadd699d6216287fb443dc4625",
+        "product_sha256": "50e9fcc2f86b82a4006639e6d5e958753f7f8fdadd699d6216287fb443dc4625",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/main.go",
+        "native_sha256": "053e8a734549405fb64a50967bf5260a61fac89fc5e2917b8319d885487b0b3b",
+        "product_sha256": "053e8a734549405fb64a50967bf5260a61fac89fc5e2917b8319d885487b0b3b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_api.go",
+        "native_sha256": "ba4790a5d9bbbe25156c6f8b0c7f151dc44ddee6866c75f43b5ed0462a64d5bc",
+        "product_sha256": "ba4790a5d9bbbe25156c6f8b0c7f151dc44ddee6866c75f43b5ed0462a64d5bc",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_fence.go",
+        "native_sha256": "d01aa7401fed7ff01760e5959c77a5408f9ef00a5dd2d61b51d8cd54e40660c4",
+        "product_sha256": "d01aa7401fed7ff01760e5959c77a5408f9ef00a5dd2d61b51d8cd54e40660c4",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_fence_tombstone.go",
+        "native_sha256": "5ec4be531053902e510db64275b87237c06b45f520a155ac1394431913b7a130",
+        "product_sha256": "5ec4be531053902e510db64275b87237c06b45f520a155ac1394431913b7a130",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_replication_coordinator.go",
+        "native_sha256": "ca6c8d829d503ae4ed1b2a2ba99ea000ff003c5bd0b17423103222227fc3906a",
+        "product_sha256": "ca6c8d829d503ae4ed1b2a2ba99ea000ff003c5bd0b17423103222227fc3906a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_replication_model.go",
+        "native_sha256": "afdfb9ff7c17614702de43c1c4b4c140e64a785a6b96cb6371f454a01218546a",
+        "product_sha256": "afdfb9ff7c17614702de43c1c4b4c140e64a785a6b96cb6371f454a01218546a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_runtime_v2_adapter.go",
+        "native_sha256": "1653be310ab11fbf0b6fab65b478522d3646b1c28ce4813349e110dbf53f3b64",
+        "product_sha256": "1653be310ab11fbf0b6fab65b478522d3646b1c28ce4813349e110dbf53f3b64",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_runtime_v2_manager.go",
+        "native_sha256": "1b28958b0d3236f3237f1bfdadef1e101168f0c010af5f0113011b0ee56b1967",
+        "product_sha256": "1b28958b0d3236f3237f1bfdadef1e101168f0c010af5f0113011b0ee56b1967",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_runtime_v2_mtls.go",
+        "native_sha256": "c43db698f97ac5784abbf430f245b0eae7316a935fb6ed2901544efedb016cfc",
+        "product_sha256": "c43db698f97ac5784abbf430f245b0eae7316a935fb6ed2901544efedb016cfc",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_runtime_v2_outbound.go",
+        "native_sha256": "b891d0d4aea168d50a68f1c4487577c0a4efe7f6370b80644efd3659cc6bbe21",
+        "product_sha256": "b891d0d4aea168d50a68f1c4487577c0a4efe7f6370b80644efd3659cc6bbe21",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_runtime_v2_start.go",
+        "native_sha256": "0cf0529a478dfdfdd84a23032f83354e7f01273a08100d40a02175dd87d57ad3",
+        "product_sha256": "0cf0529a478dfdfdd84a23032f83354e7f01273a08100d40a02175dd87d57ad3",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_runtime_v2_transaction.go",
+        "native_sha256": "ac79a6990ff7ee852950e0fe77ab7e1d8b0717f0cc81be2a74c1cfae1e45bc9e",
+        "product_sha256": "ac79a6990ff7ee852950e0fe77ab7e1d8b0717f0cc81be2a74c1cfae1e45bc9e",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/ha_startup_lease.go",
+        "native_sha256": "91c516a71844dad432e1cb8a321fb4a64353f8ff65ed3e7ac4b083e5aef4f1ef",
+        "product_sha256": "91c516a71844dad432e1cb8a321fb4a64353f8ff65ed3e7ac4b083e5aef4f1ef",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/rule_context.go",
+        "native_sha256": "d2707d886c31d174f3c4b5724c78861219aefb2db019ad53241466c48cd80483",
+        "product_sha256": "d2707d886c31d174f3c4b5724c78861219aefb2db019ad53241466c48cd80483",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/runtime_control_fence.go",
+        "native_sha256": "9e5e9c0a150cce672bfe4a26a32c1320ccd19a0ac2f24efa44db1d6742d86a2b",
+        "product_sha256": "9e5e9c0a150cce672bfe4a26a32c1320ccd19a0ac2f24efa44db1d6742d86a2b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/runtime_control_linux.go",
+        "native_sha256": "178d3cbae2a32d06075ec46bd1b7f2268e59f0428395a1257c581661b578982b",
+        "product_sha256": "178d3cbae2a32d06075ec46bd1b7f2268e59f0428395a1257c581661b578982b",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/runtime_lifecycle_intent_slot.go",
+        "native_sha256": "8cc575415a693f81b771af8e1d585694fddafbcf31cb096c24f9e451defc8da8",
+        "product_sha256": "8cc575415a693f81b771af8e1d585694fddafbcf31cb096c24f9e451defc8da8",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/runtime_lifecycle_manager.go",
+        "native_sha256": "ebb19e5ba6b0424c2dffc59c4d53846bf573474c0ef339b2b3f810ed364418e9",
+        "product_sha256": "ebb19e5ba6b0424c2dffc59c4d53846bf573474c0ef339b2b3f810ed364418e9",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/runtime_lifecycle_model.go",
+        "native_sha256": "c22e80632cf9393ab7a7741e8c5d2988ae91c047225bc9cef8ae0dd817c2584f",
+        "product_sha256": "c22e80632cf9393ab7a7741e8c5d2988ae91c047225bc9cef8ae0dd817c2584f",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/runtime_lifecycle_start.go",
+        "native_sha256": "bcdde919260e65ee8c146536312f38fb903ea527b3826ee537722fe667273bcb",
+        "product_sha256": "bcdde919260e65ee8c146536312f38fb903ea527b3826ee537722fe667273bcb",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/runtime_lifecycle_store.go",
+        "native_sha256": "1776beabb2a963764ca21d1a989b64289dae5569f0d3eb727dee1b0107c2f018",
+        "product_sha256": "1776beabb2a963764ca21d1a989b64289dae5569f0d3eb727dee1b0107c2f018",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/saas.go",
+        "native_sha256": "3e2422a7d2a179ad81d158a66691a4445a3dd17f73ba27067f97eb37e778683f",
+        "product_sha256": "3e2422a7d2a179ad81d158a66691a4445a3dd17f73ba27067f97eb37e778683f",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/uds.go",
+        "native_sha256": "bc7c1614b5ad6bdcf210303de12ab6776cad5bab98c1b24620fe4d71d5bb23a0",
+        "product_sha256": "bc7c1614b5ad6bdcf210303de12ab6776cad5bab98c1b24620fe4d71d5bb23a0",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/uds_permissions_linux.go",
+        "native_sha256": "345d2321ab0563e5f5b12d4a6b11459d0ae4075de40319150dbed21eba547731",
+        "product_sha256": "345d2321ab0563e5f5b12d4a6b11459d0ae4075de40319150dbed21eba547731",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/uds_permissions_unsupported.go",
+        "native_sha256": "98a25c8298ba09fdcbd1637b255f2f1c0b26d3c8ea053bf802699eb1924265e1",
+        "product_sha256": "98a25c8298ba09fdcbd1637b255f2f1c0b26d3c8ea053bf802699eb1924265e1",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/waap.go",
+        "native_sha256": "1dd1bb53950903808df2dd75aaf74b153b8cfd4eb41d3f48a1b21dc3293a1df4",
+        "product_sha256": "1dd1bb53950903808df2dd75aaf74b153b8cfd4eb41d3f48a1b21dc3293a1df4",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/waap_log_follower_linux.go",
+        "native_sha256": "5e01eef634cbf612727a9eca2c455f488cdde8c5c5deb88486d9a9989943aee0",
+        "product_sha256": "5e01eef634cbf612727a9eca2c455f488cdde8c5c5deb88486d9a9989943aee0",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/network/waap_log_follower_unsupported.go",
+        "native_sha256": "beb458e1668e8f9e20fb8c145dcf9e2c7dbd1ad1cd6e527bdd4a819e77f3e5bf",
+        "product_sha256": "beb458e1668e8f9e20fb8c145dcf9e2c7dbd1ad1cd6e527bdd4a819e77f3e5bf",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/security/compliance.go",
+        "native_sha256": "779f71e4b63cf259270e95fdb39b54375052100ee146543a66738c4d2509fcad",
+        "product_sha256": "779f71e4b63cf259270e95fdb39b54375052100ee146543a66738c4d2509fcad",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/abuse.go",
+        "native_sha256": "3ee873d579537ec9d2496ead752e9ebf1b899a7a52b8d5fc4797dc1939a8023f",
+        "product_sha256": "3ee873d579537ec9d2496ead752e9ebf1b899a7a52b8d5fc4797dc1939a8023f",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/attacker_metrics.go",
+        "native_sha256": "77d35680c692169daeaa3b7aa45804eccb069fe179b1090783df74656a045c47",
+        "product_sha256": "77d35680c692169daeaa3b7aa45804eccb069fe179b1090783df74656a045c47",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/feed_provenance_linux.go",
+        "native_sha256": "47785ffdfbe61b38158a3944e9c8f5a3a0625a27b783a98be9d92ae008cc722a",
+        "product_sha256": "47785ffdfbe61b38158a3944e9c8f5a3a0625a27b783a98be9d92ae008cc722a",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/grc_kpi.go",
+        "native_sha256": "4dfb033175df4557d0582462ba1e4041f865627064499c37c111bd3925d5ab37",
+        "product_sha256": "4dfb033175df4557d0582462ba1e4041f865627064499c37c111bd3925d5ab37",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/ha.go",
+        "native_sha256": "6ae51fb504c3f357f64f46e9af2e50ecf03da800c716363e8638e65dee410107",
+        "product_sha256": "6ae51fb504c3f357f64f46e9af2e50ecf03da800c716363e8638e65dee410107",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/nft_geoip.go",
+        "native_sha256": "08407fc27067c20ba2c661ba1baf4d60f470a324256f3aa49fd3dc03d1f5bb6f",
+        "product_sha256": "08407fc27067c20ba2c661ba1baf4d60f470a324256f3aa49fd3dc03d1f5bb6f",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/persistent_enforcement_linux.go",
+        "native_sha256": "cf93935f7eaff3b1897783bf55c44b739b3b9b6676ea664c755e2c03416205dc",
+        "product_sha256": "cf93935f7eaff3b1897783bf55c44b739b3b9b6676ea664c755e2c03416205dc",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/runtime_enforcement.go",
+        "native_sha256": "4628c57bc8e23b14fd5cfc55aa0e093c83edcd043b0c601673e0ed1fe61f1149",
+        "product_sha256": "4628c57bc8e23b14fd5cfc55aa0e093c83edcd043b0c601673e0ed1fe61f1149",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/runtime_local.go",
+        "native_sha256": "4baf3eecd2e084c47fbee445e7c2dbf30b1b8c162e6a9d3cb1dc7b5f7d61b3ed",
+        "product_sha256": "4baf3eecd2e084c47fbee445e7c2dbf30b1b8c162e6a9d3cb1dc7b5f7d61b3ed",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/runtime_registry.go",
+        "native_sha256": "92a0e36b23e3b3ff8e0a118e669acb6871ce4901ae988826ae4e1738192f5607",
+        "product_sha256": "92a0e36b23e3b3ff8e0a118e669acb6871ce4901ae988826ae4e1738192f5607",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/system_linux.go",
+        "native_sha256": "0bd726f0ac3d021da7cc43d89d5cf0acf6cbd3c34a162ac37c958230939ce132",
+        "product_sha256": "0bd726f0ac3d021da7cc43d89d5cf0acf6cbd3c34a162ac37c958230939ce132",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/telemetry/worker.go",
+        "native_sha256": "9e4eb91083bb309b82e2de6e5b49a8e0ddbbcc67e50e08be8df3e4527de5c4ae",
+        "product_sha256": "9e4eb91083bb309b82e2de6e5b49a8e0ddbbcc67e50e08be8df3e4527de5c4ae",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/utils/target_policy.go",
+        "native_sha256": "6f66976713c11fa06ef605a9f99b03261b17010ce61ec98cf7bc11282e77ad04",
+        "product_sha256": "6f66976713c11fa06ef605a9f99b03261b17010ce61ec98cf7bc11282e77ad04",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/utils/whitelist.go",
+        "native_sha256": "1d9aad435079aa4c82f17317b545edd1ca6200b37b77dde5707655382de1f786",
+        "product_sha256": "1d9aad435079aa4c82f17317b545edd1ca6200b37b77dde5707655382de1f786",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-core/webhook/discord.go",
+        "native_sha256": "356fca478dd0dd984d9a156103571f2de1787fe438f848eee18607c5eaefeef2",
+        "product_sha256": "356fca478dd0dd984d9a156103571f2de1787fe438f848eee18607c5eaefeef2",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-tui/go.mod",
+        "native_sha256": "e9a65252ca9b2d91aeee6c4528514866a91e1ce740dbf6f211f557b745ecca61",
+        "product_sha256": "e9a65252ca9b2d91aeee6c4528514866a91e1ce740dbf6f211f557b745ecca61",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-tui/go.sum",
+        "native_sha256": "856166648fc1b010704b653975e9bb8c1f9ffb9ea2b61444d244d0c971e73bc9",
+        "product_sha256": "856166648fc1b010704b653975e9bb8c1f9ffb9ea2b61444d244d0c971e73bc9",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-tui/main.go",
+        "native_sha256": "c2a943a57fc970397e458318137e3bf7671708447d67aa88f152159fd51eb828",
+        "product_sha256": "c2a943a57fc970397e458318137e3bf7671708447d67aa88f152159fd51eb828",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-tui/platform_actions.go",
+        "native_sha256": "444c40571d3255e2f93fa8fc53f579864b89ea605d630777888be4df1d911f2d",
+        "product_sha256": "444c40571d3255e2f93fa8fc53f579864b89ea605d630777888be4df1d911f2d",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-tui/platform_default.go",
+        "native_sha256": "b174d36c58cbe6774d98e6b2555a2862cafc9123f58b87af350ffd984b842a23",
+        "product_sha256": "b174d36c58cbe6774d98e6b2555a2862cafc9123f58b87af350ffd984b842a23",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-tui/runtime_history.go",
+        "native_sha256": "55bcfb3febfa75896b7f4e4f2ee4da713d6d6b0febe97a6f9ee4035bfb9669eb",
+        "product_sha256": "55bcfb3febfa75896b7f4e4f2ee4da713d6d6b0febe97a6f9ee4035bfb9669eb",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-tui/runtime_local.go",
+        "native_sha256": "cfda7f9c8cc05827bbbc4cc5f567cb0679c7eb4a670c9834fcc91bcfa189545d",
+        "product_sha256": "cfda7f9c8cc05827bbbc4cc5f567cb0679c7eb4a670c9834fcc91bcfa189545d",
+        "byte_identical": true
+      },
+      {
+        "path": "src/core/syswarden-tui/runtime_registry.go",
+        "native_sha256": "797eb01e35664f3e91da11b357adc3e9a882bedb73b221dac91f3810e91508f1",
+        "product_sha256": "797eb01e35664f3e91da11b357adc3e9a882bedb73b221dac91f3810e91508f1",
+        "byte_identical": true
+      }
+    ],
+    "permitted_version_constant_files": {
+      "src/core/syswarden-cli/pkg/system/rhel_package_owned_linux.go": 1,
+      "src/core/syswarden-cli/pkg/system/upgrade_rpm_channel.go": 2
+    },
+    "all_other_module_inputs_byte_identical": true
+  },
+  "comparison_trees": {
+    "4ca15287a2ef71658e73ee672db6e1798e526c4c": "848b4ef361f8f130ff1ea51d49a95bf7380f1431",
+    "1ac64bc56ee4b4ea9233713f94f415719b9f5ec0": "cee4b4df67d4324f6ab78c3d3b1b863384aa114f",
+    "8611c84cb8c245195dd5456bebad13a52b1d7217": "bf8b0e6202e30013f83d7ffd14a1dad0ff1ce2f0"
+  },
+  "reviewed_areas": [
+    {
+      "area": "WireGuard historical cleanup",
+      "changed": [
+        "cmd/removal_prepare.go",
+        "pkg/network/wireguard_legacy_removal_linux.go",
+        "pkg/system/removal_wireguard_linux.go"
+      ],
+      "impact": "Exact historical cleanup shares the digest-bound legacy recovery inspector, firewall guard and atomic nft batch. It requires a retained modern manifest, removal barrier and stopped service attestation; unknown ownership remains rejected.",
+      "evidence": [
+        "node01-positive-removal",
+        "node01-ambiguous-refusal-retry",
+        "native-kernel-cases",
+        "product-ci"
+      ],
+      "limitations": "Reconstructed historical residue, not the reporter exact accumulated upgrade history."
+    },
+    {
+      "area": "Common command guards and diagnostics",
+      "changed": [
+        "cmd/root.go",
+        "cmd/alerts.go"
+      ],
+      "impact": "Guard now precedes configuration and firewall recovery hooks. config validate remains read-only. Alerts warn before waiting on interrupted removal.",
+      "evidence": [
+        "node01-ambiguous-refusal-retry",
+        "product-ci"
+      ],
+      "shared_callers": [
+        "tui",
+        "config",
+        "install",
+        "update",
+        "reload",
+        "uninstall",
+        "purge"
+      ]
+    },
+    {
+      "area": "Already-current native package health",
+      "changed": [
+        "pkg/system/upgrade.go"
+      ],
+      "impact": "Already-current status requires native package manager health and installed release identity; avoids success for incomplete DEB/RPM/APK state.",
+      "evidence": [
+        "known-blocked-migration-scope",
+        "product-ci"
+      ],
+      "limitations": "Historical failure on official v4.10.0 plus fresh unit and process checks. No new all-platform native updater campaign claimed."
+    },
+    {
+      "area": "RHEL package identity and upgrade allowlist",
+      "changed": [
+        "extensions/rhel-package-owned",
+        "pkg/system/rhel_package_owned_linux.go",
+        "pkg/system/upgrade_rpm_channel.go"
+      ],
+      "impact": "Update exact 4.10.1 identity, erase marker/helper digests and retain explicit 4.10.0 migration identities. The pre-install helper accepts the reviewed list of two or three exact identity pairs.",
+      "evidence": [
+        "product-ci",
+        "source-payload-continuity",
+        "previous-accepted-ivv"
+      ],
+      "limitations": "Fresh RPM assembly/transaction harness and source review cover these identity changes. Earlier native RHEL lifecycle/service observations retain their v4.10.0 identity; no new RHEL host campaign claimed."
+    },
+    {
+      "area": "Packaging, services, core and TUI continuity",
+      "changed": [
+        "version constants and generated build metadata"
+      ],
+      "impact": "Complete native-test source closure differs only in three RHEL version constants in two CLI files. DEB entry inventory and permissions match. Core/TUI binaries differ only by exact VCS fields and ELF build notes. CLI remaining five byte changes map to RHEL identity constants and comparisons. The FPM-generated changelog timestamp changes with the source commit.",
+      "evidence": [
+        "source-payload-continuity",
+        "previous-accepted-ivv",
+        "node01-install-recovery",
+        "node01-reinstall",
+        "node01-restoration"
+      ],
+      "limitations": "No binary identity substitution: native 1ac64 and final 8611 have distinct original digests. This supports selected continuity, not a fresh all-platform result."
+    },
+    {
+      "area": "Signing, updater and publication machinery",
+      "changed": [
+        ".github/workflows/native-package-signing.yml",
+        ".github/workflows/candidate-update-bundle.yml",
+        "scripts/ci/native_package_signing_bundle.py"
+      ],
+      "impact": "Exact v4.10.1 qualified-policy signing and same-source candidate updater. Original v4.10.0 key-enrollment artifact remains frozen.",
+      "evidence": [
+        "product-ci",
+        "native-signatures",
+        "current-updater"
+      ],
+      "limitations": "Signing alone is not IVV acceptance; protected producer and independent publisher consumers remain mandatory."
+    }
+  ],
+  "outside_patch_claim": [
+    "Complete Upgrade IVVQ",
+    "Fresh all-platform lifecycle campaign",
+    "New HA endurance or broad performance results",
+    "Full equivalence to the private hardening reference",
+    "Full reproduction of every historical v3 migration chain"
+  ]
+}

@@ -32,6 +32,13 @@ SIDES = tuple(f'380e90dd-node02-four-r1-0{i}.{role}' for i in (1, 2, 3) for role
 REMOTE = '/root/syswarden-v4100-performance/'
 
 
+def stable_file_identity(meta) -> tuple:
+    # Reading a proof can update atime. Changes to identity, ownership, links,
+    # permissions, contents or modification metadata must still be rejected.
+    return (meta.st_dev, meta.st_ino, meta.st_mode, meta.st_uid, meta.st_gid,
+            meta.st_nlink, meta.st_size, meta.st_mtime_ns, meta.st_ctime_ns)
+
+
 def wire(path: Path, maximum: int = 8 * 1024 * 1024) -> bytes:
     fresh.continuity.bundle.ensure_protected_directory(path.parent, 'native proof directory')
     # Empty native stdout/stderr files are expected evidence, unlike package files.
@@ -42,11 +49,12 @@ def wire(path: Path, maximum: int = 8 * 1024 * 1024) -> bytes:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         opened = os.fstat(descriptor)
-        require((opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) ==
-                (before.st_dev, before.st_ino, 0, before.st_mtime_ns, before.st_ctime_ns) and
-                opened.st_nlink == 1 and stat.S_ISREG(opened.st_mode), 'empty native file changed')
+        require(stable_file_identity(opened) == stable_file_identity(before),
+                'empty native file changed')
         require(os.read(descriptor, 1) == b'', 'empty native file grew')
-        require(os.fstat(descriptor) == opened and path.lstat() == before, 'empty native file changed during read')
+        require(stable_file_identity(os.fstat(descriptor)) == stable_file_identity(opened) and
+                stable_file_identity(path.lstat()) == stable_file_identity(before),
+                'empty native file changed during read')
     finally:
         os.close(descriptor)
     return b''

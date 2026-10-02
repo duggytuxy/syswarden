@@ -21,7 +21,12 @@ if sys.flags.optimize:
 os.umask(0o077)
 IMAGE = 'sha256:9c045e9162bde53581444d916acf56af7c9cfe26415d1db1c107eeda5610c5d6'
 TRUST_ROOT_SHA256 = 'e9c0ffd66f3e6a9addd2b7e347b84e8d92b34d1cc8e4f4f438d02eabe59c3874'
-PACKAGES = {'syswarden-4.10.0-1.x86_64.rpm': '5d70d52cbaf637630c3eddb63ed1f0175e441ecb32e36b28827e30c3f7abc640', 'syswarden-4.10.0-1.rhelpo.x86_64.rpm': '21dc2993c109e0e1d3556a46a905f8cf02a2ed9ebc5188550ca6ccbf8f6e873c'}
+PACKAGES = {
+    'syswarden-4.10.0-1.x86_64.rpm': '5d70d52cbaf637630c3eddb63ed1f0175e441ecb32e36b28827e30c3f7abc640',
+    'syswarden-4.10.0-1.rhelpo.x86_64.rpm': '21dc2993c109e0e1d3556a46a905f8cf02a2ed9ebc5188550ca6ccbf8f6e873c',
+    'syswarden-4.10.1-1.x86_64.rpm': '1dd9d6d5d10a4adeba73d6f6786b2d7611fca32ca80b158adb8e2953bd4fabc8',
+    'syswarden-4.10.1-1.rhelpo.x86_64.rpm': 'a50bf06be94671f1dad94099b743ac347f40a978444e4ab4ab1561fe279b8426',
+}
 MARKER = 'verified-public-key.asc'
 
 

@@ -14,7 +14,11 @@ c=consumer.current
 
 
 class ConsumptionTests(unittest.TestCase):
+    current = c
+    updater = consumer.updater
+    workflow = p.WORKFLOW
     def setUp(self):
+        c = self.current
         self.now=datetime(2026,10,1,12,0,tzinfo=timezone.utc)
         self.sha='a'*40;self.run=123
         self.source=dict(product_candidate=c.PRODUCT,publication_commit=self.sha)
@@ -27,22 +31,22 @@ class ConsumptionTests(unittest.TestCase):
             purpose='publishing',runtime='rootless-podman-pinned-images-stdin-without-host-mounts')
         update=dict(schema='syswarden-current-candidate-updater-verification/v1',
             status='current-candidate-manifest-cryptographically-verified',product_candidate=c.PRODUCT,
-            producer_commit=c.PRODUCT,producer_run_id=consumer.updater.RUN,
-            artifact_id=consumer.updater.ARTIFACT,artifact_sha256=consumer.updater.ARCHIVE_SHA256,
+            producer_commit=c.PRODUCT,producer_run_id=self.updater.RUN,
+            artifact_id=self.updater.ARTIFACT,artifact_sha256=self.updater.ARCHIVE_SHA256,
             native_update_replayed=False,historical_verdicts_transferred=False,
             intermediate_release_validated=False,qualification_passed=False,publication_authorized=False)
-        context=dict(repository=p.REPOSITORY,repository_id=p.REPOSITORY_ID,workflow=p.WORKFLOW,
-            workflow_ref=p.REPOSITORY+'/'+p.WORKFLOW+'@refs/heads/main',publication_commit=self.sha,
+        context=dict(repository=p.REPOSITORY,repository_id=p.REPOSITORY_ID,workflow=self.workflow,
+            workflow_ref=p.REPOSITORY+'/'+self.workflow+'@refs/heads/main',publication_commit=self.sha,
             workflow_run_id=self.run,workflow_run_attempt=1,event='workflow_dispatch',
             source_ref='refs/heads/main',runner_environment='self-hosted',environment=p.ENVIRONMENT,owner_id=p.OWNER_ID)
-        plan=c.load_plan();inputs=consumer.expected_inputs()
+        plan=c.load_plan();inputs=consumer.expected_inputs(c)
         self.report=dict(schema='syswarden-protected-intermediate-ivv/v1',status='ivv-accepted-for-release',
-            release='v4.10.0',required_assurance='IVV',accepted_at=self.now.isoformat(),context=context,
+            release=plan['release'],required_assurance='IVV',accepted_at=self.now.isoformat(),context=context,
             source_binding=self.source,plan_sha256=c.PLAN_SHA256,input_verification=inputs,
             native_signature_verification=signatures,updater_verification=update,ci_verification={},
-            required_checks=p.acceptance_checks(inputs,signatures,update),
+            required_checks=p.acceptance_checks(inputs,signatures,update,c,self.updater),
             product_support_verification=dict(schema='syswarden-original-product-support/v1',
-                product_candidate=c.PRODUCT,run_id=p.support.RUN,
+                product_candidate=c.PRODUCT,run_id=plan['product_release_support'][0]['run_id'],
                 files=[r['file'] for r in plan['product_release_support']],
                 binary_members=plan['product_bundle_members'],original_build_attestation_verified=True,
                 publication_authorized=False),
@@ -53,7 +57,8 @@ class ConsumptionTests(unittest.TestCase):
             publication_authorized=False,release_published=False,post_acceptance_requirements=plan['post_acceptance_requirements'])
 
     def verify(self,report):
-        consumer.verify_report(report,self.files,self.source,self.run,self.now)
+        consumer.verify_report(report,self.files,self.source,self.run,self.now,
+                               current=self.current,updater=self.updater,workflow=self.workflow)
 
     def test_exact_scoped_acceptance(self):
         self.verify(self.report)
@@ -92,19 +97,19 @@ class ConsumptionTests(unittest.TestCase):
         return dict(_type='https://in-toto.io/Statement/v1',subject=[dict(name=p.REPORT,digest=dict(sha256='d'*64))],
             predicateType='https://slsa.dev/provenance/v1',predicate=dict(buildDefinition=dict(
                 buildType='https://actions.github.io/buildtypes/workflow/v1',externalParameters=dict(workflow=dict(
-                    ref='refs/heads/main',repository='https://github.com/'+p.REPOSITORY,path=p.WORKFLOW)),
+                    ref='refs/heads/main',repository='https://github.com/'+p.REPOSITORY,path=self.workflow)),
                 internalParameters=dict(github=dict(event_name='workflow_dispatch',repository_id=str(p.REPOSITORY_ID),
                     repository_owner_id=str(p.OWNER_ID),runner_environment='self-hosted')),
                 resolvedDependencies=[dict(uri=f'git+https://github.com/{p.REPOSITORY}@refs/heads/main',digest=dict(gitCommit=self.sha))]),
-                runDetails=dict(builder=dict(id=f'https://github.com/{p.REPOSITORY}/{p.WORKFLOW}@refs/heads/main'),
+                runDetails=dict(builder=dict(id=f'https://github.com/{p.REPOSITORY}/{self.workflow}@refs/heads/main'),
                     metadata=dict(invocationId=f'https://github.com/{p.REPOSITORY}/actions/runs/{self.run}/attempts/1'))))
 
     def test_verified_slsa_requires_exact_workflow_source_run_and_runner(self):
         def check(stmt):
             wire=json.dumps([dict(verificationResult=dict(statement=stmt,signature=dict(certificate=dict(
                 issuer='https://token.actions.githubusercontent.com',
-                subjectAlternativeName=f'https://github.com/{p.REPOSITORY}/{p.WORKFLOW}@refs/heads/main'))))]).encode()
-            consumer.verify_attestation(wire,self.sha,self.run,'d'*64)
+                subjectAlternativeName=f'https://github.com/{p.REPOSITORY}/{self.workflow}@refs/heads/main'))))]).encode()
+            consumer.verify_attestation(wire,self.sha,self.run,'d'*64,self.workflow)
         check(self.statement())
         mutations=[lambda s:s['subject'][0]['digest'].update(sha256='e'*64),
             lambda s:s['predicate']['buildDefinition']['resolvedDependencies'][0]['digest'].update(gitCommit='b'*40),
