@@ -345,10 +345,12 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         post_uninstall = (EXTENSION_ROOT / "scriptlets/post-uninstall.sh").read_text(
             encoding="utf-8"
         )
+        assembly_test = (EXTENSION_ROOT / "tests/test-rpm-assembly.sh").read_text(encoding="utf-8")
         for document in (readme, pre_uninstall, post_uninstall):
             self.assertIn("/var/lib/.syswarden-rhelpo-postun-recovery-v1", document)
             self.assertIn(f"0:0:700:1:{len(recovery_helper)}", document)
             self.assertIn(recovery_digest, document)
+        self.assertIn(recovery_digest, assembly_test)
         self.assertIn("v4.10.0", qualification)
         self.assertIn("cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63", qualification)
         preset = (REPOSITORY_ROOT / "src/init/systemd/90-syswarden-rhel-image.preset").read_text(
@@ -369,6 +371,7 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
             self.assertIn(identity_digest, (EXTENSION_ROOT / "scriptlets" / name).read_text())
         for name in ("pre-uninstall.sh", "postun-recovery.sh"):
             self.assertIn(marker_digest, (EXTENSION_ROOT / "scriptlets" / name).read_text())
+        self.assertIn(marker_digest, (EXTENSION_ROOT / "tests/test-rpm-assembly.sh").read_text())
 
     def test_flat_init_sources_match_current_runtime_templates_byte_for_byte(self) -> None:
         go_source = (
@@ -609,24 +612,24 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         self.assertEqual(versions, [verify_contract.PACKAGE_VERSION])
 
     def test_verifier_pins_exact_rhel_package_owned_nevra(self) -> None:
-        exact = ["syswarden", "0", "4.10.1", "1.rhelpo", "x86_64", "8"]
+        exact = ["syswarden", "0", "4.10.2", "1.rhelpo", "x86_64", "8"]
         self.assertEqual(
             verify_contract.validate_package_identity(
-                exact, "syswarden-4.10.1-1.rhelpo.x86_64.rpm"
+                exact, "syswarden-4.10.2-1.rhelpo.x86_64.rpm"
             ),
             "8",
         )
         for metadata, filename in (
             (
-                ["syswarden", "0", "4.10.2", "1.rhelpo", "x86_64", "8"],
-                "syswarden-4.10.2-1.rhelpo.x86_64.rpm",
+                ["syswarden", "0", "4.10.3", "1.rhelpo", "x86_64", "8"],
+                "syswarden-4.10.3-1.rhelpo.x86_64.rpm",
             ),
             (
-                ["syswarden", "0", "4.10.1", "2.rhelpo", "x86_64", "8"],
-                "syswarden-4.10.1-2.rhelpo.x86_64.rpm",
+                ["syswarden", "0", "4.10.2", "2.rhelpo", "x86_64", "8"],
+                "syswarden-4.10.2-2.rhelpo.x86_64.rpm",
             ),
-            (exact, "syswarden-4.10.2-1.rhelpo.x86_64.rpm"),
-            (["syswarden", "1", "4.10.1", "1.rhelpo", "x86_64", "8"], "syswarden-4.10.1-1.rhelpo.x86_64.rpm"),
+            (exact, "syswarden-4.10.3-1.rhelpo.x86_64.rpm"),
+            (["syswarden", "1", "4.10.2", "1.rhelpo", "x86_64", "8"], "syswarden-4.10.2-1.rhelpo.x86_64.rpm"),
         ):
             with self.subTest(metadata=metadata, filename=filename), self.assertRaisesRegex(
                 verify_contract.VerificationError, "identity does not match"

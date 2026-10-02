@@ -132,3 +132,82 @@ func TestRecoverWireGuardPropagatesInspectionFailureWithoutMutation_SW2_WGRECOVE
 		t.Fatalf("inspection error = %v, want sentinel", err)
 	}
 }
+
+func commandLegacyWireGuardRetirementPlan() network.LegacyWireGuardRetirementPlan {
+	return network.LegacyWireGuardRetirementPlan{
+		Schema: "syswarden-legacy-wireguard-retirement-v1", State: "pending",
+		ArchivePath:  "/etc/wireguard/.syswarden-retired/wg0.conf",
+		ForwardRules: map[string][]network.LegacyWireGuardForwardRuleEvidence{"wg0": {}, "wg-syswarden": {}},
+		Blockers:     []string{}, SafeToApply: true,
+	}
+}
+
+func TestRecoverWireGuardExplicitRetirementDryRunAndApply(t *testing.T) {
+	previousInspect, previousApply := inspectLegacyWireGuardRetirement, applyLegacyWireGuardRetirement
+	t.Cleanup(func() {
+		inspectLegacyWireGuardRetirement, applyLegacyWireGuardRetirement = previousInspect, previousApply
+	})
+	plan := commandLegacyWireGuardRetirementPlan()
+	digest, err := network.LegacyWireGuardRetirementPlanSHA256(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyCalls := 0
+	inspectLegacyWireGuardRetirement = func() (network.LegacyWireGuardRetirementPlan, error) { return plan, nil }
+	applyLegacyWireGuardRetirement = func(got string) (network.LegacyWireGuardRetirementPlan, error) {
+		applyCalls++
+		if got != digest {
+			t.Fatal("incorrect authorization digest")
+		}
+		return plan, nil
+	}
+	for _, args := range [][]string{{"--retire-legacy-wg0"}, {"--retire-legacy-wg0", "--apply", "--plan-sha256", digest}} {
+		command := newRecoverWireGuardCommand()
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetArgs(args)
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), digest) {
+			t.Fatal("missing exact digest")
+		}
+		if len(args) == 1 && (applyCalls != 0 || !strings.Contains(output.String(), "recover-wireguard --retire-legacy-wg0 --apply --plan-sha256")) {
+			t.Fatal("dry run did not preserve explicit retirement scope")
+		}
+	}
+	if applyCalls != 1 {
+		t.Fatal("wrong apply count")
+	}
+}
+
+func TestRecoverWireGuardRetirementBlockedAndAlreadyRetiredGuidance(t *testing.T) {
+	previousInspect := inspectLegacyWireGuardRetirement
+	t.Cleanup(func() { inspectLegacyWireGuardRetirement = previousInspect })
+	for _, state := range []string{"blocked", "retired"} {
+		plan := commandLegacyWireGuardRetirementPlan()
+		if state == "blocked" {
+			plan.SafeToApply = false
+			plan.Blockers = []string{"historical wg0 service must be inactive"}
+		} else {
+			plan.State = "retired"
+		}
+		inspectLegacyWireGuardRetirement = func() (network.LegacyWireGuardRetirementPlan, error) { return plan, nil }
+		command := newRecoverWireGuardCommand()
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetArgs([]string{"--retire-legacy-wg0"})
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(output.String(), "--apply --plan-sha256") {
+			t.Fatal("unsafe or redundant apply advertised")
+		}
+		if state == "blocked" && !strings.Contains(output.String(), "independent administration access") {
+			t.Fatal("missing access warning")
+		}
+		if state == "retired" && !strings.Contains(output.String(), "no change is required") {
+			t.Fatal("missing completed-state guidance")
+		}
+	}
+}

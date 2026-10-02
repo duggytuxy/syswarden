@@ -19,6 +19,11 @@ var rootCmd = &cobra.Command{
 	Short: "SYSWARDEN Security Orchestrator",
 	Long:  "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "uninstall" {
+			if err := preflightStandaloneUninstall(); err != nil {
+				return err
+			}
+		}
 		if system.OfflineQualificationPackageInstall() {
 			topLevel := topLevelCommand(cmd)
 			if topLevel != nil && topLevel.Name() == "install" {
@@ -41,6 +46,11 @@ var rootCmd = &cobra.Command{
 		// Reject removal-blocked commands before firewall recovery or config normalization can mutate the host.
 		if err := enforceRemovalState(cmd); err != nil {
 			return err
+		}
+		if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "install" {
+			if err := preflightLegacyWireGuardForInstall(); err != nil {
+				return installStageError("historical WireGuard conflict detected before command preparation", err)
+			}
 		}
 		if commandRequiresEarlyFirewallRecovery(cmd) {
 			if err := recoverPendingFirewallTransactionHook(); err != nil {

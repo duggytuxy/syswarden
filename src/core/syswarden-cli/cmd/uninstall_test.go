@@ -7,6 +7,9 @@ import (
 	"testing"
 )
 
+// Pipeline tests supply package authority independently of the developer host.
+func init() { preflightStandaloneUninstall = func() error { return nil } }
+
 func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBACKEND_001(t *testing.T) {
 	previousBegin := beginRemoval
 	previousCron := removeOwnedCronStateForRemoval
@@ -814,5 +817,30 @@ func TestPackageRemovalCommandRemainsInternalAndArgumentFree_SW2_FWBACKEND_001(t
 	}
 	if err := preparePackageRemovalCmd.Args(preparePackageRemovalCmd, []string{"unexpected"}); err == nil {
 		t.Fatal("internal package removal command accepted an argument")
+	}
+}
+
+func TestUninstallPackageAuthorityRefusesBeforeAnyProductMutation(t *testing.T) {
+	previousAuthority := preflightStandaloneUninstall
+	previousBegin := beginRemoval
+	previousRecovery := recoverPendingFirewallTransactionHook
+	previousConfig := initConfigHook
+	t.Cleanup(func() {
+		preflightStandaloneUninstall = previousAuthority
+		beginRemoval = previousBegin
+		recoverPendingFirewallTransactionHook = previousRecovery
+		initConfigHook = previousConfig
+	})
+	t.Setenv("SYSWARDEN_PKG_INSTALL", "1")
+	sentinel := errors.New("native package manager owns the installation")
+	preflightStandaloneUninstall = func() error { return sentinel }
+	beginRemoval = func() error { t.Fatal("removal barrier created after package refusal"); return nil }
+	recoverPendingFirewallTransactionHook = func() error { t.Fatal("firewall recovery ran after package refusal"); return nil }
+	initConfigHook = func() { t.Fatal("configuration loaded after package refusal") }
+	if err := rootCmd.PersistentPreRunE(uninstallCmd, nil); !errors.Is(err, sentinel) {
+		t.Fatalf("pre-run refusal: %v", err)
+	}
+	if err := uninstallCmd.RunE(uninstallCmd, nil); !errors.Is(err, sentinel) {
+		t.Fatalf("run refusal: %v", err)
 	}
 }

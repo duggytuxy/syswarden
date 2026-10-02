@@ -5,7 +5,7 @@ It is additive and explicitly opt-in. The default SysWarden package builder,
 package lifecycle and first RHEL image extension remain unchanged when the
 profile flag is absent.
 
-Status: implemented, included in the v4.10.1 candidate scope and not yet
+Status: implemented, included in the v4.10.2 candidate scope and not yet
 qualified. Release publication remains blocked until the exact signed profile
 RPM passes the protected AlmaLinux 9 and AlmaLinux 10 native campaigns.
 
@@ -67,8 +67,8 @@ intentionally share the RPM package name `syswarden`, making them mutually
 exclusive, but use distinct releases and filenames:
 
 ```text
-syswarden-4.10.1-1.x86_64.rpm
-syswarden-4.10.1-1.rhelpo.x86_64.rpm
+syswarden-4.10.2-1.x86_64.rpm
+syswarden-4.10.2-1.rhelpo.x86_64.rpm
 ```
 
 The package-owned filename, NEVRA, bytes and RPM signing identity are bound to
@@ -131,7 +131,7 @@ Use an independently recorded digest for the opt-in RPM:
 
 ```console
 python3 extensions/rhel-package-owned/verify-rpm.py \
-  --rpm /absolute/path/syswarden-4.10.1-1.rhelpo.x86_64.rpm \
+  --rpm /absolute/path/syswarden-4.10.2-1.rhelpo.x86_64.rpm \
   --sha256 REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS
 ```
 
@@ -151,7 +151,7 @@ RPM verification and its profile-specific provenance.
 
 ## Image pipeline use
 
-An image pipeline may opt in only to the exact v4.10.1 profile artifact that
+An image pipeline may opt in only to the exact v4.10.2 profile artifact that
 passed release qualification. It can be installed through a normal RHEL
 `mock` or chroot image transaction without a running systemd instance. The RPM
 owns the configuration, firewall integration files, units and preset; its
@@ -221,7 +221,7 @@ sudo stat -Lc '%u:%g:%a:%h:%s' -- \
   /var/lib/.syswarden-rhelpo-postun-recovery-v1
 # Expected: 0:0:700:1:9923
 sudo sha256sum -- /var/lib/.syswarden-rhelpo-postun-recovery-v1
-# Expected SHA-256: de79df4cfb15554453f3643520e413893202346f8edac49360c15b334f388715
+# Expected SHA-256: 6827907cbdfa25c39fe79b2d30e1faa34b9980abae4330c75495fc8d9d128608
 sudo /bin/sh /var/lib/.syswarden-rhelpo-postun-recovery-v1
 ```
 
@@ -235,11 +235,11 @@ product residue are absent before removing that terminal helper.
 Do not combine this profile with the first RHEL image extension in one image.
 They represent different ownership models.
 
-## Native qualification required for v4.10.1
+## Native qualification required for v4.10.2
 
 Before this profile can be called qualified or distributable, first establish
 its distinct package identity and signed provenance, then run the approved RHEL
-9 and RHEL 10 matrix with the exact signed v4.10.1 candidate RPM and capture
+9 and RHEL 10 matrix with the exact signed v4.10.2 candidate RPM and capture
 evidence for:
 
 - clean installation and configuration under SELinux Enforcing;
@@ -256,11 +256,11 @@ evidence for:
 No VPS or image is mutated by the repository tests in this directory. Passing
 those source and assembly tests does not qualify the profile.
 
-### v4.10.1 identity continuity
+### v4.10.2 identity continuity
 
 The current profile binds installation, reinstall and final erase to the exact
-v4.10.1 package identity. PREIN also accepts the exact previous v4.10.0 RHELPO
-owner for an upgrade; the historical standard-RPM migration remains restricted
+v4.10.2 package identity. PREIN also accepts the exact previous v4.10.0 and v4.10.1 RHELPO
+owners for an upgrade; the historical standard-RPM migration remains restricted
 to its reviewed v4.04.3 identity. Unknown versions remain rejected.
 The [v4.10.0 native qualification plan](NATIVE_QUALIFICATION_V4.10.0.md) is historical;
-its original helper digest and verdict scope are not current v4.10.1 evidence.
+its original helper digest and verdict scope are not current v4.10.2 evidence.

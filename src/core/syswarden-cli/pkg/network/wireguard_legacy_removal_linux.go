@@ -78,7 +78,11 @@ func (host legacyWireGuardRecoveryHost) remove(requireRemoval func() error) erro
 // A durable transaction is left to the operation-aware removal recovery path.
 func PreflightWireGuardRemoval() error {
 	return preflightWireGuardRemovalInventory(func() (wireguardstate.Inventory, error) {
-		return wireguardstate.Inspect(wireGuardFilesystemRoot)
+		inventory, err := wireguardstate.Inspect(wireGuardFilesystemRoot)
+		if err == nil && !inventory.Transaction {
+			err = preflightLegacyWireGuardConflict()
+		}
+		return inventory, err
 	})
 }
 

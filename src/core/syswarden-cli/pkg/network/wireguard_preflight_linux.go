@@ -189,6 +189,9 @@ func PreflightWireguard() error {
 	if config.GlobalConfig == nil {
 		return fmt.Errorf("WireGuard preflight requires a loaded configuration")
 	}
+	if err := PreflightLegacyWireGuardConflict(); err != nil {
+		return err
+	}
 	if !config.GlobalConfig.EnableWG {
 		return preflightDisabledWireGuard()
 	}

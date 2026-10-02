@@ -38,7 +38,7 @@ attest_installed_rhelpo_identity() {
     [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$identity_file")" = '0:0:600:1:35' ] || \
         fail 'RPM identity output is not canonical and bounded during interrupted migration recovery.'
     [ "$(/usr/bin/sha256sum -- "$identity_file" | /usr/bin/awk '{print $1}')" = \
-        9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e ] || \
+        ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 ] || \
         fail 'Installed RPM identity does not authorize interrupted migration recovery.'
     cleanup_identity
     trap - 0 1 2 3 15

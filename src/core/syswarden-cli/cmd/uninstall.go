@@ -8,12 +8,16 @@ import (
 )
 
 var uninstallHostSystem = system.UninstallSystem
+var preflightStandaloneUninstall = system.PreflightStandaloneUninstall
 
 var uninstallCmd = &cobra.Command{
 	Use:   "uninstall",
 	Short: "Delete SysWarden services, rules, configuration, data, and logs",
-	Long:  "This destructive operation removes SysWarden state and does not restore every prior host setting.",
+	Long:  "Removes a standalone installation after verified cleanup. Native package installations must be removed through their package manager to preserve package database consistency. This destructive operation does not restore every prior host setting.",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := preflightStandaloneUninstall(); err != nil {
+			return err
+		}
 		if err := prepareVerifiedFirewallRemoval(); err != nil {
 			return err
 		}

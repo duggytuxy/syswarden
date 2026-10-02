@@ -15,6 +15,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var preflightLegacyWireGuardForInstall = network.PreflightLegacyWireGuardConflict
+
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install SYSWARDEN and configure security modules",
@@ -30,6 +32,9 @@ var installCmd = &cobra.Command{
 			}
 			fmt.Println("[INFO] Candidate package staged without host activation; the qualification updater must attest it before activation.")
 			return nil
+		}
+		if err := preflightLegacyWireGuardForInstall(); err != nil {
+			return installStageError("historical WireGuard conflict detected before configuration or dependency changes", err)
 		}
 		if system.OfflineQualificationActivation() {
 			if err := prepareOfflineQualificationActivationConfiguration(
@@ -174,7 +179,7 @@ var installCmd = &cobra.Command{
 			return installStageError("legacy shell completion reconciliation failed", err)
 		}
 
-		fmt.Println("[SYSWARDEN] v4.10.1 native installation complete.")
+		fmt.Println("[SYSWARDEN] v4.10.2 native installation complete.")
 		return nil
 	},
 }

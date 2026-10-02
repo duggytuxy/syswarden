@@ -1,3 +1,28 @@
+# Release v4.10.2
+
+### FIXED
+
+- **Historical WireGuard generation conflicts:** Detect an old `wg0`
+  configuration that still claims the reserved nftables namespace before
+  installation, reconciliation or a new removal barrier. Direct operators to
+  an explicit retirement plan instead of allowing the old configuration to
+  recreate the conflict at boot.
+- **Dual-generation recovery:** Add `recover-wireguard --retire-legacy-wg0`
+  with a read-only redacted plan, exact SHA-256 authorization and repeated
+  attestation under the firewall lock. Require stopped, disabled affected VPNs,
+  preserve current ownership and administrator rules, handle an already absent
+  historical NAT table, and archive the exact old configuration privately
+  without overwriting an existing backup. Retry interrupted cleanup with a
+  freshly reviewed plan and verify repeated retirement without mutation.
+- **Native package removal consistency:** Refuse direct CLI uninstall before
+  product mutation when a native package manager still registers SysWarden,
+  including incomplete or residual package states. Direct operators to native
+  removal so a later same-version install cannot skip a payload deleted by
+  the standalone uninstaller. Document targeted recovery for installations
+  already missing their package payload.
+
+---
+
 # Release v4.10.1
 
 ### FIXED

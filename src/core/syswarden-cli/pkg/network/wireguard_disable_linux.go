@@ -92,6 +92,9 @@ func reconcileDisabledWireGuard() (resultErr error) {
 		}
 	}()
 
+	if err := preflightLegacyWireGuardConflict(); err != nil {
+		return err
+	}
 	if err := recoverPendingWireGuardForwardingStateLocked(); err != nil {
 		return fmt.Errorf("recover interrupted WireGuard forwarding persistence before disable: %w", err)
 	}
