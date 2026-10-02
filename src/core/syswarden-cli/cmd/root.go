@@ -47,6 +47,11 @@ var rootCmd = &cobra.Command{
 		if err := enforceRemovalState(cmd); err != nil {
 			return err
 		}
+		if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "install" {
+			if err := preflightLegacyWireGuardForInstall(); err != nil {
+				return installStageError("historical WireGuard conflict detected before command preparation", err)
+			}
+		}
 		if commandRequiresEarlyFirewallRecovery(cmd) {
 			if err := recoverPendingFirewallTransactionHook(); err != nil {
 				return fmt.Errorf("[ERROR] authoritative firewall recovery failed before command preparation: %w", err)
