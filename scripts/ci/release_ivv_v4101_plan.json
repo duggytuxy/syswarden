@@ -27,6 +27,8 @@
     "scripts/ci/candidate_update_verify_v4101_test.py",
     "scripts/ci/ivv_native_rpmkeys.py",
     "scripts/ci/ivv_native_rpmkeys_test.py",
+    "scripts/ci/qualification_continuity_performance_receipts.py",
+    "scripts/ci/qualification_continuity_performance_receipts_test.py",
     "scripts/ci/release_assurance_contract.py",
     "scripts/ci/release_assurance_contract_test.py",
     "scripts/ci/release_gate_test.py",

@@ -173,4 +173,39 @@ class NativeExecutionTests(unittest.TestCase):
         path.write_text(json.dumps(original))
 
 
+class EmptyProofMetadataTests(unittest.TestCase):
+    def check_read(self, changed_field, stage):
+        from types import SimpleNamespace
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink',
+                  'st_size', 'st_atime_ns', 'st_mtime_ns', 'st_ctime_ns')
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'empty'; path.write_bytes(b'')
+            before = path.lstat()
+            changed = SimpleNamespace(**{field: getattr(before, field) + (field == changed_field)
+                                         for field in fields})
+            original_lstat = Path.lstat
+            reads = 0
+            def lstat(target, *args, **kwargs):
+                nonlocal reads
+                if target != path: return original_lstat(target, *args, **kwargs)
+                reads += 1
+                return changed if stage == 'path-after' and reads > 1 else before
+            states = [changed, before] if stage == 'opened' else [before, changed if stage == 'fd-after' else before]
+            with mock.patch.object(receipts.os, 'fstat', side_effect=states), \
+                 mock.patch.object(Path, 'lstat', autospec=True, side_effect=lstat):
+                return receipts.wire(path)
+
+    def test_read_access_timestamp_is_not_a_content_mutation(self):
+        for stage in ('opened', 'fd-after', 'path-after'):
+            with self.subTest(stage=stage):
+                self.assertEqual(self.check_read('st_atime_ns', stage), b'')
+
+    def test_identity_ownership_and_modification_changes_remain_rejected(self):
+        for stage in ('opened', 'fd-after', 'path-after'):
+            for field in ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink',
+                          'st_size', 'st_mtime_ns', 'st_ctime_ns'):
+                with self.subTest(stage=stage, field=field), self.assertRaises(receipts.Error):
+                    self.check_read(field, stage)
+
+
 if __name__ == '__main__':unittest.main()

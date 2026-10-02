@@ -98,3 +98,9 @@ source/artifact bindings and compare release assets. The signed annotated tag,
 protected publication, Sigstore release manifest and downloaded public asset
 verification remain separate requirements. Public documentation lives at
 [syswarden.io/docs](https://syswarden.io/docs/).
+
+The shared empty-proof reader ignores access-time updates caused by reading the
+file itself. It still rejects changes to inode, device, ownership, permissions,
+link count, size, modification time and change time, both at open and after
+reading. This verifier correction does not alter any historical evidence bytes
+or their original verdicts.
