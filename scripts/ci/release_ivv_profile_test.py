@@ -5,6 +5,7 @@ from scripts.ci import release_ivv_profile as profiles
 from scripts.ci import release_assurance_contract as assurance
 from scripts.ci import release_ivv_current as previous
 from scripts.ci import release_ivv_v4101 as current
+from scripts.ci import release_ivv_v4102 as patch2
 from scripts.ci import release_ivv_consumer as consumer
 from scripts.ci import release_ivv_producer as producer
 
@@ -15,9 +16,12 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(old.product, previous.PRODUCT)
         self.assertEqual(new.product, current.PRODUCT)
         self.assertNotEqual(old.workflow, new.workflow)
+        newest = profiles.load('v4.10.2')
+        self.assertEqual(newest.product, patch2.PRODUCT)
+        self.assertNotEqual(newest.workflow, new.workflow)
         self.assertEqual(previous.PLAN_SHA256, 'fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab')
         self.assertEqual(previous.load_plan()['private_input_manifest_sha256'], 'ca7b71603aa2758ee140daaa467d1a8fa39a8d50a7e3b3cbec1107d09f033567')
-        for release in ('v4.10.2', 'v5.00.0', 'v6.00.0', None):
+        for release in ('v4.10.3', 'v5.00.0', 'v6.00.0', None):
             with self.assertRaises(previous.frozen.PlanError): profiles.load(release)
 
     def classification(self, release='v4.10.1', prefix='Patch', track='intermediate-validation'):

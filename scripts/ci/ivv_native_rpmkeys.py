@@ -26,6 +26,8 @@ PACKAGES = {
     'syswarden-4.10.0-1.rhelpo.x86_64.rpm': '21dc2993c109e0e1d3556a46a905f8cf02a2ed9ebc5188550ca6ccbf8f6e873c',
     'syswarden-4.10.1-1.x86_64.rpm': '1dd9d6d5d10a4adeba73d6f6786b2d7611fca32ca80b158adb8e2953bd4fabc8',
     'syswarden-4.10.1-1.rhelpo.x86_64.rpm': 'a50bf06be94671f1dad94099b743ac347f40a978444e4ab4ab1561fe279b8426',
+    'syswarden-4.10.2-1.x86_64.rpm': 'ddd8d62f36d37110813bf61338f409fde9e6251514c4f542791609e4dc399d0a',
+    'syswarden-4.10.2-1.rhelpo.x86_64.rpm': '4c80b18a455a96c55b13cb1d72e2bfd587e14c05d807d0adc8d89833b810976c',
 }
 MARKER = 'verified-public-key.asc'
 
