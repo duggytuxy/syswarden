@@ -30,7 +30,7 @@ class SigningBundleError(RuntimeError):
 
 # Product versions are reviewed separately from the immutable key-enrollment
 # evidence and the compatible v4.10.0 evidence schema.
-SUPPORTED_RELEASES = ("v4.10.0", "v4.10.1")
+SUPPORTED_RELEASES = ("v4.10.0", "v4.10.1", "v4.10.2")
 BOOTSTRAP_RELEASE_TAG = "v4.10.0"
 SCHEMA_PROFILE = "syswarden-native-package-signing/v4.10.0"
 VERIFICATION_PROFILE = "syswarden-native-package-verification/v4.10.0"
