@@ -1,0 +1,114 @@
+name: SysWarden Protected v4.10.2 Patch IVV
+
+on:
+  workflow_dispatch:
+    inputs:
+      authorization:
+        description: VERIFY-V4102-IVV-NO-PUBLISH
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: syswarden-protected-intermediate-ivv-v4102
+  cancel-in-progress: false
+
+jobs:
+  protected-ivv:
+    runs-on: [self-hosted, linux, x64, syswarden-ivv-proof-verification]
+    environment:
+      name: syswarden-release-qualification
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Require Exact Owner Dispatch
+        shell: bash
+        env:
+          AUTHORIZATION: ${{ inputs.authorization }}
+        run: |
+          set -euo pipefail
+          test "${AUTHORIZATION}" = "VERIFY-V4102-IVV-NO-PUBLISH"
+          test "${GITHUB_REPOSITORY}" = "duggytuxy/syswarden"
+          test "${GITHUB_REPOSITORY_ID}" = "1153695079"
+          test "${GITHUB_ACTOR}" = "duggytuxy"
+          test "${GITHUB_TRIGGERING_ACTOR}" = "duggytuxy"
+          test "${GITHUB_EVENT_NAME}" = "workflow_dispatch"
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "${GITHUB_RUN_ATTEMPT}" = "1"
+
+      - name: Checkout Exact Protected Producer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Fetch Exact Native Observation Source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --no-recurse-submodules https://github.com/duggytuxy/syswarden.git 94d97f07cb5a054669dd66d6efd28ba55db5d173
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "94d97f07cb5a054669dd66d6efd28ba55db5d173"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Verify Native Evidence and Frozen Product Signatures
+        id: verify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          umask 077
+          product="94d97f07cb5a054669dd66d6efd28ba55db5d173"
+          input_root="${HOME}/.local/share/syswarden/native-release-evidence/${product}/intermediate-ivv"
+          output_parent="$(mktemp -d "${RUNNER_TEMP%/}/syswarden-intermediate-ivv.XXXXXXXXXX")"
+          printf 'public_root=%s\n' "${output_parent}/result/public" >> "${GITHUB_OUTPUT}"
+          python3 -B scripts/ci/release_ivv_producer.py --release v4.10.2 \
+            --repository "${GITHUB_WORKSPACE}" --publication-sha "${GITHUB_SHA}" \
+            --private-inputs "${input_root}/private" \
+            --native-bundle "${input_root}/native/bundle" \
+            --native-archive "${input_root}/native/artifact.zip" \
+            --candidate-bundle "${input_root}/updater/bundle" \
+            --candidate-archive "${input_root}/updater/artifact.zip" \
+            --work "${output_parent}/result"
+
+      - name: Attest Protected IVV Report
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.verify.outputs.public_root }}/RELEASE_IVV.json
+
+      - name: Preserve Exact Report Attestation
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          PUBLIC_ROOT: ${{ steps.verify.outputs.public_root }}
+        run: |
+          set -euo pipefail
+          test -f "${BUNDLE_PATH}"
+          test ! -L "${BUNDLE_PATH}"
+          test ! -e "${PUBLIC_ROOT}/RELEASE_IVV.intoto.jsonl"
+          cp --no-clobber -- "${BUNDLE_PATH}" "${PUBLIC_ROOT}/RELEASE_IVV.intoto.jsonl"
+
+      - name: Upload Public Report and Exact Signed Packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: syswarden-release-ivv
+          path: ${{ steps.verify.outputs.public_root }}/
+          if-no-files-found: error
+          retention-days: 30
+
+      # Private raw evidence and verification traces stay on the ephemeral runner
+      # for the owner's encrypted archive. This workflow cannot create a release.

@@ -17,6 +17,46 @@ while investigating. Never delete them to bypass an ownership refusal. Do not
 publish configuration contents, VPN keys, plan output or raw host diagnostics.
 The plan omits key contents but still contains local operational metadata.
 
+## Obtain the recovery command when an older removal is blocked
+
+An existing removal barrier also blocks a normal package upgrade. On an older
+DEB installation, do not remove that barrier or replace the installed CLI to
+make the new command available. First obtain the official v4.10.2 amd64 DEB
+and independently verify its release provenance, checksum and detached native
+signature against the trusted release verification material. A checksum copied
+from the same untrusted download is insufficient. Before publication, only the
+protected qualification bundle is eligible for the authorized test campaign;
+this runbook does not make an unpublished package a public release.
+
+For that already verified package, extract its contents into a new private
+directory. The command checks the copied package against the frozen v4.10.2
+digest before extraction. This does not install the package or execute its
+maintainer scripts.
+Replace the final argument with the absolute path to the verified DEB:
+
+```sh
+sudo sh -eu -c 'umask 077; test -f "$1"; test ! -L "$1"; recovery_stage=$(mktemp -d /root/syswarden-recovery.XXXXXXXX); install -m 600 -- "$1" "$recovery_stage/package.deb"; printf "%s  %s\n" 0e71d9856e6838a3feeea369c514c6ed55676d249b1b3fe213b086cd942e5980 "$recovery_stage/package.deb" | sha256sum -c --status; test "$(dpkg-deb --field "$recovery_stage/package.deb" Package)" = syswarden; test "$(dpkg-deb --field "$recovery_stage/package.deb" Version)" = 4.10.2; test "$(dpkg-deb --field "$recovery_stage/package.deb" Architecture)" = amd64; mkdir -m 700 "$recovery_stage/root"; dpkg-deb --extract "$recovery_stage/package.deb" "$recovery_stage/root"; chmod 700 "$recovery_stage/root"; test -x "$recovery_stage/root/opt/syswarden/bin/syswarden-cli"; printf "Recovery executable: %s/root/opt/syswarden/bin/syswarden-cli\n" "$recovery_stage"' sh /absolute/path/to/verified/syswarden_4.10.2_amd64.deb
+```
+
+Use the printed executable path for every recovery inspection and application
+below, including after stopping services. For example:
+
+```sh
+sudo /root/syswarden-recovery.REPLACE/root/opt/syswarden/bin/syswarden-cli recover-wireguard --retire-legacy-wg0
+```
+
+Replace `REPLACE` with the actual private directory suffix. The plan's printed
+apply example uses `syswarden`; on this older installation, substitute the same
+verified staged executable while retaining the exact fresh plan digest. Do not
+accidentally invoke the older installed CLI for that step. All configuration,
+ownership evidence and service checks still refer to the real host.
+
+After verified retirement, resume removal through the native package manager as
+described below. Install the verified current package only after removal has
+completed and its barrier is absent. The temporary executable is recovery
+tooling, not an installed product upgrade. Keep its provenance and the private
+retirement archive until the operation and any required backup are verified.
+
 ## Inspect explicit historical retirement
 
 The dedicated path retires the exact supported historical `wg0` configuration.

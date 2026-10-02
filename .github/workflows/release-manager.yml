@@ -1936,17 +1936,21 @@ jobs:
             ' | sha256sum | awk '{print $1}'
           }
 
-          metadata="$(gh api --method GET \
-            "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          metadata="$(python3 -B scripts/ci/release_draft.py resolve \
+            --repository "${GITHUB_REPOSITORY}" --tag "${RELEASE_TAG}")"
           if ! validate_draft_metadata <<< "${metadata}"; then
             echo "ERROR: private draft metadata is inconsistent." >&2
             exit 1
           fi
+          release_id="$(jq -r '.id' <<< "${metadata}")"
           snapshot_before="$(draft_snapshot_sha256 <<< "${metadata}")"
           jq -j '.body' <<< "${metadata}" > draft_release_notes.md
           cmp --silent tmp/release_payload/release_notes.md draft_release_notes.md
           mkdir draft_release_assets
-          gh release download "${RELEASE_TAG}" --dir draft_release_assets
+          printf '%s\n' "${metadata}" > draft_release_metadata.json
+          python3 -B scripts/ci/release_draft.py download \
+            --repository "${GITHUB_REPOSITORY}" --metadata draft_release_metadata.json \
+            --destination "${GITHUB_WORKSPACE}/draft_release_assets"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
@@ -1962,7 +1966,7 @@ jobs:
             "${RELEASE_SHA}"
 
           metadata_after="$(gh api --method GET \
-            "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
           if ! validate_draft_metadata <<< "${metadata_after}"; then
             echo "ERROR: private draft metadata changed while assets were validated." >&2
             exit 1
@@ -2164,7 +2168,7 @@ jobs:
               return 1
             fi
             if ! metadata="$(gh api --method GET \
-              "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"; then
+              "repos/${GITHUB_REPOSITORY}/releases/${EXPECTED_DRAFT_RELEASE_ID}")"; then
               echo "ERROR: pre-publication private draft lookup failed; refusing publication." >&2
               return 1
             fi

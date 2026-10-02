@@ -1,0 +1,279 @@
+{
+  "schema": "syswarden-current-intermediate-ivv-plan/v1",
+  "release": "v4.10.2",
+  "required_assurance": "IVV",
+  "product_candidate": "94d97f07cb5a054669dd66d6efd28ba55db5d173",
+  "native_tested_candidate": "94d97f07cb5a054669dd66d6efd28ba55db5d173",
+  "previous_accepted_product": "8c3405758a9b369924f466d12652e99d3a84dc56",
+  "originating_transition": {
+    "commit": "59d7854bc4a21ddb950da2f1509edb432f54402a",
+    "prefix": "Patch",
+    "previous_version": "v4.10.1"
+  },
+  "originating_pull_request": 287,
+  "last_public_release": {
+    "tag": "v4.10.0",
+    "commit": "3cc06b62d42b5adadc46fc9a252fece5adf670c1",
+    "release_id": 400909549
+  },
+  "publication_source_change_allowlist": [
+    ".github/workflows/release-ivv-v4102.yml",
+    ".github/workflows/release-manager.yml",
+    "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md",
+    "docs/maintainers/RELEASE_VALIDATION_POLICY.md",
+    "docs/qualification/INTERMEDIATE_ACCEPTANCE_V4.10.2.md",
+    "docs/technical/WIREGUARD_LEGACY_RECOVERY.md",
+    "scripts/ci/candidate_update_verify_v4102.py",
+    "scripts/ci/candidate_update_verify_v4102_test.py",
+    "scripts/ci/ivv_native_rpmkeys.py",
+    "scripts/ci/ivv_native_rpmkeys_test.py",
+    "scripts/ci/release_draft.py",
+    "scripts/ci/release_draft_test.py",
+    "scripts/ci/release_gate_test.py",
+    "scripts/ci/release_ivv_profile.py",
+    "scripts/ci/release_ivv_profile_test.py",
+    "scripts/ci/release_ivv_v4102.py",
+    "scripts/ci/release_ivv_v4102_impact.json",
+    "scripts/ci/release_ivv_v4102_inputs.json",
+    "scripts/ci/release_ivv_v4102_plan.json",
+    "scripts/ci/release_ivv_v4102_test.py",
+    "scripts/ci/release_ivv_v4102_workflow_test.py"
+  ],
+  "product_packages": [
+    {
+      "path": "packages/syswarden-4.10.2-1.x86_64.rpm",
+      "size": 16215147,
+      "sha256": "ddd8d62f36d37110813bf61338f409fde9e6251514c4f542791609e4dc399d0a"
+    },
+    {
+      "path": "packages/syswarden_4.10.2_amd64.deb",
+      "size": 15927798,
+      "sha256": "0e71d9856e6838a3feeea369c514c6ed55676d249b1b3fe213b086cd942e5980"
+    },
+    {
+      "path": "packages/syswarden_4.10.2_amd64.deb.asc",
+      "size": 833,
+      "sha256": "b6d067af3181e926de9b8f99beee0e771d5949edf6705e2eb4611b79c8f77197"
+    },
+    {
+      "path": "packages/syswarden_4.10.2_x86_64.apk",
+      "size": 16134035,
+      "sha256": "6a74053f1d0fe4e054a5d6868d899dbc97cdce21d19b828ad8e0c2f2897165ae"
+    },
+    {
+      "path": "rhel-package-owned/packages/syswarden-4.10.2-1.rhelpo.x86_64.rpm",
+      "size": 15914914,
+      "sha256": "4c80b18a455a96c55b13cb1d72e2bfd587e14c05d807d0adc8d89833b810976c"
+    }
+  ],
+  "private_input_manifest_sha256": "04dfc170f54b877e7635d828bf3b3f51137a947c2cef6a34d16981db33110aea",
+  "impact_sha256": "c3526fba2e01e888a05c79023f83110c8b4706034262fd897db371db25e9dd9d",
+  "historical_plan_sha256": "fc8147e574f5728147787700fe6c65961eb0be61562e467c8436dd56c9b176ab",
+  "product_native_signing": {
+    "run_id": 37030270841,
+    "artifact_id": 11237882878,
+    "artifact_name": "syswarden-native-signed-packages-qualified-4.10.2-37030270841-1-94d97f07cb5a054669dd66d6efd28ba55db5d173",
+    "artifact_digest": "sha256:825aac83e41320bbb8607f91adbfea9a12f3da6e6b116e62c45c9509e2252bf3"
+  },
+  "updater_producer": {
+    "commit": "94d97f07cb5a054669dd66d6efd28ba55db5d173",
+    "run_id": 37033510001,
+    "artifact_id": 11237844323,
+    "archive_sha256": "e0e233a82a1f011026022758ba79951783dedf95661e4ee8ce96ac0f3c61f236"
+  },
+  "native_archive_sha256": "578d9775e410dcdaef36095764dfabeb0ea2bde9db7055d77e7f4924636c170d",
+  "native_cli_sha256": "e85cc6a44fc2bb32295ef382c44e04bf8fe2929cd2292fc2a7f7c0850d10f148",
+  "required_input_ids": [
+    "active-guards",
+    "archive-native-evidence",
+    "campaign-integrity",
+    "current-updater",
+    "dual-generation-fixture",
+    "dual-generation-resume",
+    "enable-modern-v4100",
+    "entry-readonly",
+    "final-restored-verification",
+    "first-reboot-verification",
+    "harden-current",
+    "native-partial-states",
+    "native-purge-reinstall",
+    "negative-current-preservation",
+    "negative-current-resume",
+    "previous-accepted-ivv",
+    "product-ci",
+    "product-support",
+    "real-missing-payload-repair",
+    "real-missing-payload-resume",
+    "real-missing-payload-resume-tree",
+    "reconciliation-removal-prevention",
+    "reinstall-old-for-update",
+    "removal-barrier",
+    "repair-intermediate-inspection",
+    "resume-native-purge",
+    "retirement-retry",
+    "schedule-first-reboot",
+    "schedule-second-reboot",
+    "second-reboot-verification",
+    "signed-update",
+    "single-generation-native-purge",
+    "source-impact",
+    "stage-reverify",
+    "upgrade-preflight",
+    "upgrade-v4100"
+  ],
+  "claim_limits": [
+    "Intermediate Patch IVV only; not full Upgrade IVVQ.",
+    "Fresh Debian 13 observations use the exact signed product package and its attested CLI. Historical observations keep their original identities.",
+    "Recognized historical WireGuard states were reconstructed under a relevant hardening subset; not the reporter exact machine or every upgrade chain since v3.",
+    "Active historical VPN retirement requires explicit operator selection and independent administrative access. Unknown ownership and custom configurations remain safe refusals.",
+    "Controlled archive I/O failure and fresh retry were tested; process-kill and power-loss durability are not claimed.",
+    "Geo/ASN was temporarily disabled with approval to isolate WireGuard; the original snapshot, settings and service states were restored and verified.",
+    "Operator configuration and lists were explicitly restored from private backups after native purge. Automatic retention across purge is not claimed.",
+    "The attested candidate CLI exercised the protected qualification updater; the installed older production updater was not used for that operation.",
+    "Earlier platform, service and HA observations retain their original identities. No fresh all-platform lifecycle, HA endurance or broad performance campaign is claimed.",
+    "Original nonzero harness captures and their corrections remain in the private input graph; they are not relabeled successful executions."
+  ],
+  "preflight_is_acceptance": false,
+  "required_acceptance_checks": [
+    "candidate-ci",
+    "native-signatures",
+    "signed-native-payload",
+    "wireguard-active-and-ownership-refusals",
+    "wireguard-retirement-and-retry",
+    "single-generation-cleanup",
+    "native-package-consistency",
+    "recurrence-prevention",
+    "selected-platform-lifecycle-continuity",
+    "offline-update",
+    "restorations"
+  ],
+  "acceptance_basis": {
+    "candidate-ci": [
+      "product-ci"
+    ],
+    "native-signatures": [],
+    "signed-native-payload": [
+      "stage-reverify",
+      "campaign-integrity",
+      "product-support",
+      "source-impact"
+    ],
+    "wireguard-active-and-ownership-refusals": [
+      "active-guards",
+      "native-partial-states",
+      "negative-current-preservation",
+      "negative-current-resume"
+    ],
+    "wireguard-retirement-and-retry": [
+      "removal-barrier",
+      "retirement-retry",
+      "resume-native-purge"
+    ],
+    "single-generation-cleanup": [
+      "single-generation-native-purge"
+    ],
+    "native-package-consistency": [
+      "native-partial-states",
+      "native-purge-reinstall",
+      "real-missing-payload-repair",
+      "real-missing-payload-resume-tree"
+    ],
+    "recurrence-prevention": [
+      "reconciliation-removal-prevention",
+      "first-reboot-verification",
+      "second-reboot-verification"
+    ],
+    "selected-platform-lifecycle-continuity": [
+      "previous-accepted-ivv",
+      "source-impact",
+      "product-ci"
+    ],
+    "offline-update": [
+      "current-updater",
+      "signed-update",
+      "reinstall-old-for-update"
+    ],
+    "restorations": [
+      "entry-readonly",
+      "final-restored-verification",
+      "campaign-integrity"
+    ]
+  },
+  "post_acceptance_requirements": [
+    "signed-annotated-tag",
+    "independent-publisher-consumers",
+    "immutable-exact-assets",
+    "Sigstore-release-authenticity",
+    "downloaded-release-verification"
+  ],
+  "product_ci": [
+    {
+      "workflow": ".github/workflows/auto-versioning.yml",
+      "run_id": 37028742964
+    },
+    {
+      "workflow": ".github/workflows/scorecard.yml",
+      "run_id": 37028743426
+    },
+    {
+      "workflow": ".github/workflows/compliance.yml",
+      "run_id": 37028743196
+    },
+    {
+      "workflow": ".github/workflows/package.yml",
+      "run_id": 37028743569
+    },
+    {
+      "workflow": ".github/workflows/security-audit.yml",
+      "run_id": 37028743201
+    }
+  ],
+  "product_release_support": [
+    {
+      "id": 11236648575,
+      "name": "syswarden-attested-bundle",
+      "size_in_bytes": 15873161,
+      "digest": "sha256:eebe37786ba1eb03a1c917215065b06a910b78b9b72b9bc0dec984a7a404ccff",
+      "run_id": 37028743201,
+      "file": {
+        "path": "syswarden-release.tar.gz",
+        "size": 15952186,
+        "sha256": "f812d9a6f95abe203f81d6a9e151987d7008fa2f91537c968f4b717c054a5f3c"
+      }
+    },
+    {
+      "id": 11236456750,
+      "name": "syswarden-sbom",
+      "size_in_bytes": 4056,
+      "digest": "sha256:3762cdeafc96eb3cdc5d9763f7e33f7b80eb302f4485c807d4989cb447fef872",
+      "run_id": 37028743201,
+      "file": {
+        "path": "syswarden-sbom.spdx.json",
+        "size": 79280,
+        "sha256": "7c616c394149c3a3938cb10678f2453217618c248a8cd0a5e239196ee856d7bf"
+      }
+    }
+  ],
+  "product_bundle_members": [
+    {
+      "path": "signatures.json",
+      "size": 22231,
+      "sha256": "955687624840ba52b6f9d08b37971dfc69a784faa30ffeb7b4d7215d16f546b6"
+    },
+    {
+      "path": "bin/syswarden-cli",
+      "size": 19943726,
+      "sha256": "e85cc6a44fc2bb32295ef382c44e04bf8fe2929cd2292fc2a7f7c0850d10f148"
+    },
+    {
+      "path": "bin/syswarden-core",
+      "size": 12284206,
+      "sha256": "aa2c9aeb72e8b4934e59c2f30a8a6c21ef4c73d46dcca7f8b7c14f3c26e277b0"
+    },
+    {
+      "path": "bin/syswarden-tui",
+      "size": 8651054,
+      "sha256": "376b56b5357b58274be30a0f2531bb970ee0ba29144efd5a9693d19f25f40013"
+    }
+  ]
+}

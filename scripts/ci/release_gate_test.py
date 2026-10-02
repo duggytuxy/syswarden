@@ -2101,7 +2101,7 @@ esac
             """#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$#" -eq 4 && "$1" == "api" && "$2" == "--method" && "$3" == "GET" ]]; then
-  [[ "$4" == "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" ]]
+  [[ "$4" == "repos/${GITHUB_REPOSITORY}/releases/${EXPECTED_DRAFT_RELEASE_ID}" ]]
   printf 'gh-get\\n' >> "${FAKE_LOG}"
   printf '%s\\n' "${TEST_DRAFT_METADATA:?}"
   exit 0
