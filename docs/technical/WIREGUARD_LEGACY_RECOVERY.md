@@ -1,7 +1,8 @@
 # Historical WireGuard recovery and package removal
 
-This runbook describes the v4.10.2 source candidate. It does not establish release
-qualification or publication. Current release instructions are maintained at
+This runbook applies to the published v4.10.2 patch. Its targeted IVV scope and
+verified artifacts are recorded in the [publication record](../releases/v4.10.2/README.md).
+Current release instructions are maintained at
 [syswarden.io/docs](https://syswarden.io/docs/).
 
 ## Identify the failure
