@@ -590,25 +590,30 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         with self.assertRaisesRegex(verify_contract.VerificationError, "unsafe"):
             verify_contract.parse_file_inventory("/path\t-rw-r--r--\troot\troot\t\tabc\t1\n/path\t-rw-r--r--\troot\troot\t\tabc\t1\n")
 
+    def test_verifier_package_version_matches_current_source(self) -> None:
+        source = (REPOSITORY_ROOT / "src/core/syswarden-cli/pkg/system/upgrade.go").read_text(encoding="utf-8")
+        versions = re.findall(r'(?m)^var Version = "v([0-9]+\.[0-9]{2}\.[0-9]+)"$', source)
+        self.assertEqual(versions, [verify_contract.PACKAGE_VERSION])
+
     def test_verifier_pins_exact_rhel_package_owned_nevra(self) -> None:
-        exact = ["syswarden", "0", "4.10.0", "1.rhelpo", "x86_64", "8"]
+        exact = ["syswarden", "0", "4.10.1", "1.rhelpo", "x86_64", "8"]
         self.assertEqual(
             verify_contract.validate_package_identity(
-                exact, "syswarden-4.10.0-1.rhelpo.x86_64.rpm"
+                exact, "syswarden-4.10.1-1.rhelpo.x86_64.rpm"
             ),
             "8",
         )
         for metadata, filename in (
             (
-                ["syswarden", "0", "4.10.1", "1.rhelpo", "x86_64", "8"],
-                "syswarden-4.10.1-1.rhelpo.x86_64.rpm",
+                ["syswarden", "0", "4.10.2", "1.rhelpo", "x86_64", "8"],
+                "syswarden-4.10.2-1.rhelpo.x86_64.rpm",
             ),
             (
-                ["syswarden", "0", "4.10.0", "2.rhelpo", "x86_64", "8"],
-                "syswarden-4.10.0-2.rhelpo.x86_64.rpm",
+                ["syswarden", "0", "4.10.1", "2.rhelpo", "x86_64", "8"],
+                "syswarden-4.10.1-2.rhelpo.x86_64.rpm",
             ),
-            (exact, "syswarden-4.10.1-1.rhelpo.x86_64.rpm"),
-            (["syswarden", "1", "4.10.0", "1.rhelpo", "x86_64", "8"], "syswarden-4.10.0-1.rhelpo.x86_64.rpm"),
+            (exact, "syswarden-4.10.2-1.rhelpo.x86_64.rpm"),
+            (["syswarden", "1", "4.10.1", "1.rhelpo", "x86_64", "8"], "syswarden-4.10.1-1.rhelpo.x86_64.rpm"),
         ):
             with self.subTest(metadata=metadata, filename=filename), self.assertRaisesRegex(
                 verify_contract.VerificationError, "identity does not match"
