@@ -345,10 +345,12 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         post_uninstall = (EXTENSION_ROOT / "scriptlets/post-uninstall.sh").read_text(
             encoding="utf-8"
         )
+        assembly_test = (EXTENSION_ROOT / "tests/test-rpm-assembly.sh").read_text(encoding="utf-8")
         for document in (readme, pre_uninstall, post_uninstall):
             self.assertIn("/var/lib/.syswarden-rhelpo-postun-recovery-v1", document)
             self.assertIn(f"0:0:700:1:{len(recovery_helper)}", document)
             self.assertIn(recovery_digest, document)
+        self.assertIn(recovery_digest, assembly_test)
         self.assertIn("v4.10.0", qualification)
         self.assertIn("cf60ef354a217753bd3704e1fb5b182a1694abcc75a631b6d3218320f7b4fa63", qualification)
         preset = (REPOSITORY_ROOT / "src/init/systemd/90-syswarden-rhel-image.preset").read_text(
@@ -369,6 +371,7 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
             self.assertIn(identity_digest, (EXTENSION_ROOT / "scriptlets" / name).read_text())
         for name in ("pre-uninstall.sh", "postun-recovery.sh"):
             self.assertIn(marker_digest, (EXTENSION_ROOT / "scriptlets" / name).read_text())
+        self.assertIn(marker_digest, (EXTENSION_ROOT / "tests/test-rpm-assembly.sh").read_text())
 
     def test_flat_init_sources_match_current_runtime_templates_byte_for_byte(self) -> None:
         go_source = (

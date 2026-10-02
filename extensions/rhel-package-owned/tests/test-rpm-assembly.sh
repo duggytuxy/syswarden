@@ -553,7 +553,7 @@ assert_exact_erase_ready_marker() {
     assert_exact_chroot_regular_file "$1" \
         /var/lib/.syswarden-rhelpo-erase-ready-v1 \
         600 71 \
-        30af7d69819cc05aed32cd93d570cad2623276077e264590b3b00bd1fe8d2f9e \
+        d773345917080a2ba51781517be024ef79958e051c4fd521c9c294629500408e \
         'RHEL package-owned erase-ready marker'
 }
 
@@ -569,7 +569,7 @@ assert_exact_postun_recovery_helper() {
     assert_exact_chroot_regular_file "$1" \
         /var/lib/.syswarden-rhelpo-postun-recovery-v1 \
         700 9923 \
-        de79df4cfb15554453f3643520e413893202346f8edac49360c15b334f388715 \
+        6827907cbdfa25c39fe79b2d30e1faa34b9980abae4330c75495fc8d9d128608 \
         'RHEL package-owned post-uninstall recovery helper'
 }
 
