@@ -556,13 +556,13 @@ class NativePackageSigningBundleTests(unittest.TestCase):
             "--unsigned-artifact-id",
             "200",
             "--unsigned-artifact-name",
-            "syswarden-packages-4.10.0",
+            f"syswarden-packages-{self.release.removeprefix('v')}",
             "--unsigned-artifact-digest",
             "sha256:" + "4" * 64,
             "--rhel-unsigned-artifact-id",
             "201",
             "--rhel-unsigned-artifact-name",
-            "syswarden-rhel-package-owned-4.10.0",
+            f"syswarden-rhel-package-owned-{self.release.removeprefix('v')}",
             "--rhel-unsigned-artifact-digest",
             "sha256:" + "6" * 64,
             "--signing-run-id",
@@ -611,7 +611,7 @@ class NativePackageSigningBundleTests(unittest.TestCase):
                     str(self.bootstrap_signed_artifact_id),
                     "--bootstrap-signed-artifact-name",
                     bundle.signed_artifact_name(
-                        self.release,
+                        bundle.BOOTSTRAP_RELEASE_TAG,
                         bundle.BOOTSTRAP_BUNDLE_MODE,
                         self.bootstrap_signing_run_id,
                         1,
@@ -716,6 +716,7 @@ class NativePackageSigningBundleTests(unittest.TestCase):
         )
 
     def test_reviewed_phase_a_bootstrap_identity_is_immutable(self) -> None:
+        self.assertEqual(bundle.BOOTSTRAP_RELEASE_TAG, "v4.10.0")
         self.assertEqual(bundle.BOOTSTRAP_REPOSITORY, "duggytuxy/syswarden")
         self.assertEqual(
             bundle.BOOTSTRAP_RELEASE_SHA,
@@ -733,6 +734,90 @@ class NativePackageSigningBundleTests(unittest.TestCase):
             bundle.BOOTSTRAP_SIGNED_ARTIFACT_DIGEST,
             "sha256:e06ab6cf35c0c71a512588867e13715e7d754dc70e0ce2fb4c8c073b36429d1a",
         )
+
+    def use_v4101_product(self) -> None:
+        # The ancestor bundle has already been sealed as v4.10.0 in setUp.
+        # Replace only the current product fixture and its verification records.
+        for directory in (self.unsigned, self.signed, self.rhel_unsigned, self.rhel_signed):
+            for path in directory.iterdir():
+                path.unlink()
+        self.release = "v4.10.1"
+        self.names = bundle.package_names(self.release)
+        self.rhel_name = bundle.rhel_package_owned_name(self.release)
+        self.write_packages(self.unsigned, self.unsigned_data)
+        self.write_packages(self.signed, self.signed_data)
+        self.write_rhel_packages(self.rhel_unsigned, self.rhel_unsigned_data)
+        self.write_rhel_packages(self.rhel_signed, self.rhel_signed_data)
+        self.deb_signature.unlink()
+        self.deb_signature = self.root / bundle.deb_signature_name(self.release)
+        self.deb_signature.write_bytes(self.deb_signature_data)
+        self.rewrite_verification_evidence()
+
+    def test_v4101_qualified_bundle_retains_exact_v4100_bootstrap(self) -> None:
+        before = {path.relative_to(self.bootstrap_bundle): path.read_bytes()
+                  for path in self.bootstrap_bundle.rglob("*") if path.is_file()}
+        self.use_v4101_product()
+        self.test_finalize_and_verify_exact_bundle()
+        provenance = bundle.load_json(
+            self.root / "bundle/evidence/NATIVE_SIGNING_PROVENANCE.json", "provenance"
+        )
+        self.assertEqual(provenance["source"]["release_tag"], "v4.10.1")
+        self.assertEqual(provenance["bootstrap_qualification"]["artifact"]["name"],
+                         bundle.BOOTSTRAP_SIGNED_ARTIFACT_NAME)
+        self.assertEqual(before, {path.relative_to(self.bootstrap_bundle): path.read_bytes()
+                                 for path in self.bootstrap_bundle.rglob("*") if path.is_file()})
+        with self.assertRaises(bundle.SigningBundleError):
+            bundle.verify_bundle(self.root / "bundle", "v4.10.0", self.release_sha)
+
+    def test_old_product_cannot_be_relabelled_as_v4101(self) -> None:
+        output = self.root / "bundle"
+        self.assertEqual(bundle.main(self.finalize_arguments(output)), 0)
+        with self.assertRaises(bundle.SigningBundleError):
+            bundle.verify_bundle(output, "v4.10.1", self.release_sha)
+
+    def test_v4101_requires_current_verification_for_every_package_lane(self) -> None:
+        paths = (self.rpm_verification, self.rhel_rpm_verification,
+                 self.apk_verification, self.deb_verification)
+        old = {path: path.read_bytes() for path in paths}
+        self.use_v4101_product()
+        for path in paths:
+            with self.subTest(lane=path.name):
+                current = path.read_bytes()
+                path.write_bytes(old[path])
+                self.assertNotEqual(bundle.main(self.finalize_arguments()), 0)
+                self.assertFalse((self.root / "bundle").exists())
+                path.write_bytes(current)
+
+    def test_v4101_cannot_relabel_bootstrap_package_evidence(self) -> None:
+        self.use_v4101_product()
+        path = self.bootstrap_bundle / "evidence/NATIVE_SIGNING_PROVENANCE.json"
+        provenance = json.loads(path.read_bytes())
+        provenance["source"]["release_tag"] = "v4.10.1"
+        self.write_json(path, provenance)
+        self.reseal_bundle(self.bootstrap_bundle)
+        self.assertNotEqual(bundle.main(self.finalize_arguments()), 0)
+        self.assertFalse((self.root / "bundle").exists())
+
+    def test_v4101_cannot_create_or_verify_new_bootstrap(self) -> None:
+        self.use_v4101_product()
+        args = (*self.finalize_arguments(include_bootstrap=False), "--bootstrap-qualification")
+        self.assertNotEqual(bundle.main(args), 0)
+        self.assertFalse((self.root / "bundle").exists())
+        with self.assertRaisesRegex(bundle.SigningBundleError, "bootstrap signing remains frozen"):
+            bundle.verify_bundle(self.bootstrap_bundle, self.release,
+                                 self.bootstrap_release_sha, bundle.BOOTSTRAP_BUNDLE_MODE)
+        with self.assertRaisesRegex(bundle.SigningBundleError, "bootstrap signing remains frozen"):
+            bundle.signed_artifact_name(self.release, bundle.BOOTSTRAP_BUNDLE_MODE,
+                                        301, 1, self.release_sha)
+
+    def test_unreviewed_product_versions_remain_rejected(self) -> None:
+        for release in ("v4.10.2", "v4.11.0", "v5.00.0", "4.10.1", "v4.10.01", ""):
+            with self.subTest(release=release):
+                for operation in (bundle.package_names, bundle.rhel_package_owned_name):
+                    with self.assertRaisesRegex(bundle.SigningBundleError, "not been reviewed"):
+                        operation(release)
+                with self.assertRaisesRegex(bundle.SigningBundleError, "not been reviewed"):
+                    bundle.verify_bundle(self.bootstrap_bundle, release, self.release_sha)
 
     def test_inventory_is_exact_and_bound(self) -> None:
         output = self.root / "inventory.json"

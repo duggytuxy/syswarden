@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Exact v4.10.0 source version
+        description: Exact reviewed source version (v4.10.0 or qualified-policy v4.10.1)
         required: true
         type: string
       release_sha:
@@ -70,6 +70,7 @@ env:
   APPROVED_BOOTSTRAP_ARTIFACT_NAME: syswarden-native-signed-packages-4.10.0-35822833447-1-c741c775e990ac6c877847b3a99ca3a5c392e35b
   APPROVED_BOOTSTRAP_ARTIFACT_SIZE: "64068607"
   APPROVED_BOOTSTRAP_RELEASE_SHA: c741c775e990ac6c877847b3a99ca3a5c392e35b
+  APPROVED_BOOTSTRAP_RELEASE_TAG: v4.10.0
   APPROVED_BOOTSTRAP_REPOSITORY: duggytuxy/syswarden
   APPROVED_BOOTSTRAP_RUN_ID: "35822833447"
   FOUNDATION_POLICY_SHA256: 6b98b3b5bca83b9bc611c3b2e384636b5bbcbecc9e818e0f06104255200b011d
@@ -200,10 +201,14 @@ jobs:
           if [[ "${QUALIFICATION_MODE}" == "bootstrap-recovery" ]]; then
             expected_authorization="REQUALIFY-NATIVE-BOOTSTRAP-NO-PUBLISH"
           fi
-          if [[ "${RELEASE_TAG}" != "v4.10.0" || \
+          if [[ ( "${RELEASE_TAG}" != "v4.10.0" && "${RELEASE_TAG}" != "v4.10.1" ) || \
                 ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
                 "${AUTHORIZATION}" != "${expected_authorization}" ]]; then
-            echo "ERROR: v4.10.0 signing inputs or no-publication authorization are invalid." >&2
+            echo "ERROR: reviewed signing inputs or no-publication authorization are invalid." >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" == "v4.10.1" && "${QUALIFICATION_MODE}" != "qualified-policy" ]]; then
+            echo "ERROR: v4.10.1 requires the existing qualified policy and exact v4.10.0 bootstrap evidence." >&2
             exit 1
           fi
           if [[ ! "${APK_SIGNER_IMAGE}" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$ ]]; then
@@ -395,12 +400,11 @@ jobs:
           BOOTSTRAP_RELEASE_SHA: ${{ inputs.bootstrap_release_sha }}
           REQUESTED_ARTIFACT_ID: ${{ inputs.bootstrap_signed_artifact_id }}
           REQUESTED_RUN_ID: ${{ inputs.bootstrap_signing_run_id }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="${RELEASE_TAG#v}"
+          version="${APPROVED_BOOTSTRAP_RELEASE_TAG#v}"
           expected_name="syswarden-native-signed-packages-${version}-${REQUESTED_RUN_ID}-1-${BOOTSTRAP_RELEASE_SHA}"
           if [[ "${GITHUB_REPOSITORY}" != "${APPROVED_BOOTSTRAP_REPOSITORY}" || \
                 "${BOOTSTRAP_RELEASE_SHA}" != "${APPROVED_BOOTSTRAP_RELEASE_SHA}" || \

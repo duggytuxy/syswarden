@@ -222,7 +222,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
                 self.workflow.index("Generate and Verify Protected Candidate Manifest"),
             )
 
-    def manifest_staging_fixture(self, root: Path) -> tuple[Path, Path, dict[str, bytes]]:
+    def manifest_staging_fixture(self, root: Path, version: str = "4.10.0") -> tuple[Path, Path, dict[str, bytes]]:
         source = root / "native-signing"
         packages = source / "packages"
         packages.mkdir(parents=True, mode=0o700)
@@ -233,9 +233,9 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
         files = {
             name: ("unit fixture: " + name + "\n").encode("ascii")
             for name in (
-                "syswarden-4.10.0-1.x86_64.rpm",
-                "syswarden_4.10.0_amd64.deb",
-                "syswarden_4.10.0_x86_64.apk",
+                f"syswarden-{version}-1.x86_64.rpm",
+                f"syswarden_{version}_amd64.deb",
+                f"syswarden_{version}_x86_64.apk",
             )
         }
         records = [
@@ -245,7 +245,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
         (evidence / "NATIVE_SIGNING_PROVENANCE.json").write_text(
             json.dumps({"packages": {"signed": records}}), encoding="ascii"
         )
-        files["syswarden_4.10.0_amd64.deb.asc"] = b"unit detached signature\n"
+        files[f"syswarden_{version}_amd64.deb.asc"] = b"unit detached signature\n"
         for name, data in files.items():
             (packages / name).write_bytes(data)
         files["SHA256SUMS.txt"] = "".join(
@@ -255,13 +255,13 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
         (packages / "SHA256SUMS.txt").write_bytes(files["SHA256SUMS.txt"])
         return source, destination, files
 
-    def run_manifest_staging(self, source: Path, destination: Path) -> subprocess.CompletedProcess:
+    def run_manifest_staging(self, source: Path, destination: Path, release: str = "v4.10.0") -> subprocess.CompletedProcess:
         step = workflow_step(self.workflow, "Stage Exact Candidate Manifest Packages")
         script, = literal_run_blocks(step)
         return subprocess.run(
             ["bash", "-euo", "pipefail", "-c", script], cwd=ROOT,
             env={**os.environ, "NATIVE_SIGNING_DIR": str(source),
-                 "CANDIDATE_PACKAGES_DIR": str(destination), "RELEASE_TAG": "v4.10.0"},
+                 "CANDIDATE_PACKAGES_DIR": str(destination), "RELEASE_TAG": release},
             capture_output=True, text=True, check=False,
         )
 
@@ -285,6 +285,21 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             self.assertEqual(signing.count('--packages "${CANDIDATE_PACKAGES_DIR}"'), 2)
             self.assertNotIn('--packages "${NATIVE_SIGNING_DIR}/packages"', signing)
             self.assertIn('"${BUNDLE_ROOT}/verification/"', signing)
+
+    def test_v4101_manifest_staging_requires_its_own_package_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source, destination, original = self.manifest_staging_fixture(Path(temporary), "4.10.1")
+            wrong_release = self.run_manifest_staging(source, destination, "v4.10.0")
+            self.assertNotEqual(wrong_release.returncode, 0)
+            self.assertFalse(list(destination.iterdir()))
+            accepted = self.run_manifest_staging(source, destination, "v4.10.1")
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertEqual({path.name for path in destination.iterdir()},
+                             set(original) - {"syswarden_4.10.1_amd64.deb.asc"})
+            for path in destination.iterdir():
+                if path.name != "SHA256SUMS.txt":
+                    self.assertEqual(path.read_bytes(), original[path.name])
+            self.assertEqual({path.name: path.read_bytes() for path in (source / "packages").iterdir()}, original)
 
     def test_actual_staging_rejects_tampering_links_and_destination_collisions(self) -> None:
         for mutation in ("package", "signature", "checksum", "provenance", "extra", "symlink", "collision"):
@@ -407,6 +422,9 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
                                   env={**os.environ, **base, **update}, capture_output=True)
         self.assertEqual(run({}).returncode, 0)
         self.assertEqual(run({"RELEASE_SHA": "a" * 40}).returncode, 0)
+        patch = {"RELEASE_SHA": "a" * 40, "RELEASE_TAG": "v4.10.1"}
+        self.assertEqual(run(patch).returncode, 0)
+        self.assertNotEqual(run({"RELEASE_TAG": "v4.10.1"}).returncode, 0)
         for update in [
             {"EVENT_NAME": "pull_request"}, {"EVENT_REF": "refs/tags/v4.10.0"},
             {"EVENT_REF_NAME": "unreviewed"}, {"EVENT_REF_TYPE": "tag"},
@@ -415,9 +433,11 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             {"EVENT_ACTOR": "other"}, {"EVENT_TRIGGERING_ACTOR": "other"},
             {"RUN_ATTEMPT": "2"}, {"RUNNER_ENVIRONMENT_CONTEXT": "self-hosted"},
             {"NATIVE_RUN_ID": "0"}, {"AUTHORIZATION": "PUBLISH"},
+            {"RELEASE_TAG": "v4.10.2"}, {"RELEASE_TAG": "v5.00.0"},
         ]:
             with self.subTest(update=update):
                 self.assertNotEqual(run(update).returncode, 0)
+                self.assertNotEqual(run(patch | update).returncode, 0)
 
     def test_distinct_product_is_pinned_before_secret_and_sealed_as_v2(self) -> None:
         source = workflow_step(self.workflow, "Bind Frozen IVV Product to Producer")
