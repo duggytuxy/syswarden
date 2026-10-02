@@ -15,11 +15,13 @@ try:
     from scripts.ci import current_candidate_update_verify as updater
     from scripts.ci import release_ivv_native_signatures as native_signatures
     from scripts.ci import release_ivv_support as support
+    from scripts.ci import release_ivv_profile as profiles
 except ModuleNotFoundError:
     import release_ivv_current as current
     import current_candidate_update_verify as updater
     import release_ivv_native_signatures as native_signatures
     import release_ivv_support as support
+    import release_ivv_profile as profiles
 
 frozen = current.frozen
 require, equal = current.require, current.equal
@@ -38,20 +40,20 @@ def api(repository: Path, path: str, *args: str) -> dict:
     return frozen.strict_json(wire)
 
 
-def verify_context(event: dict, publication: str) -> dict:
+def verify_context(event: dict, publication: str, workflow: str = WORKFLOW) -> dict:
     require(type(publication) is str and frozen.SHA.fullmatch(publication), 'exact publication commit required')
     expected = dict(GITHUB_REPOSITORY=REPOSITORY, GITHUB_REPOSITORY_ID=str(REPOSITORY_ID),
         GITHUB_REPOSITORY_OWNER='duggytuxy', GITHUB_REPOSITORY_OWNER_ID=str(OWNER_ID),
         GITHUB_ACTOR='duggytuxy', GITHUB_TRIGGERING_ACTOR='duggytuxy',
         GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REF='refs/heads/main',
         GITHUB_SHA=publication, GITHUB_WORKFLOW_SHA=publication, GITHUB_RUN_ATTEMPT='1',
-        GITHUB_WORKFLOW_REF=REPOSITORY + '/' + WORKFLOW + '@refs/heads/main',
+        GITHUB_WORKFLOW_REF=REPOSITORY + '/' + workflow + '@refs/heads/main',
         RUNNER_ENVIRONMENT='self-hosted', RUNNER_OS='Linux', RUNNER_ARCH='X64')
     for key, value in expected.items(): equal(event.get(key), value, 'wrong protected producer context: ' + key)
     run = event.get('GITHUB_RUN_ID', '')
     require(type(run) is str and run.isdecimal() and int(run) > 0 and str(int(run)) == run,
             'invalid protected producer run')
-    return dict(repository=REPOSITORY, repository_id=REPOSITORY_ID, workflow=WORKFLOW,
+    return dict(repository=REPOSITORY, repository_id=REPOSITORY_ID, workflow=workflow,
                 workflow_ref=expected['GITHUB_WORKFLOW_REF'], publication_commit=publication,
                 workflow_run_id=int(run), workflow_run_attempt=1, event='workflow_dispatch',
                 source_ref='refs/heads/main', runner_environment='self-hosted',
@@ -93,7 +95,7 @@ def check_run(row: dict, sha: str, path: str, event='push', branch='main') -> di
                                     'status', 'conclusion', 'run_attempt')}
 
 
-def ci_verification(repository: Path, publication: str) -> dict:
+def ci_verification(repository: Path, publication: str, current=current) -> dict:
     product = []
     for expected in current.load_plan()['product_ci']:
         row = api(repository, 'actions/runs/' + str(expected['run_id']))
@@ -124,7 +126,7 @@ def file_snapshot(root: Path) -> dict[str, bytes]:
     return files
 
 
-def check_native_archive(archive: Path, native: Path) -> None:
+def check_native_archive(archive: Path, native: Path, current=current) -> None:
     require(archive.is_absolute() and archive == archive.resolve(strict=True), 'unsafe native archive')
     wire = frozen.bundle.regular_bytes(archive, 128 * 1024 * 1024, 'original native archive')
     equal('sha256:' + frozen.digest(wire), current.load_plan()['product_native_signing']['artifact_digest'],
@@ -153,7 +155,8 @@ def check_inventory(files: dict[str, bytes]) -> list[dict]:
             for name, wire in sorted(files.items())]
 
 
-def acceptance_checks(input_result: dict, signatures: dict, update: dict) -> list[dict]:
+def acceptance_checks(input_result: dict, signatures: dict, update: dict,
+                      current=current, updater=updater) -> list[dict]:
     """Admission is scoped IVV, never a replacement historical native verdict."""
     plan = current.load_plan()
     equal(input_result['product_candidate'], current.PRODUCT, 'input candidate differs')
@@ -182,8 +185,9 @@ def acceptance_checks(input_result: dict, signatures: dict, update: dict) -> lis
 
 
 def produce(repository: Path, publication: str, private: Path, native: Path,
-            native_archive: Path, update_root: Path, update_archive: Path, work: Path) -> dict:
-    context = verify_context(dict(os.environ), publication)
+            native_archive: Path, update_root: Path, update_archive: Path, work: Path,
+            *, current=current, updater=updater, workflow: str = WORKFLOW) -> dict:
+    context = verify_context(dict(os.environ), publication, workflow)
     source = current.source_binding(repository, publication)
     environment = api(repository, 'environments/' + ENVIRONMENT)
     branches = api(repository, 'environments/' + ENVIRONMENT + '/deployment-branch-policies', '-f', 'per_page=100')
@@ -192,17 +196,18 @@ def produce(repository: Path, publication: str, private: Path, native: Path,
             'producer workspace must be new')
     work.mkdir(mode=0o700)
     inputs = current.verify_private_inputs(private)
-    ci = ci_verification(repository, publication)
+    ci = ci_verification(repository, publication, current)
     current.verify_package_inputs(native)
-    check_native_archive(native_archive, native)
-    signatures = native_signatures.verify(repository, native, work / 'native-verification')
+    check_native_archive(native_archive, native, current)
+    signatures = native_signatures.verify(repository, native, work / 'native-verification', current)
     update = updater.verify(repository, native, update_root, update_archive)
-    support_root, support_result = support.fetch(repository, work / 'product-support')
-    checks = acceptance_checks(inputs, signatures, update)
+    support_root, support_result = support.fetch(repository, work / 'product-support', current)
+    checks = acceptance_checks(inputs, signatures, update, current, updater)
     public = work / 'public'; public.mkdir(mode=0o700)
     native_files = file_snapshot(native)
     copy_files(native_files, public / 'native-signing')
-    updater_files = updater.original.snapshot(update_root)
+    snapshot = getattr(updater, 'snapshot', updater.original.snapshot)
+    updater_files = snapshot(update_root)
     # These are public package/provenance files, never the private native captures.
     copy_files(updater_files, public / 'updater')
     copy_files(file_snapshot(support_root), public / 'product-support')
@@ -210,12 +215,12 @@ def produce(repository: Path, publication: str, private: Path, native: Path,
     require(current.source_binding(repository, publication) == source, 'publication source changed')
     equal(current.verify_private_inputs(private), inputs, 'reviewed private inputs changed')
     equal(file_snapshot(native), native_files, 'native input changed after verification')
-    equal(updater.original.snapshot(update_root), updater_files, 'updater changed after verification')
-    equal(ci_verification(repository, publication), ci, 'required CI changed during verification')
+    equal(snapshot(update_root), updater_files, 'updater changed after verification')
+    equal(ci_verification(repository, publication, current), ci, 'required CI changed during verification')
     verify_environment(api(repository, 'environments/' + ENVIRONMENT),
                        api(repository, 'environments/' + ENVIRONMENT + '/deployment-branch-policies', '-f', 'per_page=100'))
     report = dict(schema='syswarden-protected-intermediate-ivv/v1',
-        status='ivv-accepted-for-release', release='v4.10.0', required_assurance='IVV',
+        status='ivv-accepted-for-release', release=current.load_plan()['release'], required_assurance='IVV',
         accepted_at=datetime.now(timezone.utc).isoformat(), context=context, source_binding=source,
         plan_sha256=current.PLAN_SHA256, input_verification=inputs,
         native_signature_verification=signatures, updater_verification=update,
@@ -236,10 +241,13 @@ def main() -> int:
                  'candidate-bundle', 'candidate-archive', 'work'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--publication-sha', required=True)
+    parser.add_argument('--release', choices=tuple(profiles.REVIEWED), default='v4.10.0')
     args = parser.parse_args()
     try:
+        profile = profiles.load(args.release)
         produce(args.repository, args.publication_sha, args.private_inputs, args.native_bundle,
-                args.native_archive, args.candidate_bundle, args.candidate_archive, args.work)
+                args.native_archive, args.candidate_bundle, args.candidate_archive, args.work,
+                current=profile.current, updater=profile.updater, workflow=profile.workflow)
     except (frozen.PlanError, frozen.bundle.SigningBundleError, OSError, KeyError, TypeError,
             zipfile.BadZipFile) as exc:
         parser.exit(1, f'Protected intermediate acceptance rejected: {exc}\n')

@@ -16,9 +16,11 @@ import sys
 try:
     from scripts.ci import release_ivv_plan as ivv
     from scripts.ci import release_ivv_current as current
+    from scripts.ci import release_ivv_profile as profiles
 except ModuleNotFoundError:
     import release_ivv_plan as ivv
     import release_ivv_current as current
+    import release_ivv_profile as profiles
 
 REPOSITORY = 'duggytuxy/syswarden'
 REPOSITORY_ID = 1153695079
@@ -85,12 +87,12 @@ def from_classification(document: dict, release: str, publication: str) -> Assur
             document['track'] == 'intermediate-validation', 'invalid intermediate classification')
     # A future intermediate release needs its own reviewed product plan.
     # Do not silently borrow the frozen v4.10.0 product or evidence.
-    require(release == 'v4.10.0', 'no reviewed intermediate product plan for this release')
-    plan = current.load_plan()
+    profile = profiles.load(release)
+    plan = profile.current.load_plan()
     ivv.verify_track(document, publication, plan)
-    equal(plan['product_candidate'], PRODUCT_V4100, 'unreviewed frozen product')
-    return AssuranceContract('intermediate-validation', 'IVV', release, publication, PRODUCT_V4100,
-        '.github/workflows/release-ivv.yml', 'syswarden-release-ivv')
+    equal(plan['product_candidate'], profile.product, 'unreviewed frozen product')
+    return AssuranceContract('intermediate-validation', 'IVV', release, publication, profile.product,
+        profile.workflow, 'syswarden-release-ivv')
 
 
 def derive(repository: Path, release: str, publication: str) -> AssuranceContract:

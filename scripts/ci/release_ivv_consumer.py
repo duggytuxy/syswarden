@@ -15,10 +15,12 @@ try:
     from scripts.ci import release_ivv_current as current
     from scripts.ci import release_assurance_contract as assurance
     from scripts.ci import release_ivv_producer as producer
+    from scripts.ci import release_ivv_profile as profiles
 except ModuleNotFoundError:
     import release_ivv_current as current
     import release_assurance_contract as assurance
     import release_ivv_producer as producer
+    import release_ivv_profile as profiles
 
 frozen = current.frozen
 updater = producer.updater
@@ -99,14 +101,15 @@ def unpack(wire: bytes, destination: Path) -> dict[str, bytes]:
     return files
 
 
-def verify_attestation(wire: bytes, publication: str, run: int, digest: str) -> None:
+def verify_attestation(wire: bytes, publication: str, run: int, digest: str,
+                       workflow: str = producer.WORKFLOW) -> None:
     rows = frozen.strict_json(b'{"results":' + wire + b'}')['results']
     require(type(rows) is list and len(rows) == 1, 'one verified protected statement required')
     statement = rows[0]['verificationResult']['statement']
     cert = rows[0]['verificationResult']['signature']['certificate']
     equal(cert['issuer'], 'https://token.actions.githubusercontent.com', 'wrong protected OIDC issuer')
     equal(cert['subjectAlternativeName'],
-          f'https://github.com/{REPOSITORY}/{producer.WORKFLOW}@refs/heads/main',
+          f'https://github.com/{REPOSITORY}/{workflow}@refs/heads/main',
           'wrong protected certificate identity')
     equal(statement['_type'], 'https://in-toto.io/Statement/v1', 'wrong statement type')
     equal(statement['subject'], [dict(name=producer.REPORT, digest=dict(sha256=digest))],
@@ -115,7 +118,7 @@ def verify_attestation(wire: bytes, publication: str, run: int, digest: str) -> 
     predicate = statement['predicate']; build = predicate['buildDefinition']
     equal(build['buildType'], 'https://actions.github.io/buildtypes/workflow/v1', 'wrong build type')
     equal(build['externalParameters']['workflow'], dict(ref='refs/heads/main',
-          repository='https://github.com/' + REPOSITORY, path=producer.WORKFLOW), 'wrong protected workflow')
+          repository='https://github.com/' + REPOSITORY, path=workflow), 'wrong protected workflow')
     github = build['internalParameters']['github']
     for key, value in dict(event_name='workflow_dispatch', repository_id=str(producer.REPOSITORY_ID),
         repository_owner_id=str(producer.OWNER_ID), runner_environment='self-hosted').items():
@@ -123,12 +126,12 @@ def verify_attestation(wire: bytes, publication: str, run: int, digest: str) -> 
     equal(build['resolvedDependencies'], [dict(uri=f'git+https://github.com/{REPOSITORY}@refs/heads/main',
           digest=dict(gitCommit=publication))], 'wrong protected source')
     equal(predicate['runDetails']['builder']['id'],
-          f'https://github.com/{REPOSITORY}/{producer.WORKFLOW}@refs/heads/main', 'wrong protected builder')
+          f'https://github.com/{REPOSITORY}/{workflow}@refs/heads/main', 'wrong protected builder')
     equal(predicate['runDetails']['metadata']['invocationId'],
           f'https://github.com/{REPOSITORY}/actions/runs/{run}/attempts/1', 'wrong protected run or retry')
 
 
-def expected_inputs() -> dict:
+def expected_inputs(current=current) -> dict:
     plan = current.load_plan(); manifest = current.load_manifest(plan)
     rows = [dict(id=r['id'], original_candidate=r['candidate_commit'], relation=r['relation'],
                  input_sha256=r['object_sha256'], original_bytes_verified=True,
@@ -142,16 +145,17 @@ def expected_inputs() -> dict:
 
 
 def verify_report(report: dict, files: dict[str, bytes], source: dict, run: int,
-                  now: datetime | None = None) -> None:
+                  now: datetime | None = None, *, current=current, updater=updater,
+                  workflow: str = producer.WORKFLOW) -> None:
     plan = current.load_plan(); publication = source['publication_commit']
     expected_context = dict(repository=REPOSITORY, repository_id=producer.REPOSITORY_ID,
-        workflow=producer.WORKFLOW, workflow_ref=REPOSITORY + '/' + producer.WORKFLOW + '@refs/heads/main',
+        workflow=workflow, workflow_ref=REPOSITORY + '/' + workflow + '@refs/heads/main',
         publication_commit=publication, workflow_run_id=run, workflow_run_attempt=1,
         event='workflow_dispatch', source_ref='refs/heads/main', runner_environment='self-hosted',
         environment=producer.ENVIRONMENT, owner_id=producer.OWNER_ID)
     fixed = dict(schema='syswarden-protected-intermediate-ivv/v1',status='ivv-accepted-for-release',
-        release='v4.10.0',required_assurance='IVV',context=expected_context,source_binding=source,
-        plan_sha256=current.PLAN_SHA256,input_verification=expected_inputs(),
+        release=plan['release'],required_assurance='IVV',context=expected_context,source_binding=source,
+        plan_sha256=current.PLAN_SHA256,input_verification=expected_inputs(current),
         continuity_admitted_under_named_plan=True,historical_verdicts_transferred=False,
         private_raw_inputs_uploaded=False,claim_limits=plan['claim_limits'],
         intermediate_release_validated=True,full_qualification_passed=False,
@@ -187,20 +191,21 @@ def verify_report(report: dict, files: dict[str, bytes], source: dict, run: int,
         historical_verdicts_transferred=False,intermediate_release_validated=False,
         qualification_passed=False,publication_authorized=False).items():
         equal(update[key],value,'updater acceptance differs: '+key)
-    equal(report['required_checks'], producer.acceptance_checks(expected_inputs(),signatures,update),
+    equal(report['required_checks'], producer.acceptance_checks(expected_inputs(current),signatures,update,current,updater),
           'a required IVV check or its original evidence binding is missing')
     payload = {k:v for k,v in files.items() if k not in (producer.REPORT, ATTESTATION)}
     equal(report['artifact_files'],producer.check_inventory(payload),'public artifact changed after acceptance')
     require(payload and all(n.startswith(('native-signing/','updater/','product-support/')) for n in payload),
             'private or unexpected files in public artifact')
     equal(report['product_support_verification'],dict(schema='syswarden-original-product-support/v1',
-        product_candidate=current.PRODUCT,run_id=producer.support.RUN,
+        product_candidate=current.PRODUCT,run_id=plan['product_release_support'][0]['run_id'],
         files=[r['file'] for r in plan['product_release_support']],
         binary_members=plan['product_bundle_members'],original_build_attestation_verified=True,
         publication_authorized=False),'original binary/SBOM support differs')
 
 
-def materialize(native: Path, update: Path, support: Path, output: Path) -> None:
+def materialize(native: Path, update: Path, support: Path, output: Path,
+                current=current, updater=updater) -> None:
     require(not output.exists() and not output.is_symlink(), 'prepared layout exists')
     output.mkdir(mode=0o700)
     payloads = {}
@@ -218,7 +223,8 @@ def materialize(native: Path, update: Path, support: Path, output: Path) -> None
                             output/row['name'])
 
 
-def verify_assets(assets: Path, native: Path, update: Path, support: Path) -> None:
+def verify_assets(assets: Path, native: Path, update: Path, support: Path,
+                  current=current, updater=updater) -> None:
     for row in current.verify_package_inputs(native):
         equal(frozen.bundle.regular_bytes(assets/Path(row['path']).name,MAX_ARCHIVE,'release asset'),
               frozen.read_anchored(native,row,MAX_ARCHIVE),'publication substituted a tested package')
@@ -234,6 +240,10 @@ def consume(repository: Path, publication: str, release: str, requested: int | N
             work: Path, assets: Path | None = None) -> dict:
     contract = assurance.derive(repository,release,publication)
     equal(contract.assurance,'IVV','the intermediate consumer cannot replace an Upgrade gate')
+    profile = profiles.load(release)
+    current, updater, workflow = profile.current, profile.updater, profile.workflow
+    equal(contract.workflow_path, workflow, 'consumer workflow differs from reviewed profile')
+    equal(contract.product_candidate, current.PRODUCT, 'consumer product differs from reviewed profile')
     source = current.source_binding(repository,publication)
     run, artifact = select(repository,contract,requested)
     require(work.is_absolute() and work.parent == work.parent.resolve(strict=True) and not work.exists(),
@@ -243,11 +253,11 @@ def consume(repository: Path, publication: str, release: str, requested: int | N
     root=work/'evidence';files=unpack(archive_wire,root)
     attested = updater.original.command(['gh','attestation','verify',str(root/producer.REPORT),
         '--bundle',str(root/ATTESTATION),'--repo',REPOSITORY,
-        '--signer-workflow',REPOSITORY+'/'+producer.WORKFLOW,'--signer-digest',publication,
+        '--signer-workflow',REPOSITORY+'/'+workflow,'--signer-digest',publication,
         '--source-digest',publication,'--source-ref','refs/heads/main','--format','json'],repository)
-    verify_attestation(attested,publication,run['id'],frozen.digest(files[producer.REPORT]))
-    report=frozen.strict_json(files[producer.REPORT]);verify_report(report,files,source,run['id'])
-    equal(producer.ci_verification(repository,publication),report['ci_verification'],'required CI changed')
+    verify_attestation(attested,publication,run['id'],frozen.digest(files[producer.REPORT]),workflow)
+    report=frozen.strict_json(files[producer.REPORT]);verify_report(report,files,source,run['id'],current=current,updater=updater,workflow=workflow)
+    equal(producer.ci_verification(repository,publication,current),report['ci_verification'],'required CI changed')
     producer.verify_environment(producer.api(repository,'environments/'+producer.ENVIRONMENT),
         producer.api(repository,'environments/'+producer.ENVIRONMENT+'/deployment-branch-policies','-f','per_page=100'))
     native=root/'native-signing';update=root/'updater'
@@ -261,10 +271,10 @@ def consume(repository: Path, publication: str, release: str, requested: int | N
     for key in ('descriptor_sha256','manifest_sha256','manifest_signature_sha256','packages'):
         equal(checked_update[key],report['updater_verification'][key],'updater identity changed')
     support=root/'product-support'
-    equal(producer.support.verify(repository,support),report['product_support_verification'],
+    equal(producer.support.verify(repository,support,current),report['product_support_verification'],
           'original binary/SBOM could not be independently verified')
-    if assets is not None: verify_assets(assets,native,update,support)
-    materialize(native,update,support,work/'verified')
+    if assets is not None: verify_assets(assets,native,update,support,current,updater)
+    materialize(native,update,support,work/'verified',current,updater)
     equal(producer.file_snapshot(root),files,'artifact changed during independent consumption')
     repeated_run,repeated_artifact=select(repository,contract,run['id'])
     equal(repeated_artifact,artifact,'original protected artifact metadata changed')

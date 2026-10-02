@@ -23,18 +23,19 @@ RUN=36813024209
 MAX_BYTES=128*1024*1024
 
 
-def metadata(repository: Path,row: dict) -> dict:
+def metadata(repository: Path,row: dict,current=current) -> dict:
     wire=updater.original.command(['gh','api',f"repos/{REPO}/actions/artifacts/{row['id']}"],repository)
     doc=frozen.strict_json(wire)
     for key in ('id','name','size_in_bytes','digest'):
         equal(doc[key],row[key],'original product support artifact differs: '+key)
     require(doc['expired'] is False,'original product support artifact expired')
-    equal(doc['workflow_run'],dict(id=RUN,repository_id=1153695079,head_repository_id=1153695079,
+    equal(doc['workflow_run'],dict(id=row['run_id'],repository_id=1153695079,head_repository_id=1153695079,
           head_branch='main',head_sha=current.PRODUCT),'product support has wrong producer')
     return doc
 
 
-def verify_statement(wire: bytes) -> None:
+def verify_statement(wire: bytes,current=current) -> None:
+    run=current.load_plan()['product_release_support'][0]['run_id']
     rows=frozen.strict_json(b'{"results":'+wire+b'}')['results']
     require(type(rows) is list and len(rows)==1,'one verified product build statement required')
     result=rows[0]['verificationResult'];statement=result['statement']
@@ -58,16 +59,16 @@ def verify_statement(wire: bytes) -> None:
     equal(predicate['runDetails']['builder']['id'],f'https://github.com/{REPO}/{WORKFLOW}@refs/heads/main',
           'wrong product builder')
     equal(predicate['runDetails']['metadata']['invocationId'],
-          f'https://github.com/{REPO}/actions/runs/{RUN}/attempts/1','wrong product run or retry')
+          f'https://github.com/{REPO}/actions/runs/{run}/attempts/1','wrong product run or retry')
 
 
-def verify(repository: Path,root: Path) -> dict:
+def verify(repository: Path,root: Path,current=current) -> dict:
     plan=current.load_plan();rows=plan['product_release_support']
     require(root.is_absolute() and root==root.resolve(strict=True),'unsafe product support root')
     equal({p.name for p in root.iterdir()},{r['file']['path'] for r in rows},'unexpected support inventory')
     wires={}
     for row in rows:
-        metadata(repository,row)
+        metadata(repository,row,current)
         wires[row['file']['path']]=frozen.read_anchored(root,row['file'],MAX_BYTES)
     bundle=root/'syswarden-release.tar.gz'
     release_gate.validate_bundle(bundle);release_gate.validate_sbom(root/'syswarden-sbom.spdx.json')
@@ -85,20 +86,20 @@ def verify(repository: Path,root: Path) -> dict:
         '--signer-workflow',REPO+'/'+WORKFLOW,'--signer-digest',current.PRODUCT,
         '--source-digest',current.PRODUCT,'--source-ref','refs/heads/main',
         '--deny-self-hosted-runners','--format','json'],repository)
-    verify_statement(verified)
+    verify_statement(verified,current)
     for row in rows:equal(frozen.read_anchored(root,row['file'],MAX_BYTES),wires[row['file']['path']],
                          'product support changed during verification')
     return dict(schema='syswarden-original-product-support/v1',product_candidate=current.PRODUCT,
-        run_id=RUN,files=[r['file'] for r in rows],binary_members=plan['product_bundle_members'],
+        run_id=plan['product_release_support'][0]['run_id'],files=[r['file'] for r in rows],binary_members=plan['product_bundle_members'],
         original_build_attestation_verified=True,publication_authorized=False)
 
 
-def fetch(repository: Path,work: Path) -> tuple[Path,dict]:
+def fetch(repository: Path,work: Path,current=current) -> tuple[Path,dict]:
     require(work.is_absolute() and work.parent==work.parent.resolve(strict=True) and not work.exists(),
             'product support workspace must be new')
     work.mkdir(mode=0o700);root=work/'files';root.mkdir(mode=0o700)
     for row in current.load_plan()['product_release_support']:
-        metadata(repository,row)
+        metadata(repository,row,current)
         archive=work/(str(row['id'])+'.zip')
         with archive.open('xb') as output:
             r=subprocess.run(['gh','api',f"repos/{REPO}/actions/artifacts/{row['id']}/zip"],cwd=repository,
@@ -115,4 +116,4 @@ def fetch(repository: Path,work: Path) -> tuple[Path,dict]:
             require(not member.is_dir() and not member.flag_bits&1 and
                     stat.S_IFMT(member.external_attr>>16) in (0,stat.S_IFREG),'unsafe product archive entry')
             frozen.bundle.write_exclusive(root/member.filename,packed.read(member))
-    return root,verify(repository,root)
+    return root,verify(repository,root,current)
