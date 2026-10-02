@@ -1,0 +1,110 @@
+{
+  "status": "public-release-independently-verified",
+  "checked_at": "2026-10-02T19:38:58.836792+00:00",
+  "release": "v4.10.2",
+  "release_id": 402098079,
+  "publication_commit": "4bb302512636b001ecf78490177d3d4883513838",
+  "product_candidate": "94d97f07cb5a054669dd66d6efd28ba55db5d173",
+  "publisher_run_id": 37053860325,
+  "protected_ivv_run_id": 37050993460,
+  "release_metadata_stable": true,
+  "exact_ivv_package_and_updater_bytes_retained": true,
+  "assets": [
+    {
+      "name": "RELEASE_SHA256SUMS.txt",
+      "asset_id": 606326991,
+      "size": 1035,
+      "sha256": "dc05f47c680c17face9deee2f2f4068b83007f819285177a34f1c1cc220452c6",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "asset_id": 606326992,
+      "size": 283,
+      "sha256": "fc4cc881e507d2a07ac4cc6aade40cb19597e3ff982a26941981b4d1393a4d70",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "plumber-report.zip",
+      "asset_id": 606326994,
+      "size": 125836,
+      "sha256": "1ed9319f2379d55536c470c268798a4a516a445d922188fb96b78c2e853591fe",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-4.10.2-1.rhelpo.x86_64.rpm",
+      "asset_id": 606326993,
+      "size": 15914914,
+      "sha256": "4c80b18a455a96c55b13cb1d72e2bfd587e14c05d807d0adc8d89833b810976c",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-4.10.2-1.x86_64.rpm",
+      "asset_id": 606326990,
+      "size": 16215147,
+      "sha256": "ddd8d62f36d37110813bf61338f409fde9e6251514c4f542791609e4dc399d0a",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-release.tar.gz",
+      "asset_id": 606327005,
+      "size": 15952186,
+      "sha256": "f812d9a6f95abe203f81d6a9e151987d7008fa2f91537c968f4b717c054a5f3c",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-sbom.spdx.json",
+      "asset_id": 606327009,
+      "size": 79280,
+      "sha256": "7c616c394149c3a3938cb10678f2453217618c248a8cd0a5e239196ee856d7bf",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-update-manifest-v1.json",
+      "asset_id": 606327015,
+      "size": 671,
+      "sha256": "d6f9c316f11d44f330b3f400ec9e726dad2a486238125ed3e8c8015fa9703978",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-update-manifest-v1.json.sig",
+      "asset_id": 606327024,
+      "size": 89,
+      "sha256": "95de1894b6b9f809fb938f307462569744ef867107949740aca6c7449d4f8c9b",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden_4.10.2_amd64.deb",
+      "asset_id": 606327029,
+      "size": 15927798,
+      "sha256": "0e71d9856e6838a3feeea369c514c6ed55676d249b1b3fe213b086cd942e5980",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden_4.10.2_amd64.deb.asc",
+      "asset_id": 606327037,
+      "size": 833,
+      "sha256": "b6d067af3181e926de9b8f99beee0e771d5949edf6705e2eb4611b79c8f77197",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden_4.10.2_x86_64.apk",
+      "asset_id": 606327036,
+      "size": 16134035,
+      "sha256": "6a74053f1d0fe4e054a5d6868d899dbc97cdce21d19b828ad8e0c2f2897165ae",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    }
+  ]
+}
