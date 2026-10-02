@@ -609,24 +609,24 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         self.assertEqual(versions, [verify_contract.PACKAGE_VERSION])
 
     def test_verifier_pins_exact_rhel_package_owned_nevra(self) -> None:
-        exact = ["syswarden", "0", "4.10.1", "1.rhelpo", "x86_64", "8"]
+        exact = ["syswarden", "0", "4.10.2", "1.rhelpo", "x86_64", "8"]
         self.assertEqual(
             verify_contract.validate_package_identity(
-                exact, "syswarden-4.10.1-1.rhelpo.x86_64.rpm"
+                exact, "syswarden-4.10.2-1.rhelpo.x86_64.rpm"
             ),
             "8",
         )
         for metadata, filename in (
             (
-                ["syswarden", "0", "4.10.2", "1.rhelpo", "x86_64", "8"],
-                "syswarden-4.10.2-1.rhelpo.x86_64.rpm",
+                ["syswarden", "0", "4.10.3", "1.rhelpo", "x86_64", "8"],
+                "syswarden-4.10.3-1.rhelpo.x86_64.rpm",
             ),
             (
-                ["syswarden", "0", "4.10.1", "2.rhelpo", "x86_64", "8"],
-                "syswarden-4.10.1-2.rhelpo.x86_64.rpm",
+                ["syswarden", "0", "4.10.2", "2.rhelpo", "x86_64", "8"],
+                "syswarden-4.10.2-2.rhelpo.x86_64.rpm",
             ),
-            (exact, "syswarden-4.10.2-1.rhelpo.x86_64.rpm"),
-            (["syswarden", "1", "4.10.1", "1.rhelpo", "x86_64", "8"], "syswarden-4.10.1-1.rhelpo.x86_64.rpm"),
+            (exact, "syswarden-4.10.3-1.rhelpo.x86_64.rpm"),
+            (["syswarden", "1", "4.10.2", "1.rhelpo", "x86_64", "8"], "syswarden-4.10.2-1.rhelpo.x86_64.rpm"),
         ):
             with self.subTest(metadata=metadata, filename=filename), self.assertRaisesRegex(
                 verify_contract.VerificationError, "identity does not match"

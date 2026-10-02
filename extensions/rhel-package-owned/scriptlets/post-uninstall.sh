@@ -19,7 +19,7 @@ if [ "$1" -eq 0 ]; then
         exit 1
     }
     [ "$(/usr/bin/sha256sum -- "$helper" | /usr/bin/awk '{print $1}')" = \
-        de79df4cfb15554453f3643520e413893202346f8edac49360c15b334f388715 ] || {
+        6827907cbdfa25c39fe79b2d30e1faa34b9980abae4330c75495fc8d9d128608 ] || {
         printf '%s\n' 'RHEL package-owned post-uninstall recovery helper content is not exact.' >&2
         exit 1
     }

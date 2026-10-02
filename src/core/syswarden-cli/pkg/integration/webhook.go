@@ -296,7 +296,7 @@ func setupCLIWebhookPayload(hostname string, timestamp time.Time) (DiscordPayloa
 				Description: "Native Go Webhook integration established.",
 				Color:       3066993,
 				Fields: []EmbedField{
-					{Name: "Version", Value: "v4.10.1", Inline: true},
+					{Name: "Version", Value: "v4.10.2", Inline: true},
 					{Name: "NODE", Value: hostname, Inline: true},
 					{Name: "Status", Value: "Active", Inline: true},
 				},

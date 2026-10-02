@@ -85,7 +85,7 @@
     "canonical CIDRs authorize inbound peers only and are never dialed",
     "v4.02.9+ requires a trusted Ed25519 release manifest",
     "dedicated CGO-free static APK binaries are built for x86_64",
-    "configuration, data, logs, services and firewall tables are deleted",
+    "standalone removal deletes owned configuration, data, logs, services and firewall state",
     "X-SysWarden-HA-Fence-Condition",
     "opaque, case-sensitive strings",
     "schema_version = 1 is current; an absent schema_version denotes historical input.",
@@ -99,7 +99,9 @@
     "Rsyslog inputs are generated only for initially validated paths; protect parent directories because rsyslog reopens names itself.",
     "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars.",
     "Dry-runs exact historical WireGuard recovery; mutation requires the reviewed plan SHA-256.",
-    "With WireGuard and HA enabled, the configured HA peer port must differ from the configured SSH port."
+    "With WireGuard and HA enabled, the configured HA peer port must differ from the configured SSH port.",
+    "Native installations require apt-get remove/purge, dnf remove or apk del for syswarden.",
+    "recover-wireguard --retire-legacy-wg0 inspects exact historical wg0 retirement"
   ],
   "required_wiki_phrases": {
     "Home.md": [
@@ -189,9 +191,9 @@
     {
       "case": "root",
       "stream": "stdout",
-      "reason": "Advance the Patch version to v4.10.1 while preserving the bounded built-in operator reference.",
+      "reason": "Advance the Patch version to v4.10.2 while preserving the bounded built-in operator reference.",
       "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
-      "after": "SYSWARDEN v4.10.1 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+      "after": "SYSWARDEN v4.10.2 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
     },
     {
       "case": "help:syswarden update",
@@ -550,9 +552,9 @@
     {
       "path": "syswarden uninstall",
       "field": "long",
-      "reason": "Warn that the destructive operation does not restore every host setting.",
+      "reason": "Enforce native package removal authority before destructive cleanup and state the standalone removal limits.",
       "before": "",
-      "after": "This destructive operation removes SysWarden state and does not restore every prior host setting."
+      "after": "Removes a standalone installation after verified cleanup. Native package installations must be removed through their package manager to preserve package database consistency. This destructive operation does not restore every prior host setting."
     },
     {
       "path": "syswarden uninstall",

@@ -20,7 +20,7 @@ import release_gate
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SOURCE_CANDIDATE_VERSION = "v4.10.1"
+SOURCE_CANDIDATE_VERSION = "v4.10.2"
 STABLE_PUBLIC_VERSION = "v4.10.0"
 PUBLIC_REPORT_VERSION = "v4.03.3"
 OPERATIONAL_WIKI_BASELINE_VERSION = "v4.04.3"
@@ -237,7 +237,7 @@ class DocumentationGateTest(unittest.TestCase):
             [],
         )
         errors = documentation_gate.validate_public_version_order(
-            SOURCE_CANDIDATE_VERSION, "v4.10.2"
+            SOURCE_CANDIDATE_VERSION, "v4.10.3"
         )
         self.assertTrue(any("cannot be newer" in error for error in errors))
 

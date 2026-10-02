@@ -46,7 +46,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %stui%s                 : Launches the local terminal dashboard; it opens no network listener.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sunblock%s             : Removes one or more addresses or CIDRs from the blocklist.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sruntime-unblock%s     : Removes local runtime claims through the authenticated core; persistent and independent HA claims remain.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %suninstall%s           : Deletes SysWarden services, rules, configuration, data and logs.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %suninstall%s           : Removes standalone SysWarden state; native packages require their package manager.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sunwhitelist%s         : Removes one or more addresses or CIDRs from the whitelist.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %supdate%s              : Installs an update only after signed-manifest and package verification.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %supdate-feeds%s        : Refreshes remote feeds, validates embedded GeoIP data and reapplies firewall policy.\n", ansiGreen, ansiReset)
@@ -119,7 +119,8 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("%s--- 5. SAFETY LIMITS ---%s\n", ansiYellow, ansiReset)
 		fmt.Printf("  %sRELOAD:%s the Linux nftables candidate is committed atomically and verified; compatibility-wrapper failure leaves nftables authoritative and returns an error. The core normally restarts, so keep console access and a ruleset backup.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sUPDATE:%s v4.02.9+ requires a trusted Ed25519 release manifest; v4.02.8 needs a separately verified manual first hop to the qualified v4.03.2 Linux package.\n", ansiRed, ansiReset)
-		fmt.Printf("  %sUNINSTALL:%s configuration, data, logs, services and firewall tables are deleted; it is not a rollback.\n", ansiRed, ansiReset)
+		fmt.Printf("  %sUNINSTALL:%s standalone removal deletes owned configuration, data, logs, services and firewall state; it is not a rollback. Native installations require apt-get remove/purge, dnf remove or apk del for syswarden.\n", ansiRed, ansiReset)
+		fmt.Printf("  %sWIREGUARD RECOVERY:%s recover-wireguard --retire-legacy-wg0 inspects exact historical wg0 retirement, including coexistence with manifest-owned wg-syswarden. Confirm independent access before stopping affected VPN services, repeat the dry run, and authorize only its current plan digest. The private archive preserves keys; never publish it.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sALPINE:%s dedicated CGO-free static APK binaries are built for x86_64; install only an exact release-qualified artifact.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sPLATFORMS:%s The current source targets the Linux DEB, RPM and APK AMD64 package matrix only.\n\n", ansiRed, ansiReset)
 

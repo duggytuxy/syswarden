@@ -968,7 +968,7 @@
     "path": "syswarden recover-wireguard",
     "use": "recover-wireguard",
     "short": "Inspect and explicitly recover exact historical WireGuard nftables state",
-    "long": "Inspects one of the two supported historical SysWarden WireGuard generations without changing the host. Recovery is fail-closed and requires a second invocation with --apply and the exact SHA-256 digest printed by the dry run.",
+    "long": "Inspects supported historical SysWarden WireGuard state without changing the host. Use --retire-legacy-wg0 to explicitly retire the exact historical wg0 configuration, including coexistence with manifest-owned wg-syswarden. Recovery is fail-closed and requires a second invocation with --apply and the exact SHA-256 digest printed by the dry run.",
     "flags": [
       {
         "name": "apply",
@@ -997,6 +997,13 @@
         "type": "string",
         "default": "",
         "usage": "Authorize only the exact lowercase SHA-256 digest printed by the dry run"
+      },
+      {
+        "name": "retire-legacy-wg0",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect explicit historical wg0 retirement with a private backup, including coexistence with manifest-owned wg-syswarden"
       }
     ],
     "arg_outcomes": {
@@ -1164,7 +1171,7 @@
     "path": "syswarden uninstall",
     "use": "uninstall",
     "short": "Delete SysWarden services, rules, configuration, data, and logs",
-    "long": "This destructive operation removes SysWarden state and does not restore every prior host setting.",
+    "long": "Removes a standalone installation after verified cleanup. Native package installations must be removed through their package manager to preserve package database consistency. This destructive operation does not restore every prior host setting.",
     "flags": [
       {
         "name": "config",

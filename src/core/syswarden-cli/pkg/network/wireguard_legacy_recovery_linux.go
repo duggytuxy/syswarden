@@ -191,7 +191,10 @@ func captureLegacyWireGuardConfiguration(
 	}
 	defer func() { _ = root.Close() }()
 
-	parents := []string{"etc", "etc/wireguard"}
+	var parents []string
+	for parent := filepath.Dir(logical); parent != "."; parent = filepath.Dir(parent) {
+		parents = append([]string{parent}, parents...)
+	}
 	parentIdentities := make([]os.FileInfo, 0, len(parents))
 	for _, parent := range parents {
 		info, err := root.Lstat(parent)
@@ -679,7 +682,7 @@ func selectLegacyWireGuardConfiguration(
 	}
 	if len(eligible) != 1 {
 		return legacyWireGuardGenerationCandidate{}, fmt.Errorf(
-			"multiple historical WireGuard configurations make the unmarked table lineage ambiguous",
+			"multiple historical WireGuard configurations make the unmarked table lineage ambiguous; %s", legacyWireGuardRetirementHint,
 		)
 	}
 	return eligible[0], nil

@@ -2355,6 +2355,9 @@ func SetupWireguard() (resultErr error) {
 			resultErr = errors.Join(resultErr, fmt.Errorf("release WireGuard nftables activation guard: %w", err))
 		}
 	}()
+	if err := preflightLegacyWireGuardConflict(); err != nil {
+		return err
+	}
 	if err := recoverPendingWireGuardForwardingStateLocked(); err != nil {
 		return fmt.Errorf("recover interrupted WireGuard forwarding persistence before setup: %w", err)
 	}

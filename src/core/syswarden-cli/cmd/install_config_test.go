@@ -19,6 +19,7 @@ func init() {
 	// tests, so these command tests never depend on the developer host RPM/DPKG
 	// database.
 	preflightSystemdFirewallOrderingForInstall = func() error { return nil }
+	preflightLegacyWireGuardForInstall = func() error { return nil }
 }
 
 func stubInstallFirewallCompatibility(t *testing.T) {
@@ -1397,5 +1398,23 @@ func TestPrepareInstallConfigurationRejectsInvalidCandidateBeforeHostMutation_SW
 	}
 	if state := config.CurrentLoadState(); !state.Degraded || state.Error == "" {
 		t.Fatalf("load state = %#v, want degraded rejection", state)
+	}
+}
+
+func TestInstallRejectsHistoricalWireGuardConflictBeforeConfigurationAndDependencies(t *testing.T) {
+	previousLegacy := preflightLegacyWireGuardForInstall
+	previousConfig := installConfigPreflight
+	previousDependencies := installDependenciesForInstall
+	t.Cleanup(func() {
+		preflightLegacyWireGuardForInstall = previousLegacy
+		installConfigPreflight = previousConfig
+		installDependenciesForInstall = previousDependencies
+	})
+	sentinel := errors.New("historical configuration claims reserved WireGuard namespace")
+	preflightLegacyWireGuardForInstall = func() error { return sentinel }
+	installConfigPreflight = func(string) error { t.Fatal("configuration changed after conflict"); return nil }
+	installDependenciesForInstall = func() error { t.Fatal("dependencies changed after conflict"); return nil }
+	if err := installCmd.RunE(installCmd, nil); !errors.Is(err, sentinel) {
+		t.Fatalf("missing historical conflict: %v", err)
 	}
 }
