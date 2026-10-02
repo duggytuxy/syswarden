@@ -326,6 +326,25 @@ and artifact by ID, verify its GitHub attestation, descriptor, complete file
 inventory, checksums and updater signature, and bind both NODE01 candidate
 observations to it before accepting their evidence.
 
+The signing preparation for v4.10.1 uses the existing qualified native-key
+policy and protected environments. It accepts only `qualified-policy`; new
+bootstrap qualification or recovery for this product version is rejected.
+The exact reviewed key-enrollment evidence remains v4.10.0, bound to its
+original source, run, artifact ID, digest and foundation policy. Its expiry,
+inventory and trust-root checks still apply. Current v4.10.1 packages and
+verification records must be produced afresh from the same exact merged
+`main` SHA; v4.10.0 package evidence cannot be relabeled. The v4.10.0 profile
+names identify the compatible evidence schemas, not the current product
+version, which remains explicit in every package and provenance binding.
+
+For v4.10.1, the candidate updater producer also requires identical product
+and producer SHAs. The distinct-product path remains confined to the frozen
+v4.10.0 plan. These signing workflows produce non-public preparation artifacts
+only. Publication still requires a separately reviewed v4.10.1 IVV plan,
+the exact protected acceptance result and independent publisher checks.
+Signing support does not authorize a tag or Release, and later versions remain
+rejected until their signing scope is reviewed.
+
 After qualification succeeds, create the exact inspected candidate version
 locally as an annotated SSH- or GPG-signed tag whose peeled commit is the exact
 qualified `main` SHA. Verify the tag locally against the approved signer before

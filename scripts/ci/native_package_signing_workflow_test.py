@@ -652,6 +652,36 @@ print(json.dumps(document, separators=(",", ":")))
         accepted = execute({"QUALIFICATION_MODE": "bootstrap-qualification",
                             "AUTHORIZATION": "SIGN-NATIVE-PACKAGES-NO-PUBLISH"})
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        approved = {key: value.strip('"') for key, value in re.findall(
+            r"(?m)^  (APPROVED_BOOTSTRAP_\w+|FOUNDATION_POLICY_SHA256): (.+)$", self.workflow)}
+        qualified = approved | {
+            "QUALIFICATION_MODE": "qualified-policy",
+            "AUTHORIZATION": "SIGN-NATIVE-PACKAGES-NO-PUBLISH",
+            "BOOTSTRAP_RELEASE_SHA": approved["APPROVED_BOOTSTRAP_RELEASE_SHA"],
+            "BOOTSTRAP_SIGNING_RUN_ID": approved["APPROVED_BOOTSTRAP_RUN_ID"],
+            "BOOTSTRAP_SIGNED_ARTIFACT_ID": approved["APPROVED_BOOTSTRAP_ARTIFACT_ID"],
+            "BOOTSTRAP_POLICY_SHA256": approved["FOUNDATION_POLICY_SHA256"],
+        }
+        for release in ("v4.10.0", "v4.10.1"):
+            with self.subTest(release=release):
+                accepted = execute(qualified | {"RELEASE_TAG": release})
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+                for change in (
+                    {"BOOTSTRAP_RELEASE_SHA": "b" * 40},
+                    {"BOOTSTRAP_SIGNING_RUN_ID": "123"},
+                    {"BOOTSTRAP_SIGNED_ARTIFACT_ID": "456"},
+                    {"BOOTSTRAP_POLICY_SHA256": "0" * 64},
+                    {"AUTHORIZATION": "PUBLISH"}, {"EVENT_ACTOR": "other"},
+                    {"WORKFLOW_SHA": "b" * 40}, {"RUN_ATTEMPT": "2"},
+                ):
+                    self.assertNotEqual(execute(qualified | {"RELEASE_TAG": release} | change).returncode, 0)
+        for changes in (
+            qualified | {"RELEASE_TAG": "v4.10.2"},
+            qualified | {"RELEASE_TAG": "v5.00.0"},
+            {"RELEASE_TAG": "v4.10.1", "QUALIFICATION_MODE": "bootstrap-qualification",
+             "AUTHORIZATION": "SIGN-NATIVE-PACKAGES-NO-PUBLISH"},
+        ):
+            self.assertNotEqual(execute(changes).returncode, 0)
 
     def test_recovery_cannot_change_foundation_keys_or_qualified_policy(self) -> None:
         script = named_literal_run_block(self.workflow, "Validate Source and Signature Policy Foundation")
@@ -802,7 +832,8 @@ print(json.dumps(document, separators=(",", ":")))
         }
 
         def execute(
-            run_document: dict[str, Any], artifacts: list[dict[str, Any]]
+            run_document: dict[str, Any], artifacts: list[dict[str, Any]],
+            release_tag: str = "v4.10.0",
         ) -> subprocess.CompletedProcess[str]:
             with tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -842,13 +873,14 @@ print(json.dumps(payload, separators=(",", ":")))
                         "APPROVED_BOOTSTRAP_ARTIFACT_NAME": artifact_name,
                         "APPROVED_BOOTSTRAP_ARTIFACT_SIZE": str(artifact_size),
                         "APPROVED_BOOTSTRAP_RELEASE_SHA": bootstrap_sha,
+                        "APPROVED_BOOTSTRAP_RELEASE_TAG": "v4.10.0",
                         "APPROVED_BOOTSTRAP_REPOSITORY": "duggytuxy/syswarden",
                         "APPROVED_BOOTSTRAP_RUN_ID": str(run_id),
                         "GITHUB_OUTPUT": str(output_path),
                         "GITHUB_REPOSITORY": "duggytuxy/syswarden",
                         "GH_TOKEN": "test-token",
                         "PATH": f"{root}:{environment['PATH']}",
-                        "RELEASE_TAG": "v4.10.0",
+                        "RELEASE_TAG": release_tag,
                         "REPOSITORY_OWNER": "duggytuxy",
                         "REQUESTED_ARTIFACT_ID": str(artifact_id),
                         "REQUESTED_RUN_ID": str(run_id),
@@ -866,6 +898,10 @@ print(json.dumps(payload, separators=(",", ":")))
 
         accepted = execute(valid_run, [valid_artifact])
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        accepted = execute(valid_run, [valid_artifact], "v4.10.1")
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIn('version="${APPROVED_BOOTSTRAP_RELEASE_TAG#v}"', resolver)
+        self.assertIn('APPROVED_BOOTSTRAP_RELEASE_TAG: v4.10.0', self.workflow)
 
         rejected_cases = []
         wrong_attempt = json.loads(json.dumps(valid_run))
@@ -906,6 +942,7 @@ print(json.dumps(payload, separators=(",", ":")))
         for run_document, artifacts in rejected_cases:
             with self.subTest(run=run_document, artifacts=artifacts):
                 self.assertNotEqual(execute(run_document, artifacts).returncode, 0)
+                self.assertNotEqual(execute(run_document, artifacts, "v4.10.1").returncode, 0)
 
     def test_apk_operations_are_offline_and_container_hardened(self) -> None:
         self.assertGreaterEqual(self.workflow.count("--network none"), 2)

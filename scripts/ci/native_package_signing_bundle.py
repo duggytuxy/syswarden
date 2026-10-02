@@ -28,7 +28,10 @@ class SigningBundleError(RuntimeError):
     pass
 
 
-TARGET_RELEASE = "v4.10.0"
+# Product versions are reviewed separately from the immutable key-enrollment
+# evidence and the compatible v4.10.0 evidence schema.
+SUPPORTED_RELEASES = ("v4.10.0", "v4.10.1")
+BOOTSTRAP_RELEASE_TAG = "v4.10.0"
 SCHEMA_PROFILE = "syswarden-native-package-signing/v4.10.0"
 VERIFICATION_PROFILE = "syswarden-native-package-verification/v4.10.0"
 RPM_PROOF_PROFILE = "syswarden-rpm-payload-preservation/v4.10.0"
@@ -77,9 +80,18 @@ def fail(message: str) -> None:
     raise SigningBundleError(message)
 
 
+def validate_release(release: str) -> None:
+    if release not in SUPPORTED_RELEASES:
+        fail("native signing release has not been reviewed")
+
+
+def validate_bootstrap_release(release: str) -> None:
+    if release != BOOTSTRAP_RELEASE_TAG:
+        fail(f"bootstrap signing remains frozen to {BOOTSTRAP_RELEASE_TAG}")
+
+
 def package_names(release: str) -> dict[str, str]:
-    if release != TARGET_RELEASE:
-        fail(f"native signing workflow is frozen to {TARGET_RELEASE}")
+    validate_release(release)
     version = release.removeprefix("v")
     return {
         "deb": f"syswarden_{version}_amd64.deb",
@@ -93,8 +105,7 @@ def deb_signature_name(release: str) -> str:
 
 
 def rhel_package_owned_name(release: str) -> str:
-    if release != TARGET_RELEASE:
-        fail(f"RHEL package-owned signing is frozen to {TARGET_RELEASE}")
+    validate_release(release)
     return f"syswarden-{release.removeprefix('v')}-1.rhelpo.x86_64.rpm"
 
 
@@ -805,6 +816,7 @@ def signed_artifact_name(
     package_names(release)
     version = release.removeprefix("v")
     if mode == BOOTSTRAP_BUNDLE_MODE:
+        validate_bootstrap_release(release)
         # Phase A is already immutable. Preserve its exact historical artifact
         # name so Phase B can consume the evidence that the ancestor produced.
         return (
@@ -873,6 +885,7 @@ def validate_bootstrap_binding(
     artifact_digest: str,
     day: dt.date,
 ) -> dict[str, Any]:
+    validate_release(release)
     if REPOSITORY.fullmatch(repository) is None:
         fail("bootstrap repository identity is malformed")
     if COMMIT_SHA.fullmatch(foundation_release_sha) is None:
@@ -885,7 +898,7 @@ def validate_bootstrap_binding(
     if GITHUB_DIGEST.fullmatch(artifact_digest) is None:
         fail("bootstrap signed artifact digest is malformed")
     expected_artifact_name = signed_artifact_name(
-        release,
+        BOOTSTRAP_RELEASE_TAG,
         BOOTSTRAP_BUNDLE_MODE,
         signing_run_id,
         1,
@@ -911,7 +924,7 @@ def validate_bootstrap_binding(
     )
     verify_bundle(
         bundle_root,
-        release,
+        BOOTSTRAP_RELEASE_TAG,
         foundation_release_sha,
         mode=BOOTSTRAP_BUNDLE_MODE,
     )
@@ -958,6 +971,7 @@ def validate_bootstrap_reference(
     qualified_release_sha: str,
     repository: str,
 ) -> dict[str, Any]:
+    validate_release(release)
     checked = exact_keys(
         reference,
         {
@@ -1019,7 +1033,7 @@ def validate_bootstrap_reference(
         or artifact["name"] != BOOTSTRAP_SIGNED_ARTIFACT_NAME
         or artifact["name"]
         != signed_artifact_name(
-            release,
+            BOOTSTRAP_RELEASE_TAG,
             BOOTSTRAP_BUNDLE_MODE,
             signing_run["id"],
             1,
@@ -1077,6 +1091,7 @@ def finalize(args: argparse.Namespace) -> None:
         field for field in bootstrap_fields if getattr(args, field) is not None
     }
     if args.bootstrap_qualification:
+        validate_bootstrap_release(release)
         if supplied_bootstrap_fields:
             fail("bootstrap mode cannot claim a prior bootstrap qualification")
     elif supplied_bootstrap_fields != set(bootstrap_fields):
@@ -1637,10 +1652,13 @@ def verify_bundle(
     release_sha: str,
     mode: str = QUALIFIED_BUNDLE_MODE,
 ) -> None:
+    validate_release(release)
     if COMMIT_SHA.fullmatch(release_sha) is None:
         fail("expected release SHA is malformed")
     if mode not in {QUALIFIED_BUNDLE_MODE, BOOTSTRAP_BUNDLE_MODE}:
         fail("signed bundle verification mode is invalid")
+    if mode == BOOTSTRAP_BUNDLE_MODE:
+        validate_bootstrap_release(release)
     ensure_real_directory(root, "signed bundle")
     entries = {entry.name: entry for entry in root.iterdir()}
     if set(entries) != {
