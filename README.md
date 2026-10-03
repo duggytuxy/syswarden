@@ -48,7 +48,12 @@ defense layer without placing another proxy in the application data path.
 SysWarden is not an inline HTTP proxy, a traffic sanitizer or a regulatory
 certification product.
 
-Current source version: **v4.10.2**.
+Current source version: **v4.10.3**.
+
+The v4.10.3 candidate adds pre-unpack historical WireGuard screening and
+[preserved VPN migration](docs/technical/WIREGUARD_LEGACY_MIGRATION.md) for exact
+generated state without a manifest. Native first-hop acceptance and Patch IVV
+are pending; it does not inherit the published release's validation verdict.
 
 The latest IVV-validated, stable public release is
 [v4.10.2](https://github.com/duggytuxy/syswarden/releases/tag/v4.10.2).

@@ -116,6 +116,7 @@ jobs:
             scripts/ci/package_binary_provenance_gate_test.py \
             scripts/ci/package_systemd_ordering_artifact_gate_test.py \
             scripts/ci/package_systemd_ordering_preflight_test.py \
+            scripts/ci/package_wireguard_preflight_test.py \
             scripts/ci/go_toolchain_evaluation_test.py \
             scripts/ci/native_package_signature_gate_test.py \
             scripts/ci/native_package_signing_bundle_test.py \
@@ -777,9 +778,11 @@ jobs:
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_systemd_ordering_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_wireguard_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/preinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
+          syswarden_preflight_wireguard /
           syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
           syswarden_preflight_systemd_ordering_dropin

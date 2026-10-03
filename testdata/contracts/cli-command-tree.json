@@ -968,7 +968,7 @@
     "path": "syswarden recover-wireguard",
     "use": "recover-wireguard",
     "short": "Inspect and explicitly recover exact historical WireGuard nftables state",
-    "long": "Inspects supported historical SysWarden WireGuard state without changing the host. Use --retire-legacy-wg0 to explicitly retire the exact historical wg0 configuration, including coexistence with manifest-owned wg-syswarden. Recovery is fail-closed and requires a second invocation with --apply and the exact SHA-256 digest printed by the dry run.",
+    "long": "Inspects supported historical SysWarden WireGuard state without changing the host. Use --retire-legacy-wg0 to explicitly retire the exact historical wg0 configuration, including proven unmanifested historical wg-syswarden. Use --migrate-legacy-wg-syswarden to preserve that VPN and migrate its exact generated hooks after historical wg0 retirement. Recovery is fail-closed and requires a second invocation with --apply and the exact SHA-256 digest printed by the dry run.",
     "flags": [
       {
         "name": "apply",
@@ -993,6 +993,13 @@
         "usage": "help for recover-wireguard"
       },
       {
+        "name": "migrate-legacy-wg-syswarden",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect preservation of the exact historical wg-syswarden VPN, with private backups and manifest-bound hooks"
+      },
+      {
         "name": "plan-sha256",
         "type": "string",
         "default": "",
@@ -1003,7 +1010,7 @@
         "type": "bool",
         "default": "false",
         "no_option": "true",
-        "usage": "Inspect explicit historical wg0 retirement with a private backup, including coexistence with manifest-owned wg-syswarden"
+        "usage": "Inspect explicit historical wg0 retirement with a private backup, including proven historical wg-syswarden without a manifest"
       }
     ],
     "arg_outcomes": {

@@ -92,6 +92,7 @@ type wireGuardRenderInput struct {
 	ClientPriv     string
 	ClientPub      string
 	PresharedKey   string
+	SharedForward  bool
 }
 
 type wireGuardNFTExpectation struct {
@@ -1330,6 +1331,15 @@ func attestWireGuardNFTActivationState(expectation wireGuardNFTExpectation) erro
 	if err != nil {
 		return err
 	}
+	if expectation.Identity.SharedForward && expectation.AllowExisting && !expectation.RequirePresent {
+		// Inactive reconciliation can retire a proven partial owned inventory.
+		// The strict zero-rule activation check runs again after exact cleanup.
+		if _, err := inspectWireGuardSharedForward(ctx, runner, expectation.Identity.OwnershipToken); err != nil {
+			return err
+		}
+	} else if err := attestWireGuardSharedForward(ctx, runner, expectation.Identity, present); err != nil {
+		return err
+	}
 	if !present {
 		if expectation.RequirePresent {
 			return fmt.Errorf("owned inet syswarden_wg table is absent")
@@ -1370,6 +1380,9 @@ func cleanupWireGuardReservedNFTTableWithRunner(
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if expected.SharedForward {
+		return cleanupWireGuardSharedRuntime(ctx, runner, expected, reattestExpectedIdentity, reattestInactiveRuntime)
+	}
 	present, inventoryHandle, err := wireGuardReservedNFTTableIdentity(ctx, runner)
 	if err != nil || !present {
 		return err
@@ -1637,6 +1650,10 @@ func cleanupAttestedInactiveWireGuardNFTTableWithRunner(
 }
 
 func cleanupAttestedInactiveWireGuardNFTTable(expected wireguardstate.ServerConfigurationIdentity) error {
+	if expected.SharedForward {
+		return fmt.Errorf("migrated WireGuard cannot use private-table-only stale recovery; preserve the manifest and shared rules")
+	}
+
 	reattestExpectedIdentity := func() error {
 		actual, err := wireGuardServerIdentityInspector()
 		if err != nil {
@@ -2104,6 +2121,9 @@ func renderWireGuardConfigurations(input wireGuardRenderInput) (string, string, 
 	switch input.Backend {
 	case "nftables":
 		postUp = fmt.Sprintf(`%s 'create table inet syswarden_wg { comment "syswarden-wg-v1:%s"; }; add chain inet syswarden_wg prerouting { type nat hook prerouting priority dstnat; }; add chain inet syswarden_wg postrouting { type nat hook postrouting priority srcnat; }; add chain inet syswarden_wg forward { type filter hook forward priority 0; policy accept; }; add rule inet syswarden_wg postrouting oifname "%s" masquerade; add rule inet syswarden_wg forward iifname "wg-syswarden" accept; add rule inet syswarden_wg forward oifname "wg-syswarden" accept'`, input.NFTPath, input.OwnershipToken, input.ActiveIf)
+		if input.SharedForward {
+			postUp = strings.TrimSuffix(postUp, "'") + wireguardstate.SharedForwardPostUpSuffix(input.OwnershipToken) + "'"
+		}
 		// A raw wg-quick deletion hook cannot prove manifest ownership or hold
 		// the shared firewall lock. Lifecycle code uses CleanupOwnedWireGuardNFTState.
 		postDown = input.TruePath

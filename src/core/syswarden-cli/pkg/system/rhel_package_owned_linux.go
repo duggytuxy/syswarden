@@ -18,7 +18,7 @@ const (
 	rhelPackageOwnedProfilePath      = "/usr/share/doc/syswarden/rhel-package-owned-profile.json"
 
 	rhelPackageOwnedEraseReadyPath        = "/var/lib/.syswarden-rhelpo-erase-ready-v1"
-	rhelPackageOwnedEraseReadyRecord      = "SYSWARDEN_RHELPO_ERASE_READY_V1\nnevra=syswarden-4.10.2-1.rhelpo.x86_64\n"
+	rhelPackageOwnedEraseReadyRecord      = "SYSWARDEN_RHELPO_ERASE_READY_V1\nnevra=syswarden-4.10.3-1.rhelpo.x86_64\n"
 	rhelPackageOwnedPresetPendingPath     = "/var/lib/.syswarden-rhelpo-preset-pending-v1"
 	rhelPackageOwnedPresetPendingTempPath = rhelPackageOwnedPresetPendingPath + ".new"
 

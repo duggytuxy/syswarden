@@ -14,7 +14,7 @@ import (
 )
 
 func testRHELPackageOwnedIdentity() []byte {
-	return []byte("syswarden\t0\t4.10.2\t1.rhelpo\tx86_64\n")
+	return []byte("syswarden\t0\t4.10.3\t1.rhelpo\tx86_64\n")
 }
 
 func testRHELPackageOwnedOwner(t *testing.T, root string) (uint32, uint32) {
@@ -182,7 +182,7 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 		root := t.TempDir()
 		host := testRHELPackageOwnedHost(t, root)
 		host.queryInstalled = func() ([]byte, error) {
-			return []byte("syswarden\t0\t4.10.2\t1\tx86_64\n"), nil
+			return []byte("syswarden\t0\t4.10.3\t1\tx86_64\n"), nil
 		}
 		present, err := host.attest()
 		if err != nil || present {
@@ -338,7 +338,7 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 			mutate: func(t *testing.T, _ string, host *rhelPackageOwnedAttestationHost) {
 				t.Helper()
 				host.queryInstalled = func() ([]byte, error) {
-					return []byte("syswarden\t0\t4.10.2\t1\tx86_64\n"), nil
+					return []byte("syswarden\t0\t4.10.3\t1\tx86_64\n"), nil
 				}
 			},
 		},
@@ -347,7 +347,7 @@ func TestRHELPackageOwnedProfileAttestationFailsClosed(t *testing.T) {
 			mutate: func(t *testing.T, _ string, host *rhelPackageOwnedAttestationHost) {
 				t.Helper()
 				host.queryFileOwner = func(string) ([]byte, error) {
-					return []byte("syswarden\t0\t4.10.2\t2.rhelpo\tx86_64\n"), nil
+					return []byte("syswarden\t0\t4.10.3\t2.rhelpo\tx86_64\n"), nil
 				}
 			},
 		},
@@ -985,8 +985,8 @@ func TestPrepareRHELPackageOwnedRuntimeForEraseRejectsPresetRecoveryBeforeCleanu
 }
 
 func TestRHELPackageOwnedIdentityRejectsDifferentRunningRelease(t *testing.T) {
-	if err := exactRHELPackageOwnedRPMIdentity(testRHELPackageOwnedIdentity(), "v4.10.3"); err == nil {
-		t.Fatal("v4.10.2-only RHELPO profile accepted a different running release")
+	if err := exactRHELPackageOwnedRPMIdentity(testRHELPackageOwnedIdentity(), "v4.10.4"); err == nil {
+		t.Fatal("v4.10.3-only RHELPO profile accepted a different running release")
 	}
 	if host := productionRHELPackageOwnedAttestationHost(); host.runningVersion != Version {
 		t.Fatal("production RHELPO attestation is not bound to running release")

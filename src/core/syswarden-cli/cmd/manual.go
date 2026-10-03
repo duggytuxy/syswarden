@@ -121,6 +121,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %sUPDATE:%s v4.02.9+ requires a trusted Ed25519 release manifest; v4.02.8 needs a separately verified manual first hop to the qualified v4.03.2 Linux package.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sUNINSTALL:%s standalone removal deletes owned configuration, data, logs, services and firewall state; it is not a rollback. Native installations require apt-get remove/purge, dnf remove or apk del for syswarden.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sWIREGUARD RECOVERY:%s recover-wireguard --retire-legacy-wg0 inspects exact historical wg0 retirement, including coexistence with manifest-owned wg-syswarden. Confirm independent access before stopping affected VPN services, repeat the dry run, and authorize only its current plan digest. The private archive preserves keys; never publish it.\n", ansiRed, ansiReset)
+		fmt.Printf("  %sWIREGUARD MIGRATION:%s recover-wireguard --migrate-legacy-wg-syswarden inspects exact unmanifested generated files. After explicit legacy retirement, migration preserves client keys in private backups and replaces historical hooks with manifest-bound hooks. Services must remain stopped and disabled while the reviewed plan is applied.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sALPINE:%s dedicated CGO-free static APK binaries are built for x86_64; install only an exact release-qualified artifact.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sPLATFORMS:%s The current source targets the Linux DEB, RPM and APK AMD64 package matrix only.\n\n", ansiRed, ansiReset)
 

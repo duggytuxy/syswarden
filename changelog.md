@@ -1,3 +1,32 @@
+# Release v4.10.3
+
+### FIXED
+
+- **Historical upgrade boundary:** Screen historical WireGuard namespace claims
+  and unmanifested generated paths in native pre-install scripts before package
+  payload replacement, including calls from an older installed updater. Report
+  the verified staged recovery path without invoking that older CLI. The
+  candidate still requires fresh native first-hop validation and Patch IVV.
+- **Unmanifested dual-generation recovery:** Recognize complete historical
+  generated server, client and forwarding files by exact templates and matching
+  key relationships. Bind them to the explicit `wg0` retirement plan while
+  preserving their bytes. Reject partial, customized or changed evidence.
+- **Preserved historical VPN migration:** Add a separate digest-authorized
+  `recover-wireguard --migrate-legacy-wg-syswarden` operation. Preserve keys,
+  addresses, port and the client file, archive original files privately, replace
+  historical server hooks and publish an exact ownership manifest. Require an
+  inactive, disabled VPN and proven runtime cleanup. Journal each migration,
+  block ordinary mutation while it is pending, and support verified continuation
+  after interruption without overwriting backups.
+
+- **Hardened forwarding compatibility:** Preserve the operator's shared forward
+  chain and its policy while restoring the two historical VPN allowances with
+  manifest-bound rule tokens. Verify activation and remove only exact owned
+  rules and table handles, including a partially absent runtime. Refuse changed
+  ownership or foreign table content without discarding recovery evidence.
+
+---
+
 # Release v4.10.2
 
 ### FIXED

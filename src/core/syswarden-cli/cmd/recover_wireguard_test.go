@@ -181,6 +181,65 @@ func TestRecoverWireGuardExplicitRetirementDryRunAndApply(t *testing.T) {
 	}
 }
 
+func TestRecoverWireGuardMigrationRequiresSeparateDigestAuthorization(t *testing.T) {
+	previousInspect, previousApply := inspectLegacyWireGuardMigration, applyLegacyWireGuardMigration
+	t.Cleanup(func() {
+		inspectLegacyWireGuardMigration, applyLegacyWireGuardMigration = previousInspect, previousApply
+	})
+	plan := network.LegacyWireGuardMigrationPlan{
+		Schema: "syswarden-legacy-wireguard-migration-plan-v1", State: "pending", SafeToApply: true,
+		Blockers: []string{}, ForwardRules: []network.LegacyWireGuardForwardRuleEvidence{},
+	}
+	digest, err := network.LegacyWireGuardMigrationPlanSHA256(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspectCalls, applyCalls := 0, 0
+	inspectLegacyWireGuardMigration = func() (network.LegacyWireGuardMigrationPlan, error) { inspectCalls++; return plan, nil }
+	applyLegacyWireGuardMigration = func(got string) (network.LegacyWireGuardMigrationPlan, error) {
+		applyCalls++
+		if got != digest {
+			t.Fatal("incorrect migration digest")
+		}
+		return plan, nil
+	}
+	for _, args := range [][]string{
+		{"--migrate-legacy-wg-syswarden"},
+		{"--migrate-legacy-wg-syswarden", "--apply", "--plan-sha256", digest},
+	} {
+		command := newRecoverWireGuardCommand()
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetArgs(args)
+		if err := command.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), digest) {
+			t.Fatal("missing migration digest")
+		}
+		if len(args) == 1 && applyCalls != 0 {
+			t.Fatal("dry run applied migration")
+		}
+	}
+	if inspectCalls != 1 || applyCalls != 1 {
+		t.Fatal("unexpected migration calls")
+	}
+	for _, args := range [][]string{
+		{"--retire-legacy-wg0", "--migrate-legacy-wg-syswarden"},
+		{"--migrate-legacy-wg-syswarden", "--apply"},
+		{"--migrate-legacy-wg-syswarden", "--plan-sha256", digest},
+	} {
+		command := newRecoverWireGuardCommand()
+		command.SetArgs(args)
+		if err := command.Execute(); err == nil {
+			t.Fatal("accepted ambiguous or incomplete authorization")
+		}
+	}
+	if inspectCalls != 1 || applyCalls != 1 {
+		t.Fatal("invalid authorization reached migration handler")
+	}
+}
+
 func TestRecoverWireGuardRetirementBlockedAndAlreadyRetiredGuidance(t *testing.T) {
 	previousInspect := inspectLegacyWireGuardRetirement
 	t.Cleanup(func() { inspectLegacyWireGuardRetirement = previousInspect })

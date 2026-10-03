@@ -19,6 +19,10 @@ func attestRepairableTokenizedWireGuardNFTTableWithRunner(
 	if runner == nil {
 		return fmt.Errorf("tokenized WireGuard nftables preflight runner is unavailable")
 	}
+	if expected.SharedForward {
+		return fmt.Errorf("migrated WireGuard requires exact manifest-bound table and shared-rule recovery; preserve the manifest")
+	}
+
 	if !wireGuardInterfaceName.MatchString(expected.ActiveInterface) ||
 		!wireGuardOwnershipTokenName.MatchString(expected.OwnershipToken) {
 		return fmt.Errorf("invalid manifest-bound WireGuard nftables preflight identity")

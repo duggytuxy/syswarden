@@ -113,16 +113,19 @@ type legacyWireGuardGenerationCandidate struct {
 }
 
 type legacyWireGuardRecoveryHost struct {
-	filesystemRoot string
-	expectedUID    uint32
-	expectedGID    uint32
-	effectiveUID   func() int
-	managerState   func() (string, error)
-	isAlpine       func() bool
-	commandOutput  wireGuardServiceOutputRunner
-	nftRunner      wireGuardNFTCommandRunner
-	nftBatch       func(context.Context, string) ([]byte, error)
-	guard          func() (func() error, error)
+	filesystemRoot    string
+	expectedUID       uint32
+	expectedGID       uint32
+	effectiveUID      func() int
+	managerState      func() (string, error)
+	isAlpine          func() bool
+	commandOutput     wireGuardServiceOutputRunner
+	nftRunner         wireGuardNFTCommandRunner
+	nftBatch          func(context.Context, string) ([]byte, error)
+	guard             func() (func() error, error)
+	migrationNFTPath  func() (string, error)
+	migrationTruePath func() (string, error)
+	migrationToken    func() (string, error)
 }
 
 func productionLegacyWireGuardRecoveryHost() legacyWireGuardRecoveryHost {
@@ -141,7 +144,10 @@ func productionLegacyWireGuardRecoveryHost() legacyWireGuardRecoveryHost {
 				maximumWireGuardCommandOutput,
 			)
 		},
-		guard: wireGuardNFTActivationGuard,
+		guard:             wireGuardNFTActivationGuard,
+		migrationNFTPath:  wireGuardNFTExecutablePath,
+		migrationTruePath: wireGuardTrueExecutablePath,
+		migrationToken:    wireGuardOwnershipToken,
 	}
 }
 

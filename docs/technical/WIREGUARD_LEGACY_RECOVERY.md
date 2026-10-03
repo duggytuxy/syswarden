@@ -5,6 +5,11 @@ verified artifacts are recorded in the [publication record](../releases/v4.10.2/
 Current release instructions are maintained at
 [syswarden.io/docs](https://syswarden.io/docs/).
 
+For the newly reported v4.02.8 first-hop upgrade with historical generated files
+without a manifest, see the [v4.10.3 candidate migration procedure](WIREGUARD_LEGACY_MIGRATION.md).
+That extension is under validation. The published v4.10.2 procedure below does
+not cover this unmanifested coexistence case.
+
 ## Identify the failure
 
 Accumulated installations can leave an old `wg0` configuration alongside the

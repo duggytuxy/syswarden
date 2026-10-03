@@ -48,3 +48,6 @@ act.secrets
 .DS_Store
 Thumbs.db
 null
+
+# Private local agent instructions
+/AGENTS.md

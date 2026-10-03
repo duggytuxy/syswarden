@@ -27,7 +27,7 @@ RPM_TOOL = Path("/usr/bin/rpm")
 MAX_RPM_BYTES = 256 * 1024 * 1024
 MAX_QUERY_BYTES = 4 * 1024 * 1024
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-PACKAGE_VERSION = "4.10.2"
+PACKAGE_VERSION = "4.10.3"
 PACKAGE_RELEASE = "1.rhelpo"
 PRODUCT_EXECUTABLE = re.compile(
     r"(?:/opt/syswarden/bin/)?syswarden-(?:cli|core|tui)(?![A-Za-z0-9_.-])"
