@@ -7,6 +7,12 @@ or publication. The public stable release remains v4.10.2 until verified
 publication. Current public instructions belong at
 [syswarden.io/docs](https://syswarden.io/docs/).
 
+A later signed candidate failed ownership verification after Linux renumbered
+its unchanged filesystem at reboot. Publication is held until the
+[persistent filesystem identity correction](WIREGUARD_FILESYSTEM_IDENTITY.md)
+passes a fresh signed native campaign and protected Patch IVV. Earlier native
+successes do not qualify that failed candidate.
+
 ## Why the older upgrade fails
 
 Historical releases, including v4.02.8, generated `wg-syswarden.conf`, the client
