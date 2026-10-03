@@ -326,7 +326,7 @@ and artifact by ID, verify its GitHub attestation, descriptor, complete file
 inventory, checksums and updater signature, and bind both NODE01 candidate
 observations to it before accepting their evidence.
 
-The signing preparation for v4.10.1 and v4.10.2 uses the existing qualified
+The signing preparation for v4.10.1, v4.10.2 and v4.10.3 uses the existing qualified
 native-key policy and protected environments. It accepts only `qualified-policy`; new
 bootstrap qualification or recovery for these product versions is rejected.
 The exact reviewed key-enrollment evidence remains v4.10.0, bound to its
@@ -337,17 +337,28 @@ verification records must be produced afresh from the same exact merged
 names identify the compatible evidence schemas, not the current product
 version, which remains explicit in every package and provenance binding.
 
-For v4.10.1 and v4.10.2, the candidate updater producer also requires identical
+For v4.10.1, v4.10.2 and v4.10.3, the candidate updater producer also requires identical
 product and producer SHAs. The distinct-product path remains confined to the frozen
 v4.10.0 plan. These signing workflows produce non-public preparation artifacts
 only. Publication still requires a separately reviewed version-specific IVV plan,
 the exact protected acceptance result and independent publisher checks.
-Signing support does not authorize a tag or Release, and versions after v4.10.2
+Signing support does not authorize a tag or Release, and versions after v4.10.3
 remain rejected until their signing scope is reviewed. The v4.10.2 Patch requires
 fresh native acceptance for dual-generation WireGuard retirement, prevention
 across update and reboot, interrupted removal and native package reinstall.
 The original v4.10.1 tag, plan and evidence remain unchanged and cannot establish
 v4.10.2 acceptance.
+
+The v4.10.3 Patch requires fresh signed-package observations and protected IVV
+for the actual installed v4.02.8 updater, refusal before native unpack,
+recovery from official half-configured v4.10.2, retirement of the older
+namespace claim, preservation of the generated VPN client, interrupted
+migration and resume, encrypted transit and NAT after reboot, and native
+purge followed by same-version reinstall. The unsigned
+[native rehearsal](../technical/WIREGUARD_LEGACY_NATIVE_V4.10.3.md) supports
+implementation review only. It cannot establish protected acceptance for the
+merged signed product. Original v4.10.0, v4.10.1 and v4.10.2 tags, plans,
+artifacts and acceptance records remain immutable and are not v4.10.3 verdicts.
 
 After qualification succeeds, create the exact inspected candidate version
 locally as an annotated SSH- or GPG-signed tag whose peeled commit is the exact
