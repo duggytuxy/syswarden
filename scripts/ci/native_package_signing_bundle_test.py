@@ -833,10 +833,37 @@ class NativePackageSigningBundleTests(unittest.TestCase):
     def test_v4102_rejects_v4101_verification_for_every_package_lane(self) -> None:
         self.assert_patch_requires_current_verification("v4.10.2", "v4.10.1")
 
+    def test_v4103_qualified_bundle_retains_exact_v4100_bootstrap(self) -> None:
+        self.assert_patch_bundle_retains_exact_bootstrap("v4.10.3")
+
+    def test_v4103_cannot_relabel_bootstrap_package_evidence(self) -> None:
+        self.assert_patch_cannot_relabel_bootstrap("v4.10.3")
+
+    def test_v4103_cannot_create_or_verify_new_bootstrap(self) -> None:
+        self.assert_patch_cannot_create_bootstrap("v4.10.3")
+
+    def test_v4103_rejects_v4100_verification_for_every_package_lane(self) -> None:
+        self.assert_patch_requires_current_verification("v4.10.3", "v4.10.0")
+
+    def test_v4103_rejects_v4101_verification_for_every_package_lane(self) -> None:
+        self.assert_patch_requires_current_verification("v4.10.3", "v4.10.1")
+
+    def test_v4103_rejects_v4102_verification_for_every_package_lane(self) -> None:
+        self.assert_patch_requires_current_verification("v4.10.3", "v4.10.2")
+
+    def test_older_patch_bundles_cannot_be_relabelled_as_v4103(self) -> None:
+        for release in ("v4.10.1", "v4.10.2"):
+            with self.subTest(release=release):
+                self.use_patch_product(release)
+                output = self.root / ("bundle-" + release)
+                self.assertEqual(bundle.main(self.finalize_arguments(output)), 0)
+                with self.assertRaises(bundle.SigningBundleError):
+                    bundle.verify_bundle(output, "v4.10.3", self.release_sha)
+
     def test_old_product_cannot_be_relabelled_as_reviewed_patch(self) -> None:
         output = self.root / "bundle"
         self.assertEqual(bundle.main(self.finalize_arguments(output)), 0)
-        for release in ("v4.10.1", "v4.10.2"):
+        for release in ("v4.10.1", "v4.10.2", "v4.10.3"):
             with self.subTest(release=release), self.assertRaises(bundle.SigningBundleError):
                 bundle.verify_bundle(output, release, self.release_sha)
 
@@ -848,7 +875,7 @@ class NativePackageSigningBundleTests(unittest.TestCase):
             bundle.verify_bundle(output, "v4.10.2", self.release_sha)
 
     def test_unreviewed_product_versions_remain_rejected(self) -> None:
-        for release in ("v4.10.3", "v4.11.0", "v5.00.0", "4.10.2", "v4.10.02", ""):
+        for release in ("v4.10.4", "v4.11.0", "v5.00.0", "4.10.3", "v4.10.03", ""):
             with self.subTest(release=release):
                 for operation in (bundle.package_names, bundle.rhel_package_owned_name):
                     with self.assertRaisesRegex(bundle.SigningBundleError, "not been reviewed"):
