@@ -169,7 +169,7 @@ if absent "$marker"; then
 fi
 
 exact_regular "$marker" 600 71 \
-    d773345917080a2ba51781517be024ef79958e051c4fd521c9c294629500408e
+    6f176a3ebcc42106f358faefe5e1905a77661d9d70ad36578f9aeea8b97c6237
 
 if ! absent /var/lib/syswarden; then
     exact_directory /var/lib/syswarden 750
@@ -228,7 +228,7 @@ fi
 /usr/bin/timeout 30 /usr/bin/sync || fail 'Cannot make post-uninstall cleanup durable.'
 
 exact_regular "$marker" 600 71 \
-    d773345917080a2ba51781517be024ef79958e051c4fd521c9c294629500408e
+    6f176a3ebcc42106f358faefe5e1905a77661d9d70ad36578f9aeea8b97c6237
 /usr/bin/rm -f -- "$marker"
 absent "$marker" || fail 'Erase-ready marker remains after post-uninstall recovery.'
 /usr/bin/sync -f -- /var/lib

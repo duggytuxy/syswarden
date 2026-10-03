@@ -192,7 +192,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "6827907cbdfa25c39fe79b2d30e1faa34b9980abae4330c75495fc8d9d128608",
+      "sha256": "3f48cb07b86f85987d6c6242d5fd26d0251ced64896c1b5e1008dae9935720b9",
       "rpm_ownership": "payload",
       "rpm_package": "syswarden",
       "role": "rpm-postun-recovery"
@@ -205,7 +205,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "ec31752aa737f01239cefa0faef7c2c7507454dfad5cf50ec511ee5436edb478",
+      "sha256": "bed69e150f2c31496e1ce8e21290f87a4b6f1ba881e438d1ac7d1cfc1a47ca30",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-pre-install"
@@ -218,7 +218,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "1588f5a9be8fa0266dfb74deacb76d250fb0e9030ff28d95f6b6f0e50c17e2b3",
+      "sha256": "c44db374e3e1a14ac480dc29e1aababce81c1bd30b07bca26c4b4884f1d59395",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-post-install"
@@ -231,7 +231,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "cd007035dedbaaf23118e327bddcda6fbc9dd8e791a3d82cf9a13e25fa344cbe",
+      "sha256": "65579393aaadd849f8c023c348213ada0cd88a2d30c0f5efc76fc6d4b063f92b",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-pre-uninstall"
@@ -244,7 +244,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "da2d33d76bd9835f982971d29dfa8b9caa932371a9695ee4cb98688824328f18",
+      "sha256": "abedc5279525de8a5c843a37040c534ddad42174bc00b6775ce383ec4110fb8a",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-post-uninstall"

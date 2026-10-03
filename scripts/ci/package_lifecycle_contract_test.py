@@ -40,6 +40,7 @@ ALPINE_CRONIE_PREFLIGHT_HELPER = (
 SYSTEMD_ORDERING_PREFLIGHT_HELPER = (
     REPOSITORY / "scripts" / "ci" / "package_systemd_ordering_preflight.sh"
 )
+WIREGUARD_PREFLIGHT_HELPER = REPOSITORY / "scripts" / "ci" / "package_wireguard_preflight.sh"
 REMOVAL_STATE_HELPER = REPOSITORY / "scripts" / "ci" / "package_removal_state.sh"
 SERVICE_SOURCE = REPOSITORY / "src" / "core" / "syswarden-cli" / "pkg" / "system" / "service_linux.go"
 DEPENDENCIES_SOURCE = (
@@ -144,6 +145,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
             if name == "preinst.sh":
                 prefix += SYSTEMD_ORDERING_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+                prefix += WIREGUARD_PREFLIGHT_HELPER.read_text(encoding="utf-8").replace(
+                    "!= 0:0", f"!= {os.getuid()}:{os.getgid()}"
+                )
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
             body = prefix + body
@@ -214,6 +218,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
             if name == "preinst.sh":
                 prefix += SYSTEMD_ORDERING_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+                prefix += WIREGUARD_PREFLIGHT_HELPER.read_text(encoding="utf-8").replace(
+                    "!= 0:0", f"!= {os.getuid()}:{os.getgid()}"
+                )
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
             body = prefix + body
@@ -1954,6 +1961,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     "syswarden_classify_service_manager / openrc",
                     "printf '%s\\n' ACTIVE",
                 )
+                prefix = prefix.replace(
+                    "syswarden_preflight_wireguard /\n",
+                    f"syswarden_preflight_wireguard '{mock_bin}'\n",
+                )
                 probe = prefix + "printf '%s\\n' partial-configuration-reached; exit 97\n"
                 return subprocess.run(
                     ["/bin/sh", "-c", probe, f"{apk_script}-contract", "4.3.3"],
@@ -2343,6 +2354,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 executable = script.replace(
                     "/var/lib/.syswarden-removal-finalizing-v1", str(finalizing)
                 ).replace("/var/lib/syswarden", str(state_root))
+                executable = executable.replace(
+                    "syswarden_preflight_wireguard /\n",
+                    f"syswarden_preflight_wireguard '{root}'\n",
+                )
                 executable = executable.replace(
                     "[ ! -L /var/lib ] && [ -d /var/lib ]",
                     f"[ ! -L {parent} ] && [ -d {parent} ]",

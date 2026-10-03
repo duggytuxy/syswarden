@@ -9,11 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"syswarden-cli/pkg/wireguardstate"
 )
 
 // A failed list-chain command is never interpreted as absence. The successful
 // complete chain inventory must first prove absence, or bind the target handle.
-func (host legacyWireGuardRecoveryHost) inspectRetirementForwardRules(ctx context.Context) (map[string][]LegacyWireGuardForwardRuleEvidence, uint64, error) {
+func (host legacyWireGuardRecoveryHost) inspectRetirementForwardRules(ctx context.Context, owned ...wireguardstate.ServerConfigurationIdentity) (map[string][]LegacyWireGuardForwardRuleEvidence, uint64, error) {
 	empty := map[string][]LegacyWireGuardForwardRuleEvidence{"wg0": {}, "wg-syswarden": {}}
 	wire, err := host.nftRunner.Run(ctx, "-a", "-j", "list", "chains")
 	if err != nil {
@@ -33,6 +34,13 @@ func (host legacyWireGuardRecoveryHost) inspectRetirementForwardRules(ctx contex
 	currentHandle, err := retirementForwardChainHandle(wire)
 	if err != nil || currentHandle != handle {
 		return nil, 0, errors.Join(fmt.Errorf("shared forward chain changed during retirement inspection"), err)
+	}
+	if len(owned) == 1 && owned[0].SharedForward {
+		_, filtered, err := parseWireGuardSharedForward(wire, owned[0].OwnershipToken)
+		if err != nil {
+			return nil, 0, err
+		}
+		wire = filtered
 	}
 	rules, err := matchingLegacyWireGuardForwardRules(wire)
 	return rules, handle, err

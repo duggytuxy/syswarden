@@ -76,6 +76,7 @@ type ServerConfigurationIdentity struct {
 	TruePath        string
 	OwnershipToken  string
 	ActiveInterface string
+	SharedForward   bool
 }
 
 // Artifact records the exact file identity accepted as SysWarden-owned.
@@ -366,7 +367,8 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp has an invalid masquerade interface")
 	}
 	expectedPostUp := fmt.Sprintf(`%s 'create table inet syswarden_wg { comment "syswarden-wg-v1:%s"; }; add chain inet syswarden_wg prerouting { type nat hook prerouting priority dstnat; }; add chain inet syswarden_wg postrouting { type nat hook postrouting priority srcnat; }; add chain inet syswarden_wg forward { type filter hook forward priority 0; policy accept; }; add rule inet syswarden_wg postrouting oifname "%s" masquerade; add rule inet syswarden_wg forward iifname "wg-syswarden" accept; add rule inet syswarden_wg forward oifname "wg-syswarden" accept'`, nftPath, ownershipToken, activeInterface)
-	if postUp != expectedPostUp {
+	sharedForward := postUp == strings.TrimSuffix(expectedPostUp, "'")+SharedForwardPostUpSuffix(ownershipToken)+"'"
+	if postUp != expectedPostUp && !sharedForward {
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp is not the exact owned nftables hook")
 	}
 	postDown, err := exactConfigurationValue(lines[5], "PostDown = ")
@@ -403,7 +405,7 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard peer AllowedIPs is not the canonical second subnet host")
 	}
 	return ServerConfigurationIdentity{
-		NFTPath: nftPath, TruePath: truePath, OwnershipToken: ownershipToken, ActiveInterface: activeInterface,
+		NFTPath: nftPath, TruePath: truePath, OwnershipToken: ownershipToken, ActiveInterface: activeInterface, SharedForward: sharedForward,
 	}, nil
 }
 
@@ -636,7 +638,7 @@ func recordFromFile(logical string, info os.FileInfo, digest [sha256.Size]byte, 
 }
 
 func captureAt(directory *pinnedDirectory, name, logical string, expectedUID, expectedGID uint32, limit int64) (Artifact, []byte, error) {
-	fd, err := unix.Openat(int(directory.file.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	fd, err := unix.Openat(int(directory.file.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return Artifact{}, nil, err
 	}
@@ -980,6 +982,9 @@ func stageEntry(root, logical, stageName, quarantineName string, content []byte,
 // same-directory staging files. A durable bounded journal is published before
 // the first private file is created so interrupted work can be recovered.
 func StageOwnedArtifacts(root string, contents map[string][]byte, expectedUID, expectedGID uint32) (*StagedPublication, error) {
+	if err := preflightLegacyMigration(root); err != nil {
+		return nil, err
+	}
 	if len(contents) != len(canonicalArtifactPaths) {
 		return nil, fmt.Errorf("WireGuard staging requires the exact generated-artifact inventory")
 	}
@@ -1898,6 +1903,13 @@ func AnyOwnedArtifactExists(root string) (bool, error) {
 // Inspect returns a bounded no-follow inventory. Unsafe file types still count
 // as present so callers cannot misclassify partial or hostile state as absent.
 func Inspect(root string) (Inventory, error) {
+	if err := preflightLegacyMigration(root); err != nil {
+		return Inventory{}, err
+	}
+	return inspectInventory(root)
+}
+
+func inspectInventory(root string) (Inventory, error) {
 	var inventory Inventory
 	for _, logical := range canonicalArtifactPaths {
 		present, err := inventoryLogicalExists(root, logical)
@@ -2518,6 +2530,9 @@ func recoverTransaction(
 // immediate removal. A removal that carries an external-reload debt is never
 // consumed through this general API.
 func Recover(root string, expectedUID, expectedGID uint32) (bool, error) {
+	if err := preflightLegacyMigration(root); err != nil {
+		return false, err
+	}
 	return recoverTransaction(root, expectedUID, expectedGID, recoverGeneralTransaction)
 }
 
@@ -2525,6 +2540,9 @@ func Recover(root string, expectedUID, expectedGID uint32) (bool, error) {
 // external-reload debt. Publication and immediate-removal journals are never
 // mutated through this API.
 func RecoverRemoval(root string, expectedUID, expectedGID uint32) (bool, error) {
+	if err := preflightLegacyMigration(root); err != nil {
+		return false, err
+	}
 	return recoverTransaction(root, expectedUID, expectedGID, recoverRemovalTransactionOnly)
 }
 
@@ -2673,6 +2691,9 @@ func verifyRemovalJournalComplete(
 // only removal work. The caller must reload the affected runtime state and then
 // call FinalizeRemoval.
 func PrepareRemoval(root string, expectedUID, expectedGID uint32) (bool, error) {
+	if err := preflightLegacyMigration(root); err != nil {
+		return false, err
+	}
 	operation, transactionPresent, err := InspectTransaction(root, expectedUID, expectedGID)
 	if err != nil {
 		return false, err
@@ -2723,6 +2744,9 @@ func PrepareRemoval(root string, expectedUID, expectedGID uint32) (bool, error) 
 // after the caller has successfully reloaded the external runtime state. The
 // journal is retained if any generated final, quarantine, or scratch remains.
 func FinalizeRemoval(root string, expectedUID, expectedGID uint32) (bool, error) {
+	if err := preflightLegacyMigration(root); err != nil {
+		return false, err
+	}
 	operation, present, err := InspectTransaction(root, expectedUID, expectedGID)
 	if err != nil {
 		return false, err
@@ -2759,10 +2783,19 @@ func FinalizeRemoval(root string, expectedUID, expectedGID uint32) (bool, error)
 // Callers that require an external runtime reload must use PrepareRemoval and
 // FinalizeRemoval instead so interruption cannot lose the reload debt.
 func RemoveOwnedArtifacts(root string, expectedUID, expectedGID uint32) error {
+	if err := preflightLegacyMigration(root); err != nil {
+		return err
+	}
 	if _, err := Recover(root, expectedUID, expectedGID); err != nil {
 		return fmt.Errorf("recover prior WireGuard transaction before removal: %w", err)
 	}
 	return beginOwnedArtifactRemoval(
 		root, expectedUID, expectedGID, TransactionOperationRemove, false,
 	)
+}
+
+// SharedForwardPostUpSuffix restores the two historical allowances in the
+// existing operator chain. The caller must first validate the ownership token.
+func SharedForwardPostUpSuffix(token string) string {
+	return fmt.Sprintf(`; insert rule inet filter forward iifname "wg-syswarden" accept comment "syswarden-wg-forward-v1:%s"; insert rule inet filter forward oifname "wg-syswarden" accept comment "syswarden-wg-forward-v1:%s"`, token, token)
 }

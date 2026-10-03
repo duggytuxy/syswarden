@@ -28,6 +28,7 @@ type LegacyWireGuardRetirementPlan struct {
 	Schema                     string                                          `json:"schema"`
 	State                      string                                          `json:"state"`
 	Configuration              LegacyWireGuardFileEvidence                     `json:"historical_configuration"`
+	LegacyGenerated            []LegacyWireGuardFileEvidence                   `json:"historical_generated_artifacts,omitempty"`
 	Ownership                  LegacyWireGuardOwnershipEvidence                `json:"current_ownership"`
 	ServiceManager             string                                          `json:"service_manager"`
 	HistoricalService          LegacyWireGuardServiceEvidence                  `json:"historical_service"`
@@ -51,18 +52,7 @@ func retirementDigest(wire []byte) string {
 }
 
 func historicalWG0Egress(configuration []byte) (string, error) {
-	// Extract only a candidate interface. Full historical-template validation
-	// below proves every byte, including both hooks, before trusting it.
-	const prefix = `nft 'add rule inet syswarden_wg postrouting oifname "`
-	_, tail, found := strings.Cut(string(configuration), prefix)
-	candidate, _, closed := strings.Cut(tail, `" masquerade'`)
-	if !found || !closed || !wireGuardInterfaceName.MatchString(candidate) {
-		return "", fmt.Errorf("historical wg0 egress cannot be proved from the exact generated hook")
-	}
-	if err := validateHistoricalWireGuardConfiguration(configuration, "wg0", candidate); err != nil {
-		return "", err
-	}
-	return candidate, nil
+	return historicalWireGuardEgress(configuration, "wg0")
 }
 
 func retirementServiceBlockers(label string, service LegacyWireGuardServiceEvidence, present bool) []string {
@@ -103,8 +93,13 @@ func (host legacyWireGuardRecoveryHost) inspectRetirement() (LegacyWireGuardReti
 	if inventory.Transaction {
 		return plan, fmt.Errorf("resume the pending verified WireGuard ownership transaction before historical retirement")
 	}
+	var historicalGenerated *legacyWireGuardGeneratedState
 	if !inventory.Empty() && !inventory.Manifest {
-		return plan, fmt.Errorf("current WireGuard artifacts lack an ownership manifest; preserve them for separate verified recovery")
+		generated, err := inspectLegacyWireGuardGeneratedState(host.filesystemRoot, host.expectedUID, host.expectedGID)
+		if err != nil {
+			return plan, fmt.Errorf("current WireGuard artifacts lack an ownership manifest and cannot be proved as exact historical generated state; preserve them for separate verified recovery: %w", err)
+		}
+		historicalGenerated = &generated
 	}
 	ownership, err := inspectLegacyWireGuardOwnership(host.filesystemRoot, host.expectedUID, host.expectedGID)
 	if err != nil {
@@ -136,6 +131,9 @@ func (host legacyWireGuardRecoveryHost) inspectRetirement() (LegacyWireGuardReti
 	egress, err := historicalWG0Egress(configuration.content)
 	if err != nil {
 		return plan, fmt.Errorf("refuse unproven historical wg0 retirement: %w", err)
+	}
+	if historicalGenerated != nil && historicalGenerated.input.ActiveIf != egress {
+		return plan, fmt.Errorf("historical WireGuard generations disagree on the reserved table egress")
 	}
 	configuration.evidence.Source = "exact-historical-config"
 	serviceManager, historicalService, historicalPresent, err := host.inspectHistoricalService("wg0")
@@ -179,7 +177,11 @@ func (host legacyWireGuardRecoveryHost) inspectRetirement() (LegacyWireGuardReti
 		}
 		tableDigest = retirementDigest(wire)
 	}
-	matches, chainHandle, err := host.inspectRetirementForwardRules(ctx)
+	var currentIdentities []wireguardstate.ServerConfigurationIdentity
+	if ownership.modernIdentity != nil {
+		currentIdentities = append(currentIdentities, *ownership.modernIdentity)
+	}
+	matches, chainHandle, err := host.inspectRetirementForwardRules(ctx, currentIdentities...)
 	if err != nil {
 		return plan, err
 	}
@@ -190,7 +192,7 @@ func (host legacyWireGuardRecoveryHost) inspectRetirement() (LegacyWireGuardReti
 		}
 		matches[iface] = rules
 	}
-	if len(matches["wg-syswarden"]) != 0 && ownership.modernIdentity == nil {
+	if len(matches["wg-syswarden"]) != 0 && ownership.modernIdentity == nil && historicalGenerated == nil {
 		return plan, fmt.Errorf("shared current WireGuard rules lack a verified current manifest")
 	}
 	if state == "retired" && (tableAction == "delete-exact-legacy" || len(matches["wg0"]) != 0 || len(matches["wg-syswarden"]) != 0) {
@@ -210,6 +212,9 @@ func (host legacyWireGuardRecoveryHost) inspectRetirement() (LegacyWireGuardReti
 		TableAction: tableAction, TableHandle: handle, TableSHA256: tableDigest, ForwardChainHandle: chainHandle, ForwardRules: matches,
 		ArchivePath: legacyWireGuardArchivePath, ArchiveDirectory: archiveDirectory,
 		SafeToApply: len(blockers) == 0, Blockers: blockers,
+	}
+	if historicalGenerated != nil {
+		plan.LegacyGenerated = historicalGenerated.evidence()
 	}
 	return plan, nil
 }

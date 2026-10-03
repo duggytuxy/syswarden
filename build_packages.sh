@@ -614,9 +614,11 @@ cat "${SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > preinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> preinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> preinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_preflight.sh" >> preinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_wireguard_preflight.sh" >> preinst.sh
 cat << 'EOF' >> preinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
+syswarden_preflight_wireguard /
 syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
 syswarden_preflight_systemd_ordering_dropin
