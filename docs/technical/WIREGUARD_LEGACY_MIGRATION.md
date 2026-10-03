@@ -1,7 +1,8 @@
 # Historical WireGuard migration without an ownership manifest
 
-Status: v4.10.3 candidate implementation. Native first-hop acceptance and
-version-specific Patch IVV are pending. This document does not authorize a tag
+Status: v4.10.3 candidate implementation. The unsigned Debian 13 native
+[rehearsal](WIREGUARD_LEGACY_NATIVE_V4.10.3.md) covers both historical upgrade
+entry points. Protected signing and version-specific Patch IVV remain pending. This document does not authorize a tag
 or publication. The public stable release remains v4.10.2 until verified
 publication. Current public instructions belong at
 [syswarden.io/docs](https://syswarden.io/docs/).
@@ -143,6 +144,32 @@ When removal was the intended operation and a removal barrier remains, resume
 native package removal after verified migration. Do not delete the barrier or
 use direct CLI uninstall against a registered package. Keep private backups
 until the operator verifies the intended outcome.
+
+### A hardened temporary directory can block the old updater retry
+
+The v4.02.8 updater downloads to the fixed path `/tmp/syswarden.deb` and changes
+its owner to `_apt`. After a rejected upgrade, that file can remain present.
+With `fs.protected_regular` enabled, a later invocation by root can fail before
+package installation with `open /tmp/syswarden.deb: permission denied`.
+This error does not invalidate a completed WireGuard migration. The old updater
+also prints some failures while returning zero, so verify dpkg state and the
+installed executable independently.
+
+Keep the temporary-directory protections enabled. After the reviewed WireGuard
+recovery, resume using the independently verified v4.10.3 package from its
+separate staging path:
+
+```sh
+sudo apt-get install /absolute/path/to/verified/syswarden_4.10.3_amd64.deb
+dpkg-query -W -f='${Status} ${Version}\n' syswarden
+```
+
+Replace the example path with the actual verified package. Retain the old
+download as private evidence if needed; do not use broad temporary-file cleanup
+or change the ownership of unrelated files. The first-hop laboratory rehearsal
+also verifies an unchanged old updater retry after archiving only its exact,
+checksum-verified stale download. That explicit laboratory step is not an
+automatic cleanup performed by the recovery command.
 
 ## Required acceptance before publication
 
