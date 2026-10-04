@@ -67,7 +67,7 @@ remains mandatory on the exact GitHub candidate or merged SHA.
 | `scorecard.yml` | Workflow and policy contract tests | GitHub repository posture, Scorecard service result and SARIF publication |
 | `compliance.yml` | Workflow and policy contract tests | Plumber service execution, GitHub OIDC result and remote score publication |
 | `release-qualification.yml` | Optional native lifecycle, kernel and evidence-schema rehearsal when matching hardware and inputs exist | Protected environment review, ephemeral runner identity, authoritative run and artifact IDs, hosted sealing and exact reuse of the protected candidate updater material |
-| `release-ivv.yml`, `release-ivv-v4101.yml`, `release-ivv-v4102.yml` | Pinned private-proof integrity, selective continuity review, native publishing signatures, original binary bundle/SBOM, current updater and rejection tests | Exact owner-approved main producer, private ephemeral runner, GitHub attestation, unique immutable result and independent IVV consumers at all three publication boundaries |
+| `release-ivv.yml`, `release-ivv-v4101.yml`, `release-ivv-v4102.yml`, `release-ivv-v4103.yml` | Pinned private-proof integrity, selective continuity review, native publishing signatures, original binary bundle/SBOM, current updater and rejection tests | Exact owner-approved main producer, private ephemeral runner, GitHub attestation, unique immutable result and independent IVV consumers at all three publication boundaries |
 | `release-manager.yml` | Static release gates, version and signature checks, asset inventory and non-mutating negative tests | Ruleset revalidation, protected dispatch, tag creation, production approval and public Release publication |
 
 ## Candidate-bound Act event
@@ -376,3 +376,11 @@ their own protected approvals.
 The [release validation policy](RELEASE_VALIDATION_POLICY.md) distinguishes **IVVQ** (Integration, Verification, Validation and Qualification) for `Upgrade` generation changes from **IVV** (Integration, Verification and Validation) for `Patch`, `Minor` and `Major` intermediate changes. Use `./scripts/versioning.sh release-track --repo . --tag <version>` before creating a tag to identify the originating transition, including across corrective PRs. This classification is recorded by CI but does not satisfy acceptance or authorize publication. The intermediate evidence and publishing contract must be integrated separately; existing qualification and signing gates are still enforced.
 
 For v4.10.1, the [Patch IVV plan](../qualification/INTERMEDIATE_ACCEPTANCE_V4.10.1.md) binds the signed product and original native observations separately. Run the exact `release-ivv-v4101.yml` producer after its reviewed tooling merge and exact-main checks. Its acceptance cannot be inferred from native signing or the older v4.10.0 report. `Upgrade` releases retain the complete IVVQ producer and consumers.
+
+For v4.10.3, use the separately reviewed
+[Patch IVV plan](../qualification/INTERMEDIATE_ACCEPTANCE_V4.10.3.md) and
+`release-ivv-v4103.yml`. The fresh signed-product campaign includes the actual
+historical updater, official half-configured recovery, original VPN client
+preservation and real filesystem device renumbering. The producer verifies all
+305 private native files and final baseline restoration. Its exact protected
+acceptance is required before tagging. Previous IVV verdicts remain unchanged.
