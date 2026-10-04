@@ -485,13 +485,6 @@ func attestExactSystemdPackageDropInWithDPKGOwner(
 	return path + "#" + fmt.Sprintf("%x", digest) + "#" + firstPackageEvidence, nil
 }
 
-func attestSysWardenSystemdDropInPackageOwnership(
-	executor firewallManagerExecutor,
-	path string,
-) (string, error) {
-	return attestSysWardenSystemdDropInPackageOwnershipWithDPKGOwner(executor, path, parseSysWardenDPKGDropInOwner)
-}
-
 func attestSysWardenSystemdDropInPackageOwnershipWithDPKGOwner(
 	executor firewallManagerExecutor,
 	path string,

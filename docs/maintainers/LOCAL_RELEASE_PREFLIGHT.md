@@ -359,7 +359,14 @@ half-configured v4.10.2 state before service migration: exact historical units,
 staged recovery across the package-version boundary, historical rsyslog bridge,
 preservation of customized artifacts and native removal retry. The
 [historical removal regression](../technical/HISTORICAL_PACKAGE_REMOVAL.md)
-must pass with the final signed product. The unsigned
+must pass with the final signed product. Also exercise fresh installation and
+reinstallation with valid independent OSINT HTTPS sources whose intersection
+is below the publication minimum. Require successful package configuration,
+an explicit warning, preservation of the attested Data-Shield snapshot and
+unrelated firewall policy, and rejection of malformed sources. Explicit
+refresh must still report insufficient corroboration, as specified in the
+[OSINT lifecycle regression](../technical/OSINT_INSTALL_AVAILABILITY.md).
+The unsigned
 [native rehearsal](../technical/WIREGUARD_LEGACY_NATIVE_V4.10.3.md) supports
 implementation review only. It cannot establish protected acceptance for the
 merged signed product. Original v4.10.0, v4.10.1 and v4.10.2 tags, plans,

@@ -9,7 +9,9 @@ Publication hold: the protected run
 failed native RPM verification because the tracked verifier lacked the candidate
 RPM anchors. No protected acceptance was issued. A subsequent
 [historical package-removal regression](../technical/HISTORICAL_PACKAGE_REMOVAL.md)
-also requires a runtime correction. The identities and observations below
+and an independently reproduced
+[OSINT installation availability regression](../technical/OSINT_INSTALL_AVAILABILITY.md)
+also require runtime corrections. The identities and observations below
 remain bound to their original product. New reviewed source, signatures, native
 observations and a revised IVV plan are required; this plan cannot accept the
 changed product.

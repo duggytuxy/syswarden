@@ -49,6 +49,7 @@ var (
 	errUnauthenticatedASNFeed = errors.New("unauthenticated RADB WHOIS data is non-authoritative for firewall policy")
 	errNonPublicFeedPrefix    = errors.New("non-public or special-use prefix")
 	errFeedMirrorQuorum       = errors.New("feed mirror quorum unavailable")
+	errOSINTIntersection      = errors.New("OSINT canonical intersection unavailable")
 	reservedFeedPrefixes      = []netip.Prefix{
 		netip.MustParsePrefix("0.0.0.0/8"),
 		netip.MustParsePrefix("10.0.0.0/8"),
@@ -2333,9 +2334,13 @@ func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listCho
 		fmt.Println("Downloading Free OSINT Feeds (CINS & Blocklist.de)... SKIPPED")
 	default:
 		fmt.Printf("Downloading Free OSINT Feeds (CINS & Blocklist.de)... ")
-		if err := DownloadOSINT(ctx, "/etc/syswarden/lists/syswarden_threatintel"); err != nil {
+		published, err := downloadOSINTForLifecycle(ctx, "/etc/syswarden/lists/syswarden_threatintel", purpose)
+		if err != nil {
 			fmt.Printf("FAILED (%v)\n", err)
 			feedErrors = append(feedErrors, fmt.Errorf("OSINT feeds: %w", err))
+		} else if !published {
+			fmt.Println("SKIPPED (validated sources have fewer than 4 common entries; no OSINT entries published)")
+			_, _ = fmt.Fprintln(os.Stderr, "[WARNING] The optional OSINT supplement is unavailable. Existing feed snapshots were left unchanged by this step; the hourly updater will retry.")
 		} else {
 			fmt.Println("OK")
 		}
@@ -2346,16 +2351,52 @@ func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listCho
 
 // DownloadOSINT publishes only entries independently present at every configured OSINT origin.
 func DownloadOSINT(ctx context.Context, destBase string) error {
+	_, err := downloadOSINTForLifecycle(ctx, destBase, feedDownloadExplicitUpdate)
+	return err
+}
+
+func downloadOSINTForLifecycle(ctx context.Context, destBase string, purpose feedDownloadPurpose) (bool, error) {
 	v4Target, err := approvedFeedFileForPath(destBase+".ipv4", ".ipv4")
 	if err != nil {
-		return err
+		return false, err
 	}
 	v6Target, err := approvedFeedFileForPath(destBase+".ipv6", ".ipv6")
 	if err != nil {
-		return err
+		return false, err
 	}
 	urls := osintThreatIntelSources()
-	return downloadOSINTWithClient(ctx, &http.Client{Timeout: feedHTTPTimeout}, urls, v4Target, v6Target, 4)
+	return downloadOSINTForLifecycleWithClient(ctx, &http.Client{Timeout: feedHTTPTimeout}, urls, v4Target, v6Target, 4, purpose)
+}
+
+// Only a validated, insufficient intersection is optional during installation.
+// The installer reconciles selected feed evidence before this step. Omitting
+// the supplement publishes nothing and does not alter any existing snapshot.
+// Explicit and hourly refreshes continue to report the unavailable intersection.
+func downloadOSINTForLifecycleWithClient(ctx context.Context, client *http.Client, urls []string, v4Target, v6Target feedFileTarget, minimumIntersectionEntries int, purpose feedDownloadPurpose) (bool, error) {
+	err := downloadOSINTWithClient(ctx, client, urls, v4Target, v6Target, minimumIntersectionEntries)
+	if err == nil {
+		return true, nil
+	}
+	if purpose != feedDownloadPackageInstall || !errors.Is(err, errOSINTIntersection) {
+		return false, err
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return false, fmt.Errorf("OSINT download context ended: %w", contextErr)
+	}
+	return false, nil
+}
+
+type osintIntersectionError struct {
+	entries int
+	minimum int
+}
+
+func (err osintIntersectionError) Error() string {
+	return fmt.Sprintf("OSINT canonical intersection has %d entries, minimum is %d", err.entries, err.minimum)
+}
+
+func (err osintIntersectionError) Unwrap() error {
+	return errOSINTIntersection
 }
 
 func downloadOSINTWithClient(ctx context.Context, client *http.Client, urls []string, v4Target, v6Target feedFileTarget, minimumIntersectionEntries int) error {
@@ -2397,7 +2438,7 @@ func downloadOSINTWithClient(ctx context.Context, client *http.Client, urls []st
 		}
 	}
 	if len(intersection) < minimumIntersectionEntries {
-		return fmt.Errorf("OSINT canonical intersection has %d entries, minimum is %d", len(intersection), minimumIntersectionEntries)
+		return osintIntersectionError{entries: len(intersection), minimum: minimumIntersectionEntries}
 	}
 	var ipv4Prefixes []netip.Prefix
 	var ipv6Prefixes []netip.Prefix
