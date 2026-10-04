@@ -59,6 +59,9 @@ func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBAC
 	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "before managed firewall services are stopped") {
 		t.Fatalf("uninstall preparation refusal = %v", err)
 	}
+	if !strings.Contains(err.Error(), "retry the original removal command") || strings.Contains(err.Error(), "sudo syswarden uninstall") {
+		t.Fatalf("service refusal redirects native package removal to standalone uninstall: %v", err)
+	}
 	if cronCalls != 0 || wireGuardCalls != 0 || cleanupCalls != 0 {
 		t.Fatalf("state cleanup ran after service preparation failure: cron=%d WireGuard=%d firewall=%d", cronCalls, wireGuardCalls, cleanupCalls)
 	}

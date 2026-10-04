@@ -337,6 +337,21 @@ func attestApprovedSystemdServiceDropIns(
 	executor firewallManagerExecutor,
 	dropIns string,
 ) (string, error) {
+	return attestSystemdServiceDropInsWithPackageAttestor(executor, dropIns, attestNormalSystemdPackageDropIn)
+}
+
+func attestNormalSystemdPackageDropIn(executor firewallManagerExecutor, path string) (string, error) {
+	if path == systemdCoreSocketCapabilityDropInPath {
+		return attestExactSystemdCoreSocketCapabilityDropIn(executor, path)
+	}
+	return attestExactSystemdFirewallOrderingDropIn(executor, path)
+}
+
+func attestSystemdServiceDropInsWithPackageAttestor(
+	executor firewallManagerExecutor,
+	dropIns string,
+	attestPackage func(firewallManagerExecutor, string) (string, error),
+) (string, error) {
 	if dropIns == "" {
 		return "", nil
 	}
@@ -364,13 +379,13 @@ func attestApprovedSystemdServiceDropIns(
 			}
 			evidence = append(evidence, item)
 		case systemdCoreSocketCapabilityDropInPath:
-			item, err := attestExactSystemdCoreSocketCapabilityDropIn(executor, path)
+			item, err := attestPackage(executor, path)
 			if err != nil {
 				return "", err
 			}
 			evidence = append(evidence, item)
 		case systemdFirewallWireGuardOrderingDropInPath:
-			item, err := attestExactSystemdFirewallOrderingDropIn(executor, path)
+			item, err := attestPackage(executor, path)
 			if err != nil {
 				return "", err
 			}
@@ -417,6 +432,22 @@ func attestExactSystemdPackageDropInAt(
 	expectedUID, expectedGID uint32,
 	expectedContent, description string,
 ) (string, error) {
+	return attestExactSystemdPackageDropInWithDPKGOwner(
+		executor, path, expectedPath, trustedRoot, expectedUID, expectedGID,
+		expectedContent, description, parseSysWardenDPKGDropInOwner,
+	)
+}
+
+func attestExactSystemdPackageDropInWithDPKGOwner(
+	executor firewallManagerExecutor,
+	path, expectedPath, trustedRoot string,
+	expectedUID, expectedGID uint32,
+	expectedContent, description string,
+	parseDPKGOwner func([]byte) (string, error),
+) (string, error) {
+	if parseDPKGOwner == nil {
+		return "", fmt.Errorf("SysWarden systemd drop-in owner parser is absent")
+	}
 	if path != expectedPath {
 		return "", fmt.Errorf("refusing unexpected SysWarden systemd %s drop-in %s", description, path)
 	}
@@ -432,7 +463,7 @@ func attestExactSystemdPackageDropInAt(
 	if string(first.content) != expectedContent {
 		return "", fmt.Errorf("refusing modified SysWarden systemd %s drop-in %s", description, path)
 	}
-	firstPackageEvidence, err := attestSysWardenSystemdDropInPackageOwnership(executor, path)
+	firstPackageEvidence, err := attestSysWardenSystemdDropInPackageOwnershipWithDPKGOwner(executor, path, parseDPKGOwner)
 	if err != nil {
 		return "", err
 	}
@@ -441,7 +472,7 @@ func attestExactSystemdPackageDropInAt(
 		!bytes.Equal(first.content, second.content) {
 		return "", fmt.Errorf("SysWarden systemd %s drop-in changed during attestation", description)
 	}
-	secondPackageEvidence, err := attestSysWardenSystemdDropInPackageOwnership(executor, path)
+	secondPackageEvidence, err := attestSysWardenSystemdDropInPackageOwnershipWithDPKGOwner(executor, path, parseDPKGOwner)
 	if err != nil || secondPackageEvidence != firstPackageEvidence {
 		return "", fmt.Errorf("SysWarden systemd %s drop-in package ownership changed during attestation", description)
 	}
@@ -454,9 +485,10 @@ func attestExactSystemdPackageDropInAt(
 	return path + "#" + fmt.Sprintf("%x", digest) + "#" + firstPackageEvidence, nil
 }
 
-func attestSysWardenSystemdDropInPackageOwnership(
+func attestSysWardenSystemdDropInPackageOwnershipWithDPKGOwner(
 	executor firewallManagerExecutor,
 	path string,
+	parseDPKGOwner func([]byte) (string, error),
 ) (string, error) {
 	var claims []string
 	var failures []string
@@ -477,7 +509,7 @@ func attestSysWardenSystemdDropInPackageOwnership(
 			)
 			if versionErr != nil {
 				failures = append(failures, "dpkg-query version failed")
-			} else if claim, parseErr := parseSysWardenDPKGDropInOwner(version); parseErr != nil {
+			} else if claim, parseErr := parseDPKGOwner(version); parseErr != nil {
 				failures = append(failures, "dpkg-query: "+parseErr.Error())
 			} else {
 				claims = append(claims, claim)

@@ -1061,25 +1061,23 @@ func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
 		hasWAFExpectation = true
 	}
 	if !hasWAFExpectation {
-		waf, _, renderErr := renderWAFRsyslogConfig(
-			activeConfig.ModsecLogs,
-			activeConfig.SiemEnabled,
-		)
-		if renderErr != nil {
-			options.warn(fmt.Sprintf("Preserving the WAF rsyslog bridge: cannot render expected bytes: %v", renderErr))
-		} else {
+		var alternatives [][]byte
+		waf, _, renderErr := renderWAFRsyslogConfig(activeConfig.ModsecLogs, activeConfig.SiemEnabled)
+		if renderErr == nil {
 			legacyWAF, _, legacyRenderErr := renderLegacyV4032WAFRsyslogConfig(activeConfig.ModsecLogs)
 			if legacyRenderErr != nil {
 				return legacyRenderErr
 			}
+			alternatives = append(alternatives, []byte(waf), []byte(legacyWAF))
+		}
+		if historical, err := renderHistoricalV4028WAFForRemoval(activeConfig.ModsecLogs); err == nil {
+			alternatives = append(alternatives, []byte(historical))
+		}
+		if len(alternatives) == 0 {
+			options.warn("Preserving the WAF rsyslog bridge: no exact generated variant can be reconstructed.")
+		} else {
 			selected, present, exact, selectErr := selectExactOwnedArtifactAlternativeInDirectory(
-				directory,
-				wafRsyslogConfigName,
-				"SysWarden WAF rsyslog bridge",
-				uid,
-				gid,
-				[]byte(waf),
-				[]byte(legacyWAF),
+				directory, wafRsyslogConfigName, "SysWarden WAF rsyslog bridge", uid, gid, alternatives...,
 			)
 			if selectErr != nil {
 				return fmt.Errorf("select exact WAF rsyslog variant before removal: %w", selectErr)
@@ -1088,7 +1086,7 @@ func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
 				wafExpectation = selected
 				hasWAFExpectation = true
 			} else if present {
-				options.warn("Preserving the WAF rsyslog bridge: bytes do not match the current or v4.03.2 generated variant.")
+				options.warn("Preserving the WAF rsyslog bridge: bytes do not match an exact current or supported historical generated variant.")
 			}
 		}
 	}

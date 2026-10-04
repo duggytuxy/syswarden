@@ -42,7 +42,7 @@ func prepareVerifiedFirewallRemoval() error {
 	}
 	if err := prepareFirewallStateForRemoval(); err != nil {
 		return fmt.Errorf(
-			"refusing removal before managed firewall services are stopped; the durable removal barrier is retained; inspect WireGuard evidence with 'sudo syswarden recover-wireguard' and retry 'sudo syswarden uninstall' after resolving the reported cause: %w",
+			"refusing removal before managed firewall services are stopped; the durable removal barrier is retained; resolve the reported service or runtime cause without deleting ownership evidence, then retry the original removal command: %w",
 			err,
 		)
 	}
@@ -54,7 +54,7 @@ func prepareVerifiedFirewallRemoval() error {
 	}
 	if err := removeOwnedWireGuardStateForRemoval(); err != nil {
 		return fmt.Errorf(
-			"refusing removal before exact WireGuard cleanup; the durable removal tombstone is retained; inspect exact historical state with 'sudo syswarden recover-wireguard' before explicit recovery, then retry 'sudo syswarden uninstall': %w",
+			"refusing removal before exact WireGuard cleanup; the durable removal tombstone is retained; inspect exact historical state with 'sudo syswarden recover-wireguard' before explicit recovery, then retry the original removal command: %w",
 			err,
 		)
 	}
