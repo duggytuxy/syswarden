@@ -46,12 +46,20 @@ type preparedSystemdServiceArtifactHost struct {
 }
 
 func productionPreparedSystemdServiceArtifactHost() (preparedSystemdServiceArtifactHost, error) {
-	content, err := selectedSystemdCoreServiceContent(hostFirewallExecutor())
+	content, err := selectedSystemdCoreRemovalContent(hostFirewallExecutor())
 	if err != nil {
 		return preparedSystemdServiceArtifactHost{}, err
 	}
 	corePath := filepath.Join(serviceSystemdUnitDir, "syswarden-core.service")
 	firewallPath := filepath.Join(serviceSystemdUnitDir, "syswarden-firewall.service")
+	content, err = selectExactSystemdRemovalContent(corePath, content, historicalSystemdCoreRemovalTemplates(), 0, 0)
+	if err != nil {
+		return preparedSystemdServiceArtifactHost{}, err
+	}
+	firewallContent, err := selectExactSystemdRemovalContent(firewallPath, systemdFirewallService, historicalSystemdFirewallRemovalTemplates(), 0, 0)
+	if err != nil {
+		return preparedSystemdServiceArtifactHost{}, err
+	}
 	return preparedSystemdServiceArtifactHost{
 		artifacts: []preparedSystemdServiceArtifact{
 			{
@@ -59,7 +67,7 @@ func productionPreparedSystemdServiceArtifactHost() (preparedSystemdServiceArtif
 				allowedModes: []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 			},
 			{
-				path: firewallPath, content: systemdFirewallService, mode: sourceSystemdUnitMode,
+				path: firewallPath, content: firewallContent, mode: sourceSystemdUnitMode,
 				allowedModes: []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 			},
 			{
@@ -85,18 +93,13 @@ func productionPreparedSystemdServiceArtifactHost() (preparedSystemdServiceArtif
 				mode: 0644, packageDropIn: true, optionalParent: true,
 			},
 		},
-		trustedRoot:     "/",
-		expectedUID:     0,
-		expectedGID:     0,
-		classifyRuntime: classifyServiceManagerRuntime,
-		executor:        hostFirewallExecutor(),
-		processScan:     scanExactRootSysWardenCLIMutators,
-		attestPackageDrop: func(executor firewallManagerExecutor, path string) (string, error) {
-			if path == systemdCoreSocketCapabilityDropInPath {
-				return attestExactSystemdCoreSocketCapabilityDropIn(executor, path)
-			}
-			return attestExactSystemdFirewallOrderingDropIn(executor, path)
-		},
+		trustedRoot:       "/",
+		expectedUID:       0,
+		expectedGID:       0,
+		classifyRuntime:   classifyServiceManagerRuntime,
+		executor:          hostFirewallExecutor(),
+		processScan:       scanExactRootSysWardenCLIMutators,
+		attestPackageDrop: attestExactSystemdRemovalDropIn,
 	}, nil
 }
 
@@ -645,6 +648,7 @@ func RemovePreparedServiceArtifactsForRemoval() error {
 			return err
 		}
 		coreContent := host.artifacts[0].content
+		firewallContent := host.artifacts[1].content
 		managerState, err := host.classifyRuntime(false)
 		if err != nil {
 			return fmt.Errorf("classify systemd runtime before exact service removal: %w", err)
@@ -673,7 +677,7 @@ func RemovePreparedServiceArtifactsForRemoval() error {
 		}
 		if err := removePreparedServiceEnablementModes(
 			"/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service",
-			"/etc/systemd/system/syswarden-firewall.service", systemdFirewallService,
+			"/etc/systemd/system/syswarden-firewall.service", firewallContent,
 			[]os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 			"../syswarden-firewall.service", "/etc/systemd/system/syswarden-firewall.service",
 		); err != nil {
@@ -686,7 +690,7 @@ func RemovePreparedServiceArtifactsForRemoval() error {
 			return err
 		}
 		if err := removePreparedExactServiceFileModes(
-			"/etc/systemd/system/syswarden-firewall.service", systemdFirewallService,
+			"/etc/systemd/system/syswarden-firewall.service", firewallContent,
 			[]os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
 		); err != nil {
 			return err

@@ -86,7 +86,7 @@ func productionFirewallRemovalPreparationHost() firewallRemovalPreparationHost {
 		attestSystemdUnit:          attestSystemdFirewallRemovalUnitFile,
 		attestRHELPackageOwned:     attestInstalledRHELPackageOwnedProfile,
 		attestRHELPackageUnit:      attestRHELPackageOwnedUnit,
-		attestSystemdDropIns:       attestApprovedSystemdServiceDropIns,
+		attestSystemdDropIns:       attestSystemdRemovalDropIns,
 		attestOpenRCUnit:           attestOpenRCFirewallRemovalUnit,
 		openRCUnitPresent:          inspectOpenRCFirewallRemovalUnitPresence,
 		attestOpenRCRunlevel:       attestOpenRCFirewallRemovalRunlevelLink,

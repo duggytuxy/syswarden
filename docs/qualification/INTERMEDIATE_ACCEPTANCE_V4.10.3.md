@@ -4,6 +4,16 @@ This plan defines intermediate Integration, Verification and Validation (IVV)
 for the v4.10.3 Patch. It does not grant acceptance by itself. Upgrade generation
 changes continue to require the full IVVQ track.
 
+Publication hold: the protected run
+[37188157105](https://github.com/duggytuxy/syswarden/actions/runs/37188157105)
+failed native RPM verification because the tracked verifier lacked the candidate
+RPM anchors. No protected acceptance was issued. A subsequent
+[historical package-removal regression](../technical/HISTORICAL_PACKAGE_REMOVAL.md)
+also requires a runtime correction. The identities and observations below
+remain bound to their original product. New reviewed source, signatures, native
+observations and a revised IVV plan are required; this plan cannot accept the
+changed product.
+
 ## Exact identities
 
 The frozen signed product is
