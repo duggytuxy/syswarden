@@ -152,6 +152,13 @@ func preflightDisabledWireGuard() error {
 // phase; a pending transaction must stop callers before they change firewall
 // policy.
 func inspectWireGuardStateForPreflight() (wireguardstate.Manifest, bool, error) {
+	for _, path := range []string{wireGuardFilesystemBindingPath, "/etc/wireguard/" + wireGuardFilesystemBindingStage} {
+		if pending, err := wireGuardPrivatePathPresent(path); err != nil {
+			return wireguardstate.Manifest{}, false, err
+		} else if pending {
+			return wireguardstate.Manifest{}, false, fmt.Errorf("pending WireGuard filesystem binding requires recovery during the mutation phase")
+		}
+	}
 	if pending, err := wireGuardForwardingTransitionPending(); err != nil {
 		return wireguardstate.Manifest{}, false, fmt.Errorf("inspect WireGuard forwarding transition: %w", err)
 	} else if pending {

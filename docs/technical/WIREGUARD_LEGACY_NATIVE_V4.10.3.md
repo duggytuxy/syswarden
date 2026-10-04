@@ -4,6 +4,17 @@ Status: unsigned candidate rehearsal on hardened Debian 13. Protected native
 signing and version-specific Patch IVV remain required before publication.
 These observations do not establish recovery on a reporter's production host.
 
+Publication hold: a later signed rehearsal of commit
+`1920f2065d6280d41211007895f969ea1f4fce36` failed its second scenario's reboot.
+The filesystem's device number changed while its UUID, generated file bytes,
+inodes and protected metadata remained unchanged. The original manifest used
+the device number as durable identity, so the firewall refused ownership
+verification at boot. This failed observation supersedes any inference of
+release readiness from the earlier unsigned rehearsal below. Its signatures
+and earlier successful stages remain evidence of those stages only. The
+[filesystem identity correction](WIREGUARD_FILESYSTEM_IDENTITY.md) requires
+new reviewed source, fresh signatures, native reboot tests and protected IVV.
+
 The tested implementation is commit
 `8ac3376302949e2788f952444965f60d3eba92bc`, with candidate DEB SHA-256
 `0533f6c65164f7a879acb5e86f87a651f675c6dce30df65d4c12a61255c44f6f`.

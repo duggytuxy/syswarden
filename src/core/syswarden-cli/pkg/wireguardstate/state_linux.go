@@ -82,14 +82,15 @@ type ServerConfigurationIdentity struct {
 // Artifact records the exact file identity accepted as SysWarden-owned.
 // Mode is the permission bit value, for example 384 for 0600.
 type Artifact struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
-	Mode   uint32 `json:"mode"`
-	UID    uint32 `json:"uid"`
-	GID    uint32 `json:"gid"`
-	NLink  uint64 `json:"nlink"`
-	Device uint64 `json:"device"`
-	Inode  uint64 `json:"inode"`
+	Path           string `json:"path"`
+	SHA256         string `json:"sha256"`
+	Mode           uint32 `json:"mode"`
+	UID            uint32 `json:"uid"`
+	GID            uint32 `json:"gid"`
+	NLink          uint64 `json:"nlink"`
+	Device         uint64 `json:"device"`
+	Inode          uint64 `json:"inode"`
+	FilesystemUUID string `json:"filesystem_uuid,omitempty"`
 }
 
 // Manifest is the canonical ownership envelope for the exact generated set.
@@ -102,13 +103,14 @@ type Manifest struct {
 // SymlinkArtifact binds a non-secret service link created by SysWarden. A nil
 // manifest field means an exact preexisting operator link was never adopted.
 type SymlinkArtifact struct {
-	Path   string `json:"path"`
-	Target string `json:"target"`
-	UID    uint32 `json:"uid"`
-	GID    uint32 `json:"gid"`
-	NLink  uint64 `json:"nlink"`
-	Device uint64 `json:"device"`
-	Inode  uint64 `json:"inode"`
+	Path           string `json:"path"`
+	Target         string `json:"target"`
+	UID            uint32 `json:"uid"`
+	GID            uint32 `json:"gid"`
+	NLink          uint64 `json:"nlink"`
+	Device         uint64 `json:"device"`
+	Inode          uint64 `json:"inode"`
+	FilesystemUUID string `json:"filesystem_uuid,omitempty"`
 }
 
 // Inventory is a no-follow presence inventory for the complete bounded state.
@@ -656,14 +658,26 @@ func captureAt(directory *pinnedDirectory, name, logical string, expectedUID, ex
 		_ = file.Close()
 		return Artifact{}, nil, err
 	}
+	filesystemUUID, err := readFilesystemUUID(fd)
+	if err != nil {
+		_ = file.Close()
+		return Artifact{}, nil, err
+	}
 	content, readErr := io.ReadAll(io.LimitReader(file, limit+1))
 	after, statErr := file.Stat()
+	afterUUID, uuidErr := readFilesystemUUID(fd)
 	closeErr := file.Close()
 	if readErr != nil {
 		return Artifact{}, nil, readErr
 	}
 	if statErr != nil {
 		return Artifact{}, nil, statErr
+	}
+	if uuidErr != nil {
+		return Artifact{}, nil, fmt.Errorf("reread owned artifact %s filesystem identity: %w", logical, uuidErr)
+	}
+	if filesystemUUID != afterUUID {
+		return Artifact{}, nil, fmt.Errorf("owned artifact %s filesystem identity changed while reading", logical)
 	}
 	if closeErr != nil {
 		return Artifact{}, nil, closeErr
@@ -686,6 +700,7 @@ func captureAt(directory *pinnedDirectory, name, logical string, expectedUID, ex
 	}
 	digest := sha256.Sum256(content)
 	record, err := recordFromFile(logical, after, digest, expectedUID, expectedGID)
+	record.FilesystemUUID = filesystemUUID
 	return record, content, err
 }
 
@@ -702,6 +717,14 @@ func captureSymlinkAt(
 		before.Gid != expectedGID || before.Nlink != 1 || before.Ino == 0 {
 		return SymlinkArtifact{}, fmt.Errorf("OpenRC WireGuard service link has an unsafe identity")
 	}
+	var parent unix.Stat_t
+	if err := unix.Fstat(int(directory.file.Fd()), &parent); err != nil || parent.Dev != before.Dev {
+		return SymlinkArtifact{}, fmt.Errorf("OpenRC WireGuard service link filesystem differs from its pinned parent")
+	}
+	filesystemUUID, err := readFilesystemUUID(int(directory.file.Fd()))
+	if err != nil {
+		return SymlinkArtifact{}, err
+	}
 	buffer := make([]byte, len(OpenRCServiceLinkTarget)+1)
 	count, err := unix.Readlinkat(int(directory.file.Fd()), name, buffer)
 	if err != nil {
@@ -716,10 +739,15 @@ func captureSymlinkAt(
 		before.Uid != after.Uid || before.Gid != after.Gid || before.Nlink != after.Nlink {
 		return SymlinkArtifact{}, fmt.Errorf("OpenRC WireGuard service link changed during attestation")
 	}
+	afterUUID, err := readFilesystemUUID(int(directory.file.Fd()))
+	if err != nil || afterUUID != filesystemUUID {
+		return SymlinkArtifact{}, fmt.Errorf("OpenRC WireGuard service link filesystem changed during attestation")
+	}
 	return SymlinkArtifact{
 		Path: OpenRCServiceLinkPath, Target: OpenRCServiceLinkTarget,
 		UID: after.Uid, GID: after.Gid, NLink: uint64(after.Nlink),
 		Device: uint64(after.Dev), Inode: after.Ino,
+		FilesystemUUID: filesystemUUID,
 	}, nil
 }
 
@@ -743,20 +771,28 @@ func InspectOpenRCServiceLink(root string, expectedUID, expectedGID uint32) (Sym
 	return artifact, true, nil
 }
 
-func sameSymlinkArtifact(left, right SymlinkArtifact) bool {
-	return left == right
+func sameSymlinkArtifact(actual, expected SymlinkArtifact) bool {
+	if !sameFilesystemIdentity(actual.Device, actual.FilesystemUUID, expected.Device, expected.FilesystemUUID) {
+		return false
+	}
+	actual.Device, actual.FilesystemUUID = expected.Device, expected.FilesystemUUID
+	return actual == expected
 }
 
 func validPlannedOrExactSymlink(artifact SymlinkArtifact, expectedUID, expectedGID uint32) bool {
 	if artifact.Path != OpenRCServiceLinkPath || artifact.Target != OpenRCServiceLinkTarget ||
-		artifact.UID != expectedUID || artifact.GID != expectedGID || artifact.NLink != 1 {
+		artifact.UID != expectedUID || artifact.GID != expectedGID || artifact.NLink != 1 || !validFilesystemUUID(artifact.FilesystemUUID) {
 		return false
 	}
 	return (artifact.Device == 0 && artifact.Inode == 0) || artifact.Inode != 0
 }
 
-func sameArtifact(left, right Artifact) bool {
-	return left == right
+func sameArtifact(actual, expected Artifact) bool {
+	if !sameFilesystemIdentity(actual.Device, actual.FilesystemUUID, expected.Device, expected.FilesystemUUID) {
+		return false
+	}
+	actual.Device, actual.FilesystemUUID = expected.Device, expected.FilesystemUUID
+	return actual == expected
 }
 
 func reflectManifestArtifacts(artifacts []Artifact, journalEntries []journalArtifact) bool {
@@ -783,6 +819,7 @@ func validateManifest(manifest *Manifest, expectedUID, expectedGID uint32) error
 		return fmt.Errorf("invalid WireGuard ownership manifest envelope")
 	}
 	identities := make(map[[2]uint64]struct{}, len(manifest.Artifacts))
+	persistentIdentities := make(map[string]struct{}, len(manifest.Artifacts))
 	for index, artifact := range manifest.Artifacts {
 		if artifact.Path != canonicalArtifactPaths[index] {
 			return fmt.Errorf("WireGuard ownership manifest has a noncanonical artifact inventory")
@@ -792,7 +829,7 @@ func validateManifest(manifest *Manifest, expectedUID, expectedGID uint32) error
 			return fmt.Errorf("WireGuard ownership manifest has an invalid SHA-256 digest for %s", artifact.Path)
 		}
 		if artifact.Mode != uint32(0600) || artifact.UID != expectedUID || artifact.GID != expectedGID ||
-			artifact.NLink != 1 || artifact.Inode == 0 {
+			artifact.NLink != 1 || artifact.Inode == 0 || !validFilesystemUUID(artifact.FilesystemUUID) {
 			return fmt.Errorf("WireGuard ownership manifest has invalid metadata for %s", artifact.Path)
 		}
 		identity := [2]uint64{artifact.Device, artifact.Inode}
@@ -800,6 +837,13 @@ func validateManifest(manifest *Manifest, expectedUID, expectedGID uint32) error
 			return fmt.Errorf("WireGuard ownership manifest aliases generated artifacts")
 		}
 		identities[identity] = struct{}{}
+		if artifact.FilesystemUUID != "" {
+			persistentIdentity := fmt.Sprintf("%s:%d", artifact.FilesystemUUID, artifact.Inode)
+			if _, duplicate := persistentIdentities[persistentIdentity]; duplicate {
+				return fmt.Errorf("WireGuard ownership manifest aliases filesystem-bound artifacts")
+			}
+			persistentIdentities[persistentIdentity] = struct{}{}
+		}
 	}
 	if manifest.OpenRCServiceLink != nil {
 		link := *manifest.OpenRCServiceLink
@@ -835,7 +879,7 @@ func validPlannedOrExactArtifact(artifact Artifact, expectedPath string, expecte
 		return false
 	}
 	if artifact.Path != expectedPath || artifact.Mode != uint32(0600) || artifact.UID != expectedUID ||
-		artifact.GID != expectedGID || artifact.NLink != 1 {
+		artifact.GID != expectedGID || artifact.NLink != 1 || !validFilesystemUUID(artifact.FilesystemUUID) {
 		return false
 	}
 	return (artifact.Device == 0 && artifact.Inode == 0) || artifact.Inode != 0

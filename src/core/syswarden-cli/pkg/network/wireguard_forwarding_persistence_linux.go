@@ -42,14 +42,15 @@ type wireGuardForwardingPersistenceState struct {
 }
 
 type wireGuardExactFile struct {
-	SHA256 string `json:"sha256"`
-	Mode   uint32 `json:"mode"`
-	UID    uint32 `json:"uid"`
-	GID    uint32 `json:"gid"`
-	NLink  uint64 `json:"nlink"`
-	Device uint64 `json:"device"`
-	Inode  uint64 `json:"inode"`
-	Size   int64  `json:"size"`
+	SHA256         string `json:"sha256"`
+	Mode           uint32 `json:"mode"`
+	UID            uint32 `json:"uid"`
+	GID            uint32 `json:"gid"`
+	NLink          uint64 `json:"nlink"`
+	Device         uint64 `json:"device"`
+	Inode          uint64 `json:"inode"`
+	Size           int64  `json:"size"`
+	FilesystemUUID string `json:"filesystem_uuid,omitempty"`
 }
 
 type wireGuardForwardingTransitionJournal struct {
@@ -149,18 +150,19 @@ func validWireGuardExactFile(identity wireGuardExactFile, maximum int64) bool {
 	return err == nil && len(digest) == sha256.Size && hex.EncodeToString(digest) == identity.SHA256 &&
 		identity.Mode == 0600 && identity.UID == wireGuardExpectedOwnerUID &&
 		identity.GID == wireGuardExpectedOwnerGID && identity.NLink == 1 &&
-		identity.Inode != 0 && identity.Size >= 0 && identity.Size <= maximum
+		identity.Inode != 0 && identity.Size >= 0 && identity.Size <= maximum &&
+		wireguardstate.ValidFilesystemUUID(identity.FilesystemUUID)
 }
 
-func sameWireGuardExactFile(left, right wireGuardExactFile) bool {
-	return left == right
+func sameWireGuardExactFile(actual, expected wireGuardExactFile) bool {
+	return actual.Size == expected.Size && wireguardstate.MatchesRecordedArtifact(
+		wireGuardArtifactFromExactFile(wireguardstate.ForwardingConfigurationPath, actual),
+		wireGuardArtifactFromExactFile(wireguardstate.ForwardingConfigurationPath, expected),
+	)
 }
 
 func wireGuardExactFileMatchesArtifact(identity wireGuardExactFile, artifact wireguardstate.Artifact) bool {
-	return identity.SHA256 == artifact.SHA256 && identity.Mode == artifact.Mode &&
-		identity.UID == artifact.UID && identity.GID == artifact.GID &&
-		identity.NLink == artifact.NLink && identity.Device == artifact.Device &&
-		identity.Inode == artifact.Inode
+	return wireguardstate.MatchesRecordedArtifact(wireGuardArtifactFromExactFile(artifact.Path, identity), artifact)
 }
 
 func wireGuardArtifactFromExactFile(path string, identity wireGuardExactFile) wireguardstate.Artifact {
@@ -168,6 +170,7 @@ func wireGuardArtifactFromExactFile(path string, identity wireGuardExactFile) wi
 		Path: path, SHA256: identity.SHA256, Mode: identity.Mode,
 		UID: identity.UID, GID: identity.GID, NLink: identity.NLink,
 		Device: identity.Device, Inode: identity.Inode,
+		FilesystemUUID: identity.FilesystemUUID,
 	}
 }
 
@@ -233,10 +236,15 @@ func readWireGuardExactFileAt(directory *os.File, name string, maximum int64) (w
 		return wireGuardExactFile{}, nil, false, fmt.Errorf("adopt exact WireGuard file %s", name)
 	}
 	info, statErr := file.Stat()
+	filesystemUUID, uuidErr := wireguardstate.CaptureFilesystemUUID(file)
 	content, readErr := io.ReadAll(io.LimitReader(file, maximum+1))
+	afterUUID, afterUUIDErr := wireguardstate.CaptureFilesystemUUID(file)
 	closeErr := file.Close()
-	if statErr != nil || readErr != nil || closeErr != nil {
-		return wireGuardExactFile{}, nil, false, errors.Join(statErr, readErr, closeErr)
+	if statErr != nil || readErr != nil || closeErr != nil || uuidErr != nil || afterUUIDErr != nil {
+		return wireGuardExactFile{}, nil, false, errors.Join(statErr, readErr, closeErr, uuidErr, afterUUIDErr)
+	}
+	if filesystemUUID != afterUUID {
+		return wireGuardExactFile{}, nil, false, fmt.Errorf("WireGuard file %s filesystem changed while reading", name)
 	}
 	if int64(len(content)) > maximum {
 		return wireGuardExactFile{}, nil, false, fmt.Errorf("WireGuard file %s exceeds %d bytes", name, maximum)
@@ -245,6 +253,7 @@ func readWireGuardExactFileAt(directory *os.File, name string, maximum int64) (w
 	if err != nil {
 		return wireGuardExactFile{}, nil, false, fmt.Errorf("attest exact WireGuard file %s: %w", name, err)
 	}
+	identity.FilesystemUUID = filesystemUUID
 	return identity, content, true, nil
 }
 
@@ -367,6 +376,7 @@ func manifestWithWireGuardForwarding(
 	manifest wireguardstate.Manifest,
 	forwarding wireGuardExactFile,
 ) (wireguardstate.Manifest, []byte, error) {
+	manifest.Artifacts = append([]wireguardstate.Artifact(nil), manifest.Artifacts...)
 	found := false
 	for index := range manifest.Artifacts {
 		if manifest.Artifacts[index].Path == wireguardstate.ForwardingConfigurationPath {
@@ -408,11 +418,15 @@ func readWireGuardForwardingTransitionJournal() (
 }
 
 func wireGuardForwardingTransitionPathPresent() (bool, error) {
+	return wireGuardPrivatePathPresent(wireGuardForwardingTransitionPath)
+}
+
+func wireGuardPrivatePathPresent(path string) (bool, error) {
 	root, err := os.OpenRoot(wireGuardFilesystemRoot)
 	if err != nil {
 		return false, err
 	}
-	_, statErr := root.Lstat(strings.TrimPrefix(wireGuardForwardingTransitionPath, "/"))
+	_, statErr := root.Lstat(strings.TrimPrefix(path, "/"))
 	closeErr := root.Close()
 	if errors.Is(statErr, os.ErrNotExist) {
 		return false, closeErr
@@ -451,7 +465,7 @@ func verifyWireGuardStaticManifestArtifacts(manifest wireguardstate.Manifest) er
 		actual, present, err := wireguardstate.InspectOpenRCServiceLink(
 			wireGuardFilesystemRoot, wireGuardExpectedOwnerUID, wireGuardExpectedOwnerGID,
 		)
-		if err != nil || !present || actual != *manifest.OpenRCServiceLink {
+		if err != nil || !present || !wireguardstate.MatchesRecordedServiceLink(actual, *manifest.OpenRCServiceLink) {
 			if err == nil {
 				err = fmt.Errorf("owned OpenRC WireGuard service link identity mismatch")
 			}
@@ -537,6 +551,27 @@ func decodeWireGuardManifestBytes(wire []byte) (wireguardstate.Manifest, error) 
 		return manifest, fmt.Errorf("WireGuard ownership manifest bytes are not canonical")
 	}
 	return manifest, nil
+}
+
+// The target manifest contains the device number captured before publication.
+// Rebuild with that recorded forwarding identity only after checking it against
+// the pinned current file. Every other manifest byte must remain exact.
+func forwardingManifestMatchesTarget(wire []byte, prior wireguardstate.Manifest, current wireGuardExactFile, requireUUID bool) bool {
+	recorded, err := decodeWireGuardManifestBytes(wire)
+	if err != nil {
+		return false
+	}
+	artifact, err := wireGuardManifestArtifact(recorded, wireguardstate.ForwardingConfigurationPath)
+	if err != nil || !wireGuardExactFileMatchesArtifact(current, artifact) {
+		return false
+	}
+	if requireUUID && current.FilesystemUUID != "" && artifact.FilesystemUUID == "" {
+		return false
+	}
+	current.Device = artifact.Device
+	current.FilesystemUUID = artifact.FilesystemUUID
+	_, expected, err := manifestWithWireGuardForwarding(prior, current)
+	return err == nil && bytes.Equal(expected, wire)
 }
 
 func recoverWireGuardForwardingTransition() (bool, error) {
@@ -632,12 +667,9 @@ func recoverWireGuardForwardingTransition() (bool, error) {
 		}
 		return true, fmt.Errorf("forwarding transition target artifact is missing or changed")
 	}
-	_, expectedNewManifestWire, err := manifestWithWireGuardForwarding(oldManifest, newForwarding)
-	if err != nil {
-		return true, err
-	}
-	activeManifestNew := bytes.Equal(activeManifestWire, expectedNewManifestWire) && !activeManifestOld
-	stageManifestNew := stageManifestPresent && bytes.Equal(stageManifestWire, expectedNewManifestWire) && !stageManifestOld
+	requireUUID := journal.OldForwarding.FilesystemUUID != ""
+	activeManifestNew := forwardingManifestMatchesTarget(activeManifestWire, oldManifest, newForwarding, requireUUID) && !activeManifestOld
+	stageManifestNew := stageManifestPresent && forwardingManifestMatchesTarget(stageManifestWire, oldManifest, newForwarding, requireUUID) && !stageManifestOld
 
 	switch {
 	case activeForwardingOld && activeManifestOld:
@@ -732,6 +764,9 @@ func transitionWireGuardForwardingPersistence(
 	}
 	if _, err := recoverWireGuardForwardingTransition(); err != nil {
 		return fmt.Errorf("recover prior WireGuard forwarding transition: %w", err)
+	}
+	if err := bindVerifiedWireGuardFilesystems(); err != nil {
+		return fmt.Errorf("bind verified WireGuard filesystem identities: %w", err)
 	}
 	manifest, err := wireguardstate.ReadAndVerify(
 		wireGuardFilesystemRoot, wireGuardExpectedOwnerUID, wireGuardExpectedOwnerGID,
@@ -903,6 +938,9 @@ func recoverWireGuardForwardingTransitionGuarded() (resultErr error) {
 }
 
 func recoverPendingWireGuardForwardingStateLocked() error {
+	if err := recoverWireGuardFilesystemBinding(); err != nil {
+		return fmt.Errorf("recover attested WireGuard filesystem binding: %w", err)
+	}
 	pending, err := wireGuardForwardingTransitionPathPresent()
 	if err != nil {
 		return fmt.Errorf("inspect pending WireGuard forwarding persistence: %w", err)

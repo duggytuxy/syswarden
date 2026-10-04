@@ -276,13 +276,13 @@ func renameLegacyMigrationFile(root string, expected Artifact, destination strin
 	defer func() { _ = directory.file.Close() }()
 	sourceName, destinationName := filepath.Base(expected.Path), filepath.Base(destination)
 	actual, _, err := captureAt(directory, sourceName, expected.Path, uid, gid, maximumOwnedArtifactBytes)
-	if err != nil || actual != expected {
+	if err != nil || !sameArtifact(actual, expected) {
 		return errors.Join(fmt.Errorf("legacy migration rename source changed"), err)
 	}
 	flags := uint(unix.RENAME_NOREPLACE)
 	if exchangeWith != nil {
 		actual, _, err := captureAt(directory, destinationName, destination, uid, gid, maximumOwnedArtifactBytes)
-		if err != nil || actual != *exchangeWith {
+		if err != nil || !sameArtifact(actual, *exchangeWith) {
 			return errors.Join(fmt.Errorf("legacy migration exchange target changed"), err)
 		}
 		flags = unix.RENAME_EXCHANGE
@@ -295,14 +295,14 @@ func renameLegacyMigrationFile(root string, expected Artifact, destination strin
 	}
 	actual, _, err = captureAt(directory, destinationName, destination, uid, gid, maximumOwnedArtifactBytes)
 	expected.Path = destination
-	if err != nil || actual != expected {
+	if err != nil || !sameArtifact(actual, expected) {
 		return errors.Join(fmt.Errorf("legacy migration renamed file failed attestation; evidence retained"), err)
 	}
 	if exchangeWith != nil {
 		expectedSource := *exchangeWith
 		expectedSource.Path = filepath.Join(filepath.Dir(destination), sourceName)
 		actual, _, err = captureAt(directory, sourceName, expectedSource.Path, uid, gid, maximumOwnedArtifactBytes)
-		if err != nil || actual != expectedSource {
+		if err != nil || !sameArtifact(actual, expectedSource) {
 			return errors.Join(fmt.Errorf("legacy migration exchanged original failed attestation; evidence retained"), err)
 		}
 	}
@@ -377,7 +377,7 @@ func ContinueLegacyMigration(root string, expected LegacyMigrationSnapshot, serv
 	if current.Stage != nil {
 		original := current.journal.Original[0]
 		original.Path = legacyMigrationStage
-		if *current.Stage != original {
+		if !sameArtifact(*current.Stage, original) {
 			return fmt.Errorf("legacy migration exchange did not retain the original server")
 		}
 		if err := renameLegacyMigrationFile(root, original, legacyMigrationOriginal, nil, uid, gid); err != nil {
