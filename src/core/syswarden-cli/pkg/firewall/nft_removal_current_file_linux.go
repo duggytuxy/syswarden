@@ -188,13 +188,8 @@ func nftCurrentKernelPopulation(entries []any, spec nftCurrentPopulationSpec) (m
 	return canonicalNFTPopulationGroups(groups), nil
 }
 
-// Extract static elements only after exact comparison with independently
-// supplied inputs. Nonempty dynamic sets require their own runtime attestation
-// and are refused here. Unknown metadata is never discarded as formatting.
-func inspectNFTCurrentStaticPopulations(live []byte, family string, input nftCurrentPersistenceInputs, evidence nftCurrentPersistenceEvidence) ([]byte, error) {
-	return inspectNFTCurrentPopulations(live, family, input, evidence, nil)
-}
-
+// Compare populations with independent writer inputs and runtime claims.
+// Unknown metadata is never discarded as formatting.
 func inspectNFTCurrentPopulations(live []byte, family string, input nftCurrentPersistenceInputs, evidence nftCurrentPersistenceEvidence, claims *nftRuntimeClaimProof) ([]byte, error) {
 	if family != "inet" && family != "netdev" {
 		return nil, fmt.Errorf("unsupported current population family")

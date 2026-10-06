@@ -260,10 +260,6 @@ func applyLegacyRetention(parentPath, backupParentPath, expected string, guard f
 	return plan, backup, err
 }
 
-func attestCompletedLegacyLogRetention(backupParentPath, expected string, guard func() error) (LegacyLogRetentionPlan, string, error) {
-	return attestCompletedLegacyRetention(backupParentPath, expected, guard, legacyLogsProfile())
-}
-
 func attestCompletedLegacyRetention(backupParentPath, expected string, guard func() error, profile legacyRetentionProfile) (LegacyLogRetentionPlan, string, error) {
 	rootPath := filepath.Join(backupParentPath, "syswarden-retired-v1")
 	root, err := openExistingPinnedServiceDirectory(rootPath)

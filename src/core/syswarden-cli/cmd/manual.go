@@ -40,6 +40,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %slist%s                : Displays manual IP registries and active HA bans with provenance and expiry.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %smanual%s              : Displays this operator reference.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %smigrate-config%s      : Compatibility alias for transactional modular migration.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %srecover-removal%s     : Inspects bounded historical removal recovery; apply only an exact reviewed plan.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %srecover-wireguard%s   : Dry-runs exact historical WireGuard recovery; mutation requires the reviewed plan SHA-256.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sreload%s              : Reapplies policy, repairs cron jobs and normally restarts the core.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %srevoke-ssh%s          : Removes an address from the SSH exception registry.\n", ansiGreen, ansiReset)
@@ -122,6 +123,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %sUNINSTALL:%s standalone removal deletes owned configuration, data, logs, services and firewall state; it is not a rollback. Native installations require apt-get remove/purge, dnf remove or apk del for syswarden.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sWIREGUARD RECOVERY:%s recover-wireguard --retire-legacy-wg0 inspects exact historical wg0 retirement, including coexistence with manifest-owned wg-syswarden. Confirm independent access before stopping affected VPN services, repeat the dry run, and authorize only its current plan digest. The private archive preserves keys; never publish it.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sWIREGUARD MIGRATION:%s recover-wireguard --migrate-legacy-wg-syswarden inspects exact unmanifested generated files. After explicit legacy retirement, migration preserves client keys in private backups and replaces historical hooks with manifest-bound hooks. Services must remain stopped and disabled while the reviewed plan is applied.\n", ansiRed, ansiReset)
+		fmt.Printf("  %sREMOVAL RECOVERY:%s recover-removal inspects one selected historical inventory before a separate --apply --plan-sha256 operation. Fail2ban recovery also requires its exact --file-plan-sha256. Review the declared service effects and preserve private originals. Changed or ambiguous evidence remains blocked; never clear a removal barrier to force completion.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sALPINE:%s dedicated CGO-free static APK binaries are built for x86_64; install only an exact release-qualified artifact.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sPLATFORMS:%s The current source targets the Linux DEB, RPM and APK AMD64 package matrix only.\n\n", ansiRed, ansiReset)
 

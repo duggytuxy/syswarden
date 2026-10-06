@@ -5,7 +5,6 @@ package firewall
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -129,7 +128,7 @@ func TestLegacyFail2banPersistenceBindsDependenciesAndOriginalAuthority(t *testi
 				t.Fatal(err)
 			}
 			if _, err := inspectLegacyFail2banPersistenceState(host, record, review); err == nil {
-				t.Fatal(fmt.Sprintf("changed %s was accepted", change))
+				t.Fatalf("changed %s was accepted", change)
 			}
 		})
 	}
