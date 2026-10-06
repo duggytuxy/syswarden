@@ -53,12 +53,63 @@ func preflightConfiguredOperatorPolicyRemoval() error {
 		return fmt.Errorf("reattest administrator policy source before removal: %w", err)
 	}
 	if len(config.GlobalConfig.OperatorPolicy.Rules) != 0 {
-		return fmt.Errorf("administrator operator policy remains configured; preserve its source and runtime rules, establish equivalent independently managed protection, then retry removal")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		preservation, err := authorizeNFTOperatorPolicyRemoval(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("administrator operator policy remains configured without verified independent preservation; preserve its source and runtime rules: %w", err)
+		}
+		expected, err := compileOperatorPolicy(config.GlobalConfig.OperatorPolicy.Rules)
+		if err != nil {
+			return err
+		}
+		actual, err := compileOperatorPolicy(preservation.Rules)
+		if err != nil || expected.chain != actual.chain {
+			return fmt.Errorf("configured administrator policy differs from the independently preserved policy")
+		}
 	}
 	return nil
 }
 
 func preflightLiveOperatorPolicyRemoval(document nftJSONDocument) error {
+	embedded := false
+	for _, entry := range document.NFTables {
+		rule := entry.Rule
+		if rule != nil && rule.Family == "inet" && rule.Table == "syswarden" && rule.Chain == operatorPolicyChainName && rule.Comment != operatorPolicyReturnComment {
+			embedded = true
+		}
+	}
+	if !embedded {
+		return preflightUnpreservedLiveOperatorPolicyRemoval(document)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	preservation, err := authorizeNFTOperatorPolicyRemoval(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("administrator policy rules remain in a product table without exact independent preservation: %w", err)
+	}
+	compiled, err := compileOperatorPolicy(preservation.Rules)
+	if err != nil {
+		return err
+	}
+	if err := verifyOperatorPolicyNFTState(document, compiled.verification); err != nil {
+		return err
+	}
+	// Analyze a shallow copy only after exact typed verification. Keep raw
+	// fields and all other objects so unknown rules and metadata still refuse.
+	reduced := document
+	reduced.NFTables = nil
+	for _, entry := range document.NFTables {
+		rule := entry.Rule
+		if rule != nil && rule.Family == "inet" && rule.Table == "syswarden" && rule.Chain == operatorPolicyChainName && rule.Comment != operatorPolicyReturnComment {
+			continue
+		}
+		reduced.NFTables = append(reduced.NFTables, entry)
+	}
+	return preflightUnpreservedLiveOperatorPolicyRemoval(reduced)
+}
+
+func preflightUnpreservedLiveOperatorPolicyRemoval(document nftJSONDocument) error {
 	chains, returns := 0, 0
 	for _, entry := range document.NFTables {
 		if chain := entry.Chain; chain != nil && chain.Family == "inet" && chain.Table == "syswarden" && chain.Name == operatorPolicyChainName {

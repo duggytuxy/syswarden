@@ -154,7 +154,20 @@ func decodeNFTPersistenceLoaderCommand(value string, stop bool) (string, string,
 }
 
 func queryNFTPersistenceLoader(ctx context.Context, host nftPersistenceFilesystem, expected nftPersistenceRead) (nftPersistenceLoaderStatus, error) {
-	var empty nftPersistenceLoaderStatus
+	content, err := queryNFTPersistenceLoaderProperties(ctx, host, expected, nftPersistenceLoaderProperties)
+	if err != nil {
+		return nftPersistenceLoaderStatus{}, err
+	}
+	return decodeNFTPersistenceLoaderStatus(content)
+}
+
+// Both property sets are internal fixed contracts. Callers cannot select a unit,
+// execute a service action or introduce arbitrary service-manager arguments.
+func queryNFTPersistenceLoaderProperties(ctx context.Context, host nftPersistenceFilesystem, expected nftPersistenceRead, properties string) ([]byte, error) {
+	var empty []byte
+	if properties != nftPersistenceLoaderProperties && properties != nftOperatorBootProperties {
+		return empty, fmt.Errorf("unsupported read-only loader property set")
+	}
 	current, err := host.snapshot("/usr/bin/systemctl")
 	if err != nil || !sameLegacyFail2banSource(expected, current) || current.identity.Mode().Perm()&0111 == 0 {
 		return empty, fmt.Errorf("nftables loader inspection lost the exact service-manager executable")
@@ -175,7 +188,15 @@ func queryNFTPersistenceLoader(ctx context.Context, host nftPersistenceFilesyste
 	}
 	child, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	command := exec.CommandContext(child, "/proc/self/fd/3", "--system", "--no-pager", "--all", "show", "--property="+nftPersistenceLoaderProperties, "--", "nftables.service")
+	var command *exec.Cmd
+	switch properties {
+	case nftPersistenceLoaderProperties:
+		command = exec.CommandContext(child, "/proc/self/fd/3", "--system", "--no-pager", "--all", "show", "--property="+nftPersistenceLoaderProperties, "--", "nftables.service")
+	case nftOperatorBootProperties:
+		command = exec.CommandContext(child, "/proc/self/fd/3", "--system", "--no-pager", "--all", "show", "--property="+nftOperatorBootProperties, "--", "nftables.service")
+	default:
+		return empty, fmt.Errorf("unsupported read-only loader property set")
+	}
 	command.ExtraFiles = []*os.File{binary}
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "SYSTEMD_COLORS=0", "SYSTEMD_LOG_LEVEL=err"}
 	command.Dir = "/"
@@ -189,7 +210,7 @@ func queryNFTPersistenceLoader(ctx context.Context, host nftPersistenceFilesyste
 	if err != nil || !sameLegacyFail2banSource(expected, current) {
 		return empty, fmt.Errorf("nftables loader service manager changed during observation")
 	}
-	return decodeNFTPersistenceLoaderStatus(stdout.content.Bytes())
+	return stdout.content.Bytes(), nil
 }
 
 type nftPersistenceLoaderInspection struct {

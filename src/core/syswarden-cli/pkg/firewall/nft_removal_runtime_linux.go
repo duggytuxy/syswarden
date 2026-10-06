@@ -261,6 +261,9 @@ func retireNFTCurrentRuntimeUsing(ctx context.Context, host nftPersistenceFilesy
 		return fmt.Errorf("current runtime retirement lacks exact reviewed evidence and complete guards")
 	}
 	check := func() error {
+		if err := verifyNFTOperatorRemovalBinding(ctx, plan.binding.Current); err != nil {
+			return err
+		}
 		if err := history.verify(); err != nil {
 			return err
 		}

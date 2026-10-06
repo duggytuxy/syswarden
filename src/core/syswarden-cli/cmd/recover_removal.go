@@ -26,7 +26,7 @@ var inspectLegacyCronRetirement = system.InspectLegacyCronRetirement
 var applyLegacyCronRetirement = system.ApplyLegacyCronRetirement
 
 func newRecoverRemovalCommand() *cobra.Command {
-	var retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, retainOperatorConfig, retireHistoricalFirewall, confirmHistoricalInputs, apply bool
+	var retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, retainOperatorConfig, retireHistoricalFirewall, confirmHistoricalInputs, preserveOperatorPolicy, exportOperatorPolicy, apply bool
 	var digest, fileDigest, historicalInputs string
 	command := &cobra.Command{
 		Use:   "recover-removal",
@@ -38,7 +38,7 @@ func newRecoverRemovalCommand() *cobra.Command {
 			for _, candidate := range []struct {
 				selected bool
 				kind     string
-			}{{retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}, {retireHistoricalFirewall, "historical-firewall-persistence"}} {
+			}{{retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}, {retireHistoricalFirewall, "historical-firewall-persistence"}, {preserveOperatorPolicy, "operator-policy"}, {exportOperatorPolicy, "operator-policy-export"}} {
 				if candidate.selected {
 					if selection != "" {
 						return fmt.Errorf("select exactly one legacy retention inventory")
@@ -81,6 +81,15 @@ func newRecoverRemovalCommand() *cobra.Command {
 			}
 			if fileDigest != "" {
 				return fmt.Errorf("--file-plan-sha256 applies only to historical Fail2ban recovery")
+			}
+			if selection == "operator-policy-export" {
+				if apply {
+					return fmt.Errorf("operator policy export is read-only and cannot be applied")
+				}
+				return runOperatorPolicyExport(cmd)
+			}
+			if selection == "operator-policy" {
+				return runOperatorPolicyPreservation(cmd, apply, digest)
 			}
 			if selection == "operator-config" {
 				return runOperatorConfigurationRetention(cmd, apply, digest)
@@ -126,6 +135,8 @@ func newRecoverRemovalCommand() *cobra.Command {
 			return err
 		},
 	}
+	command.Flags().BoolVar(&preserveOperatorPolicy, "preserve-operator-policy", false, "Review exact independent administrator policy preservation before product removal")
+	command.Flags().BoolVar(&exportOperatorPolicy, "export-operator-policy", false, "Export private typed administrator receiver rules for separate operator review and installation")
 	command.Flags().BoolVar(&retireHistoricalFirewall, "retire-legacy-firewall-persistence", false, "Review an exact historical persistent source after product tables are absent")
 	command.Flags().StringVar(&historicalInputs, "historical-inputs", "", "Private original generation input capture for historical persistence review")
 	command.Flags().BoolVar(&confirmHistoricalInputs, "confirm-historical-inputs", false, "Explicitly confirm original independent generation inputs when applying historical persistence recovery")

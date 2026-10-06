@@ -305,3 +305,37 @@ func TestHistoricalPersistenceRecoveryRefusesMissingBindingAfterEdits(t *testing
 		})
 	}
 }
+
+func TestHistoricalInputCapturePreservesOpaqueOriginalConfiguration(t *testing.T) {
+	session := fixtureNFTHistoricalSourceRecovery(t)
+	original := []byte("[administrator]\ninclude = \"/original/configuration\"\n")
+	document := session.origin.document
+	document.Evidence[0].SHA256 = nftSHA256Hex(original)
+	description, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.host.root.WriteFile("root/historical-inputs/configuration.txt", original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.host.root.WriteFile(nftHistoricalCapturePath[1:], description, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := inspectNFTHistoricalInputs(session.host, nftHistoricalCapturePath)
+	if err != nil {
+		t.Fatal("opaque original configuration was interpreted as nftables source", err)
+	}
+	if err := inspection.verify(session.host); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := session.host.read("/root/historical-inputs/configuration.txt")
+	if err != nil || !bytes.Equal(retained, original) {
+		t.Fatal("original evidence changed", err)
+	}
+	if err := session.host.root.WriteFile("root/historical-inputs/configuration.txt", append(original, '#'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspection.verify(session.host); err == nil {
+		t.Fatal("changed opaque evidence was accepted")
+	}
+}

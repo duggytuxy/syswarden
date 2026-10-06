@@ -39,6 +39,9 @@ func (session *nftRemovalSession) retireMetadata(ctx context.Context, runner nft
 	}
 	progressFile := nftPersistenceGraphFileRecord(progress, plan.sha256)
 	check := func() error {
+		if err := verifyNFTOperatorRemovalBinding(ctx, plan.binding.Current); err != nil {
+			return err
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}

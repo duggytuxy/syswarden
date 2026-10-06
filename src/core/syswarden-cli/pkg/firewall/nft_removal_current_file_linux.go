@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"syswarden-cli/config"
 )
 
 type nftCurrentPopulation struct {
@@ -17,9 +18,29 @@ type nftCurrentPopulation struct {
 	Entries []string `json:"entries"`
 }
 
+// This additional binding is populated only by explicit preservation recovery.
+// Pure source recognition does not establish the existence or validity of that
+// proof. Every removal entry point and session must independently recheck it.
+type nftPreservedOperatorInputs struct {
+	Rules []config.OperatorPolicyRule `json:"rules"`
+	Proof string                      `json:"preservation_sha256"`
+}
+
+func (input *nftPreservedOperatorInputs) validate() error {
+	if input == nil {
+		return nil
+	}
+	if !validLegacyRetirementDigest(input.Proof) || len(input.Rules) == 0 {
+		return fmt.Errorf("operator preservation lacks exact typed policy and proof binding")
+	}
+	_, err := prepareNFTOperatorReceiver(input.Rules)
+	return err
+}
+
 type nftCurrentPersistenceInputs struct {
-	Base        nftV4028PersistenceInputs `json:"base"`
-	Populations []nftCurrentPopulation    `json:"populations"`
+	Base        nftV4028PersistenceInputs   `json:"base"`
+	Populations []nftCurrentPopulation      `json:"populations"`
+	Operator    *nftPreservedOperatorInputs `json:"operator_preservation,omitempty"`
 }
 
 type nftCurrentPopulationSpec struct {
@@ -102,6 +123,16 @@ func inspectNFTCurrentPersistentFile(source []byte, input nftCurrentPersistenceI
 		end = len(source)
 	}
 	base := source[:end]
+	if err := input.Operator.validate(); err != nil {
+		return empty, err
+	}
+	if input.Operator != nil {
+		normalized, err := normalizeNFTOperatorSource(base, input.Operator.Rules)
+		if err != nil {
+			return empty, err
+		}
+		base = normalized
+	}
 	if _, err := inspectNFTGoBasePersistentFile(base, input.Base, "current"); err != nil {
 		return empty, err
 	}
@@ -275,6 +306,12 @@ func inspectNFTCurrentRuntimeWithClaims(source, inet, ingress, arp []byte, input
 	document, err := inspectNFTPersistence(evidence.base)
 	if err != nil {
 		return nftCurrentPersistenceEvidence{}, err
+	}
+	if input.Operator != nil {
+		inet, _, err = normalizeNFTOperatorRuntime(inet, input.Operator.Rules)
+		if err != nil {
+			return nftCurrentPersistenceEvidence{}, err
+		}
 	}
 	for index, live := range [][]byte{ingress, inet} {
 		table := document.tables[index]

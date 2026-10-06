@@ -202,6 +202,7 @@ func (runner execNFTCommandRunner) Run(ctx context.Context, stdin []byte, args .
 			_ = commandFile.Close()
 		}
 	}()
+	receiverTable, receiverObservation := nftOperatorReceiverObservationTarget(args)
 	switch {
 	case len(args) == 3 && args[0] == "-j" && args[1] == "list" && args[2] == "tables":
 		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "tables")
@@ -215,6 +216,8 @@ func (runner execNFTCommandRunner) Run(ctx context.Context, stdin []byte, args .
 		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "netdev", "syswarden_hw_drop")
 	case slices.Equal(args, []string{"-j", "list", "table", "arp", "syswarden_arp"}):
 		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "arp", "syswarden_arp")
+	case receiverObservation:
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "inet", receiverTable) // #nosec G204 -- Pinned read-only observer; table is a fixed prefix plus exactly twenty lowercase hexadecimal characters.
 	case len(args) == 4 && args[0] == "list" && args[1] == "table":
 		target := nftTableTarget{family: args[2], name: args[3]}
 		switch target {

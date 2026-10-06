@@ -3,9 +3,11 @@
 package firewall
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
 )
 
 type nftPolicyOwnershipInspection struct {
@@ -27,7 +29,24 @@ func inspectNFTPolicyOwnership(host nftPersistenceFilesystem) (nftPolicyOwnershi
 	if err != nil || source.identity == nil || source.identity.Mode().Perm() != 0600 {
 		return inspection, fmt.Errorf("current policy source is missing or has changed private metadata")
 	}
-	inspection.inputs, err = currentNFTInputsFromOwnership(source.content, receipt)
+	decoded, err := decodeNFTPolicyOwnership(receipt)
+	if err != nil {
+		return inspection, err
+	}
+	emptyOperator, err := compileOperatorPolicy(nil)
+	if err != nil {
+		return inspection, err
+	}
+	var preservation *nftPreservedOperatorInputs
+	if decoded.Generation.OperatorChain != emptyOperator.chain {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		preservation, err = authorizeNFTOperatorPolicyRemoval(ctx, nil)
+		if err != nil {
+			return inspection, err
+		}
+	}
+	inspection.inputs, err = currentNFTInputsFromPreservedOwnership(source.content, receipt, preservation)
 	if err != nil {
 		return inspection, err
 	}

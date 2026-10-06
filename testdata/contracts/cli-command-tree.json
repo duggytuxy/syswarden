@@ -992,6 +992,13 @@
         "usage": "Explicitly confirm original independent generation inputs when applying historical persistence recovery"
       },
       {
+        "name": "export-operator-policy",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Export private typed administrator receiver rules for separate operator review and installation"
+      },
+      {
         "name": "file-plan-sha256",
         "type": "string",
         "default": "",
@@ -1016,6 +1023,13 @@
         "type": "string",
         "default": "",
         "usage": "Authorize only the exact lowercase SHA-256 digest printed by the dry run"
+      },
+      {
+        "name": "preserve-operator-policy",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Review exact independent administrator policy preservation before product removal"
       },
       {
         "name": "resume-unused-fail2ban",

@@ -12,8 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
+	"syswarden-cli/config"
 
 	"golang.org/x/sys/unix"
 )
@@ -85,16 +87,33 @@ func prepareNFTPolicyOwnership(source []byte, generation *nftPolicyGeneration, t
 // Reconstruct populations only after their exact source hash is authorized by
 // a private writer receipt. The independent full renderer check still runs.
 func currentNFTInputsFromOwnership(source, ownership []byte) (nftCurrentPersistenceInputs, error) {
+	return currentNFTInputsFromPreservedOwnership(source, ownership, nil)
+}
+
+// A caller supplying preservation must also attest its complete independent
+// receiver before and during retirement. This function only binds writer bytes
+// to typed inputs; it grants no authority to delete administrator protection.
+func currentNFTInputsFromPreservedOwnership(source, ownership []byte, preservation *nftPreservedOperatorInputs) (nftCurrentPersistenceInputs, error) {
 	var empty nftCurrentPersistenceInputs
 	record, err := decodeNFTPolicyOwnership(ownership)
 	if err != nil || record.SourceSHA256 != nftSHA256Hex(source) {
 		return empty, fmt.Errorf("persistent policy differs from its writer ownership receipt")
 	}
-	operator, err := compileOperatorPolicy(nil)
+	if err := preservation.validate(); err != nil {
+		return empty, err
+	}
+	var rules []config.OperatorPolicyRule
+	if preservation != nil {
+		rules = slices.Clone(preservation.Rules)
+	}
+	operator, err := compileOperatorPolicy(rules)
 	if err != nil || record.Generation.OperatorChain != operator.chain {
 		return empty, fmt.Errorf("operator policy requires separate preservation before product retirement")
 	}
 	input := nftCurrentPersistenceInputs{Base: record.Generation.Base}
+	if preservation != nil {
+		input.Operator = &nftPreservedOperatorInputs{Rules: rules, Proof: preservation.Proof}
+	}
 	remaining := ""
 	if offset := bytes.Index(source, []byte("add element ")); offset >= 0 {
 		remaining = string(source[offset:])

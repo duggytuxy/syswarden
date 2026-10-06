@@ -134,6 +134,67 @@ be distinguished from an active product installation; they do not load rules or
 start services. Flat legacy configuration and arbitrary directory contents are
 outside this modular retention route.
 
+## Independent administrator policy preservation
+
+Typed administrator ingress accepts in `modules/99-user.toml` can have active
+rules inside the product table. Retaining the TOML alone does not preserve their
+runtime behavior. Removal refuses that state until a reviewed independent
+receiver is present, persistent and reverified at each removal boundary.
+
+Prepare a private export with `recover-removal --export-operator-policy`.
+Standard output contains the exact receiver source, including private rule
+predicates. Standard error identifies its required path. Save and review this
+output privately. Exporting does not write an active file, change rules, approve
+removal or establish ownership of any existing object.
+
+The original administrator TOML may retain mode 0600 or 0640 with root ownership
+and the root group. Its exact mode remains bound to the review and is never
+changed by preservation or removal.
+
+The administrator must install the reviewed source with root ownership and mode
+0600 at the indicated path under `/etc/nftables.d`, include it exactly once from
+the actual shared nftables loader, and verify the resulting traffic behavior.
+The shared loader must be active and persistently enabled at boot. Recovery does
+not enable, reload, restart or rewrite that shared service. Unexpected receiver
+contents, namespace collisions, duplicate includes, unsafe files, opaque loader
+commands and disabled or transient-only enablement are refused.
+
+The receiver supports the same closed typed IPv4/IPv6 ICMP, TCP and UDP ingress
+accept predicates. It has an independent input base chain with an accept policy.
+It introduces no replacement default-deny policy. An accept verdict does not
+override a drop in another base chain. Independently managed drops and unrelated
+protections must still be verified before and after removal and reboot. Product
+rules outside the administrator policy retain their existing ownership checks.
+
+Once that independent configuration is active, inspect:
+
+```sh
+sudo syswarden recover-removal --preserve-operator-policy
+```
+
+Review the metadata and exact plan digest. Applying the same option with
+`--apply --plan-sha256` records only a private preservation decision. It requires
+the exact typed administrator source, the current writer receipt, the complete
+recognized product source, matching original administrator runtime rules and
+the exact independent receiver. The decision captures original counter
+observations privately; it does not claim continuous counters across the two
+chains. It grants no product ownership of the receiver or the administrator
+configuration.
+
+Then repeat the original uninstall, remove or purge command. Preflight, source
+retirement, the kernel generation fence and final metadata retirement all
+recheck the independent receiver. A changed or missing source, loader, decision
+or runtime rule causes refusal. The receiver and original administrator TOML
+remain outside product deletion targets. Unknown surrounding product-table
+objects or populations still require their own recovery and cannot be adopted
+through this decision.
+
+The private decision can be reused after product source retirement because the
+receiver remains independently reachable from the shared loader. Original review
+evidence is not rewritten on retry. This route requires native validation of
+uninstall, remove and purge separately, including shared reload and a real host
+reboot, before it is accepted as release coverage.
+
 ## Explicit limits before acceptance
 
 The following states remain refused and require additional bounded recovery
@@ -143,7 +204,8 @@ work. A refusal preserves evidence; it is not complete removal:
   generation inputs, and historical live rules not covered by a separate
   ownership proof. A matching template alone is insufficient.
 - Configured or live administrator policy embedded in product-owned tables
-  until equivalent independently managed protection is established.
+  without an exact reviewed preservation decision, or with changed configuration,
+  loader or receiver evidence.
 - Customized configuration outside the documented retained `99-user.toml`
   surface or an explicit supported modular retention decision, and other
   artifacts whose ownership is unresolved.

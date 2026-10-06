@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syswarden-cli/pkg/wireguardstate"
 )
 
 const nftHistoricalInputSchema = "syswarden-historical-firewall-inputs-v1"
@@ -124,7 +125,7 @@ func (inspection nftHistoricalInputInspection) verify(host nftPersistenceFilesys
 	}
 	for _, expected := range inspection.files {
 		current, attrs, err := snapshotNFTPersistenceMetadata(host, expected.Artifact.Path)
-		if err != nil || current.identity == nil || current.identity.Mode().Perm() != 0600 || !matchesNFTPersistenceGraphSource(expected, current, attrs) {
+		if err != nil || current.identity == nil || current.identity.Mode().Perm() != 0600 || !matchesNFTHistoricalInput(expected, current, attrs) {
 			return fmt.Errorf("historical input evidence changed after inspection")
 		}
 	}
@@ -163,4 +164,15 @@ func nftHistoricalInputFilePaths(inspection nftHistoricalInputInspection) []stri
 	}
 	slices.Sort(paths)
 	return paths
+}
+
+// Original configuration and host evidence are opaque bytes. Do not run the
+// nftables include parser on TOML, shell configuration or original observations.
+// Hashes, file identity, metadata and xattrs still bind every byte to the review.
+func matchesNFTHistoricalInput(expected nftPersistenceGraphSourceRecord, current nftPersistenceRead, attrs []nftPersistenceXattr) bool {
+	actual, err := bindNFTPersistenceGraphSource(expected.Artifact.Path, current, attrs, current.content)
+	return err == nil && expected.EditedSHA256 == expected.Artifact.SHA256 &&
+		actual.Size == expected.Size && actual.ModifiedNS == expected.ModifiedNS &&
+		actual.Xattrs == expected.Xattrs && actual.EditedSHA256 == expected.EditedSHA256 &&
+		wireguardstate.MatchesRecordedArtifact(actual.Artifact, expected.Artifact)
 }

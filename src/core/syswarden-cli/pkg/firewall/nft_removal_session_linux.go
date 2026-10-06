@@ -53,6 +53,9 @@ func (session *nftRemovalSession) check(ctx context.Context) error {
 	if session == nil || session.producers.verify == nil {
 		return fmt.Errorf("missing removal session")
 	}
+	if err := verifyNFTOperatorRemovalBinding(ctx, session.plan.binding.Current); err != nil {
+		return err
+	}
 	if err := session.history.verify(); err != nil {
 		return err
 	}
