@@ -4,7 +4,9 @@ package firewall
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,5 +197,15 @@ func TestLegacyIPTablesPreflightRefusesCollidingOwnershipAliases(t *testing.T) {
 	owned[prefix.key()] = prefix
 	if preflightOwnedLegacyIPTablesObservation(observation, owned) == nil {
 		t.Fatal("multiple manifest entries claimed the same kernel rule")
+	}
+}
+
+func TestLegacyIPTablesPreflightRefusesUnavailableKernelInventory(t *testing.T) {
+	previous := legacyIPTablesKernelTableNames
+	t.Cleanup(func() { legacyIPTablesKernelTableNames = previous })
+	sentinel := errors.New("synthetic kernel inventory unavailable")
+	legacyIPTablesKernelTableNames = func() ([]byte, error) { return nil, sentinel }
+	if err := preflightLegacyIPTablesDocument(context.Background(), nftJSONDocument{}); !errors.Is(err, sentinel) {
+		t.Fatal("unavailable legacy backend observation was treated as absence", err)
 	}
 }

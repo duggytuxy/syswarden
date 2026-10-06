@@ -103,6 +103,14 @@ func TestMain(m *testing.M) {
 	linuxWrapperCommandEnvironment = testLinuxWrapperCommandEnvironment
 	uninstallNFTRunnerFactory = func() (nftCommandRunner, error) { return &fakeUninstallNFTRunner{}, nil }
 	firewallRemovalServiceReattest = func() error { return nil }
+	// Synthetic nftables runners must not inspect the developer's live
+	// compatibility rules or private recovery receipts. Native fixtures and
+	// explicit observer tests establish those separate filesystem boundaries.
+	legacyIPTablesKernelTableNames = func() ([]byte, error) { return nil, nil }
+	legacyIPTablesOwnedPreflightCheck = func(context.Context) error {
+		return fmt.Errorf("fixture has no independently observed wrapper ownership")
+	}
+	legacyIPTablesPreservationCheck = func(context.Context) error { return fmt.Errorf("fixture has no private preservation receipt") }
 	// Compatibility-wrapper fixtures use an empty synthetic nftables runtime.
 	// Keep their preparation in that fixture instead of inspecting the developer
 	// host. Writer-bound filesystem retirement has separate component and native

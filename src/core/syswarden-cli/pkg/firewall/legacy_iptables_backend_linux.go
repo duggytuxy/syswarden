@@ -13,22 +13,17 @@ import (
 	"strings"
 )
 
+var legacyIPTablesKernelTableNames = readLegacyIPTablesKernelTableNames
+
 // The active alternative may expose only nf_tables while the older kernel
 // backend still has rules. Its kernel inventory is a read-only refusal signal,
 // never authority to delete a shared table or import a historical manifest.
 func preflightLegacyIPTablesBackend(ctx context.Context) error {
-	file, err := os.Open("/proc/net/ip_tables_names")
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
+	content, err := legacyIPTablesKernelTableNames()
 	if err != nil {
-		return fmt.Errorf("inspect legacy iptables backend before removal: %w", err)
+		return err
 	}
-	defer func() { _ = file.Close() }()
-	content, err := io.ReadAll(io.LimitReader(file, 4097))
-	if err != nil || len(content) > 4096 {
-		return fmt.Errorf("legacy iptables kernel table inventory is unavailable or unbounded")
-	}
+
 	present := false
 	for _, name := range strings.Fields(string(content)) {
 		present = present || name == "filter"
@@ -93,4 +88,20 @@ func preflightLegacyIPTablesBackendSave(save []byte, owned map[string]linuxWrapp
 		seen[profile.key] = true
 	}
 	return len(seen) != 0, nil
+}
+
+func readLegacyIPTablesKernelTableNames() ([]byte, error) {
+	file, err := os.Open("/proc/net/ip_tables_names")
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect legacy iptables backend before removal: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(io.LimitReader(file, 4097))
+	if err != nil || len(content) > 4096 {
+		return nil, fmt.Errorf("legacy iptables kernel table inventory is unavailable or unbounded")
+	}
+	return content, nil
 }
