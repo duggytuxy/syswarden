@@ -62,7 +62,7 @@ func TestLegacySaaSRetentionRequiresReviewAndPreservesOriginals(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				content[name], err = os.ReadFile(filepath.Join(active, name))
+				content[name], err = directory.root.ReadFile(name)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -77,13 +77,18 @@ func TestLegacySaaSRetentionRequiresReviewAndPreservesOriginals(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			saved, err := os.OpenRoot(backup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = saved.Close() }()
 			for name, before := range originals {
 				path := filepath.Join(backup, name)
 				after, err := os.Stat(path)
 				if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
 					t.Fatal("original cache inode or metadata changed", name, err)
 				}
-				got, err := os.ReadFile(path)
+				got, err := saved.ReadFile(name)
 				if err != nil || !bytes.Equal(got, content[name]) {
 					t.Fatal("original cache content changed", name, err)
 				}
@@ -108,7 +113,7 @@ func TestLegacySaaSRetentionRejectsChangesAndAmbiguity(t *testing.T) {
 					t.Fatal(err)
 				}
 				snapshot, _, err := inspectLegacyDataDirectory(directory, false, profile)
-				directory.close()
+				defer directory.close()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -122,7 +127,7 @@ func TestLegacySaaSRetentionRejectsChangesAndAmbiguity(t *testing.T) {
 						err = os.WriteFile(path, []byte("private historical cache bytes\n"), 0600)
 					}
 				case "permissions":
-					err = os.Chmod(path, 0640)
+					err = directory.root.Chmod(name, 0640)
 				case "hardlink":
 					err = os.Link(path, filepath.Join(parent, "shared"))
 				case "symlink":
