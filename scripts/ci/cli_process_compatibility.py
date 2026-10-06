@@ -518,8 +518,13 @@ def verify_baseline_contract(
 
 
 def isolated_go_env(cache: Path) -> dict[str, str]:
-    cache.mkdir(parents=True, exist_ok=False)
     env = os.environ.copy()
+    configured_cache = env.get("GOCACHE", "")
+    if configured_cache:
+        cache = Path(configured_cache)
+        if not cache.is_absolute():
+            raise CompatibilityError("GOCACHE must be an absolute cache directory")
+    cache.mkdir(parents=True, exist_ok=bool(configured_cache))
     env.update(
         {
             "GOCACHE": str(cache),
