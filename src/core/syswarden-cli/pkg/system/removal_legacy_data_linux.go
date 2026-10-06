@@ -36,6 +36,8 @@ func legacyDataProfile(kind string) (legacyRetentionProfile, error) {
 			"syswarden_blacklist.ipv4": "list", "syswarden_blacklist.ipv6": "list",
 			"syswarden_whitelist.ipv4": "list", "syswarden_whitelist.ipv6": "list",
 			".syswarden_blacklist_pair_v1": "blocklist-pair", ".syswarden_whitelist_pair_v1": "whitelist-pair",
+			"syswarden_saas_monitors.ipv4": "saas-cache", "syswarden_saas_monitors.ipv6": "saas-cache",
+			"syswarden_saas_monitors.pair": "saas-cache",
 		}
 	case "ui":
 		profile.directory, profile.backupKind = "/var/lib/syswarden/ui", "legacy-ui"
@@ -87,12 +89,18 @@ func inspectLegacyDataFile(directory *pinnedServiceDirectory, name, kind string,
 		// Pair markers describe initialization, not provenance of list contents.
 	} else {
 		attribute := productSnapshotOriginAttribute
-		if kind == "list" {
+		if kind == "list" || kind == "saas-cache" {
 			attribute = generatedListOriginAttribute
 		}
 		var marker [512]byte
 		_, originErr := unix.Fgetxattr(int(file.Fd()), attribute, marker[:])
 		if originErr == nil {
+			// SaaS publication has no creation-origin contract. Names and pair
+			// hashes cannot confer ownership, and an unexpected marker must not
+			// become a way to bypass the exact-content retirement boundary.
+			if kind == "saas-cache" {
+				return identity, "", false, fmt.Errorf("legacy SaaS retention cannot override an unsupported creation marker")
+			}
 			if kind == "list" {
 				proven, err = HasGeneratedListOrigin(file, name, digest)
 			} else {

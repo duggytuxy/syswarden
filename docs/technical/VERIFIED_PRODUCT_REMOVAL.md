@@ -49,6 +49,15 @@ Legacy data retention also requires the operator to confirm that the listed
 files have no other producer. Original bytes are moved to a private recovery
 location and are distinguished from active configuration.
 
+The bounded list inventory includes the optional SaaS monitor IPv4 and IPv6
+cache files and `syswarden_saas_monitors.pair`. Historical installations may
+have only one family or no pair manifest. These files require explicit
+`--retain-legacy-lists` review and confirmation that no other producer uses
+them. Neither their names nor their pair hashes establish product ownership.
+Recovery retains their exact bytes and inodes, including incomplete cache
+generations, without interpreting them as firewall input. Changed inputs,
+unexpected creation markers and unrelated directory entries cause refusal.
+
 Fail2ban recovery binds the original configuration inventory separately from
 the runtime or persistence plan. Persistent entries in a shared nftables source
 are reviewed and retired before target jail and runtime retirement. The source
@@ -56,6 +65,15 @@ edit retains the original file privately and preserves administrator bytes.
 It does not reload the firewall, mutate live rules or stop the shared Fail2ban
 service. Applying the later runtime plan stops only the proven historical
 targets and verifies that unrelated live protection remains present.
+
+Shared-source review also follows balanced administrator rule fragments inside
+independent tables. It verifies the original and active include contexts before
+each edit and after interruption. Fragments inside a selected Fail2ban table,
+references to retired targets and changes to an administrator dependency cause
+refusal. Literal administrator table replacement is preserved. One adjacent
+`add table`, `flush table`, and literal include sequence per source is supported
+only when the included file declares that complete independent table. Recovery
+does not execute these loader commands or acquire ownership of their targets.
 
 An interrupted unused-definition retirement has a separate resumption mode.
 It requires the original file-plan digest and a fresh review of current
@@ -158,6 +176,32 @@ The shared loader must be active and persistently enabled at boot. Recovery does
 not enable, reload, restart or rewrite that shared service. Unexpected receiver
 contents, namespace collisions, duplicate includes, unsafe files, opaque loader
 commands and disabled or transient-only enablement are refused.
+
+Reloads must also be idempotent. A bare declarative receiver include can append
+duplicate rules on reload and is refused without a verified preceding reset.
+For a loader that preserves other firewall owners, place these three statements
+together, substituting the exact table name and path from the reviewed export:
+
+```text
+add table inet <exported_table_name>
+flush table inet <exported_table_name>
+include "<exported_receiver_path>"
+```
+
+The first statement permits a cold start; the second clears only the receiving
+table's rules before loading the exact policy. Review namespace ownership before
+installing this sequence. Recovery never executes it or changes the shared
+loader. The receiving table must still match the independently compiled model.
+An existing leading entry-point `flush ruleset` is recognized for compatibility;
+adding a global flush is not required or recommended for this preparation.
+
+Independent administrator tables may use a literal `destroy table` immediately
+before their matching declaration. Balanced include fragments inside those
+tables remain administrator-owned. Their complete literal include graph is
+rechecked. Nested receivers, variables, table declarations inside fragments,
+commands that escape the bounded reload forms and resets of reserved product
+tables are refused. Verify cold-start and repeated-reload traffic behavior as
+well as a real reboot before relying on the preservation result.
 
 The receiver supports the same closed typed IPv4/IPv6 ICMP, TCP and UDP ingress
 accept predicates. It has an independent input base chain with an accept policy.

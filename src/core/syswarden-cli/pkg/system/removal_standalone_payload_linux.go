@@ -82,7 +82,9 @@ func inspectStandalonePayload(directory *pinnedServiceDirectory, expected map[st
 		return result, err
 	}
 	result.directory, err = exactRemovalArtifactIdentity(info)
-	if err != nil || !info.IsDir() || info.Mode().Perm() != 0750 || !serviceFileOwnedByCurrentUser(info) {
+	// Native archives create these directories as 0755; historical hardened
+	// installations may retain 0750. Exact file bindings remain mandatory.
+	if err != nil || !slices.Contains([]os.FileMode{os.ModeDir | 0750, os.ModeDir | 0755}, info.Mode()) || !serviceFileOwnedByCurrentUser(info) {
 		return result, fmt.Errorf("standalone payload directory has unexpected metadata")
 	}
 	checkNames := func(root *os.Root, want []string) error {
@@ -105,7 +107,7 @@ func inspectStandalonePayload(directory *pinnedServiceDirectory, expected map[st
 	}
 	binInfo, err := directory.root.Lstat("bin")
 	binIdentity, identityErr := exactRemovalArtifactIdentity(binInfo)
-	if err != nil || identityErr != nil || !binInfo.IsDir() || binInfo.Mode().Perm() != 0750 || !serviceFileOwnedByCurrentUser(binInfo) {
+	if err != nil || identityErr != nil || !slices.Contains([]os.FileMode{os.ModeDir | 0750, os.ModeDir | 0755}, binInfo.Mode()) || !serviceFileOwnedByCurrentUser(binInfo) {
 		return result, fmt.Errorf("standalone binary directory has unexpected metadata")
 	}
 	bin, err := directory.root.OpenRoot("bin")

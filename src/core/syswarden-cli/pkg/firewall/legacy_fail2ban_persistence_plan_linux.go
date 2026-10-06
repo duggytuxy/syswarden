@@ -29,12 +29,19 @@ func planLegacyFail2banPersistence(content []byte, record legacyFail2banNFTJourn
 	if err != nil {
 		return empty, err
 	}
-	if err := verifyLegacyFail2banLiteralPersistence(content, tokens, document); err != nil {
+	targets := make(map[nftTableTarget]bool)
+	for _, plan := range plans {
+		targets[nftTableTarget{family: plan.family, name: plan.table}] = true
+	}
+	if err := verifyLegacyFail2banLiteralPersistence(content, tokens, document, targets); err != nil {
 		return empty, err
 	}
 	edit := nftPersistenceEdit{originalSHA256: sha256.Sum256(content), content: bytes.Clone(content)}
 	dependencies := make(map[string]bool)
 	for _, plan := range plans {
+		if legacyFail2banRetiresWholeTable(plan) {
+			dependencies[plan.table] = true
+		}
 		claims, err := decodeLegacyFail2banNFTClaims(plan.claims)
 		if err != nil {
 			return empty, err
@@ -110,16 +117,11 @@ func planLegacyFail2banPersistence(content []byte, record legacyFail2banNFTJourn
 
 // Reject indirection and context-dependent fragments before reasoning about
 // a table's scope. The complete include graph is separately bound by callers.
-func verifyLegacyFail2banLiteralPersistence(content []byte, tokens []nftPersistenceToken, document nftPersistenceDocument) error {
+func verifyLegacyFail2banLiteralPersistence(content []byte, tokens []nftPersistenceToken, document nftPersistenceDocument, targets map[nftTableTarget]bool) error {
 	// The graph scanner intentionally skips continued newlines. A literal
 	// ownership check must not overlook a name assembled across that gap.
 	if bytes.Contains(content, []byte{'\\', '\n'}) {
 		return fmt.Errorf("continued persistent expressions require separate verified recovery")
-	}
-	for _, include := range document.includes {
-		if include.depth != 0 {
-			return fmt.Errorf("nested persistent includes require separate verified recovery")
-		}
 	}
 	for _, token := range tokens {
 		value := string(content[token.start:token.end])
@@ -127,28 +129,18 @@ func verifyLegacyFail2banLiteralPersistence(content []byte, tokens []nftPersiste
 			return fmt.Errorf("indirect persistent expressions require separate verified recovery")
 		}
 	}
-	// At top level only complete literal table declarations, literal includes
-	// and an existing administrator flush statement are admitted. No command
-	// here is executed or added by recovery.
-	var outside []nftPersistenceToken
-	for _, token := range tokens {
-		inside := false
-		for _, table := range document.tables {
-			inside = inside || token.start >= table.start && token.end <= table.end
-		}
-		for _, include := range document.includes {
-			inside = inside || token.start >= include.start && token.end <= include.end
-		}
-		if !inside && token.kind != '\n' && token.kind != ';' {
-			outside = append(outside, token)
-		}
+	if err := verifyLegacyFail2banIndependentIncludes(document, targets); err != nil {
+		return err
 	}
-	for index := 0; index < len(outside); index += 2 {
-		if index+1 >= len(outside) || nftPersistenceWord(content, outside[index]) != "flush" || nftPersistenceWord(content, outside[index+1]) != "ruleset" {
-			return fmt.Errorf("persistent commands outside literal tables require separate verified recovery")
-		}
+	// Pure byte planning does not know an include's evaluation context. A
+	// fragment is allowed here only without table declarations or loader
+	// commands. The complete original and active graphs must independently
+	// prove its administrator-table context before every file mutation.
+	_, _, err := inspectLegacyFail2banLoaderSource(content, nftPersistenceSource{path: "/entry", document: document}, "/entry", targets)
+	if err != nil && len(document.tables) == 0 {
+		return verifyNFTOperatorReceiverFragment(content, tokens, "")
 	}
-	return nil
+	return err
 }
 
 func legacyFail2banPersistenceWords(content []byte, tokens []nftPersistenceToken) []string {

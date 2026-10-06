@@ -130,6 +130,9 @@ func prepareLegacyFail2banPersistence(host nftPersistenceFilesystem, loader *nft
 	if err != nil {
 		return record, "", err
 	}
+	if err := verifyLegacyFail2banPersistenceGraph(graph, kernel, host.read); err != nil {
+		return record, "", err
+	}
 	parents := make(map[string]bool)
 	for _, source := range graph.sources {
 		snapshot, attrs, err := snapshotNFTPersistenceMetadata(host, source.path)
@@ -253,6 +256,11 @@ func inspectLegacyFail2banPersistenceState(host nftPersistenceFilesystem, record
 		graph, err := inspectNFTPersistenceGraph(record.Entries, reader)
 		if err != nil || len(graph.sources) != len(expected) || len(graph.expansions) != len(record.Expansions) {
 			return nil, fmt.Errorf("shared persistence graph differs from its complete reviewed inventory")
+		}
+		if err := verifyLegacyFail2banPersistenceGraph(graph, record.Kernel, func(path string) ([]byte, error) {
+			return expected[path].content, nil
+		}); err != nil {
+			return nil, err
 		}
 		for index, expansion := range graph.expansions {
 			if expansion.pattern != record.Expansions[index].Pattern || !slices.Equal(expansion.paths, record.Expansions[index].Paths) {
