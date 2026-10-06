@@ -539,7 +539,16 @@ jobs:
               "${stage}/usr/local/bin" \
               "${stage}/usr/share/bash-completion/completions" \
               "${stage}/usr/share/doc/syswarden"
-            for component in syswarden-cli syswarden-core syswarden-tui; do
+            for component in syswarden-core syswarden-tui syswarden-cli; do
+              link_flags='-s -w'
+              if [[ "${component}" == syswarden-cli ]]; then
+                core_digest=$(sha256sum "${stage}/opt/syswarden/bin/syswarden-core")
+                tui_digest=$(sha256sum "${stage}/opt/syswarden/bin/syswarden-tui")
+                signatures_digest=$(sha256sum "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json")
+                link_flags+=" -X syswarden-cli/pkg/system.standaloneCoreSHA256=${core_digest%% *}"
+                link_flags+=" -X syswarden-cli/pkg/system.standaloneTUISHA256=${tui_digest%% *}"
+                link_flags+=" -X syswarden-cli/pkg/system.standaloneSignaturesSHA256=${signatures_digest%% *}"
+              fi
               env \
                 CGO_ENABLED=0 \
                 GIT_NO_REPLACE_OBJECTS=1 \
@@ -600,7 +609,7 @@ jobs:
                   -buildvcs=true \
                   -mod=readonly \
                   -trimpath \
-                  -ldflags='-s -w' \
+                  -ldflags="${link_flags}" \
                   -o "${stage}/opt/syswarden/bin/${component}" \
                   "./src/core/${component}"
               chmod 0750 "${stage}/opt/syswarden/bin/${component}"
@@ -1043,7 +1052,12 @@ jobs:
               syswarden_attest_dedicated_root "${syswarden_root_path}" || return 1
               syswarden_refuse_mounted_path_tree "${syswarden_root_path}" || return 1
               syswarden_attest_dedicated_root "${syswarden_root_path}" || return 1
-              rm -rf -- "${syswarden_root_path}" || return 1
+              # Exact file retirement must finish while the CLI is available.
+              # A later purge has no authority to recursively adopt leftovers.
+              rmdir -- "${syswarden_root_path}" || {
+                  printf '%s\n' 'Refusing finalization of a nonempty product directory; all remaining entries are preserved for verified recovery.' >&2
+                  return 1
+              }
               syswarden_path_absent "${syswarden_root_path}"
           }
 
@@ -1053,7 +1067,7 @@ jobs:
               syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
               syswarden_remove_exact_runtime_socket /run/syswarden.sock || exit 1
               syswarden_remove_exact_runtime_socket /run/syswarden-control.sock || exit 1
-              if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
+              if [ "$1" = "remove" ] || [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
                   syswarden_select_removal_barrier
                   syswarden_barrier_status=$?
                   if [ "${syswarden_barrier_status}" -eq 2 ]; then
@@ -1075,12 +1089,10 @@ jobs:
                   done
                   syswarden_attest_removal_marker "${syswarden_active_barrier}" || exit 1
                   syswarden_remove_dedicated_root /opt/syswarden || exit 1
-                  syswarden_remove_dedicated_root /etc/syswarden || exit 1
+                  syswarden_finalize_retained_operator_configuration || exit 1
                   syswarden_remove_dedicated_root /var/log/syswarden || exit 1
                   syswarden_empty_removal_state || exit 1
                   syswarden_finalize_removal_state_root || exit 1
-              else
-                  syswarden_transition_to_deferred_purge || exit 1
               fi
           fi
           syswarden_refresh_systemd_after_rpm_payload_transition "${1:-}" || exit 1

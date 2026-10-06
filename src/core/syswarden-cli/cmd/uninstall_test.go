@@ -8,7 +8,21 @@ import (
 )
 
 // Pipeline tests supply package authority independently of the developer host.
-func init() { preflightStandaloneUninstall = func() error { return nil } }
+func init() {
+	preflightStandaloneUninstall = func() error { return nil }
+	preflightHistoricalFail2banForRemoval = func() error { return nil }
+	preflightAdministratorPolicyForRemoval = func() error { return nil }
+	preflightKnownNFTPersistenceForRemoval = func() error { return nil }
+	preflightHistoricalHostForRemoval = func() error { return nil }
+	attestHistoricalHostRemovalComplete = func() error { return nil }
+	removeExactJournaldFragmentForRemoval = func() error { return nil }
+	attestRuntimeRetirementBeforeNativeErase = func() error { return nil }
+	removePristineDefaultConfigurationForRemoval = func() error { return nil }
+	retireRuntimeHistoryForRemoval = func() error { return nil }
+	retireCreatedProductLogsForRemoval = func() error { return nil }
+	retireGeneratedListsForRemoval = func() error { return nil }
+	retireCreatedUISnapshotsForRemoval = func() error { return nil }
+}
 
 func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBACKEND_001(t *testing.T) {
 	previousBegin := beginRemoval

@@ -977,8 +977,24 @@ func UninstallSystem() error {
 	if err := preflightHostRemovalMountBoundaries(); err != nil {
 		return fmt.Errorf("refusing host removal before mount-boundary preflight: %w", err)
 	}
+	if !rhelPackageOwned {
+		if err := attestStandaloneCompletionPayloadAbsent(); err != nil {
+			return err
+		}
+	}
+	if err := AttestHistoricalHostRemovalComplete(); err != nil {
+		return fmt.Errorf("refusing host removal while historical recovery remains incomplete: %w", err)
+	}
 	if err := preflightHostProductRemovalArtifacts(); err != nil {
 		return fmt.Errorf("refusing host removal before product-root preflight: %w", err)
+	}
+	// Keep both the executable and its launchers available until every runtime
+	// remainder is classified. Otherwise an unrelated late refusal could make
+	// the documented retry command disappear before cleanup is complete.
+	if !rhelPackageOwned {
+		if err := AttestRuntimeRetirementBeforeNativeErase(); err != nil {
+			return fmt.Errorf("refusing standalone finalization while runtime retirement remains incomplete: %w", err)
+		}
 	}
 	if err := retireLegacyWebTUIService(IsAlpine()); err != nil {
 		return fmt.Errorf("retire legacy Web-TUI service: %w", err)
@@ -1014,10 +1030,6 @@ func UninstallSystem() error {
 	// removed and verified under the firewall lock before this phase. Exact
 	// WireGuard nftables and manifest-attributed artifacts were also removed
 	// while their ownership evidence was still available.
-	fmt.Fprintln(
-		os.Stderr,
-		"[WARN] Preserved ambiguous legacy hardening, rsyslog, shell-completion, legacy config, and root-crontab artifacts for manual recovery. Exact legacy SysWarden cron records may remain but cannot execute after the product binary is absent.",
-	)
 
 	// Remove the shared-parent log root first while the executable remains
 	// available for a retry. The durable tombstone remains until every
@@ -1027,7 +1039,12 @@ func UninstallSystem() error {
 	if err := removeDedicatedProductLogTree(); err != nil {
 		return err
 	}
-	if err := removeDedicatedRemovalTree("/etc/syswarden"); err != nil {
+	if err := FinalizeRetainedOperatorConfiguration(); err != nil {
+		return err
+	}
+	// Retire the exact compiled payload before unlinking its launchers. A
+	// refusal must leave the normal recovery command available.
+	if err := retireStandalonePayloadForRemoval(); err != nil {
 		return err
 	}
 	if err := removeExactProductSymlinkAt(
@@ -1050,6 +1067,6 @@ func UninstallSystem() error {
 		return fmt.Errorf("finalize verified host removal: %w", err)
 	}
 
-	fmt.Println("[SUCCESS] Verified SysWarden-owned host removal is complete. Preserved legacy artifacts require manual review.")
+	fmt.Println("[SUCCESS] Verified SysWarden-owned host removal is complete.")
 	return nil
 }

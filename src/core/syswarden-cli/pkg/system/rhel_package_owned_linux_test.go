@@ -749,11 +749,23 @@ func TestPrepareRHELPackageOwnedRuntimeForEraseRecoversSafeTemporaryBeforeCleanu
 			if err := prepareRHELPackageOwnedRuntimeForEraseAt(
 				root, marker, uid, gid,
 				testSuccessfulRHELPackagePayloadAttestation,
-			); err != nil {
+			); err == nil {
+				t.Fatal("temporary recovery adopted unrelated runtime contents")
+			}
+			reader, err := os.OpenRoot(filepath.Dir(canary))
+			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := os.Lstat(canary); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("runtime canary remains after successful cleanup: %v", err)
+			defer func() { _ = reader.Close() }()
+			if content, err := reader.ReadFile(filepath.Base(canary)); err != nil || string(content) != "must remain\n" {
+				t.Fatal("unproven runtime canary changed", err)
+			}
+			// Simulate a separate explicitly authorized file-retirement phase.
+			if err := os.Remove(canary); err != nil {
+				t.Fatal(err)
+			}
+			if err := prepareRHELPackageOwnedRuntimeForEraseAt(root, marker, uid, gid, testSuccessfulRHELPackagePayloadAttestation); err != nil {
+				t.Fatal(err)
 			}
 			if final, err := os.ReadFile(marker); err != nil || string(final) != rhelPackageOwnedEraseReadyRecord { // #nosec G304 -- marker is a fixed file beneath the private test root
 				t.Fatalf("erase-ready marker = %q, %v", final, err)
@@ -834,9 +846,26 @@ func TestPrepareRHELPackageOwnedRuntimeForErasePreservesOnlyRPMSkeleton(t *testi
 		t.Fatal(err)
 	}
 	marker := filepath.Join(root, "var/lib/.syswarden-rhelpo-erase-ready-v1")
-	if err := prepareRHELPackageOwnedRuntimeForEraseAt(
-		root, marker, uid, gid, testSuccessfulRHELPackagePayloadAttestation,
-	); err != nil {
+	if err := prepareRHELPackageOwnedRuntimeForEraseAt(root, marker, uid, gid, testSuccessfulRHELPackagePayloadAttestation); err == nil {
+		t.Fatal("finalization adopted unretired runtime contents")
+	}
+	// All unretired entries, including links and non-regular objects, survive.
+	// Explicit fixture teardown represents a separate verified file phase.
+	for _, path := range []string{
+		"etc/syswarden/config/modules/operator.toml", "etc/syswarden/lists/runtime.list",
+		"etc/syswarden/tls/runtime.pem", "var/lib/syswarden/ui/state.json", "var/lib/syswarden/runtime.db",
+		"var/log/syswarden/syswarden.log", "opt/syswarden/legacy-config.bak", "opt/syswarden/untrusted-link",
+		"opt/syswarden/untrusted-hardlink", "opt/syswarden/untrusted-fifo",
+	} {
+		candidate := filepath.Join(root, path)
+		if _, err := os.Lstat(candidate); err != nil {
+			t.Fatal("unproven entry was removed", err)
+		}
+		if err := os.Remove(candidate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := prepareRHELPackageOwnedRuntimeForEraseAt(root, marker, uid, gid, testSuccessfulRHELPackagePayloadAttestation); err != nil {
 		t.Fatal(err)
 	}
 	if err := prepareRHELPackageOwnedRuntimeForEraseAt(

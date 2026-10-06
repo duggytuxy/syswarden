@@ -52,6 +52,8 @@ var firewallCleanupEffectiveUserID = os.Geteuid
 
 var uninstallNFTRunnerFactory = newExecNFTCommandRunner
 
+var prepareNFTCleanupForUninstall = prepareOwnedNFTCleanup
+
 var firewallRecoveryNFTRunnerFactory = newExecNFTCommandRunner
 
 var firewallRemovalServiceReattest = system.ReattestFirewallStatePreparedForRemoval
@@ -160,16 +162,24 @@ func CleanupOwnedCompatibilityRulesForUninstall() error {
 	if err := firewallRemovalServiceReattest(); err != nil {
 		return fmt.Errorf("reattest stopped firewall mutators before cleanup: %w", err)
 	}
-	if err := applyLinuxFirewallWrappersForUninstall(nil, nil); err != nil {
-		return fmt.Errorf("clean owned compatibility wrapper permissions: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	runner, err := uninstallNFTRunnerFactory()
 	if err != nil {
 		return fmt.Errorf("prepare nftables uninstall runner: %w", err)
 	}
-	if err := cleanupReservedNFTablesForUninstall(ctx, runner); err != nil {
+	if err := preflightNFTablesForUninstall(ctx, runner); err != nil {
+		return fmt.Errorf("preserve administrator firewall protection before wrapper cleanup: %w", err)
+	}
+	cleanup, closeInspection, err := prepareNFTCleanupForUninstall(ctx, runner)
+	if err != nil {
+		return fmt.Errorf("prepare exact firewall retirement before wrapper cleanup: %w", err)
+	}
+	defer closeInspection()
+	if err := applyLinuxFirewallWrappersForUninstall(nil, nil); err != nil {
+		return fmt.Errorf("clean owned compatibility wrapper permissions: %w", err)
+	}
+	if err := cleanup(); err != nil {
 		return fmt.Errorf("clean reserved SysWarden nftables tables: %w", err)
 	}
 	if err := firewallRemovalServiceReattest(); err != nil {
@@ -455,8 +465,10 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	_, _ = fmt.Fprintf(&nftRules, "\t\tip6 saddr @syswarden_ssh_bypass6 tcp dport %s accept\n", sshPort)
 
 	// SSH Cloaking (WireGuard VPN Only) vs Standard SSH
+	wireGuardSubnet := ""
 	if config.GlobalConfig.EnableWG {
-		wireGuardSubnet, subnetErr := canonicalIPv4Network(config.GlobalConfig.WGSubnet, "WireGuard subnet")
+		var subnetErr error
+		wireGuardSubnet, subnetErr = canonicalIPv4Network(config.GlobalConfig.WGSubnet, "WireGuard subnet")
 		if subnetErr != nil {
 			return subnetErr
 		}
@@ -474,11 +486,13 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	}
 
 	// Honeyports (Insider Threat Detection)
+	var honeyPorts []string
 	if config.GlobalConfig.LANMode && config.GlobalConfig.HoneyPorts != "" {
 		ports, err := canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)
 		if err != nil {
 			return fmt.Errorf("invalid honeyport configuration: %w", err)
 		}
+		honeyPorts = strings.Split(ports, ", ")
 		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } limit rate 5/second burst 10 packets log prefix \"[SYSWARDEN-HONEYPORT] \"\n", ports)
 		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } counter drop\n", ports)
 	}
@@ -539,12 +553,13 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	_, _ = nftRules.WriteString("\t}\n}\n\n")
 
 	// 4. ARP Protection Table (L2)
+	var localIPs []string
 	if config.GlobalConfig.ArpProtect {
 		_, _ = nftRules.WriteString("table arp syswarden_arp {\n")
 		_, _ = nftRules.WriteString("\tchain input {\n\t\ttype filter hook input priority filter; policy accept;\n")
 
 		// Anti-ARP Spoofing: Drop if attacker claims to be US
-		localIPs := getLocalIPs()
+		localIPs = getLocalIPs()
 		if len(localIPs) > 0 {
 			ipList := strings.Join(localIPs, ", ")
 			_, _ = fmt.Fprintf(&nftRules, "\t\tarp saddr ip { %s } counter log prefix \"[SYSWARDEN-ARP-SPOOF] \" drop\n", ipList)
@@ -564,6 +579,21 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 		return fmt.Errorf("failed to prepare nftables sets: %w", err)
 	}
 	verification := buildNftVerificationPlan(populations, config.GlobalConfig.ArpProtect, operatorPolicy.verificationPlan())
+	verification.generation = &nftPolicyGeneration{
+		Base: nftV4028PersistenceInputs{
+			Inet: nftInetTemplateInputs{
+				Geo:    config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "",
+				ASN:    config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "",
+				Strict: strictAllow.configured, WireGuard: config.GlobalConfig.EnableWG,
+				Honey:   config.GlobalConfig.LANMode && config.GlobalConfig.HoneyPorts != "",
+				SSHPort: sshPort, WireGuardSubnet: wireGuardSubnet,
+				TCPPorts: tcpPorts, UDPPorts: udpPorts, HoneyPorts: honeyPorts,
+				LAN4: validLANSubnets4, LAN6: validLANSubnets6,
+			},
+			Interfaces: interfaces, ARP: config.GlobalConfig.ArpProtect, ARPAddresses: localIPs,
+		},
+		OperatorChain: operatorPolicy.chain,
+	}
 	runner, err := newExecNFTCommandRunner()
 	if err != nil {
 		return fmt.Errorf("prepare authoritative nftables runner: %w", err)

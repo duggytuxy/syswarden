@@ -1,0 +1,349 @@
+{
+  "schema": "syswarden-official-literal-filter-fixtures-v1",
+  "revision": "b1f909c8d774b679f46156443020fa5af45eea33",
+  "filters": [
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-aibots.conf",
+      "source": "src/jails/32-aibots.sh",
+      "source_sha256": "e4931fe6a88c485d78b23d5438c9844c0a22a6aef1cf6cae340c08828fed9454",
+      "content_sha256": "e99e0b28bbe14c7dd276a72dd8473b00bcb71cfaddccc06fe6b3d7ea1ba47265",
+      "content": "[Definition]\n# Matches known AI/LLM User-Agents in web access logs\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT|OPTIONS) [^\"]*?\" \\d{3} [^\"]*? \"[^\"]*?(?:GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-Web|Anthropic-ai|Google-Extended|PerplexityBot|Omgili|FacebookBot|Bytespider|CCBot|Diffbot|Amazonbot|Applebot-Extended|cohere-ai)[^\"]*?\"\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-apache-scanner.conf",
+      "source": "src/jails/05-apache.sh",
+      "source_sha256": "d7f38525722fc4cbe6a6797e6dfd13b87a5a8179ebfce41899e40a05a6a49a03",
+      "content_sha256": "4a67d47f49a111c8d21066685098993c8274faf715d097c5939f824d559faa5e",
+      "content": "[Definition]\n# Included HTTP 30x redirects and dynamic [A-Z]+ verbs to catch all evasive vulnerability scanners\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"[A-Z]+ [^\"]*?\" (?:30[1278]|400|401|403|404|405)\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-apache-tls.conf",
+      "source": "src/jails/53-apache-tls.sh",
+      "source_sha256": "165836079ec9ca14876a4e42e522876b7fe1caaf3c136a8ba0b73601749d84ff",
+      "content_sha256": "59e024d7290ad47d9d18bcc0177816ada2844a25d1d77844a5568d63eeae9a22",
+      "content": "[Definition]\n# [DEVSECOPS FIX] Targets mod_ssl specific error codes (AH02033 for SNI bypass, AH02261/AH02008 for handshake/cert failures)\nfailregex = ^.*? \\[ssl:(?:error|warn|info)\\].*? \\[client <HOST>(?::\\d+)?\\] AH\\d+: .*?(?:certificate verify failed|SSL Library Error|handshake failed|SSL_accept failed|peer closed connection).*$\n            ^.*? \\[ssl:(?:error|warn|info)\\].*? \\[client <HOST>(?::\\d+)?\\] SSL Library Error: .*$\n            ^.*? \\[core:(?:error|warn|info)\\].*? \\[client <HOST>(?::\\d+)?\\] AH02033: No hostname was provided via SNI.*$\n            ^.*? \\[ssl:(?:error|warn)\\].*? \\[client <HOST>(?::\\d+)?\\] AH02039: Certificate Verification: Error.*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-apimapper.conf",
+      "source": "src/jails/41_5-apimapper.sh",
+      "source_sha256": "0a08e2870914f182b5af5a89aea7ff9e8743ee498cbdc5f911497417780895de",
+      "content_sha256": "f83376bf613bbc8ad6366fcb95ed12fa69401b7822a452a038f645e097b99d2a",
+      "content": "[Definition]\n# Detects reconnaissance on Swagger, OpenAPI, and GraphQL endpoints resulting in 403/404\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD) [^\"]*(?:/swagger-ui[^ \"]*|/openapi\\.json|/swagger\\.json|/v[1-3]/api-docs|/api-docs[^ \"]*|/graphiql|/graphql/schema) HTTP/[^\"]*\" (403|404)\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-atlassian.conf",
+      "source": "src/jails/50-atlassian.sh",
+      "source_sha256": "6daebaa36362288278eb5d34c6cb453c864e11d9e22cb2f64871ed0998f03eb0",
+      "content_sha256": "f7288083d2259dfc438b4be4eb95a434d28f8dbba2da304d13187dc365bfc946",
+      "content": "[Definition]\n# RED TEAM FIX: Strict non-greedy bounds inside the HTTP method quotes to prevent ReDoS.\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"POST [^\"]*?(?:/login\\.jsp|/dologin\\.action|/rest/auth/\\d+/session)[^\"]*?\" (?:401|403|200)\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-auditd.conf",
+      "source": "src/jails/30-auditd.sh",
+      "source_sha256": "5aa6dab5c490be1afaf125006727b5137e9ac5478bc88f43bbf4a4af8e8982a1",
+      "content_sha256": "19ee8900ccc66bbf784cf0cdd3f4fc1160391f58e1bb5da0a5bf44eb79eb82f5",
+      "content": "[Definition]\nfailregex = ^.*type=(?:USER_LOGIN|USER_AUTH|USER_ERR|USER_CMD).*addr=(?:::f{4}:)?<HOST>.*res=(?:failed|0)\\s*$\n            ^.*type=ANOM_ABEND.*addr=(?:::f{4}:)?<HOST>.*\\s*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-badbots.conf",
+      "source": "src/jails/33-badbots.sh",
+      "source_sha256": "e1ecc6ec12f968afad7082cdef54fe5861d649d3ac94f634a527475c8c9482c8",
+      "content_sha256": "2e93cb705746bbbd4d32694b7d086545e200a1563d594bb2daa568754291ff6d",
+      "content": "[Definition]\n# Matches signatures of common offensive security tools and aggressive scanners\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH|CONNECT) [^\"]*?\" \\d{3} [^\"]*? \"[^\"]*?(?:Nuclei|sqlmap|Nikto|ZmEu|OpenVAS|wpscan|masscan|zgrab|CensysInspect|Shodan|NetSystemsResearch|projectdiscovery|Go-http-client|Java/|Hello World|python-requests|libwww-perl|Acunetix|Nmap|Netsparker|BurpSuite|DirBuster|dirb|gobuster|httpx|ffuf)[^\"]*?\"\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-cms-honeypot.conf",
+      "source": "src/jails/44_5-cms-honeypot.sh",
+      "source_sha256": "f52054711b4f9468656685fc301336b3eb1851745ddefe7c751bcdf1b3690613",
+      "content_sha256": "8f6f7c034a7b3cd803aaaf93e4e9b258a3117bc7c23200703a596ac008070136",
+      "content": "[Definition]\n# [DEVSECOPS FIX] Matches aggressive path traversals and double-slash bypasses (//wp/wp-includes/)\n# Instantly flags 4xx errors on standard CMS core directories/files.\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD) [^\"]*?/(?:wp-includes|wp-admin|wp-content|wp-login\\.php|xmlrpc\\.php|wlwmanifest\\.xml|joomla|administrator/index\\.php|magento)[^\"]*?\" (?:404|403|400|405)\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-cockpit-custom.conf",
+      "source": "src/jails/25-cockpit.sh",
+      "source_sha256": "eec15f266db27a93f2ee8878a8eb7a998b026ca37af8a3186823bce200e81c4b",
+      "content_sha256": "35fd120d835cedf2b4f26bd8ead202b1d7fb173730322b3b9092cb3247c2f815",
+      "content": "[Definition]\n# Purified ultra-compatible patterns matching both syslog files and systemd journal streams\nfailregex = pam_unix\\(cockpit:auth\\): authentication failure;.* rhost=(?:::ffff:)?<HOST>\n            (?:authentication failed|invalid user).*?from (?:::ffff:)?<HOST>\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-dolibarr.conf",
+      "source": "src/jails/51-dolibarr.sh",
+      "source_sha256": "a3c5a93c8d03b9217a255a893c96c3a2594a248e98a54fbe41b5b71b9dd94431",
+      "content_sha256": "084554e83be20b9cf43eae534afacda70e03cd93a023b6859553b0797df61c22",
+      "content": "[Definition]\n# [DEVSECOPS FIX] Bounded the URI parsing to strictly prevent query string ReDoS.\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"POST [^\"]*?(?:/htdocs/index\\.php|/index\\.php|/api/index\\.php/login)[^\"]*?\" (?:200|401|403)\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-drupal-auth.conf",
+      "source": "src/jails/10_5-drupal.sh",
+      "source_sha256": "8e3ca585ce350b0799338ad4f1a7e52f39e5f0ff8d9e92b7cd7ce90df4c39f4a",
+      "content_sha256": "94ba96e2b79893ba53245e850314dfae4b218184a361132060471e6c3ff0610c",
+      "content": "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"POST [^\"]*?(?:/user/login|\\?q=user/login)[^\"]*?\" 200\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-generic-auth.conf",
+      "source": "src/jails/47-generic-auth.sh",
+      "source_sha256": "f412b4ae6dde01e67d7fe426aa0fedccb8e279f1c8f0f329d74a9b7c929694ce",
+      "content_sha256": "19469933ae983218ebdbb9db3e7d6bef0968c9b5b2a2a422c6bcd5debf40ab42",
+      "content": "[Definition]\n# Detects excessive POST requests to common authentication paths to prevent credential stuffing\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"POST [^\"]*?(?:/login|/sign-in|/signin|/log-in|/auth|/authenticate|/admin/login|/user/login|/member/login)[^\"]*?(?:\\.php|\\.html|\\.htm|\\.jsp|\\.aspx)?[^\"]*?\" (?:200|401|403)\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-gitea-custom.conf",
+      "source": "src/jails/24-gitea.sh",
+      "source_sha256": "8c61b4d155c176248ea13bf99e5343ae6d87b62afa372f82b1706a0b86260296",
+      "content_sha256": "5fede590682c69bbd6c14a09f8011a5e2747c6d4a6e4faceab83e83eabfe4c66",
+      "content": "[Definition]\nfailregex = ^.*?Failed authentication attempt for .*? from <HOST>:.*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-gitlab.conf",
+      "source": "src/jails/27_5-gitlab.sh",
+      "source_sha256": "fc0290ad45f9afda1a82079a6add5043eaf32a29aeaeead0b9757cb8c56dd9b3",
+      "content_sha256": "4abce0b6759e82e7de6099a5fb939d3df88f928d6c324a8f7b8917f7a144b2b7",
+      "content": "[Definition]\nfailregex = ^.*(?:Failed Login|Authentication failed).* (?:user|username)=.* (?:ip|IP)=<HOST>.*\\s*$\n            ^.*ActionController::InvalidAuthenticityToken.* IP: <HOST>.*\\s*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-grafana-auth.conf",
+      "source": "src/jails/18-grafana.sh",
+      "source_sha256": "d4482a4bcc48a7a56d3402e4e4ae67bc53f590ed39c8e9689b2773489cd5eb71",
+      "content_sha256": "f7287c3985ecd0afc9523faed31a0bb8017144c9594244471fed11b2b4d77880",
+      "content": "[Definition]\nfailregex = ^.*(?:msg=\"Invalid username or password\"|status=401).*remote_addr=<HOST>.*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-homoglyph.conf",
+      "source": "src/jails/54-homoglyph.sh",
+      "source_sha256": "12ac213acc7d9a3a619536082190f04e73a27d8b3a6d25d084efa88778041830",
+      "content_sha256": "32b2b4aca9c536051440e566fea8ab3a056ef84f0769581c4871c74be0ebf41b",
+      "content": "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT|PATCH|DELETE|OPTIONS) [^\"]*(?:(?:(?:%%|\\\\x)F0(?:%%|\\\\x)9D(?:%%|\\\\x)9[0-9a-fA-F](?:%%|\\\\x)[89a-bA-B][0-9a-fA-F]){2,}|(?:(?:%%|\\\\x)E2(?:%%|\\\\x)80(?:%%|\\\\x)(?:8[b-fB-F]|A[a-eA-E])){2,})[^\"]*\" \\d{3}\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-idor-enum.conf",
+      "source": "src/jails/42_5-idor-enum.sh",
+      "source_sha256": "853d6887c31ffea5f0c23f316faa94ed30e4a87eb8b790681a5c70c4226670b6",
+      "content_sha256": "d04dd5d22136bc08a3707a7a391044c62218070c8b8ef62d85498fe1176cb06e",
+      "content": "[Definition]\n# Detects rapid sequential or random access to sensitive endpoints resulting in 401/403/404\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT|DELETE|PATCH) [^\"]*(?:/api/v[0-9]+/|/users?/|/profile/|/invoices?/|/downloads?/|/docs?/|/id/|/view\\?id=)[a-zA-Z0-9_-]+/?(?:[^\"]*)? HTTP/[^\"]*\" (401|403|404)\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-jenkins.conf",
+      "source": "src/jails/27-jenkins.sh",
+      "source_sha256": "80681fa8a4db83f695b398d868ddcc73c5ddad2afdadccb123950b6e797eac9d",
+      "content_sha256": "b165555d93de3ecdf86efbaf1d39f318f19f8f600b62b0495e2191ad5dd11086",
+      "content": "[Definition]\nfailregex = ^.*(?:WARN|INFO).* (?:hudson\\.security\\.AuthenticationProcessingFilter2|jenkins\\.security).* (?:unsuccessfulAuthentication|Login attempt failed).* from <HOST>.*\\s*$\n            ^.*(?:WARN|INFO).* Invalid password/token for user .* from <HOST>.*\\s*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-jndi-ssti.conf",
+      "source": "src/jails/40-jndi-ssti.sh",
+      "source_sha256": "efd698bdbd8e4d7b50c861a910af7eafac0f30bc7760bd0dd1ad29f4bcc58c77",
+      "content_sha256": "492162dc410547a20ab7af0b9d9dea72c6072697663d7da2038a154538b5f97c",
+      "content": "[Definition]\n# Detects JNDI lookups (raw and encoded) and common SSTI/Spring boot exploits in URI and User-Agent\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT) .*?(?:\\$\\{jndi:|\\x2524\\x257Bjndi:|class\\.module\\.classLoader|\\x2524\\x257Bspring\\.macro).* HTTP/.*\" \\d{3} .*$\n            ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\".*?\" \\d{3} .*? \"(?:\\$\\{jndi:|\\x2524\\x257Bjndi:).*?\"$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-laravel-auth.conf",
+      "source": "src/jails/17-laravel.sh",
+      "source_sha256": "7c77201fbc440a8294ede40c09bed218e7fce43d7fd2a0e072e522d1a060f518",
+      "content_sha256": "c278ed55a863cdf9a27e71b3f83d9e24dc6a62de11b494f9a7bb6dfff7e23117",
+      "content": "[Definition]\nfailregex = ^\\[.*\\] .*: (?:Failed login|Authentication failed|Login failed).*<HOST>.*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-lfi-advanced.conf",
+      "source": "src/jails/41-lfi-advanced.sh",
+      "source_sha256": "d5a7b4c9f90160e78ef42dc474753605a25637211645f240b46fb63d7e4e64a0",
+      "content_sha256": "76e2c1b14a4e34e05d9900a2fab136a691422e73a070286115a653d1bfc58d56",
+      "content": "[Definition]\n# [DEVSECOPS FIX] Included Nginx/Apache error log monitoring and advanced obfuscation support\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT) [^\"]*(?:php://(?:filter|input|expect)|php\\x253A\\x252F\\x252F|file://|file\\x253A\\x252F\\x252F|zip://|phar://|/etc/(?:passwd|shadow|hosts)|\\x252Fetc\\x252F(?:passwd|shadow)|/windows/(?:win\\.ini|system32)|(?:\\x2500|\\x252500)[^ ]*\\.(?:php|py|sh|pl|rb))[^\"]*\" \\d{3}\n            ^.* \\[error\\] \\d+#\\d+: \\*\\d+ .* client: <HOST>, .* request: \"(?:GET|POST|HEAD|PUT) [^\"]*(?:php://|file://|zip://|phar://|/etc/(?:passwd|shadow|hosts)|/windows/(?:win\\.ini|system32))\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-modsec.conf",
+      "source": "src/jails/35-modsec.sh",
+      "source_sha256": "b981c259051527fd852bc813c5b46d644f7a5b34ec052262c7e38dc1c6553e3a",
+      "content_sha256": "0042d9ef83c1f690dfa6d3a5726b84fddc98daea92f25b1bf1df7f751dde3f86",
+      "content": "[Definition]\n# Matches ModSecurity 4xx/5xx denials and pattern matches (Native and Reverse-Proxy X-Forwarded-For aware)\nfailregex = ^.*\\[(?:error|warn)\\].*?\\[client <HOST>(?::\\d+)?\\].*?ModSecurity: Access denied with code [45]\\d\\d.*$\n            ^.*\\[(?:error|warn)\\].*?\\[client <HOST>(?::\\d+)?\\].*?ModSecurity: Warning\\. Pattern match.*$\n            ^.*ModSecurity: Access denied.* \\[client <HOST>\\].*\n            ^.*ModSecurity: Warning.* \\[client <HOST>\\].*\nignoreregex =\n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-mongodb-guard.conf",
+      "source": "src/jails/06-mongodb.sh",
+      "source_sha256": "18a2d27a7ddb33b582fda12fb79c211c3e775e0cc71316c1cc9542c7985f1730",
+      "content_sha256": "e9cc7e731ff073749d8b6a9665c4f388a2e4e0d7d713b3de805fc29bc768e000",
+      "content": "[Definition]\nfailregex = ^.*? (?:Authentication failed|SASL authentication \\S+ failed|Command not found|unauthorized|not authorized).*? (?:<HOST>|remote:\\s*<HOST>:\\d+)\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-nextcloud.conf",
+      "source": "src/jails/11-nextcloud.sh",
+      "source_sha256": "9e3ee27ed5f909d6449053a2127ba9b18325a1aecbbbe3cbd2a4999840fee960",
+      "content_sha256": "637223e5ad48de5494961299f6f74e68eb01bfa1b6692c3eb318058edabc8d83",
+      "content": "[Definition]\nfailregex = ^.*?Login failed: .*? \\(Remote IP: '<HOST>'\\).*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-nginx-scanner.conf",
+      "source": "src/jails/04-nginx.sh",
+      "source_sha256": "ded8c4ca03762502c62ea6b9b091d5a0abf25dba6858ae275f54c75a3f3500d8",
+      "content_sha256": "2f0af6433c87831058be48c203ab098ee63e7c6dfbe3b048b2b7013a0a4fe1aa",
+      "content": "[Definition]\n# [DEVSECOPS FIX] Included HTTP 30x redirects and dynamic [A-Z]+ verbs to catch all evasive vulnerability scanners\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"[A-Z]+ [^\"]*?\" (?:30[1278]|400|401|403|404|405|444)\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-odoo.conf",
+      "source": "src/jails/48-odoo.sh",
+      "source_sha256": "8cc1a2990cc1cca22cb78edee497a8acc1824b92da52ca30bf1a8d3f82fb6ad1",
+      "content_sha256": "4d5c744d036e6d500beaa609dc36f46a573c83324648cfc0da3db8eefcd370ac",
+      "content": "[Definition]\nfailregex = ^.*? \\d+ INFO \\S+ odoo\\.addons\\.base\\.models\\.res_users: Login failed for db:.*? login:.*? from <HOST>.*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-openvpn-custom.conf",
+      "source": "src/jails/23-openvpn.sh",
+      "source_sha256": "f374fd810262c523b5b2780f846dd26b0e1d58c6a72e68df39135d672ec43e40",
+      "content_sha256": "f0a90c8777cc9315a783d5b245abb1e39322898c9f3ac2e20d738455cbb44f01",
+      "content": "[Definition]\nfailregex = ^.* <HOST>:[0-9]+ (?:TLS Error: TLS handshake failed|VERIFY ERROR:|TLS Auth Error:).*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-phpmyadmin-custom.conf",
+      "source": "src/jails/16-phpmyadmin.sh",
+      "source_sha256": "78ca4ba5d7768b730f6f25f3a4ff3ae2321f66e265fb2011a8eba28e5fb02e9c",
+      "content_sha256": "187686bae543464d7e6e692b20289a48a3364c9c3c119853bf95b320a721cd98",
+      "content": "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"POST [^\"]*?phpmyadmin[^\"]*? HTTP[^\"]*?\" 200\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-prestashop.conf",
+      "source": "src/jails/49-prestashop.sh",
+      "source_sha256": "222a67afc1a41741624fc9cae4dd2e50a162de9710e648643cb3220dad7476c8",
+      "content_sha256": "9effe5bcbb8c9c8f9b73fb385e1aa2bfe1dcef124f9e9680c51acb2ee458e544",
+      "content": "[Definition]\n# RED TEAM FIX: Bounded the URI parsing to strictly prevent query string ReDoS.\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"POST [^\"]*?index\\.php\\?[^\"]*?controller=AdminLogin[^\"]*?\" 200\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-privesc.conf",
+      "source": "src/jails/26-privesc.sh",
+      "source_sha256": "6bea9c0ed7a047da3bfce4f0a7eab3ce59f4bade1c051dded39a3c3e2003a15a",
+      "content_sha256": "34fe86e37284ae82eb3339d69921763226fd94054ff6a554be71a33fb32b24eb",
+      "content": "[INCLUDES]\nbefore = common.conf\n\n[Definition]\nfailregex = ^%(__prefix_line)s(?:su|sudo)(?:\\[\\d+\\])?: .*pam_unix\\((?:su|sudo):auth\\): authentication failure;.*rhost=<HOST>(?:\\s+user=.*)?\\s*$\n            ^%(__prefix_line)s(?:su|sudo)(?:\\[\\d+\\])?: .*(?:FAILED SU|FAILED su|authentication failure).*rhost=<HOST>.*\\s*$\n            ^%(__prefix_line)s PAM \\d+ more authentication failures; logname=.* uid=.* euid=.* tty=.* ruser=.* rhost=<HOST>.*\\s*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-proxmox-custom.conf",
+      "source": "src/jails/22-proxmox.sh",
+      "source_sha256": "65a7998d3a0c1999b9a1e516f83ed60283049abefb8b8ca608af6f28003272d0",
+      "content_sha256": "b8a871f85877b01c2bfae5dde7201c7c96f9acc5aef1b987d8804c4e7e5f1882",
+      "content": "[Definition]\nfailregex = ^.*pvedaemon\\[\\d+\\]: authentication failure; rhost=<HOST> user=.*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-proxy-abuse.conf",
+      "source": "src/jails/45-proxy-abuse.sh",
+      "source_sha256": "49f49dc47f1a9ea915e54f96623d08ac7ab4cddbd7743311f5eee5a146476f02",
+      "content_sha256": "cd472ddeca704812e62edf8b99f4bc3a0262df7a8c4d770b02abb10599fc85ad",
+      "content": "[Definition]\n# [DEVSECOPS FIX] Detects exotic methods (SSTP, WebDAV), proxy probes, and buffer overflow fuzzing in URIs\n# [HOTFIX] Extends native daemon log monitoring to catch 'invalid method' binary payloads logged at the [info] level\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:CONNECT|TRACE|TRACK|PROPFIND|PROPPATCH|MKCOL|COPY|MOVE|LOCK|UNLOCK|SSTP_DUPLEX_POST) [^\"]*?\" \\d{3}\n            ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD) (?:http|https)(?:\\x253A|:)//[^\"]*?\" \\d{3}\n            ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"\\\\x[0-9a-fA-F]{2}[^\"]*?\" (?:400|444)\n            ^.* \\[(?:info|error)\\] \\d+#\\d+: \\*\\d+ .* client: <HOST>, .* request: \"(?:SSTP_DUPLEX_POST|[^\"]*\\\\x[0-9a-fA-F]{2})\n            ^.* \\[(?:info|error)\\] \\d+#\\d+: \\*\\d+ client sent invalid method while reading client request line, client: <HOST>, .*\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-rabbitmq.conf",
+      "source": "src/jails/28_5-rabbitmq.sh",
+      "source_sha256": "156a220704d3f8bfc2acc50ff672a1b1b9abefd6923a474e6912223cf402d862",
+      "content_sha256": "8093fdbd0ddfe8ced333e8b2f4c75c3e0cf7adf41352bf6337da1734159bd70c",
+      "content": "[Definition]\nfailregex = ^.*?HTTP access denied: .*? from <HOST>.*$\n            ^.*?AMQP connection <HOST>:\\d+ .*? failed: .*?authentication failure.*$\n            ^.*?<HOST>:\\d+ .*? (?:invalid credentials|authentication failed).*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-recidive.conf",
+      "source": "src/functions/configure_fail2ban.sh",
+      "source_sha256": "ed5c5b3c7f1145f002abb4112f7fd3ee4d5e2bee01723b81895d0107ae5e0902",
+      "content_sha256": "7aba83c54640006d0fb78eb57f501351431f2c191ac657d83936c4e4d18ade7f",
+      "content": "[Definition]\n# Matches fail2ban logs including PID and NOTICE tags for correct recidive escalation\nfailregex = fail2ban\\.actions.*NOTICE\\s+\\[[^\\]]+\\]\\s+(?:Ban|Found)\\s+<HOST>\nignoreregex = fail2ban\\.actions.*NOTICE\\s+\\[[^\\]]+\\]\\s+(?:Restore )?(?:Unban|unban)\\s+<HOST>\n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-redis.conf",
+      "source": "src/jails/28-redis.sh",
+      "source_sha256": "d5d1f7f24bfd22232fd458e7caf43c54dfdfe7c010fd5f0b8f0a872fa2cdd106",
+      "content_sha256": "b649e0b3410215856ea92e17f66dba00ac9cd5471d456860af4e1c9c2e633709",
+      "content": "[Definition]\nfailregex = ^.*? <HOST>:\\d+ .*? [Aa]uthentication failed.*$\n            ^.*? Client <HOST>:\\d+ disconnected, .*? [Aa]uthentication.*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-revshell.conf",
+      "source": "src/jails/31-revshell.sh",
+      "source_sha256": "d65a4c71843753eae8f03d17ab07904e10a0042454bbfe74535465ffe35abd80",
+      "content_sha256": "10689f67389cee4048f839229a66172f2ba82b827a47c8322f8a25d6e8ad9bbc",
+      "content": "[Definition]\n# [DEVSECOPS FIX: F-010 & F-004] Unified regex normalization: Optional dates, Case-insensitivity (?i), Double-URL encoding interception (\\x25252f), and expanded LOLBins.\n# [PYTHON 3.11+ FIX] Moved inline global flag (?i) to the absolute beginning of the string to prevent compilation errors.\nfailregex = (?i)^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS) [^\"]*?(?:(?:/|\\x252f|\\x25252f)(?:bin|usr(?:/|\\x252f|\\x25252f)bin)(?:/|\\x252f|\\x25252f)(?:bash|sh|dash|zsh|ash)|(?:nc|ncat|socat)(?:\\s+|\\x2520|\\x252520|\\x2509|\\+)+(?:-e|-c)|(?:curl|wget|fetch|tftp)(?:\\s+|\\x2520|\\x252520|\\x2509|\\+)+(?:-q|-s|-O|http)|(?:python|perl|ruby|php|node|lua|awk)(?:\\s+|\\x2520|\\x252520|\\x2509|\\+)+-(?:c|e|r)|(?:;|\\x253b|\\x25253b|\\||\\x257c|\\x25257c|`|\\x2560|\\x252560|\\$|\\x2524|\\x252524)(?:\\s+|\\x2520|\\x252520|\\x2509|\\+)*(?:bash|sh|nc|ncat|socat|curl|wget|chmod|openssl)).*?\" .*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-secretshunter.conf",
+      "source": "src/jails/38-secretshunter.sh",
+      "source_sha256": "e72108d02c456bc2941e95de197357cce5831e91d15cb8f1ad66cd6026400364",
+      "content_sha256": "ec20db9df7f9b94014d97bd1e1adbf7550348c3b541f1fcdf6c6cdfb90e2852f",
+      "content": "[Definition]\n# [DEVSECOPS FIX: F-009 & F-004] Unified regex normalization: Optional dates, Case-insensitivity (?i), Double-URL encoding (\\x25252e), and universal path prefixes.\n# [PYTHON 3.11+ FIX] Moved inline global flag (?i) to the absolute beginning of the string to prevent compilation errors.\nfailregex = (?i)^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT) [^\"]*?(?:(?:/|\\x252f|\\x25252f)(?:\\.|\\x252e|\\x25252e)(?:env|git|aws|ssh)[^ ]*|(?:/|\\x252f|\\x25252f)id_(?:rsa|ed25519)[^ ]*|(?:/|\\x252f|\\x25252f)[^ ]*\\.(?:sql|bak|swp|db|sqlite3?)(?:\\.gz|\\.zip)?|(?:/|\\x252f|\\x25252f)docker-compose\\.ya?ml|(?:/|\\x252f|\\x25252f)wp-config\\.php\\.(?:bak|save|old|txt|zip)) HTTP/.*?\" \\d{3} .*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-silent-scanner.conf",
+      "source": "src/jails/44-silent-scanner.sh",
+      "source_sha256": "a244faf3b4ca26f7cc0f67a653336a172227d60ec8c026b4978613077773f8ed",
+      "content_sha256": "cf97d646a5fdda0d3b1e7d09f6a5be2b38276b6768e7f6253fcfc30c71117e4e",
+      "content": "[Definition]\n# [DEVSECOPS FIX] Bounded the HTTP request parsing [^\"]* to mathematically prevent ReDoS\n# [DEVSECOPS FIX] Added HTTP 30x redirects and dynamic [A-Z]+ verbs to capture all exotic methods\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"[A-Z]+ [^\"]*\" (?:30[1278]|400|401|403|404|405|444)\nignoreregex =\n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-slowloris.conf",
+      "source": "src/jails/55-slowloris.sh",
+      "source_sha256": "d6dc550a855ac7117bf25cde8c24c21deed3d73941a72fea1962c81572f24691",
+      "content_sha256": "55b4bc84f6877908f5b3e613cc945fd1ab362ae98937a791dd6230514c95b7c8",
+      "content": "[Definition]\n# Detects asynchronous timeouts, slow read/post operations, and HTTP/2 Multiplexing Attacks (HTTP/2 Bomb / HPACK Stall)\n# Nginx: client timed out, HTTP/2 frame violations, stream processing limits\n# Apache: AH01382 (reqtimeout), AH03198 (HTTP/2 stream timeout), AH10400 (excessive WINDOW_UPDATE frames)\nfailregex = ^.* \\[(?:info|error)\\] \\d+#\\d+: \\*\\d+ client timed out \\(\\d+: [^)]+\\) while reading client request .*, client: <HOST>, .*\n            ^.* \\[(?:info|error)\\] \\d+#\\d+: \\*\\d+ client timed out \\(\\d+: [^)]+\\) while processing HTTP/2 connection.*, client: <HOST>, .*\n            ^.* \\[(?:info|error|warn)\\] \\d+#\\d+: \\*\\d+ client sent invalid HTTP/2 frame.*, client: <HOST>, .*\n            ^.* \\[(?:info|error|warn)\\] \\d+#\\d+: \\*\\d+ client sent excessive HTTP/2 frames.*, client: <HOST>, .*\n            ^.* \\[reqtimeout:(?:info|error)\\] \\[pid \\d+(?::tid \\d+)?\\] \\[client <HOST>:\\d+\\] AH01382: Request header read timeout\n            ^.* \\[reqtimeout:(?:info|error)\\] \\[pid \\d+(?::tid \\d+)?\\] \\[client <HOST>:\\d+\\] AH01382: Request body read timeout\n            ^.* \\[http2:(?:info|error|warn)\\] \\[pid \\d+(?::tid \\d+)?\\] \\[client <HOST>:\\d+\\] AH03198: .* timeout on stream\n            ^.* \\[http2:(?:info|error|warn)\\] \\[pid \\d+(?::tid \\d+)?\\] \\[client <HOST>:\\d+\\] AH10400: .* excessive WINDOW_UPDATE frames\n            ^.* \\[core:(?:info|error)\\] \\[pid \\d+(?::tid \\d+)?\\] \\[client <HOST>:\\d+\\] AH00524: Handler for .* returned invalid result code 70007\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-sqli-xss.conf",
+      "source": "src/jails/37-sqli-xss.sh",
+      "source_sha256": "46971c743fdaef6fa3bc1e89584a43f8fc450a896f1abaeed0a7f23d7b23d9fd",
+      "content_sha256": "541fa6aaf74d58632f8bfcb9d1f20d4811b6d2708d058723fe7d899429ff6a53",
+      "content": "[Definition]\n# [DEVSECOPS FIX] Integrated advanced evasion patterns for Path Traversal (hybrid dots/url-encoding)\n# Added fallback pattern to extract malicious attempts logged into daemon error logs\n# [HOTFIX] Replaced literal '%' with '\\x25' to prevent Python ConfigParser interpolation crash\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT|PATCH|DELETE) [^\"]*(?:UNION(?:\\s|\\+|\\x2520)SELECT|CONCAT(?:\\s|\\+|\\x2520)?\\(|WAITFOR(?:\\s|\\+|\\x2520)DELAY|SLEEP(?:\\s|\\+|\\x2520)?\\(|\\x253Cscript|\\x253E|\\x253C\\x252Fscript|<script|alert\\(|onerror=|onload=|document\\.cookie|base64_decode\\(|eval\\(|\\.\\./\\.\\./|\\x252E\\x252E\\x252F|\\.(?:\\.|\\x252[eE]|\\x25252[eE]|\\x25\\x2532\\x2565)(?:/|\\x252[fF]|\\x25252[fF]|\\x25\\x2532\\x2566))[^\"]*\" \\d{3}\n            ^.* \\[error\\] \\d+#\\d+: \\*\\d+ .* client: <HOST>, .* request: \"(?:GET|POST|HEAD|PUT|PATCH|DELETE) [^\"]*(?:\\.\\./\\.\\./|\\x252E\\x252E\\x252F|\\.(?:\\.|\\x252[eE]|\\x25252[eE]|\\x25\\x2532\\x2565)(?:/|\\x252[fF]|\\x25252[fF]|\\x25\\x2532\\x2566))\n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-sso.conf",
+      "source": "src/jails/43-sso.sh",
+      "source_sha256": "9799ae35812c0a96f1cdbca2d392a8de44b003d0c788883652c9b255b4fc420c",
+      "content_sha256": "f8ee096747fbee1f4bfd28a0ee8076c668c7dfff868d928db4cf8db3e4ea81c0",
+      "content": "[Definition]\nfailregex = ^.*(?:level=error|level=\\\"error\\\").*msg=\\\"Authentication failed\\\".*remote_ip=\\\"<HOST>\\\".*$\n            ^.*(?:\\\"event\\\":\\\"Failed login\\\"|event=\\'Failed login\\').*(?:\\\"client_ip\\\":\\\"<HOST>\\\"|\\\"remote_ip\\\":\\\"<HOST>\\\").*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-ssrf.conf",
+      "source": "src/jails/39-ssrf.sh",
+      "source_sha256": "22940b48ddb23c1cc4360b7b0af94b5cc0ca31be68e25842a50d1aeb2f5109a7",
+      "content_sha256": "1d47969e6be7859fcd0e9d609db073a064c6b05165ca9a0b7ffa9bce2efa7b12",
+      "content": "[Definition]\n# [DEVSECOPS FIX: F-004 & F-005] Optional date brackets for universal log compatibility.\n# Added Case-insensitivity (?i), URL-encoding interception, and comprehensive IMDS numeric encodings (Octal, Dotted Hex).\n# [PYTHON 3.11+ FIX] Moved inline global flag (?i) to the absolute beginning of the string to prevent compilation errors.\nfailregex = (?i)^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"(?:GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS) [^\"]*?(?:169\\.254\\.169\\.254|2852039166|0xa9fea9fe|0251\\.0376\\.0251\\.0376|0xa9\\.0xfe\\.0xa9\\.0xfe|\\x2531\\x2536\\x2539\\x252e|(?:/|\\x252f|\\x25252f)metadata(?:/|\\x252f|\\x25252f)(?:instance|identity|v1)|latest(?:/|\\x252f|\\x25252f)meta-data|metadata\\.google\\.internal|(?:/|\\x252f|\\x25252f)v1(?:/|\\x252f|\\x25252f)user-data|100\\.100\\.100\\.200|192\\.0\\.0\\.192).* HTTP/.*\" \\d{3} .*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-telnet.conf",
+      "source": "src/jails/46-telnet.sh",
+      "source_sha256": "7cb04b60777f2eab70be067e081aa94cdd9ef14f9945bbcf664f17cb26cf0ee3",
+      "content_sha256": "3b4630a76e0db236d7c5294cdcd6ceccd7b64ddc75d3cf366a74a90e58dbcc01",
+      "content": "[Definition]\nfailregex = ^.*(?:in\\.telnetd|telnetd)(?:\\[\\d+\\])?: connect from (?:::f{4}:)?<HOST>.*\\s*$\n            ^.*login(?:\\[\\d+\\])?:\\s+FAILED LOGIN.*(?:FROM|from) (?:::f{4}:)?<HOST>.*\\s*$\n            ^.*login(?:\\[\\d+\\])?:\\s+.*(?:authentication failure|invalid password).*rhost=(?:::f{4}:)?<HOST>.*\\s*$\n            ^.*pam_unix\\(login:auth\\): authentication failure;.*rhost=(?:::f{4}:)?<HOST>.*\\s*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-tls-guard.conf",
+      "source": "src/jails/52-nginx-tls.sh",
+      "source_sha256": "b1d309850036a0a8a5f5f0579cb911cc8caeea97ecd638bfa96b00e1f98ba8c8",
+      "content_sha256": "bcd1552f0eb4ba694a725c94fb8488767dbcaa41f7c9962efe15e73adbf2bd9a",
+      "content": "[Definition]\n# [DEVSECOPS FIX] Non-greedy parsing to catch core SSL errors natively emitted by Nginx\nfailregex = ^.*? \\[info\\] \\d+#\\d+: \\*\\d+ SSL_do_handshake\\(\\) failed .*? client: <HOST>\n            ^.*? \\[info\\] \\d+#\\d+: \\*\\d+ peer closed connection in SSL handshake .*? client: <HOST>\n            ^.*? \\[error\\] \\d+#\\d+: \\*\\d+ no \"ssl_certificate\" is defined in server listening on SSL port .*? client: <HOST>\n            ^.*? \\[error\\] \\d+#\\d+: \\*\\d+ client SSL certificate verify error: .*? client: <HOST>\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-vaultwarden.conf",
+      "source": "src/jails/42-vaultwarden.sh",
+      "source_sha256": "2ad78216bdf795f7f07654ec305f6957d9ab4bbdf107a0a4fc0667e3790b9bf9",
+      "content_sha256": "b24141f4f162ca3ceab1a7ae763381ee05eddede7bcb0120759e880afd68a371",
+      "content": "[Definition]\nfailregex = ^.*\\[vaultwarden::api::identity\\]\\[(?:WARN|ERROR)\\].*Invalid password.*from <HOST>.*\\s*$\n            ^.*\\[vaultwarden::api::identity\\]\\[(?:WARN|ERROR)\\].*Client IP: <HOST>.*\\s*$\n            ^.*\\[(?:ERROR|WARN)\\].*Failed login attempt.*from <HOST>.*\\s*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-webshell.conf",
+      "source": "src/jails/36-webshell.sh",
+      "source_sha256": "94c83c4b2477ff9ea97c2787fb0a2c3d9e52734f5cf177dcd0eb29ac35486a09",
+      "content_sha256": "f77f0b0f9d429c967816cba278d3db7a84c0425e2921be3ad9bb24cee2707275",
+      "content": "[Definition]\n# Detects POST requests to upload/asset directories involving executable extensions\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"POST [^\"]*(?:/upload|/media|/images|/assets|/files|/tmp|/wp-content/uploads)[^\"]*\\.(?:php\\d?|phtml|phar|aspx?|ashx|jsp|cgi|pl|py|sh|exe)(?:\\?[^\"]*)? HTTP/[^\"]*\" \\d{3}\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-wireguard.conf",
+      "source": "src/jails/15-wireguard.sh",
+      "source_sha256": "6162a2a039ed45a02be027e1bc079bcb38496801fece5d67b374b417f8214ad8",
+      "content_sha256": "b44881545a32dd3e3820a8b7ed62c7ef5f8a3b1eaf3ec4443c34173669f5b33e",
+      "content": "[Definition]\nfailregex = ^.*?wireguard: .*? Handshake for peer .*? \\(<HOST>:\\d+\\) did not complete.*$\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-wordpress-auth.conf",
+      "source": "src/jails/10-wordpress.sh",
+      "source_sha256": "54fa8498c89fd93256d76d0d028e9918d8c71b61c0ab17683c1dd5f5e44fb269",
+      "content_sha256": "fabcaf9d0ef8b670dac0f92ddbdd3df08d8fd8d66f8131e5e222b3afcae48b62",
+      "content": "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ (?:\\[[^\\]]*\\]\\s+)?\"POST [^\"]*?(?:wp-login\\.php|xmlrpc\\.php)[^\"]*?\" 200\nignoreregex = \n"
+    },
+    {
+      "path": "/etc/fail2ban/filter.d/syswarden-zabbix-auth.conf",
+      "source": "src/jails/13-zabbix.sh",
+      "source_sha256": "d762dfa86f85e063edfe155845594e144548dedcdc8bcf04d6d95d2ac86112b9",
+      "content_sha256": "e17759486da461a57924a8eef24cb3fa9e957d3be3e5cb29551dde90f187ae2f",
+      "content": "[Definition]\nfailregex = ^.*?failed login of user .*? from <HOST>.*$\nignoreregex = \n"
+    }
+  ]
+}

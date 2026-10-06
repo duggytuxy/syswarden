@@ -1,0 +1,29 @@
+{
+  "profile": "shell-pre-v2",
+  "source_commit": "b1f909c8d774b679f46156443020fa5af45eea33",
+  "source_sha256": "7e4f05b550a2ab01384a635982fdbed9ba39ec04e9ec7cb402d5a2796baca749",
+  "description": "Independently captured nft list serialization of complete official shell renderer outputs. Templates bind fixed source-statement identities; placeholders are populated only from canonical typed inputs. This is a representation proof, not file ownership or mutation authorization.",
+  "statements": {
+    "front:0": "table inet syswarden_table {\n",
+    "front:2": "\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n",
+    "front:4": "\t\tct state established,related accept\n",
+    "backend:4": "\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n",
+    "backend:7": "\t\tct state invalid drop\n",
+    "backend:10": "\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n",
+    "backend:12": "\t\tct state established,related accept\n",
+    "backend:13": "\t\tiifname \"lo\" accept\n",
+    "backend:14": "\t\tip protocol icmp accept\n",
+    "backend:15": "\t\tmeta l4proto ipv6-icmp accept\n",
+    "ssh_only:0": "\t\ttcp dport {{SSHPort}} accept\n",
+    "tail:1": "\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n",
+    "tail:2": "\t\tdrop\n",
+    "active_ports:0": "\t\ttcp dport {{CombinedPorts}} accept\n",
+    "quic:0": "\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n",
+    "whitelist4:0": "\t\tip saddr {{WhitelistEntry}} accept\n",
+    "whitelist6:0": "\t\tip6 saddr {{WhitelistEntry}} accept\n",
+    "wg_port:0": "\t\tudp dport {{WireGuardPort}} accept\n",
+    "wg_front:0": "\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n",
+    "ssh_drop:0": "\t\ttcp dport {{SSHPort}} log prefix \"[SysWarden-SSH-DROP] \" drop\n",
+    "wg_backend:0": "\t\tiifname { \"lo\", \"wg0\" } accept\n"
+  }
+}

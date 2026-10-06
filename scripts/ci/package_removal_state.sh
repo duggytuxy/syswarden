@@ -153,8 +153,8 @@ syswarden_empty_removal_state() {
         "${syswarden_state_root}"/..?*; do
         syswarden_path_absent "${syswarden_state_entry}" && continue
         [ "${syswarden_state_entry}" = "${syswarden_active_barrier}" ] && continue
-        syswarden_refuse_mounted_path_tree "${syswarden_state_root}" || return 1
-        rm -rf -- "${syswarden_state_entry}" || return 1
+        printf '%s\n' 'Refusing finalization while unretired state remains. Preserve the removal evidence and complete verified file retirement.' >&2
+        return 1
     done
     syswarden_attest_removal_marker "${syswarden_active_barrier}" || return 1
     syswarden_state_count=0
@@ -169,11 +169,87 @@ syswarden_empty_removal_state() {
     [ "${syswarden_state_count}" -eq 1 ]
 }
 
+# 99-user.toml is the documented administrator-owned surface. Retention of
+# that file gives no deletion authority over adjacent or unknown entries.
+# Subshells keep recursive inventory variables local on every supported shell.
+syswarden_attest_retained_config_tree() (
+    config_path="$1"
+    config_logical="$2"
+    syswarden_path_absent "${config_path}" && exit 0
+    syswarden_attest_dedicated_root "${config_path}" || exit 1
+    syswarden_refuse_mounted_path_tree "${config_path}" || exit 1
+    for config_entry in "${config_path}"/* "${config_path}"/.[!.]* "${config_path}"/..?*; do
+        syswarden_path_absent "${config_entry}" && continue
+        config_name=${config_entry##*/}
+        case "${config_logical}/${config_name}" in
+            /etc/syswarden/config|/etc/syswarden/lists|/etc/syswarden/tls|/etc/syswarden/config/modules)
+                syswarden_attest_retained_config_tree "${config_entry}" "${config_logical}/${config_name}" || exit 1 ;;
+            /etc/syswarden/config/modules/99-user.toml)
+                [ ! -L "${config_entry}" ] && [ -f "${config_entry}" ] || exit 1
+                case "$(stat -c '%u:%g:%a:%h' "${config_entry}")" in
+                    0:0:600:1|0:0:640:1) ;;
+                    *) exit 1 ;;
+                esac ;;
+            *)
+                printf 'Unretired configuration entry remains: %s\n' "${config_entry}" >&2
+                exit 1 ;;
+        esac
+    done
+)
+
+syswarden_finalize_retained_config_tree() (
+    config_path="$1"
+    config_logical="$2"
+    syswarden_path_absent "${config_path}" && exit 0
+    syswarden_attest_retained_config_tree "${config_path}" "${config_logical}" || exit 1
+    config_identity=$(stat -c '%d:%i:%u:%g:%a' "${config_path}") || exit 1
+    for config_entry in "${config_path}"/* "${config_path}"/.[!.]* "${config_path}"/..?*; do
+        syswarden_path_absent "${config_entry}" && continue
+        config_name=${config_entry##*/}
+        case "${config_logical}/${config_name}" in
+            /etc/syswarden/config/modules/99-user.toml) ;;
+            *) syswarden_finalize_retained_config_tree "${config_entry}" "${config_logical}/${config_name}" || exit 1 ;;
+        esac
+    done
+    syswarden_attest_retained_config_tree "${config_path}" "${config_logical}" || exit 1
+    [ "$(stat -c '%d:%i:%u:%g:%a' "${config_path}")" = "${config_identity}" ] || exit 1
+    for config_entry in "${config_path}"/* "${config_path}"/.[!.]* "${config_path}"/..?*; do
+        syswarden_path_absent "${config_entry}" || exit 0
+    done
+    # rmdir cannot remove or follow a concurrent file, link or nonempty tree.
+    rmdir -- "${config_path}" || exit 1
+    sync || exit 1
+    syswarden_path_absent "${config_path}"
+)
+
+syswarden_assert_retained_operator_configuration() (
+    syswarden_path_absent /etc/syswarden && exit 0
+    syswarden_attest_retained_config_tree /etc/syswarden /etc/syswarden || exit 1
+    for config_path in /etc/syswarden /etc/syswarden/config /etc/syswarden/config/modules; do
+        config_count=0
+        for config_entry in "${config_path}"/* "${config_path}"/.[!.]* "${config_path}"/..?*; do
+            syswarden_path_absent "${config_entry}" && continue
+            case "${config_entry}" in
+                /etc/syswarden/config|/etc/syswarden/config/modules|/etc/syswarden/config/modules/99-user.toml) ;;
+                *) exit 1 ;;
+            esac
+            config_count=$((config_count + 1))
+        done
+        [ "${config_count}" -eq 1 ] || exit 1
+    done
+)
+
+syswarden_finalize_retained_operator_configuration() {
+    syswarden_attest_retained_config_tree /etc/syswarden /etc/syswarden || return 1
+    syswarden_finalize_retained_config_tree /etc/syswarden /etc/syswarden || return 1
+    syswarden_assert_retained_operator_configuration
+}
+
 syswarden_assert_external_removal_terminal() {
     syswarden_assert_product_binaries_absent || return 1
+    syswarden_assert_retained_operator_configuration || return 1
     for syswarden_terminal_path in \
         /opt/syswarden \
-        /etc/syswarden \
         /var/log/syswarden \
         /usr/local/bin/syswarden \
         /usr/local/bin/syswarden-tui \

@@ -273,3 +273,20 @@ func TestFirewallRemovalProcessClassificationCoversEveryMutatorFamily_SW2_FWBACK
 		})
 	}
 }
+
+func TestFirewallRemovalProcessScanRejectsConcurrentWireGuardRecovery(t *testing.T) {
+	root := t.TempDir()
+	procRoot := filepath.Join(root, "proc")
+	if err := os.Mkdir(procRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cliPath := filepath.Join(root, "syswarden-cli")
+	if err := os.WriteFile(cliPath, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeFirewallRemovalProcessFixture(t, procRoot, "301", cliPath, []string{cliPath, "recover-wireguard", "--apply"}, true)
+	scanner := newFirewallRemovalProcessScannerForTest(t, procRoot, cliPath, 999, "")
+	if err := scanner.scan(); err == nil || !strings.Contains(err.Error(), "recover-wireguard") {
+		t.Fatal("concurrent WireGuard recovery was not rejected", err)
+	}
+}

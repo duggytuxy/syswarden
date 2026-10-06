@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -16,13 +17,6 @@ func AutoWhitelistAdminAndInfra() error {
 		return fmt.Errorf("retire legacy metadata whitelist entry: %w", err)
 	}
 	fmt.Println("[INFO] Scanning and auto-whitelisting critical infrastructure & Admin IP...")
-
-	_ = os.MkdirAll("/etc/syswarden/lists", 0750)
-	whitelistFile := "/etc/syswarden/lists/syswarden_whitelist.ipv4"
-
-	// Read existing
-	content, _ := os.ReadFile(whitelistFile) // #nosec
-	existing := string(content)
 
 	// 1. Admin IP Detection
 	adminIP := ""
@@ -50,11 +44,6 @@ func AutoWhitelistAdminAndInfra() error {
 		discoveredInfraIPs = infraIPs
 	}
 
-	// 3. User-Defined Config IPs
-	whitelistFileV6 := "/etc/syswarden/lists/syswarden_whitelist.ipv6"
-	contentV6, _ := os.ReadFile(whitelistFileV6) // #nosec
-	existingV6 := string(contentV6)
-
 	ipsToAdd, ipsToAddV6 := automaticWhitelistCandidates(
 		adminIP,
 		config.GlobalConfig.WhitelistInfra,
@@ -66,43 +55,30 @@ func AutoWhitelistAdminAndInfra() error {
 		canonicalAdminIP = entry.network
 	}
 
-	// Append to IPv4 file safely
-	f, err := os.OpenFile(whitelistFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
-	if err != nil {
+	if err := EnsurePersistentWhitelistPair(); err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-
 	addedCount := 0
-	for _, ip := range ipsToAdd {
-		if !strings.Contains(existing, ip) {
-			_, _ = f.WriteString(ip + "\n")
-			existing += ip + "\n"
-			addedCount++
+	for _, family := range []struct {
+		name       string
+		candidates []string
+	}{
+		{"syswarden_whitelist.ipv4", ipsToAdd},
+		{"syswarden_whitelist.ipv6", ipsToAddV6},
+	} {
+		added, err := appendAutomaticWhitelist(approvedListFile{directory: "/etc/syswarden/lists", name: family.name}, family.candidates)
+		if err != nil {
+			return err
+		}
+		for _, ip := range added {
 			if ip == canonicalAdminIP {
 				fmt.Printf(" -> Auto-whitelisting Admin SSH IP: %s\n", ip)
 			} else {
-				fmt.Printf(" -> Auto-whitelisting Infra IPv4: %s\n", ip)
+				fmt.Printf(" -> Auto-whitelisting infrastructure IP: %s\n", ip)
 			}
 		}
+		addedCount += len(added)
 	}
-
-	// Append to IPv6 file safely
-	f6, err6 := os.OpenFile(whitelistFileV6, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
-	if err6 != nil {
-		return err6
-	}
-	defer func() { _ = f6.Close() }()
-
-	for _, ip := range ipsToAddV6 {
-		if !strings.Contains(existingV6, ip) {
-			_, _ = f6.WriteString(ip + "\n")
-			existingV6 += ip + "\n"
-			addedCount++
-			fmt.Printf(" -> Auto-whitelisting Infra IPv6: %s\n", ip)
-		}
-	}
-
 	if addedCount > 0 {
 		fmt.Printf("[+] Safely added %d IPs to the absolute whitelist.\n", addedCount)
 	}
@@ -120,4 +96,60 @@ func automaticWhitelistCandidates(adminIP string, includeInfra bool, infraIPs, c
 	}
 	candidates = append(candidates, configuredIPs...)
 	return canonicalWhitelistCandidates(candidates...)
+}
+
+// Automatic changes retain origin only when the exact previous list is still
+// generated. Existing unmarked or manually edited lists are never adopted.
+func appendAutomaticWhitelist(target approvedListFile, candidates []string) ([]string, error) {
+	if target.name != "syswarden_whitelist.ipv4" && target.name != "syswarden_whitelist.ipv6" {
+		return nil, fmt.Errorf("automatic whitelist target is unsupported")
+	}
+	directory, err := openListDirectory(target, false)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = directory.Close() }()
+	lease, err := lockListDirectory(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockListDirectory(lease)
+	snapshot, err := snapshotTransactionalListFileInDirectory(directory, target)
+	if err != nil {
+		return nil, err
+	}
+	if !snapshot.exists {
+		return nil, fmt.Errorf("automatic whitelist pair has not been initialized")
+	}
+	content := bytes.Clone(snapshot.content)
+	existing := make(map[string]bool)
+	for _, line := range strings.Split(string(content), "\n") {
+		existing[strings.TrimSpace(line)] = true
+	}
+	var added []string
+	for _, candidate := range candidates {
+		entry, err := parseCanonicalListEntry(candidate, false)
+		if err != nil || entry.network != candidate || entry.isIPv4 != (target.name == "syswarden_whitelist.ipv4") {
+			return nil, fmt.Errorf("automatic whitelist candidate is noncanonical or has the wrong family")
+		}
+		if existing[candidate] {
+			continue
+		}
+		if len(content) != 0 && content[len(content)-1] != '\n' {
+			content = append(content, '\n')
+		}
+		content = append(content, []byte(candidate+"\n")...)
+		existing[candidate] = true
+		added = append(added, candidate)
+	}
+	if len(added) == 0 {
+		return added, nil
+	}
+	if len(content) > maximumTransactionalListSnapshotBytes {
+		return nil, fmt.Errorf("automatic whitelist exceeds the bounded snapshot limit")
+	}
+	if err := writeListFileInDirectoryWithOrigin(directory, target, content, &snapshot.digest, nil, true); err != nil {
+		return nil, err
+	}
+	return added, nil
 }

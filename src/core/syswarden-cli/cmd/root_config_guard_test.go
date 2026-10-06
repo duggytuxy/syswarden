@@ -367,6 +367,10 @@ func TestCompletionSkipsAutomaticConfigurationAndMatchesLegacyAttestation_SW2_PK
 	const wantSize = 16339
 	const wantSHA256 = "c23c9f6c54b91105e9ecd8ad4431a9a11ad26ba3437bcd20ec2cef1a96e51d21"
 	generated := output.Bytes()
+	retiring, err := renderStandaloneCompletionPayload()
+	if err != nil || retiring != string(generated) {
+		t.Fatalf("standalone removal does not bind the published completion payload: %v", err)
+	}
 	if len(generated) != wantSize || fmt.Sprintf("%x", sha256.Sum256(generated)) != wantSHA256 {
 		t.Fatalf(
 			"completion attestation = size %d sha256 %x, want %d/%s",

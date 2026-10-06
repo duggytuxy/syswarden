@@ -1,0 +1,336 @@
+{
+  "provenance": [
+    {
+      "commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
+      "path": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
+      "source_sha256": "fcfd6e921cee312f50aad338f33f1516a519bcf87752c6595c57d38bf36336dd"
+    },
+    {
+      "commit": "e760ad91dd2aa92f42cd121bd588d4c6f82a0be2",
+      "path": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
+      "source_sha256": "907636f926089db9eadfa90ce66be3f4e6bcb6d35050baccf1a051815460dde1"
+    }
+  ],
+  "nft_version": "nftables v1.1.6 (Commodore Bullmoose #7)",
+  "cases": [
+    {
+      "case": "empty",
+      "addresses": [],
+      "source": "table arp syswarden_arp {\n\tchain input {\n\t\ttype filter hook input priority filter; policy accept;\n\t\tarp operation request limit rate over 500/second burst 1000 packets counter log prefix \"[SYSWARDEN-ARP-FLOOD] \" drop\n\t}\n}\n\n",
+      "json": {
+        "nftables": [
+          {
+            "metainfo": {
+              "version": "1.1.6",
+              "release_name": "Commodore Bullmoose #7",
+              "json_schema_version": 1
+            }
+          },
+          {
+            "table": {
+              "family": "arp",
+              "name": "syswarden_arp",
+              "handle": 1
+            }
+          },
+          {
+            "chain": {
+              "family": "arp",
+              "table": "syswarden_arp",
+              "name": "input",
+              "handle": 1,
+              "type": "filter",
+              "hook": "input",
+              "prio": 0,
+              "policy": "accept"
+            }
+          },
+          {
+            "rule": {
+              "family": "arp",
+              "table": "syswarden_arp",
+              "chain": "input",
+              "handle": 2,
+              "expr": [
+                {
+                  "match": {
+                    "op": "==",
+                    "left": {
+                      "payload": {
+                        "protocol": "arp",
+                        "field": "operation"
+                      }
+                    },
+                    "right": "request"
+                  }
+                },
+                {
+                  "limit": {
+                    "rate": 500,
+                    "burst": 1000,
+                    "per": "second",
+                    "inv": true
+                  }
+                },
+                {
+                  "counter": {
+                    "packets": 0,
+                    "bytes": 0
+                  }
+                },
+                {
+                  "log": {
+                    "prefix": "[SYSWARDEN-ARP-FLOOD] "
+                  }
+                },
+                {
+                  "drop": null
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case": "single",
+      "addresses": [
+        "192.0.2.1"
+      ],
+      "source": "table arp syswarden_arp {\n\tchain input {\n\t\ttype filter hook input priority filter; policy accept;\n\t\tarp saddr ip { 192.0.2.1 } counter log prefix \"[SYSWARDEN-ARP-SPOOF] \" drop\n\t\tarp operation request limit rate over 500/second burst 1000 packets counter log prefix \"[SYSWARDEN-ARP-FLOOD] \" drop\n\t}\n}\n\n",
+      "json": {
+        "nftables": [
+          {
+            "metainfo": {
+              "version": "1.1.6",
+              "release_name": "Commodore Bullmoose #7",
+              "json_schema_version": 1
+            }
+          },
+          {
+            "table": {
+              "family": "arp",
+              "name": "syswarden_arp",
+              "handle": 2
+            }
+          },
+          {
+            "chain": {
+              "family": "arp",
+              "table": "syswarden_arp",
+              "name": "input",
+              "handle": 1,
+              "type": "filter",
+              "hook": "input",
+              "prio": 0,
+              "policy": "accept"
+            }
+          },
+          {
+            "rule": {
+              "family": "arp",
+              "table": "syswarden_arp",
+              "chain": "input",
+              "handle": 2,
+              "expr": [
+                {
+                  "match": {
+                    "op": "==",
+                    "left": {
+                      "payload": {
+                        "protocol": "arp",
+                        "field": "saddr ip"
+                      }
+                    },
+                    "right": "192.0.2.1"
+                  }
+                },
+                {
+                  "counter": {
+                    "packets": 0,
+                    "bytes": 0
+                  }
+                },
+                {
+                  "log": {
+                    "prefix": "[SYSWARDEN-ARP-SPOOF] "
+                  }
+                },
+                {
+                  "drop": null
+                }
+              ]
+            }
+          },
+          {
+            "rule": {
+              "family": "arp",
+              "table": "syswarden_arp",
+              "chain": "input",
+              "handle": 3,
+              "expr": [
+                {
+                  "match": {
+                    "op": "==",
+                    "left": {
+                      "payload": {
+                        "protocol": "arp",
+                        "field": "operation"
+                      }
+                    },
+                    "right": "request"
+                  }
+                },
+                {
+                  "limit": {
+                    "rate": 500,
+                    "burst": 1000,
+                    "per": "second",
+                    "inv": true
+                  }
+                },
+                {
+                  "counter": {
+                    "packets": 0,
+                    "bytes": 0
+                  }
+                },
+                {
+                  "log": {
+                    "prefix": "[SYSWARDEN-ARP-FLOOD] "
+                  }
+                },
+                {
+                  "drop": null
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case": "multiple",
+      "addresses": [
+        "192.0.2.1",
+        "198.51.100.2"
+      ],
+      "source": "table arp syswarden_arp {\n\tchain input {\n\t\ttype filter hook input priority filter; policy accept;\n\t\tarp saddr ip { 192.0.2.1, 198.51.100.2 } counter log prefix \"[SYSWARDEN-ARP-SPOOF] \" drop\n\t\tarp operation request limit rate over 500/second burst 1000 packets counter log prefix \"[SYSWARDEN-ARP-FLOOD] \" drop\n\t}\n}\n\n",
+      "json": {
+        "nftables": [
+          {
+            "metainfo": {
+              "version": "1.1.6",
+              "release_name": "Commodore Bullmoose #7",
+              "json_schema_version": 1
+            }
+          },
+          {
+            "table": {
+              "family": "arp",
+              "name": "syswarden_arp",
+              "handle": 3
+            }
+          },
+          {
+            "chain": {
+              "family": "arp",
+              "table": "syswarden_arp",
+              "name": "input",
+              "handle": 1,
+              "type": "filter",
+              "hook": "input",
+              "prio": 0,
+              "policy": "accept"
+            }
+          },
+          {
+            "rule": {
+              "family": "arp",
+              "table": "syswarden_arp",
+              "chain": "input",
+              "handle": 3,
+              "expr": [
+                {
+                  "match": {
+                    "op": "==",
+                    "left": {
+                      "payload": {
+                        "protocol": "arp",
+                        "field": "saddr ip"
+                      }
+                    },
+                    "right": {
+                      "set": [
+                        "192.0.2.1",
+                        "198.51.100.2"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "counter": {
+                    "packets": 0,
+                    "bytes": 0
+                  }
+                },
+                {
+                  "log": {
+                    "prefix": "[SYSWARDEN-ARP-SPOOF] "
+                  }
+                },
+                {
+                  "drop": null
+                }
+              ]
+            }
+          },
+          {
+            "rule": {
+              "family": "arp",
+              "table": "syswarden_arp",
+              "chain": "input",
+              "handle": 4,
+              "expr": [
+                {
+                  "match": {
+                    "op": "==",
+                    "left": {
+                      "payload": {
+                        "protocol": "arp",
+                        "field": "operation"
+                      }
+                    },
+                    "right": "request"
+                  }
+                },
+                {
+                  "limit": {
+                    "rate": 500,
+                    "burst": 1000,
+                    "per": "second",
+                    "inv": true
+                  }
+                },
+                {
+                  "counter": {
+                    "packets": 0,
+                    "bytes": 0
+                  }
+                },
+                {
+                  "log": {
+                    "prefix": "[SYSWARDEN-ARP-FLOOD] "
+                  }
+                },
+                {
+                  "drop": null
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

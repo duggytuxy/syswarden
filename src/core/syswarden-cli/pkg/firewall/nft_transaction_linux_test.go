@@ -103,6 +103,16 @@ func TestMain(m *testing.M) {
 	linuxWrapperCommandEnvironment = testLinuxWrapperCommandEnvironment
 	uninstallNFTRunnerFactory = func() (nftCommandRunner, error) { return &fakeUninstallNFTRunner{}, nil }
 	firewallRemovalServiceReattest = func() error { return nil }
+	// Compatibility-wrapper fixtures use an empty synthetic nftables runtime.
+	// Keep their preparation in that fixture instead of inspecting the developer
+	// host. Writer-bound filesystem retirement has separate component and native
+	// lifecycle coverage; even this fixture must reject an existing product table.
+	prepareNFTCleanupForUninstall = func(ctx context.Context, runner nftCommandRunner) (func() error, func(), error) {
+		if err := cleanupReservedNFTablesForUninstall(ctx, runner); err != nil {
+			return nil, nil, err
+		}
+		return func() error { return cleanupReservedNFTablesForUninstall(ctx, runner) }, func() {}, nil
+	}
 	code := m.Run()
 	_ = os.RemoveAll(directory)
 	os.Exit(code)
@@ -1499,20 +1509,19 @@ func TestApplyChunkPropagatesValidationErrors_SW_FW_002(t *testing.T) {
 	}
 }
 
-func TestReservedNFTablesUninstallCleanupIsExactAndVerified_SW2_FWBACKEND_001(t *testing.T) {
+func TestReservedNFTablesUninstallCleanupNeverAdoptsNames_SW2_FWBACKEND_001(t *testing.T) {
 	operatorTable := nftTableTarget{family: "inet", name: "operator_table"}
-	runner := &fakeUninstallNFTRunner{
-		tables:              append(append([]nftTableTarget(nil), syswardenNFTTables...), operatorTable),
-		includeOperatorRule: true,
+	original := append(append([]nftTableTarget(nil), syswardenNFTTables...), operatorTable)
+	runner := &fakeUninstallNFTRunner{tables: append([]nftTableTarget(nil), original...), includeOperatorRule: true}
+	if err := cleanupReservedNFTablesForUninstall(context.Background(), runner); err == nil {
+		t.Fatal("unproven tables were accepted by their names")
 	}
+	if len(runner.deleteCalls) != 0 || !reflect.DeepEqual(runner.tables, original) {
+		t.Fatal("refused recovery changed product or administrator state")
+	}
+	runner.tables = []nftTableTarget{operatorTable}
 	if err := cleanupReservedNFTablesForUninstall(context.Background(), runner); err != nil {
-		t.Fatalf("cleanupReservedNFTablesForUninstall() error = %v", err)
-	}
-	if !reflect.DeepEqual(runner.deleteCalls, syswardenNFTTables) {
-		t.Fatalf("delete calls = %#v, want %#v", runner.deleteCalls, syswardenNFTTables)
-	}
-	if !reflect.DeepEqual(runner.tables, []nftTableTarget{operatorTable}) {
-		t.Fatalf("remaining tables = %#v, want only operator table", runner.tables)
+		t.Fatal("proven product absence was rejected", err)
 	}
 }
 
@@ -1553,7 +1562,7 @@ func TestReservedNFTablesUninstallCleanupFailsClosed_SW2_FWBACKEND_001(t *testin
 				tables:    []nftTableTarget{target},
 				deleteErr: map[nftTableTarget]error{target: errors.New("delete denied")},
 			},
-			wantDeleteCalls: 1,
+			wantDeleteCalls: 0,
 		},
 		{
 			name: "residual table",
@@ -1561,7 +1570,7 @@ func TestReservedNFTablesUninstallCleanupFailsClosed_SW2_FWBACKEND_001(t *testin
 				tables: []nftTableTarget{target},
 				retain: map[nftTableTarget]bool{target: true},
 			},
-			wantDeleteCalls: 1,
+			wantDeleteCalls: 0,
 		},
 	}
 	for _, test := range tests {
@@ -1577,17 +1586,22 @@ func TestReservedNFTablesUninstallCleanupFailsClosed_SW2_FWBACKEND_001(t *testin
 }
 
 func TestUninstallFirewallCleanupIsBracketedByServiceReattestation_SW2_FWBACKEND_001(t *testing.T) {
+	previousPrepare := prepareNFTCleanupForUninstall
 	previousUID := firewallCleanupEffectiveUserID
 	previousReattest := firewallRemovalServiceReattest
 	previousWrapperCleanup := applyLinuxFirewallWrappersForUninstall
 	previousRunnerFactory := uninstallNFTRunnerFactory
 	t.Cleanup(func() {
+		prepareNFTCleanupForUninstall = previousPrepare
 		firewallCleanupEffectiveUserID = previousUID
 		firewallRemovalServiceReattest = previousReattest
 		applyLinuxFirewallWrappersForUninstall = previousWrapperCleanup
 		uninstallNFTRunnerFactory = previousRunnerFactory
 	})
 
+	prepareNFTCleanupForUninstall = func(ctx context.Context, runner nftCommandRunner) (func() error, func(), error) {
+		return func() error { return cleanupReservedNFTablesForUninstall(ctx, runner) }, func() {}, nil
+	}
 	var order []string
 	reattestCalls := 0
 	firewallCleanupEffectiveUserID = func() int { return 0 }
@@ -1608,7 +1622,7 @@ func TestUninstallFirewallCleanupIsBracketedByServiceReattestation_SW2_FWBACKEND
 	if err := CleanupOwnedCompatibilityRulesForUninstall(); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(order, ","); got != "reattest-1,wrapper-cleanup,nft-cleanup,reattest-2" {
+	if got := strings.Join(order, ","); got != "reattest-1,nft-cleanup,wrapper-cleanup,reattest-2" {
 		t.Fatalf("cleanup order = %q", got)
 	}
 }

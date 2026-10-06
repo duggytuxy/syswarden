@@ -1,0 +1,2532 @@
+{
+  "description": "Fixed kernel semantics for independently extracted official inet renderer statements. Dynamic operands are replaced only after exact typed interval equivalence. This catalogue does not prove source, population or producer ownership.",
+  "catalogue": {
+    "1607cca1829ac081b91860528025347c9e21a6bc471659d9a6f7ba275a2660fb": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"table inet syswarden {\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "table",
+      "name": "syswarden",
+      "object": {
+        "family": "inet",
+        "name": "syswarden"
+      }
+    },
+    "b12454e59d678ba823630bbe0e1caba584edd2c704f08c0cd2a7eca156422bdb": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_whitelist",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_whitelist",
+        "table": "syswarden",
+        "type": "ipv4_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "c5e5730e6fbda168edde2361c4c6694bc0e0242839a4a2ad7fadfff494470fcf": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_whitelist6",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_whitelist6",
+        "table": "syswarden",
+        "type": "ipv6_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "ba44f47d8c657a939f33e69cc25e9b1dc03ecb022f436af83f9621820fd8de07": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_zt_allowed { type ipv4_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_zt_allowed",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_zt_allowed",
+        "table": "syswarden",
+        "type": "ipv4_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "e94453ad403293e7d8049279c0b4bf8a31311e614fe4c25d78a465d02a0c0aea": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_zt_allowed6 { type ipv6_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_zt_allowed6",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_zt_allowed6",
+        "table": "syswarden",
+        "type": "ipv6_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "42288f9210264263ecd562089d29a6f7707aa1e696c6211eda724f9771c7f5c6": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset banned_ips { type ipv4_addr; flags timeout; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "banned_ips",
+      "object": {
+        "family": "inet",
+        "name": "banned_ips",
+        "table": "syswarden",
+        "type": "ipv4_addr",
+        "flags": [
+          "timeout"
+        ]
+      }
+    },
+    "3fcbdf9d4d9858ee157f6bbc1d5f5e1020f75f39eab606955ea13b43365326a0": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset banned_ips6 { type ipv6_addr; flags timeout; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "banned_ips6",
+      "object": {
+        "family": "inet",
+        "name": "banned_ips6",
+        "table": "syswarden",
+        "type": "ipv6_addr",
+        "flags": [
+          "timeout"
+        ]
+      }
+    },
+    "597863f821d1c32f8e0212c9a3e23dca443ac634e441965a02eb76a34440af5c": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_blacklist",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_blacklist",
+        "table": "syswarden",
+        "type": "ipv4_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "cb7ba78d70d988b89065cbe6e620d37664d245bcee4e6c04ee77733d065a993f": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_blacklist6 { type ipv6_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_blacklist6",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_blacklist6",
+        "table": "syswarden",
+        "type": "ipv6_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "d52822fe5201cd6da1cb2f0fed4e2e75b7ba5643550d5c3520d36f4015f046f8": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tchain stateful_protect {\\n\\t\\ttype filter hook input priority -10; policy drop;\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "chain",
+      "name": "stateful_protect",
+      "object": {
+        "family": "inet",
+        "table": "syswarden",
+        "name": "stateful_protect",
+        "type": "filter",
+        "hook": "input",
+        "prio": -10,
+        "policy": "drop"
+      }
+    },
+    "49d45499d57141784a0e023f68d5fbc37dda979766b6dd34daa5c8d3b33679f3": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tiifname \\\"lo\\\" accept\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "meta": {
+                  "key": "iifname"
+                }
+              },
+              "right": "lo"
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "c63185c61b98d661a708a7f9736a368eabb590312ef835d49b1bcf602e73d90e": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip saddr @syswarden_whitelist accept\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_whitelist"
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "7fc7e61caca8efe02b82350c8014cb2e7dbe46a4912a6956adbcb06733dfedf0": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 saddr @syswarden_whitelist6 accept\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_whitelist6"
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "5b47f2233864e3498822a3028602be9ecfdb62de4b7ccfdb7a8aa3e51ab949bb": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip saddr @banned_ips counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@banned_ips"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "28d3e541794a94bc0e3cf6faedd65dba42afb9a700e7c4be8751a7d87d9cda47": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 saddr @banned_ips6 counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@banned_ips6"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "fb0af455ffaa8b7484ab17a5c36ddc16978b1703df0ba7347a067f8e5fd63890": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip saddr @syswarden_blacklist counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_blacklist"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "12ff232ed77c42f0a52909193f7156c3ee8ec56a703d9999302f75efe21b87f8": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 saddr @syswarden_blacklist6 counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_blacklist6"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "38ea8fe46461d4ed29e760f972b5c71411d3b732890a26ab59248ffa9ffae78d": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tct state established,related accept\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": [
+                "established",
+                "related"
+              ]
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "ed8c3a49b3f42eea51b56d4a564b6ebdd8488aa9865cdddd8e7704a39258ae20": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tct state invalid counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "invalid"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "95a75025f637a16a851b02e5ce43d7d151aaac4f4d8bda209cd6919c36f0e496": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip frag-off & 0x3fff != 0 counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "&": [
+                  {
+                    "payload": {
+                      "protocol": "ip",
+                      "field": "frag-off"
+                    }
+                  },
+                  16383
+                ]
+              },
+              "right": 0
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "86743fc52e1927a1bccf0e3a9dca4458039effa548927bfacc1fb73661290dd4": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\ttcp flags & (fin|syn|rst|psh|ack|urg) == 0 counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "flags"
+                }
+              },
+              "right": [
+                "fin",
+                "syn",
+                "rst",
+                "psh",
+                "ack",
+                "urg"
+              ]
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "25b17293cd0ed80e1a7c0b527994c8b80e0472305ac4a4f0c2cbcb6728a85b6d": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\ttcp flags & (fin|syn|rst|psh|ack|urg) == fin|psh|urg counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "&": [
+                  {
+                    "payload": {
+                      "protocol": "tcp",
+                      "field": "flags"
+                    }
+                  },
+                  {
+                    "|": [
+                      "fin",
+                      "syn",
+                      "rst",
+                      "psh",
+                      "ack",
+                      "urg"
+                    ]
+                  }
+                ]
+              },
+              "right": {
+                "|": [
+                  "fin",
+                  "psh",
+                  "urg"
+                ]
+              }
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "f7592134069cb7f8ed1de167a8f07d3bef9cd0fac9cee8153f32f1c58d1a471b": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\ttcp flags & (fin|syn|rst|ack) != syn ct state new counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "&": [
+                  {
+                    "payload": {
+                      "protocol": "tcp",
+                      "field": "flags"
+                    }
+                  },
+                  {
+                    "|": [
+                      "fin",
+                      "syn",
+                      "rst",
+                      "ack"
+                    ]
+                  }
+                ]
+              },
+              "right": "syn"
+            }
+          },
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "new"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "1721a8de942ad468da87ba62769aaf778de7c106b10182811ecd8a518aeb0309": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tct state new tcp dport { %s } accept\\n\"",
+          "strings.Join(tcpPorts, \", \")"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "new"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "TCPPorts"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 1,
+          "parameter": "TCPPorts",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "d21079fb71e1117297e295a8f36087400c9d45902cb714fe04f8757668d1f33a": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tct state new udp dport { %s } accept\\n\"",
+          "strings.Join(udpPorts, \", \")"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "new"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "udp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "UDPPorts"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 1,
+          "parameter": "UDPPorts",
+          "kind": "ports",
+          "protocol": "udp",
+          "field": "dport"
+        }
+      ]
+    },
+    "70c2d0833ededeb5ec746b210df9e0d8ba68be1adf0205bf380d580d587412e3": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tct state new tcp dport %s accept\\n\"",
+          "sshPort"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "new"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 1,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "0d321d6381547a3ebe076be752f3ab095edb0fcc68de298f4d927ba78245348e": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tip saddr { %s } accept\\n\"",
+          "strings.Join(validLANSubnets, \", \")"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": {
+                "template_parameter": "LAN4"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "LAN4",
+          "kind": "addr4",
+          "protocol": "ip",
+          "field": "saddr"
+        }
+      ]
+    },
+    "887b5716d0c086d651e5c06a93226c9f3a400b5162729d03bc6e723b964a1426": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tct state new limit rate 2/second burst 5 packets log prefix \\\"[SYSWARDEN-BLOCK] [CATCH-ALL] \\\"\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "new"
+            }
+          },
+          {
+            "limit": {
+              "rate": 2,
+              "burst": 5,
+              "per": "second"
+            }
+          },
+          {
+            "log": {
+              "prefix": "[SYSWARDEN-BLOCK] [CATCH-ALL] "
+            }
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "4a32b48ff961f44c3dac443d7c36368678dc21f61319fe140b63b5e079e66346": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tct state new counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "new"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "c4623d164a37df796d3359618079a640b91279b7432d3b49a6661a907a294e28": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tchain data_leak_protect {\\n\\t\\ttype filter hook output priority 0; policy accept;\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "chain",
+      "name": "data_leak_protect",
+      "object": {
+        "family": "inet",
+        "table": "syswarden",
+        "name": "data_leak_protect",
+        "type": "filter",
+        "hook": "output",
+        "prio": 0,
+        "policy": "accept"
+      }
+    },
+    "721e0a077a73a24740114d0642063523887fbf835a99e7e58c9c459301fdf255": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\ttcp dport 8443 accept\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": 8443
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "ef56e98e64825daf0ff8099f0264370a1d6d9385a6f8e4f00542b09d55e13aca": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tudp dport 53 udp length > 512 counter log prefix \\\"[SYSWARDEN-DNS-EXFIL] \\\" drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "udp",
+                  "field": "dport"
+                }
+              },
+              "right": 53
+            }
+          },
+          {
+            "match": {
+              "op": ">",
+              "left": {
+                "payload": {
+                  "protocol": "udp",
+                  "field": "length"
+                }
+              },
+              "right": 512
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "log": {
+              "prefix": "[SYSWARDEN-DNS-EXFIL] "
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "ad29dc3748af6ddb77a98602cae39bce4641b7eddafb1b33d475ddc98c97ed65": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tchain docker_protect {\\n\\t\\ttype filter hook forward priority -10; policy accept;\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "chain",
+      "name": "docker_protect",
+      "object": {
+        "family": "inet",
+        "table": "syswarden",
+        "name": "docker_protect",
+        "type": "filter",
+        "hook": "forward",
+        "prio": -10,
+        "policy": "accept"
+      }
+    },
+    "90363b7ef511a8d1acaeded042cb848f006066ee1af1f41a82a585e4a3b838cf": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip daddr @banned_ips counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "daddr"
+                }
+              },
+              "right": "@banned_ips"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "e48d204a5a00e69ee66ee58d58a346de7ee55b642a0135381eff9d26029aefd9": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 daddr @banned_ips6 counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "daddr"
+                }
+              },
+              "right": "@banned_ips6"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "aa02f9784750290727a94c4cb61fceade4b147dafacd02f4cd498cb86db46ac5": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip daddr @syswarden_blacklist counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "daddr"
+                }
+              },
+              "right": "@syswarden_blacklist"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "3331e6971d7a0db67607a12e94d7fed77232028d264a19362bc371dddb51227c": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 daddr @syswarden_blacklist6 counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "daddr"
+                }
+              },
+              "right": "@syswarden_blacklist6"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "45be44573a95f090607306db7c965c390aa51e84d7243f65c7c55e161414bd59": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tct state new tcp dport { %s } limit rate 5/second burst 10 packets log prefix \\\"[SYSWARDEN-HONEYPORT] \\\"\\n\"",
+          "ports"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "new"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "HoneyPorts"
+              }
+            }
+          },
+          {
+            "limit": {
+              "rate": 5,
+              "burst": 10,
+              "per": "second"
+            }
+          },
+          {
+            "log": {
+              "prefix": "[SYSWARDEN-HONEYPORT] "
+            }
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 1,
+          "parameter": "HoneyPorts",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "2d1315fc73b9a47c1f9edc4c8e42a914f1b9d857ca336923ba841a1a6811b903": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tct state new tcp dport { %s } counter drop\\n\"",
+          "ports"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "new"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "HoneyPorts"
+              }
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 1,
+          "parameter": "HoneyPorts",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "3a2cb6ac2642167169c9c5bc8bab4fe848394c169f0ce44792f5628365a2dd80": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tip saddr @syswarden_whitelist tcp dport %s accept\\n\"",
+          "sshPort"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_whitelist"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 1,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "d047222ade7dd2dff5f35b9f2e7f5a0221a925dbb94e31cae2c6e3bd394a4e6b": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tip6 saddr @syswarden_whitelist6 tcp dport %s accept\\n\"",
+          "sshPort"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_whitelist6"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 1,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "2516778a2be646b3f3b8c0dca6c7d4b99587e5264c7a9226d3516d1e19698c9b": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tip saddr %s tcp dport %s accept\\n\"",
+          "config.GlobalConfig.WGSubnet",
+          "sshPort"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": {
+                "template_parameter": "WireGuardSubnet"
+              }
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "WireGuardSubnet",
+          "kind": "addr4",
+          "protocol": "ip",
+          "field": "saddr"
+        },
+        {
+          "expression_index": 1,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "d6df1f0a93797eeff94ca3aafcd67e7f25e3c993337919e44ed7f0d9872915ce": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\ttcp dport %s counter drop\\n\"",
+          "sshPort"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "0f2c9b3c85678447395b102a845a35aa8aabdbb8a2c7d709934127118ee8f6b0": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip saddr != @syswarden_zt_allowed limit rate 2/second burst 5 packets log prefix \\\"[SYSWARDEN-ZERO-TRUST] \\\"\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_zt_allowed"
+            }
+          },
+          {
+            "limit": {
+              "rate": 2,
+              "burst": 5,
+              "per": "second"
+            }
+          },
+          {
+            "log": {
+              "prefix": "[SYSWARDEN-ZERO-TRUST] "
+            }
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "a2dbaaf9118472520c4f143e3fc28baf09d0efd99d4c9e9a1915a98bbc914ea4": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip saddr != @syswarden_zt_allowed drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_zt_allowed"
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "f0da887aeb4c7f5315dc49fd12f8e13500125890257c577e4e77203a994ac5c3": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 saddr != @syswarden_zt_allowed6 limit rate 2/second burst 5 packets log prefix \\\"[SYSWARDEN-ZERO-TRUST] \\\"\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_zt_allowed6"
+            }
+          },
+          {
+            "limit": {
+              "rate": 2,
+              "burst": 5,
+              "per": "second"
+            }
+          },
+          {
+            "log": {
+              "prefix": "[SYSWARDEN-ZERO-TRUST] "
+            }
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "050c8211592d038e2b470656d1ce4b960a9811be804f35033606b1a541dc9fc6": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 saddr != @syswarden_zt_allowed6 drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_zt_allowed6"
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "df772caa2fa3e766e433a979df5adbab4b78c418a15cc008808220ba7a3e02c8": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip saddr != @syswarden_zt_allowed counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_zt_allowed"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "069ac63837f68f9968539fbde780a8392f57f905df387e680baf51aba4be6a7b": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 saddr != @syswarden_zt_allowed6 counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_zt_allowed6"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "e517747861c55f2851840c999408df792c7dcf67300b661bc0e058f43cd86703": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_asn { type ipv4_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_asn",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_asn",
+        "table": "syswarden",
+        "type": "ipv4_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "e089a12eccfb07a99739d94c1169f9a025fcfefae413286d6388acd7ff060e0f": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_asn6 { type ipv6_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_asn6",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_asn6",
+        "table": "syswarden",
+        "type": "ipv6_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "e59c857bee2499d7d8776cbd0e033342cbbe825329a700d42063573c9c19dbdb": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip saddr @syswarden_asn counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_asn"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "07843dcf43208b4115caeb39b41330b1f307637f7f3005619f907a6b83397cfa": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 saddr @syswarden_asn6 counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_asn6"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "79659b490904884082f0613ab9f94f15014c3497cf80c92080712df3db8842aa": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_geoip",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_geoip",
+        "table": "syswarden",
+        "type": "ipv4_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "c52191d50abe5850466fd52ea2e6498b84e2136fbbd3b1df4a03cd8680a2aa30": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_geoip6 { type ipv6_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_geoip6",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_geoip6",
+        "table": "syswarden",
+        "type": "ipv6_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "f6a940dd9be622a614d047928adbffdad0ce5b86430eaf9cce87b969eb133b27": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip saddr @syswarden_geoip counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_geoip"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "499b33d088b62bb9c3c717d0e0c6cb2228bbd79d4b94baec870b8e4c30a4f073": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 saddr @syswarden_geoip6 counter drop\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_geoip6"
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "819bb8be66dda151d829de7b884a8e0adad3b83c64f178f3b5f15850883610af": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_whitelist_ports { type ipv4_addr . inet_service; flags interval; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_whitelist_ports",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_whitelist_ports",
+        "table": "syswarden",
+        "type": [
+          "ipv4_addr",
+          "inet_service"
+        ],
+        "flags": [
+          "interval"
+        ]
+      }
+    },
+    "a29139f44e71a52e69a61d4ebed586f707f7f6caf683d17a09578448527e16cd": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_whitelist_ports6 { type ipv6_addr . inet_service; flags interval; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_whitelist_ports6",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_whitelist_ports6",
+        "table": "syswarden",
+        "type": [
+          "ipv6_addr",
+          "inet_service"
+        ],
+        "flags": [
+          "interval"
+        ]
+      }
+    },
+    "4452e92f6c5af879613f1fca0f856ee826c6a820d45219ed081ab3c2ad314834": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_ssh_bypass { type ipv4_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_ssh_bypass",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_ssh_bypass",
+        "table": "syswarden",
+        "type": "ipv4_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "7349a969ea853be699258c216c30e9233667ee91e5bcad229e26944e18eaa75c": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset syswarden_ssh_bypass6 { type ipv6_addr; flags interval; auto-merge; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "syswarden_ssh_bypass6",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_ssh_bypass6",
+        "table": "syswarden",
+        "type": "ipv6_addr",
+        "flags": [
+          "interval"
+        ],
+        "auto-merge": true
+      }
+    },
+    "6d5a5dd5e70a6345a2dcd791f7be175a7d162b28d6bb810b302579563d5565ea": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset banned_ips { type ipv4_addr; flags interval,timeout; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "banned_ips",
+      "object": {
+        "family": "inet",
+        "name": "banned_ips",
+        "table": "syswarden",
+        "type": "ipv4_addr",
+        "flags": [
+          "interval",
+          "timeout"
+        ]
+      }
+    },
+    "79c4c6d5f9b79bc1d8de729b07c31d3515d500f2c73c057ebf80989283772eee": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\tset banned_ips6 { type ipv6_addr; flags interval,timeout; }\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "set",
+      "name": "banned_ips6",
+      "object": {
+        "family": "inet",
+        "name": "banned_ips6",
+        "table": "syswarden",
+        "type": "ipv6_addr",
+        "flags": [
+          "interval",
+          "timeout"
+        ]
+      }
+    },
+    "dcf8ab8e88cbc2cd8c366bbb2b20f7fec7eeb102d739c192e48d91eefd0c7d66": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "operatorPolicy.chain"
+        ],
+        "line_offset": 0
+      },
+      "kind": "chain",
+      "name": "operator-policy",
+      "object": {
+        "family": "inet",
+        "table": "syswarden",
+        "name": "operator-policy"
+      }
+    },
+    "0ff57a711b0c3e4abd2f7c2f4b4465b6e37ef89f1a3bfba44ca463951dca7001": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "operatorPolicy.chain"
+        ],
+        "line_offset": 1
+      },
+      "kind": "rule",
+      "object": {
+        "comment": "syswarden:operator-policy:v1:return",
+        "expr": [
+          {
+            "return": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "bd16cbf63d11029ddce5ec0a874b0bf47c36d9db661bdc20b1028bdd17de9989": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip saddr . tcp dport @syswarden_whitelist_ports accept\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "concat": [
+                  {
+                    "payload": {
+                      "protocol": "ip",
+                      "field": "saddr"
+                    }
+                  },
+                  {
+                    "payload": {
+                      "protocol": "tcp",
+                      "field": "dport"
+                    }
+                  }
+                ]
+              },
+              "right": "@syswarden_whitelist_ports"
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "ebaa5deb4e4087b92616d2736c08e14a478b2ee93bbe3abd64bfa76edb2897ef": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "\"\\t\\tip6 saddr . tcp dport @syswarden_whitelist_ports6 accept\\n\""
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "concat": [
+                  {
+                    "payload": {
+                      "protocol": "ip6",
+                      "field": "saddr"
+                    }
+                  },
+                  {
+                    "payload": {
+                      "protocol": "tcp",
+                      "field": "dport"
+                    }
+                  }
+                ]
+              },
+              "right": "@syswarden_whitelist_ports6"
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "187c48f4bd0d9a83d3f3dfa982e3d33f240556248900a443d0be8dfda58c58df": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tip saddr @syswarden_ssh_bypass tcp dport %s accept\\n\"",
+          "sshPort"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_ssh_bypass"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 1,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "22f94f928a4ece03f73161d08c2301d014e3c3ce2f1d659fda5668b989d3ae55": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tip6 saddr @syswarden_ssh_bypass6 tcp dport %s accept\\n\"",
+          "sshPort"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": "@syswarden_ssh_bypass6"
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 1,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "7bbae335545cced6438d48e1dced49c3e013a22c7abbc43c79bdfbc1ca91f12d": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tip saddr { %s } accept\\n\"",
+          "strings.Join(validLANSubnets4, \", \")"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": {
+                "template_parameter": "LAN4"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "LAN4",
+          "kind": "addr4",
+          "protocol": "ip",
+          "field": "saddr"
+        }
+      ]
+    },
+    "d7458c2c430576a58a7dde4eb98656fe27edfea5cb63b8b380278ecee9f4b32d": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tip6 saddr { %s } accept\\n\"",
+          "strings.Join(validLANSubnets6, \", \")"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": {
+                "template_parameter": "LAN6"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "LAN6",
+          "kind": "addr6",
+          "protocol": "ip6",
+          "field": "saddr"
+        }
+      ]
+    },
+    "bdcfe15db81aaf1f02febc15601afe1d90a20028669081d95c465881e25e6393": {
+      "source": {
+        "kind": "literal",
+        "arguments": [
+          "operatorPolicyDispatchRule()"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "comment": "syswarden:operator-policy:v1:dispatch",
+        "expr": [
+          {
+            "jump": {
+              "target": "operator-policy"
+            }
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "3c79f3c83b1631806a308f0abada00b95737e6b283ab653003c8c2dc1ec4d211": {
+      "source": {
+        "kind": "format",
+        "arguments": [
+          "\"\\t\\tip saddr %s tcp dport %s accept\\n\"",
+          "wireGuardSubnet",
+          "sshPort"
+        ],
+        "line_offset": 0
+      },
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": {
+                "template_parameter": "WireGuardSubnet"
+              }
+            }
+          },
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "WireGuardSubnet",
+          "kind": "addr4",
+          "protocol": "ip",
+          "field": "saddr"
+        },
+        {
+          "expression_index": 1,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    }
+  }
+}

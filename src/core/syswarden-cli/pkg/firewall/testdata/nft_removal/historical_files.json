@@ -1,0 +1,1255 @@
+{
+  "description": "Independent synthetic whole-file captures from the exact two historical nft list commands. Shared whitelist inputs bind both generated table blocks. This fixture establishes representation, not host ownership.",
+  "source_commit": "b1f909c8d774b679f46156443020fa5af45eea33",
+  "source_sha256": "7e4f05b550a2ab01384a635982fdbed9ba39ec04e9ec7cb402d5a2796baca749",
+  "cases": [
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": []
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": []
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.1"
+        ],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.1"
+        ],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.1"
+        ],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.1"
+        ],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "2001:db8::/64"
+        ],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [
+            "2001:db8::/64"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip6 saddr 2001:db8::/64 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::/64 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "2001:db8::/64"
+        ],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [
+            "2001:db8::/64"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip6 saddr 2001:db8::/64 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::/64 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "2001:db8::/64"
+        ],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [
+            "2001:db8::/64"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip6 saddr 2001:db8::/64 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::/64 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "2001:db8::/64"
+        ],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [
+            "2001:db8::/64"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip6 saddr 2001:db8::/64 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::/64 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.0/24",
+          "2001:db8::1"
+        ],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.0/24"
+          ],
+          "syswarden_whitelist6": [
+            "2001:db8::1"
+          ],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.0/24 accept\n\t\tip6 saddr 2001:db8::1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::1 }\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.0/24",
+          "2001:db8::1"
+        ],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.0/24"
+          ],
+          "syswarden_whitelist6": [
+            "2001:db8::1"
+          ],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.0/24 accept\n\t\tip6 saddr 2001:db8::1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::1 }\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.0/24",
+          "2001:db8::1"
+        ],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.0/24"
+          ],
+          "syswarden_whitelist6": [
+            "2001:db8::1"
+          ],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.0/24 accept\n\t\tip6 saddr 2001:db8::1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::1 }\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.0/24",
+          "2001:db8::1"
+        ],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.0/24"
+          ],
+          "syswarden_whitelist6": [
+            "2001:db8::1"
+          ],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.0/24 accept\n\t\tip6 saddr 2001:db8::1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::1 }\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.1",
+          "192.0.2.1"
+        ],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1",
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": []
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tip saddr 192.0.2.1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.1",
+          "192.0.2.1"
+        ],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1",
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": []
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tip saddr 192.0.2.1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.1",
+          "192.0.2.1"
+        ],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1",
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tip saddr 192.0.2.1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": false,
+        "Whitelist": [
+          "192.0.2.1",
+          "192.0.2.1"
+        ],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1",
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tip saddr 192.0.2.1 accept\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.1"
+        ],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": []
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.1"
+        ],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": []
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.1"
+        ],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.1"
+        ],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "2001:db8::/64"
+        ],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [
+            "2001:db8::/64"
+          ],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip6 saddr 2001:db8::/64 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::/64 }\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "2001:db8::/64"
+        ],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [
+            "2001:db8::/64"
+          ],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip6 saddr 2001:db8::/64 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::/64 }\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "2001:db8::/64"
+        ],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [
+            "2001:db8::/64"
+          ],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip6 saddr 2001:db8::/64 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::/64 }\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "2001:db8::/64"
+        ],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [],
+          "syswarden_whitelist6": [
+            "2001:db8::/64"
+          ],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip6 saddr 2001:db8::/64 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::/64 }\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.0/24",
+          "2001:db8::1"
+        ],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.0/24"
+          ],
+          "syswarden_whitelist6": [
+            "2001:db8::1"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.0/24 accept\n\t\tip6 saddr 2001:db8::1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::1 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.0/24",
+          "2001:db8::1"
+        ],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.0/24"
+          ],
+          "syswarden_whitelist6": [
+            "2001:db8::1"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.0/24 accept\n\t\tip6 saddr 2001:db8::1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::1 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.0/24",
+          "2001:db8::1"
+        ],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.0/24"
+          ],
+          "syswarden_whitelist6": [
+            "2001:db8::1"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.0/24 accept\n\t\tip6 saddr 2001:db8::1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::1 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.0/24",
+          "2001:db8::1"
+        ],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": false,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.0/24"
+          ],
+          "syswarden_whitelist6": [
+            "2001:db8::1"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.0/24 accept\n\t\tip6 saddr 2001:db8::1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 2001:db8::1 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.1",
+          "192.0.2.1"
+        ],
+        "ActivePorts": "",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1",
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tip saddr 192.0.2.1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport 22222 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.1",
+          "192.0.2.1"
+        ],
+        "ActivePorts": "443",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": false,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1",
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tip saddr 192.0.2.1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 443, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.1",
+          "192.0.2.1"
+        ],
+        "ActivePorts": "80,443,8080",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv0",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1",
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tip saddr 192.0.2.1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 80, 443, 8080, 22222 } accept\n\t\tudp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv0\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    },
+    {
+      "inet_inputs": {
+        "WireGuard": true,
+        "Whitelist": [
+          "192.0.2.1",
+          "192.0.2.1"
+        ],
+        "ActivePorts": "81, 8081",
+        "SSHPort": "22222",
+        "WireGuardPort": "51821"
+      },
+      "ingress_inputs": {
+        "interface": "swv1",
+        "geo": true,
+        "asn": true,
+        "populations": {
+          "syswarden_blacklist": [
+            "192.0.2.0/25",
+            "192.0.2.128/25",
+            "198.51.100.3-198.51.100.5"
+          ],
+          "syswarden_whitelist": [
+            "192.0.2.1",
+            "192.0.2.1"
+          ],
+          "syswarden_whitelist6": [],
+          "syswarden_geoip": [
+            "198.51.100.0/24"
+          ],
+          "syswarden_asn": [
+            "203.0.113.0/24"
+          ]
+        }
+      },
+      "source": "table inet syswarden_table {\n\tchain input_frontline {\n\t\ttype filter hook input priority filter - 10; policy accept;\n\t\tct state established,related accept\n\t\tip saddr 192.0.2.1 accept\n\t\tip saddr 192.0.2.1 accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept comment \"SysWarden: Global Trust for VPN\"\n\t\ttcp dport 22222 log prefix \"[SysWarden-SSH-DROP] \" drop\n\t}\n\n\tchain input_backend {\n\t\ttype filter hook input priority filter + 10; policy drop;\n\t\tct state invalid drop\n\t\ttcp flags & (fin | syn | rst | ack) != syn ct state new drop\n\t\tct state established,related accept\n\t\tiifname \"lo\" accept\n\t\tip protocol icmp accept\n\t\tmeta l4proto ipv6-icmp accept\n\t\ttcp dport { 81, 8081, 22222 } accept\n\t\tudp dport 51821 accept\n\t\tiifname { \"lo\", \"wg0\" } accept\n\t\tlimit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n\t\tdrop\n\t}\n}\ntable netdev syswarden_hw_drop {\n\tset syswarden_blacklist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.0/24, 198.51.100.3-198.51.100.5 }\n\t}\n\n\tset syswarden_whitelist {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 192.0.2.1 }\n\t}\n\n\tset syswarden_whitelist6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\n\tset syswarden_geoip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 198.51.100.0/24 }\n\t}\n\n\tset syswarden_asn {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 203.0.113.0/24 }\n\t}\n\n\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"swv1\" priority -500; policy accept;\n\t\tip saddr @syswarden_whitelist accept\n\t\tip6 saddr @syswarden_whitelist6 accept\n\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn | rst | psh | ack | urg) == fin | syn | rst | psh | ack | urg counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (fin | syn) == fin | syn counter packets 0 bytes 0 drop\n\t\tip protocol tcp tcp flags & (syn | rst) == syn | rst counter packets 0 bytes 0 drop\n\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n\t\tip saddr @syswarden_blacklist drop\n\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n\t\tip saddr @syswarden_geoip drop\n\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n\t\tip saddr @syswarden_asn drop\n\t}\n}\n"
+    }
+  ]
+}
