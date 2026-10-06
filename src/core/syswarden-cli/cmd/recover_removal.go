@@ -26,8 +26,8 @@ var inspectLegacyCronRetirement = system.InspectLegacyCronRetirement
 var applyLegacyCronRetirement = system.ApplyLegacyCronRetirement
 
 func newRecoverRemovalCommand() *cobra.Command {
-	var retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, retainOperatorConfig, apply bool
-	var digest, fileDigest string
+	var retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, retainOperatorConfig, retireHistoricalFirewall, confirmHistoricalInputs, apply bool
+	var digest, fileDigest, historicalInputs string
 	command := &cobra.Command{
 		Use:   "recover-removal",
 		Short: "Inspect bounded recovery for complete product removal",
@@ -38,7 +38,7 @@ func newRecoverRemovalCommand() *cobra.Command {
 			for _, candidate := range []struct {
 				selected bool
 				kind     string
-			}{{retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}} {
+			}{{retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}, {retireHistoricalFirewall, "historical-firewall-persistence"}} {
 				if candidate.selected {
 					if selection != "" {
 						return fmt.Errorf("select exactly one legacy retention inventory")
@@ -54,6 +54,15 @@ func newRecoverRemovalCommand() *cobra.Command {
 			}
 			if apply && digest == "" {
 				return fmt.Errorf("--apply requires --plan-sha256 from a reviewed dry run")
+			}
+			if selection == "historical-firewall-persistence" {
+				if historicalInputs == "" || fileDigest != "" || confirmHistoricalInputs != apply {
+					return fmt.Errorf("historical persistence requires --historical-inputs, and applying additionally requires --confirm-historical-inputs; Fail2ban file-plan approval does not apply")
+				}
+				return runHistoricalFirewallPersistenceRecovery(cmd, historicalInputs, digest, apply, confirmHistoricalInputs)
+			}
+			if historicalInputs != "" || confirmHistoricalInputs {
+				return fmt.Errorf("historical input flags apply only to --retire-legacy-firewall-persistence")
 			}
 			if selection == "unused-fail2ban-resume" {
 				if fileDigest == "" {
@@ -117,6 +126,9 @@ func newRecoverRemovalCommand() *cobra.Command {
 			return err
 		},
 	}
+	command.Flags().BoolVar(&retireHistoricalFirewall, "retire-legacy-firewall-persistence", false, "Review an exact historical persistent source after product tables are absent")
+	command.Flags().StringVar(&historicalInputs, "historical-inputs", "", "Private original generation input capture for historical persistence review")
+	command.Flags().BoolVar(&confirmHistoricalInputs, "confirm-historical-inputs", false, "Explicitly confirm original independent generation inputs when applying historical persistence recovery")
 	command.Flags().BoolVar(&retainOperatorConfig, "retain-operator-config", false, "Review administrator configuration retention at its original paths across uninstall, remove and purge")
 	command.Flags().BoolVar(&retainLegacyLogs, "retain-legacy-logs", false, "Inspect exact private retention of operator-confirmed legacy product logs")
 	command.Flags().BoolVar(&retainLegacyLists, "retain-legacy-lists", false, "Inspect exact private retention of operator-confirmed legacy lists")

@@ -76,6 +76,35 @@ only with the original bound table identity. An already empty table without
 that evidence does not acquire deletion authority. Existing version-one plans
 keep their original meaning and cannot silently authorize whole-table removal.
 
+## Historical persistent-source recovery
+
+A separate `recover-removal --retire-legacy-firewall-persistence` route accepts
+an independently retained v4.02.8 generation-input capture supplied with
+`--historical-inputs`. It recognizes only the complete supported historical
+empty-set source. Every reserved product table must already be absent. This
+route does not infer ownership of live set populations and never deletes live
+rules or reloads the shared firewall.
+
+The private capture binds the original configuration evidence and original
+host-input evidence separately from the candidate source. Its description and
+evidence files must be regular private files in a private directory under
+`/root`. File hashes bind the reviewed bytes; they do not authenticate their
+historical origin. Applying requires both the exact plan digest and
+`--confirm-historical-inputs`, confirming that the supplied values describe
+independently retained original inputs. Values reconstructed from the candidate
+source or from an agreeing live ruleset do not satisfy this requirement.
+
+The bounded include graph binds the actual loader, source identities and
+metadata. Applying stops managed product producers, rechecks absent runtime,
+retains original source and shared-file backups privately, and removes only
+recognized product entries. Administrator bytes in shared files remain intact.
+Modern ownership receipts, transaction journals or removal progress must use
+their original recovery route; this procedure cannot replace those records or
+broaden an earlier plan. Interrupted retirement can resume only with the same
+input evidence, loader authority and reviewed digest. Completion of this route
+covers persistent-source retirement only; repeat the original removal command
+to handle the remaining product state.
+
 ## Administrator configuration retention
 
 The documented `99-user.toml` override remains administrator-owned. Additional
@@ -110,8 +139,9 @@ outside this modular retention route.
 The following states remain refused and require additional bounded recovery
 work. A refusal preserves evidence; it is not complete removal:
 
-- Historical product persistence without an independent writer record, even
-  when a pure historical template recognizer can identify its shape.
+- Historical product persistence without independently retained original
+  generation inputs, and historical live rules not covered by a separate
+  ownership proof. A matching template alone is insufficient.
 - Configured or live administrator policy embedded in product-owned tables
   until equivalent independently managed protection is established.
 - Customized configuration outside the documented retained `99-user.toml`

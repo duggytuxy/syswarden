@@ -985,6 +985,13 @@
         "persistent": true
       },
       {
+        "name": "confirm-historical-inputs",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Explicitly confirm original independent generation inputs when applying historical persistence recovery"
+      },
+      {
         "name": "file-plan-sha256",
         "type": "string",
         "default": "",
@@ -997,6 +1004,12 @@
         "default": "false",
         "no_option": "true",
         "usage": "help for recover-removal"
+      },
+      {
+        "name": "historical-inputs",
+        "type": "string",
+        "default": "",
+        "usage": "Private original generation input capture for historical persistence review"
       },
       {
         "name": "plan-sha256",
@@ -1059,6 +1072,13 @@
         "default": "false",
         "no_option": "true",
         "usage": "Inspect exact historical Fail2ban entries in shared persistent rules with private original backups"
+      },
+      {
+        "name": "retire-legacy-firewall-persistence",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Review an exact historical persistent source after product tables are absent"
       }
     ],
     "arg_outcomes": {

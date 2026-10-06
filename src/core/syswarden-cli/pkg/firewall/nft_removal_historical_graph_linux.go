@@ -39,7 +39,7 @@ type nftHistoricalPersistencePlan struct {
 }
 
 func encodeNFTHistoricalPersistenceBinding(binding nftHistoricalPersistenceBinding) ([]byte, string, error) {
-	if binding.Schema != nftHistoricalPersistenceSchema || binding.Source.Artifact.Path != legacyNFTIncludePath ||
+	if (binding.Schema != nftHistoricalPersistenceSchema && binding.Schema != nftHistoricalReviewedPersistenceSchema) || binding.Source.Artifact.Path != legacyNFTIncludePath ||
 		binding.Source.EditedSHA256 != binding.Source.Artifact.SHA256 ||
 		!validLegacyRetirementDigest(binding.Origins) || binding.Origins == strings.Repeat("0", 64) ||
 		!validLegacyRetirementDigest(binding.Producers) || binding.Producers == strings.Repeat("0", 64) {
@@ -48,8 +48,11 @@ func encodeNFTHistoricalPersistenceBinding(binding nftHistoricalPersistenceBindi
 	if binding.V4028 != nil && binding.Current != nil || (binding.V4028 != nil || binding.Current != nil) && (binding.Ingress != nil || !reflect.DeepEqual(binding.Inet, nftShellInputs{})) {
 		return nil, "", fmt.Errorf("historical persistence has ambiguous renderer-generation inputs")
 	}
-	if binding.ProductEntry && binding.Current == nil {
-		return nil, "", fmt.Errorf("dedicated product entry retirement requires current writer ownership")
+	if binding.Schema == nftHistoricalReviewedPersistenceSchema && (binding.V4028 == nil || binding.Current != nil || !binding.ProductEntry) {
+		return nil, "", fmt.Errorf("reviewed historical persistence requires its separate complete v4.02.8 input binding")
+	}
+	if binding.ProductEntry && binding.Current == nil && binding.Schema != nftHistoricalReviewedPersistenceSchema {
+		return nil, "", fmt.Errorf("dedicated product entry retirement requires current writer ownership or a separate historical input review")
 	}
 	content, err := json.Marshal(binding)
 	if err != nil || len(content) > maximumNFTPersistenceBytes {
