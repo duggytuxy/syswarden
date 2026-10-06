@@ -1,24 +1,8 @@
 {
   "schema_version": 2,
   "baseline_commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
-  "policy": "The 36 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
+  "policy": "The 28 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
   "legacy": [
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/auto_whitelist.go",
-      "source_sha256": "3790e0795ece73f23018a1dc645edfc5ea2f002356b7d02f71188ed2763b96a5"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/auto_whitelist.go",
-      "source_sha256": "8090496061d39138153c736a0b9c5b37406a1699f49c8994eab065f2dddd1fd6"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/auto_whitelist.go",
-      "source_sha256": "839a4c26a5446f55d249fb7611f1a842dcdb757b38a172b8439727bc5c465909"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/auto_whitelist.go",
-      "source_sha256": "fd8c567c8d22a62735ce6d8fe1369be52482aa51ec9a1d7a80dfe0eb0b5a5769"
-    },
     {
       "file": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
       "source_sha256": "1ec8f45115f957c3c629ef5a09d34b1db96e855e62dbfc2f22246311eeb2269b"
@@ -52,9 +36,9 @@
       "source_sha256": "defbf23f23c38bd38ee87c4128c1e75b6c40e2b54002e3a611bcd13944baf62e"
     },
     {
-      "count": 2,
       "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
-      "source_sha256": "ed86f00231fa26792b98e85bf2cea75d0148af16e0c24c472646f20feeb2c98e"
+      "source_sha256": "ed86f00231fa26792b98e85bf2cea75d0148af16e0c24c472646f20feeb2c98e",
+      "count": 2
     },
     {
       "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
@@ -101,14 +85,6 @@
       "source_sha256": "ff1ac882ad1da5e29c8c253b479c72393afc4d07dd5cbc197f69ba0ac95d89e5"
     },
     {
-      "file": "src/core/syswarden-core/logger/logger.go",
-      "source_sha256": "6bb6b83753f84af2e1ed37c36b33abe39fc2b884c586b034ab05ea1a975e0a43"
-    },
-    {
-      "file": "src/core/syswarden-core/main.go",
-      "source_sha256": "541e5063ede65ae76837557956f1801e2b6f2cf25efb927a48f9c5e98f44527f"
-    },
-    {
       "file": "src/core/syswarden-core/telemetry/abuse.go",
       "source_sha256": "4591cfef2f14bf71c49c5958567575878304c81b0dc03dec268c01909cf5de7d"
     },
@@ -123,14 +99,6 @@
     {
       "file": "src/core/syswarden-core/telemetry/worker.go",
       "source_sha256": "9567064fa583a660078ad085e8c183da078d7477291002d03aed5055e6216d25"
-    },
-    {
-      "file": "src/core/syswarden-core/telemetry/worker.go",
-      "source_sha256": "bdcd20ecf21cd220122b0a38d73038e648f99891a4c31e78106c8ebffcd44f73"
-    },
-    {
-      "file": "src/core/syswarden-core/telemetry/worker.go",
-      "source_sha256": "be141befd0b6662b53005cb869a8447541aa0b9304c34e3f9e70f774d587300f"
     },
     {
       "file": "src/core/syswarden-core/telemetry/worker.go",
