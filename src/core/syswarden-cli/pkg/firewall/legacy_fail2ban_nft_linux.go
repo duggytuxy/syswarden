@@ -395,6 +395,11 @@ func applyLegacyFail2banNFTTransition(ctx context.Context, runner nftCommandRunn
 		len(plan.transaction) == 0 || len(plan.transaction) > 1<<20 || len(plan.before) > 8<<20 || len(plan.after) > 8<<20 || len(plan.claims) > 8<<20 || plan.sha256 != plan.digest() {
 		return fmt.Errorf("exact nftables retirement lacks complete durable authorization")
 	}
+	if legacyFail2banRetiresWholeTable(plan) {
+		return applyLegacyFail2banTableRetirement(ctx, runner, plan, authorize, func(ctx context.Context, inspect func(context.Context) ([]nftTableTarget, error)) (nftRemovalFence, error) {
+			return newNFTGenerationFence(ctx, inspect)
+		})
+	}
 	read := func() ([]byte, error) {
 		if err := authorize(ctx, plan.sha256); err != nil {
 			return nil, err

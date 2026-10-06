@@ -53,6 +53,9 @@ func (runner legacyFail2banNFTRunner) Run(ctx context.Context, input []byte, arg
 	if !reflect.DeepEqual(args, []string{"-j", "-f", "-"}) || !bytes.Equal(input, runner.plan.transaction) {
 		return nil, fmt.Errorf("Fail2ban nftables executable refuses an unbound command")
 	}
+	if legacyFail2banRetiresWholeTable(runner.plan) {
+		return nil, fmt.Errorf("whole-table retirement requires the independent kernel generation fence")
+	}
 	return runLegacyFail2banNFT(ctx, runner.executable, runner.plan.table, input)
 }
 

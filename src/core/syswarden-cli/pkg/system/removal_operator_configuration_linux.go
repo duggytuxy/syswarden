@@ -19,11 +19,19 @@ func FinalizeRetainedOperatorConfiguration() error {
 	if err := preflightHostRemovalMountBoundaries(); err != nil {
 		return err
 	}
-	return finalizeRetainedOperatorConfigurationAt("/etc/syswarden", 0, 0, nil)
+	retained, err := retainedOperatorConfigurationPaths(operatorRetentionRecordsPath)
+	if err != nil {
+		return err
+	}
+	return finalizeRetainedOperatorConfigurationWithRetention("/etc/syswarden", 0, 0, nil, retained)
 }
 
 func finalizeRetainedOperatorConfigurationAt(path string, uid, gid uint32, afterInventory func()) error {
-	if err := attestRuntimeRetirementRoot(path, "/etc/syswarden", uid, gid, afterInventory); err != nil {
+	return finalizeRetainedOperatorConfigurationWithRetention(path, uid, gid, afterInventory, nil)
+}
+
+func finalizeRetainedOperatorConfigurationWithRetention(path string, uid, gid uint32, afterInventory func(), approved map[string]bool) error {
+	if err := attestRuntimeRetirementRootWithRetention(path, "/etc/syswarden", uid, gid, afterInventory, approved); err != nil {
 		return err
 	}
 	tree, err := openPinnedSharedRemovalTree(path, uid, gid, uid, sharedRemovalRaceHooks{})
@@ -35,15 +43,15 @@ func finalizeRetainedOperatorConfigurationAt(path string, uid, gid uint32, after
 		return nil
 	}
 	bindings := make(map[string]removalArtifactIdentity)
-	if err := attestRuntimeRetirementTree(tree, "/etc/syswarden", uid, gid, bindings); err != nil {
+	if err := attestRuntimeRetirementTreeWithRetention(tree, "/etc/syswarden", uid, gid, bindings, approved); err != nil {
 		return err
 	}
-	retained, err := finalizeOperatorConfigurationChildren(tree.root, "/etc/syswarden", bindings)
+	retained, err := finalizeOperatorConfigurationChildren(tree.root, "/etc/syswarden", bindings, approved)
 	if err != nil {
 		return err
 	}
 	if retained {
-		return attestRuntimeRetirementRoot(path, "/etc/syswarden", uid, gid, nil)
+		return attestRuntimeRetirementRootWithRetention(path, "/etc/syswarden", uid, gid, nil, approved)
 	}
 	current, err := tree.parent.root.Lstat(tree.name)
 	opened, openedErr := tree.root.Stat(".")
@@ -53,7 +61,7 @@ func finalizeRetainedOperatorConfigurationAt(path string, uid, gid uint32, after
 	return removeEmptyProductDirectory(tree.parent.root, tree.name, path)
 }
 
-func finalizeOperatorConfigurationChildren(root *os.Root, logical string, bindings map[string]removalArtifactIdentity) (bool, error) {
+func finalizeOperatorConfigurationChildren(root *os.Root, logical string, bindings map[string]removalArtifactIdentity, approved map[string]bool) (bool, error) {
 	entries, err := readBoundedSharedRemovalEntries(root)
 	if err != nil {
 		return false, err
@@ -68,7 +76,7 @@ func finalizeOperatorConfigurationChildren(root *os.Root, logical string, bindin
 		if err != nil || identityErr != nil || !known || identity != expected {
 			return false, fmt.Errorf("configuration inventory changed before finalization: %q", path)
 		}
-		if path == "/etc/syswarden/config/modules/99-user.toml" {
+		if isRetainedOperatorConfiguration(path, approved) {
 			retained = true
 			continue
 		}
@@ -85,7 +93,7 @@ func finalizeOperatorConfigurationChildren(root *os.Root, logical string, bindin
 			_ = child.Close()
 			return false, fmt.Errorf("configuration directory changed while opening: %q", path)
 		}
-		childRetained, childErr := finalizeOperatorConfigurationChildren(child, path, bindings)
+		childRetained, childErr := finalizeOperatorConfigurationChildren(child, path, bindings, approved)
 		current, statErr := root.Lstat(name)
 		opened, openedErr = child.Stat(".")
 		closeErr := child.Close()

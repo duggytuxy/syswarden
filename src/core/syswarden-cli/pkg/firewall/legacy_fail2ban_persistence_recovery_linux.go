@@ -370,7 +370,7 @@ func ApplyLegacyFail2banPersistence(ctx context.Context, filePlan, review string
 		if err := loader.verify(ctx); err != nil {
 			return err
 		}
-		current, _, err := prepareLegacyFail2banRuntimeRetirement(ctx, adapter)
+		current, _, err := prepareLegacyFail2banRuntimeRetirementSchema(ctx, adapter, record.Kernel.Schema)
 		if err != nil {
 			return err
 		}

@@ -26,6 +26,7 @@ type LegacyFail2banRecoverySummary struct {
 	Files                  []string `json:"files"`
 	Jails                  []string `json:"jails"`
 	KernelTransactions     int      `json:"kernel_transactions"`
+	RetiresDedicatedTable  bool     `json:"retires_dedicated_historical_table,omitempty"`
 	FileOnly               bool     `json:"file_only"`
 	AlreadyComplete        bool     `json:"already_complete"`
 	StopsProductServices   bool     `json:"stops_product_services"`
@@ -63,6 +64,9 @@ func legacyFail2banRecoverySummary(session *legacyFail2banRecoverySession) Legac
 		Files: append([]string(nil), session.plan.binding.Targets...), Jails: append([]string(nil), session.kernel.Quiescence.Targets...),
 		KernelTransactions: len(session.kernel.Plans), FileOnly: session.fileOnly, AlreadyComplete: session.completed, StopsProductServices: !session.completed, PreservesSharedService: true,
 		BackupDirectory: legacyFail2banPlanPath(session.plan.sha256),
+	}
+	for _, plan := range session.kernel.Plans {
+		summary.RetiresDedicatedTable = summary.RetiresDedicatedTable || (plan.Family == "inet" && plan.Table == "syswarden_f2b" && plan.Transaction == string(legacyFail2banTableRetirementTransaction()))
 	}
 	if session.resume != nil {
 		summary.CurrentRuntimeReviewed = true

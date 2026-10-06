@@ -33,7 +33,8 @@ flush a shared ruleset or edit a package database to force completion.
 | Historical Fail2ban | `pkg/firewall/legacy_fail2ban_*` | Exact historical targets disappear; unrelated jails, rules and the shared service remain effective. |
 | Core runtime history | `pkg/runtimehistory`, `pkg/firewall/nft_removal_claims_*` | Active and retired claims match actual kernel state before private history archival. |
 | Generated host artifacts | `pkg/system/removal_*`, `syswarden-core/fileorigin` | Original identity and bytes are retained where required; unknown directory contents are never recursively adopted. |
-| Native finalization | `scripts/ci/package_removal_state.sh`, package scriptlets | No unretired product state is left behind; the documented administrator override survives. |
+| Administrator configuration | `pkg/system/removal_operator_retention_*`, `cmd/recover_operator_configuration.go` | An explicit retention decision preserves reviewed TOML files at their original paths, including later administrator edits. |
+| Native finalization | `scripts/ci/package_removal_state.sh`, package scriptlets | No unretired product state is left behind; the documented administrator override and explicitly reviewed configuration survive. |
 
 ## Historical recovery boundaries
 
@@ -66,6 +67,44 @@ requires the reviewed persistent edit, retired historical producers, original
 private backups and matching live administrator state. The table's name alone
 cannot justify deleting it or ignoring its contents.
 
+Complete dedicated-table retirement additionally requires original kernel
+evidence containing the exact historical action output, with no administrator
+objects or table annotations. A versioned plan binds that evidence before the
+action is stopped. The final deletion uses a kernel generation fence, so an
+intervening rule change causes refusal. An empty intermediate table is accepted
+only with the original bound table identity. An already empty table without
+that evidence does not acquire deletion authority. Existing version-one plans
+keep their original meaning and cannot silently authorize whole-table removal.
+
+## Administrator configuration retention
+
+The documented `99-user.toml` override remains administrator-owned. Additional
+customized modular configuration has an explicit recovery inventory:
+
+```sh
+sudo syswarden recover-removal --retain-operator-config
+```
+
+This route requires a removal already in progress with managed product services
+stopped. It inventories the master `config.toml` and bounded, private TOML files
+directly inside the `modules` directory. Exact pristine generated defaults are
+excluded. Links, executable files, unknown entries and invalid TOML are refused.
+The output contains paths, metadata and hashes, without configuration contents.
+
+After confirming that every listed file is administrator configuration to keep,
+apply the exact digest printed by inspection using the same flag with `--apply`
+and `--plan-sha256`. Then repeat the original uninstall, remove or purge command.
+The decision preserves bytes, permissions and inodes at the original paths. It
+grants no deletion authority and does not classify neighboring files.
+
+A private immutable record allows native finalization to honor this decision
+after the CLI has been erased. Later administrator edits remain protected,
+including edits made between native remove and a subsequent purge. New paths
+require a separate review. Retained configuration and its private decision must
+be distinguished from an active product installation; they do not load rules or
+start services. Flat legacy configuration and arbitrary directory contents are
+outside this modular retention route.
+
 ## Explicit limits before acceptance
 
 The following states remain refused and require additional bounded recovery
@@ -76,7 +115,8 @@ work. A refusal preserves evidence; it is not complete removal:
 - Configured or live administrator policy embedded in product-owned tables
   until equivalent independently managed protection is established.
 - Customized configuration outside the documented retained `99-user.toml`
-  surface and other artifacts whose ownership is unresolved.
+  surface or an explicit supported modular retention decision, and other
+  artifacts whose ownership is unresolved.
 - An empty historical dedicated Fail2ban table without separately justified
   table-retirement authority.
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 from pathlib import Path
 import shlex
 import subprocess
@@ -136,6 +137,68 @@ class PackageRemovalPreservationTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(unknown.read_bytes(), b"retained administrator settings\n")
                 self.assertEqual(barrier.read_bytes(), marker)
+
+    def test_reviewed_custom_configuration_survives_binary_absence_and_later_edits(self) -> None:
+        for source_name, source in self.scripts.items():
+            for kind in ("reviewed", "modified-record", "pending-record", "extra-file", "unsafe-file", "hardlinked-record", "symlinked-parent"):
+                with self.subTest(source=source_name, kind=kind), tempfile.TemporaryDirectory(prefix="sw-reviewed-config-", dir="/tmp") as temporary:
+                    base = Path(temporary)
+                    root = base / "configuration"
+                    backups = base / "backups"
+                    decisions = backups / "syswarden-retired-v1/operator-configuration"
+                    decisions.mkdir(parents=True, mode=0o700)
+                    decisions.parent.chmod(0o700)
+                    for relative in ("config/modules", "lists", "tls"):
+                        (root / relative).mkdir(parents=True, mode=0o750, exist_ok=True)
+                    files = [root / "config/config.toml", root / "config/modules/75-custom.toml"]
+                    original = b"[core]\nlog_level = \"debug\"\n"
+                    lines = ["SYSWARDEN_OPERATOR_CONFIGURATION_RETENTION_V1", "explicit-operator-retention-at-original-paths"]
+                    for file in files:
+                        file.write_bytes(original)
+                        file.chmod(0o600)
+                        lines.append("\t".join(("file", str(file), "1", "2", "33152", "0", "0", str(len(original)), "1", "0", "1", "0", hashlib.sha256(original).hexdigest())))
+                    record = ("\n".join(lines) + "\n").encode()
+                    decision = decisions / (hashlib.sha256(record).hexdigest() + ".retention")
+                    decision.write_bytes(record)
+                    decision.chmod(0o600)
+                    edited = b"# Later administrator edit\n[core]\nlog_level = \"info\"\n"
+                    for file in files:
+                        file.write_bytes(edited)
+                    if kind == "modified-record":
+                        decision.write_bytes(record + b"unexpected\n")
+                    elif kind == "pending-record":
+                        (decisions / (decision.name + ".new")).write_bytes(b"partial\n")
+                    elif kind == "extra-file":
+                        (root / "config/modules/76-new.toml").write_bytes(original)
+                    elif kind == "unsafe-file":
+                        files[0].chmod(0o700)
+                    elif kind == "hardlinked-record":
+                        os.link(decision, base / "outside")
+                    elif kind == "symlinked-parent":
+                        relocated = base / "relocated"
+                        decisions.parent.rename(relocated)
+                        decisions.parent.symlink_to(relocated)
+                    before = [file.stat() for file in files]
+                    helper = lifecycle_contract.REMOVAL_STATE_HELPER.read_text().replace("/etc/syswarden", str(root)).replace("/var/backups", str(backups))
+                    prefix = """syswarden_path_absent() { [ ! -e "$1" ] && [ ! -L "$1" ]; }
+                    syswarden_refuse_mounted_path_tree() { return 0; }
+                    """ + shell_function(source, "syswarden_attest_dedicated_root") + "\n"
+                    script = (prefix + helper).replace("0:0:", f"{os.getuid()}:{os.getgid()}:")
+                    script += "\nsyswarden_finalize_retained_operator_configuration\nsyswarden_assert_retained_operator_configuration\n"
+                    result = subprocess.run(("/bin/sh", "-eu", "-c", script), capture_output=True, timeout=10, check=False)
+                    if kind == "reviewed":
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        retry = subprocess.run(("/bin/sh", "-eu", "-c", script), capture_output=True, timeout=10, check=False)
+                        self.assertEqual(retry.returncode, 0, retry.stderr)
+                        self.assertFalse((root / "lists").exists())
+                        self.assertFalse((root / "tls").exists())
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertTrue((root / "lists").exists())
+                        self.assertTrue((root / "tls").exists())
+                    for file, identity in zip(files, before):
+                        self.assertEqual(file.read_bytes(), edited)
+                        self.assertEqual((file.stat().st_ino, file.stat().st_mode), (identity.st_ino, identity.st_mode))
 
 
 if __name__ == "__main__":

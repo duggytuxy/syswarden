@@ -38,10 +38,18 @@ func RemovePristineDefaultConfigurationForRemoval() error {
 		}
 		return ReattestFirewallStatePreparedForRemoval()
 	}
-	return retirePristineDefaultConfiguration("/etc/syswarden/config", check)
+	retained, err := retainedOperatorConfigurationPaths(operatorRetentionRecordsPath)
+	if err != nil {
+		return err
+	}
+	return retirePristineDefaultConfigurationWithRetention("/etc/syswarden/config", check, retained)
 }
 
 func retirePristineDefaultConfiguration(directory string, guard func() error) error {
+	return retirePristineDefaultConfigurationWithRetention(directory, guard, nil)
+}
+
+func retirePristineDefaultConfigurationWithRetention(directory string, guard func() error, retained map[string]bool) error {
 	if guard == nil {
 		return fmt.Errorf("default configuration retirement requires a complete removal guard")
 	}
@@ -63,6 +71,9 @@ func retirePristineDefaultConfiguration(directory string, guard func() error) er
 	var exact []string
 	matched := make(map[string]string)
 	for _, relative := range paths {
+		if retained["/etc/syswarden/config/"+filepath.ToSlash(relative)] {
+			continue
+		}
 		path := filepath.Join(directory, relative)
 		parent, err := openExistingPinnedServiceDirectory(filepath.Dir(path))
 		if errors.Is(err, fs.ErrNotExist) {

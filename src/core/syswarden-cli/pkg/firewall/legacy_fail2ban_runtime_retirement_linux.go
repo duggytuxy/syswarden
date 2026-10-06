@@ -79,9 +79,24 @@ func (adapter legacyFail2banRuntimeRetirementAdapter) valid() bool {
 // Preparation is read-only. The digest covers source ownership, exact service
 // invocation, every original kernel object and the complete bounded commands.
 func prepareLegacyFail2banRuntimeRetirement(ctx context.Context, adapter legacyFail2banRuntimeRetirementAdapter) (legacyFail2banNFTJournalRecord, string, error) {
+	return prepareLegacyFail2banRuntimeRetirementSchema(ctx, adapter, legacyFail2banCompleteNFTJournalSchema)
+}
+
+// Reobserving an existing review must retain its original planner semantics.
+// A new default cannot broaden an old intent or make its unchanged state fail
+// solely because a later planner supports complete dedicated-table retirement.
+func prepareLegacyFail2banRuntimeRetirementSchema(ctx context.Context, adapter legacyFail2banRuntimeRetirementAdapter, schema string) (legacyFail2banNFTJournalRecord, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	var empty legacyFail2banNFTJournalRecord
+	planner := prepareLegacyFail2banNFTTransition
+	switch schema {
+	case legacyFail2banNFTJournalSchema:
+	case legacyFail2banCompleteNFTJournalSchema:
+		planner = prepareLegacyFail2banCompleteNFTTransition
+	default:
+		return empty, "", fmt.Errorf("unsupported historical Fail2ban runtime review schema")
+	}
 	if !adapter.valid() {
 		return empty, "", fmt.Errorf("incomplete Fail2ban runtime retirement adapter")
 	}
@@ -117,13 +132,14 @@ func prepareLegacyFail2banRuntimeRetirement(ctx context.Context, adapter legacyF
 		if err != nil {
 			return empty, "", err
 		}
-		plan, err := prepareLegacyFail2banNFTTransition(content, byTable[table])
+		plan, err := planner(content, byTable[table])
 		if err != nil {
 			return empty, "", err
 		}
 		plans = append(plans, plan)
 	}
 	record := makeLegacyFail2banNFTJournalRecord(quiescence, plans)
+	record.Schema = schema
 	content, _, _, err := encodeLegacyFail2banNFTJournalRecord(record)
 	if err != nil {
 		return empty, "", err
@@ -145,7 +161,15 @@ func verifyLegacyFail2banKernelObservations(ctx context.Context, adapter legacyF
 			return err
 		}
 		current, err := json.Marshal(entries)
-		if err != nil || requireAfter && !bytes.Equal(current, plan.after) || !bytes.Equal(current, plan.before) && !(allowAfter && bytes.Equal(current, plan.after)) {
+		settled := bytes.Equal(current, plan.after)
+		if allowAfter && !requireAfter && legacyFail2banRetiresWholeTable(plan) {
+			intermediate, intermediateErr := legacyFail2banTableIntermediate(plan)
+			if intermediateErr != nil {
+				return intermediateErr
+			}
+			settled = settled || bytes.Equal(current, intermediate)
+		}
+		if err != nil || requireAfter && !bytes.Equal(current, plan.after) || !bytes.Equal(current, plan.before) && !(allowAfter && settled) {
 			return fmt.Errorf("Fail2ban kernel state changed outside the reviewed retirement plan; inspect a new bounded plan")
 		}
 	}
@@ -188,7 +212,7 @@ func applyLegacyFail2banRuntimeRetirement(ctx context.Context, host nftPersisten
 		return nil, err
 	}
 	if errors.Is(err, fs.ErrNotExist) {
-		fresh, digest, err := prepareLegacyFail2banRuntimeRetirement(ctx, adapter)
+		fresh, digest, err := prepareLegacyFail2banRuntimeRetirementSchema(ctx, adapter, record.Schema)
 		if err != nil || digest != reviewedDigest || !reflect.DeepEqual(fresh, record) {
 			return nil, fmt.Errorf("Fail2ban runtime state changed since review; no target was modified")
 		}

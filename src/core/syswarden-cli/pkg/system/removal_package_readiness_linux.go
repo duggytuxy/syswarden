@@ -22,8 +22,12 @@ func AttestRuntimeRetirementBeforeNativeErase() error {
 	if err := preflightHostRemovalMountBoundaries(); err != nil {
 		return err
 	}
+	retained, err := retainedOperatorConfigurationPaths(operatorRetentionRecordsPath)
+	if err != nil {
+		return err
+	}
 	for _, path := range hostRemovalMountRoots {
-		if err := attestRuntimeRetirementRoot(path, path, 0, 0, nil); err != nil {
+		if err := attestRuntimeRetirementRootWithRetention(path, path, 0, 0, nil, retained); err != nil {
 			return err
 		}
 	}
@@ -56,6 +60,10 @@ func packageRetirementChildren(path string) ([]string, []string) {
 }
 
 func attestRuntimeRetirementRoot(path, logicalPath string, uid, gid uint32, afterInventory func()) error {
+	return attestRuntimeRetirementRootWithRetention(path, logicalPath, uid, gid, afterInventory, nil)
+}
+
+func attestRuntimeRetirementRootWithRetention(path, logicalPath string, uid, gid uint32, afterInventory func(), retained map[string]bool) error {
 	tree, err := openPinnedSharedRemovalTree(path, uid, gid, uid, sharedRemovalRaceHooks{})
 	if err != nil {
 		return err
@@ -65,7 +73,7 @@ func attestRuntimeRetirementRoot(path, logicalPath string, uid, gid uint32, afte
 		return nil
 	}
 	bindings := make(map[string]removalArtifactIdentity)
-	if err := attestRuntimeRetirementTree(tree, logicalPath, uid, gid, bindings); err != nil {
+	if err := attestRuntimeRetirementTreeWithRetention(tree, logicalPath, uid, gid, bindings, retained); err != nil {
 		return err
 	}
 	if afterInventory != nil {
@@ -92,7 +100,7 @@ func attestRuntimeRetirementRoot(path, logicalPath string, uid, gid uint32, afte
 	return nil
 }
 
-func attestRuntimeRetirementTree(tree *pinnedSharedRemovalTree, path string, uid, gid uint32, bindings map[string]removalArtifactIdentity) error {
+func attestRuntimeRetirementTreeWithRetention(tree *pinnedSharedRemovalTree, path string, uid, gid uint32, bindings map[string]removalArtifactIdentity, retained map[string]bool) error {
 	bindings[path] = tree.identity
 	entries, err := readBoundedSharedRemovalEntries(tree.root)
 	if err != nil {
@@ -102,7 +110,10 @@ func attestRuntimeRetirementTree(tree *pinnedSharedRemovalTree, path string, uid
 	for _, entry := range entries {
 		name := entry.Name()
 		candidate := filepath.Join(path, name)
-		if !slices.Contains(directories, name) && !slices.Contains(payload, name) {
+		if !slices.Contains(directories, name) && !slices.Contains(payload, name) && !isRetainedOperatorConfiguration(candidate, retained) {
+			if operatorRetentionPath(candidate) {
+				return fmt.Errorf("unretired artifact remains at %q; review administrator configuration retention with 'sudo syswarden recover-removal --retain-operator-config' before retrying removal", candidate)
+			}
 			return fmt.Errorf("unretired artifact remains at %q; preserve the CLI and complete verified file retirement before product removal", candidate)
 		}
 		before, err := tree.root.Lstat(name)
@@ -115,7 +126,7 @@ func attestRuntimeRetirementTree(tree *pinnedSharedRemovalTree, path string, uid
 			return errors.Join(fmt.Errorf("unsafe package retirement entry %q", candidate), identityErr)
 		}
 		bindings[candidate] = identity
-		if candidate == "/etc/syswarden/config/modules/99-user.toml" &&
+		if isRetainedOperatorConfiguration(candidate, retained) &&
 			before.Mode().Perm() != 0600 && before.Mode().Perm() != 0640 {
 			return fmt.Errorf("retained operator configuration has unsafe permissions: %q", candidate)
 		}
@@ -135,7 +146,7 @@ func attestRuntimeRetirementTree(tree *pinnedSharedRemovalTree, path string, uid
 			}
 			// The parent descriptor is borrowed only for this recursive check.
 			nested := &pinnedSharedRemovalTree{parent: &pinnedServiceDirectory{root: tree.root}, root: child, name: name, identity: identity}
-			err = attestRuntimeRetirementTree(nested, candidate, uid, gid, bindings)
+			err = attestRuntimeRetirementTreeWithRetention(nested, candidate, uid, gid, bindings, retained)
 			closeErr := child.Close()
 			if err != nil || closeErr != nil {
 				return errors.Join(err, closeErr)

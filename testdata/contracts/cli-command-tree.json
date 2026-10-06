@@ -967,8 +967,8 @@
   {
     "path": "syswarden recover-removal",
     "use": "recover-removal",
-    "short": "Inspect bounded recovery of legacy product artifacts",
-    "long": "Inspect one bounded recovery inventory without changing the host. Review its metadata, exact digest and declared effects before applying. Data retention requires stopped product services and explicit confirmation that the files have no other producer. Cron and Fail2ban retirement stop managed product services, preserve unrelated protections and retain original files privately. This command does not infer ownership from a filename or create new ownership markers.",
+    "short": "Inspect bounded recovery for complete product removal",
+    "long": "Inspect one bounded recovery inventory without changing the host. Review its metadata, exact digest and declared effects before applying. Legacy data archival requires stopped product services and explicit confirmation that the files have no other producer. Administrator configuration retention preserves reviewed files at their original paths. Cron and Fail2ban retirement stop managed product services, preserve unrelated protections and retain original files privately. This command does not infer ownership from a filename or create new ownership markers.",
     "flags": [
       {
         "name": "apply",
@@ -1031,6 +1031,13 @@
         "default": "false",
         "no_option": "true",
         "usage": "Inspect exact private retention of operator-confirmed legacy UI snapshots"
+      },
+      {
+        "name": "retain-operator-config",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Review administrator configuration retention at its original paths across uninstall, remove and purge"
       },
       {
         "name": "retire-legacy-cron",

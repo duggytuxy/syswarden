@@ -92,7 +92,7 @@ func encodeLegacyFail2banNFTJournalRecord(record legacyFail2banNFTJournalRecord)
 		return nil, "", nil, fmt.Errorf("invalid or inconsistent Fail2ban kernel retirement intent")
 	}
 	_, quiescenceDigest, err := encodeLegacyFail2banQuiescenceRecord(record.Quiescence)
-	if err != nil || record.Schema != legacyFail2banNFTJournalSchema || len(record.Plans) == 0 || len(record.Plans) > 2 {
+	if err != nil || (record.Schema != legacyFail2banNFTJournalSchema && record.Schema != legacyFail2banCompleteNFTJournalSchema) || len(record.Plans) == 0 || len(record.Plans) > 2 {
 		return invalid()
 	}
 	targets := make(map[string]bool)
@@ -128,7 +128,11 @@ func encodeLegacyFail2banNFTJournalRecord(record legacyFail2banNFTJournalRecord)
 			families[claim.jail][claim.addressFamily] = true
 		}
 		observation := append(append([]byte(`{"nftables":`), []byte(entry.Before)...), '}')
-		plan, err := prepareLegacyFail2banNFTTransition(observation, claims)
+		planner := prepareLegacyFail2banNFTTransition
+		if record.Schema == legacyFail2banCompleteNFTJournalSchema {
+			planner = prepareLegacyFail2banCompleteNFTTransition
+		}
+		plan, err := planner(observation, claims)
 		if err != nil || plan.family != entry.Family || plan.table != entry.Table || plan.sha256 != entry.Digest ||
 			string(plan.before) != entry.Before || string(plan.after) != entry.After || string(plan.claims) != entry.Claims || string(plan.transaction) != entry.Transaction {
 			return invalid()

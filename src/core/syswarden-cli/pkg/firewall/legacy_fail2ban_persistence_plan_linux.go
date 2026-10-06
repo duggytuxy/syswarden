@@ -48,6 +48,7 @@ func planLegacyFail2banPersistence(content []byte, record legacyFail2banNFTJourn
 		if len(tables) > 1 {
 			return empty, fmt.Errorf("persistent Fail2ban table has multiple declarations")
 		}
+		start := len(edit.removed)
 		for _, claim := range claims {
 			chain, set, addressType := claim.jail, "f2b-"+claim.jail, "ipv4_addr"
 			upstream := claim.profile == "nftables-allports"
@@ -69,6 +70,13 @@ func planLegacyFail2banPersistence(content []byte, record legacyFail2banNFTJourn
 				return empty, err
 			}
 			edit.removed = append(edit.removed, ranges...)
+		}
+		if legacyFail2banRetiresWholeTable(plan) && len(tables) == 1 {
+			span, err := planLegacyFail2banWholePersistentTable(content, tokens, tables[0], edit.removed[start:])
+			if err != nil {
+				return empty, err
+			}
+			edit.removed = append(edit.removed[:start], span)
 		}
 	}
 	sort.Slice(edit.removed, func(i, j int) bool { return edit.removed[i].start < edit.removed[j].start })

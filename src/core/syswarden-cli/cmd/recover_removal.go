@@ -9,6 +9,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var inspectOperatorConfigurationRetention = system.InspectOperatorConfigurationRetention
+var applyOperatorConfigurationRetention = system.ApplyOperatorConfigurationRetention
+
 var inspectLegacyLogRetention = system.InspectLegacyLogRetention
 var applyLegacyLogRetention = system.ApplyLegacyLogRetention
 var inspectLegacyDataRetention = system.InspectLegacyDataRetention
@@ -23,19 +26,19 @@ var inspectLegacyCronRetirement = system.InspectLegacyCronRetirement
 var applyLegacyCronRetirement = system.ApplyLegacyCronRetirement
 
 func newRecoverRemovalCommand() *cobra.Command {
-	var retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, apply bool
+	var retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, retainOperatorConfig, apply bool
 	var digest, fileDigest string
 	command := &cobra.Command{
 		Use:   "recover-removal",
-		Short: "Inspect bounded recovery of legacy product artifacts",
-		Long:  "Inspect one bounded recovery inventory without changing the host. Review its metadata, exact digest and declared effects before applying. Data retention requires stopped product services and explicit confirmation that the files have no other producer. Cron and Fail2ban retirement stop managed product services, preserve unrelated protections and retain original files privately. This command does not infer ownership from a filename or create new ownership markers.",
+		Short: "Inspect bounded recovery for complete product removal",
+		Long:  "Inspect one bounded recovery inventory without changing the host. Review its metadata, exact digest and declared effects before applying. Legacy data archival requires stopped product services and explicit confirmation that the files have no other producer. Administrator configuration retention preserves reviewed files at their original paths. Cron and Fail2ban retirement stop managed product services, preserve unrelated protections and retain original files privately. This command does not infer ownership from a filename or create new ownership markers.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			selection := ""
 			for _, candidate := range []struct {
 				selected bool
 				kind     string
-			}{{retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}} {
+			}{{retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}} {
 				if candidate.selected {
 					if selection != "" {
 						return fmt.Errorf("select exactly one legacy retention inventory")
@@ -69,6 +72,9 @@ func newRecoverRemovalCommand() *cobra.Command {
 			}
 			if fileDigest != "" {
 				return fmt.Errorf("--file-plan-sha256 applies only to historical Fail2ban recovery")
+			}
+			if selection == "operator-config" {
+				return runOperatorConfigurationRetention(cmd, apply, digest)
 			}
 			if selection == "cron" {
 				return runLegacyCronRecovery(cmd, apply, digest)
@@ -111,6 +117,7 @@ func newRecoverRemovalCommand() *cobra.Command {
 			return err
 		},
 	}
+	command.Flags().BoolVar(&retainOperatorConfig, "retain-operator-config", false, "Review administrator configuration retention at its original paths across uninstall, remove and purge")
 	command.Flags().BoolVar(&retainLegacyLogs, "retain-legacy-logs", false, "Inspect exact private retention of operator-confirmed legacy product logs")
 	command.Flags().BoolVar(&retainLegacyLists, "retain-legacy-lists", false, "Inspect exact private retention of operator-confirmed legacy lists")
 	command.Flags().BoolVar(&retainLegacyUI, "retain-legacy-ui", false, "Inspect exact private retention of operator-confirmed legacy UI snapshots")
