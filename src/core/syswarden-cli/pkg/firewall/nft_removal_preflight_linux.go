@@ -36,6 +36,9 @@ func PreflightAdministratorPolicyRemoval() error {
 	if err != nil {
 		return fmt.Errorf("decode administrator policy observation: %w", err)
 	}
+	if err := preflightLegacyIPTablesDocument(ctx, document); err != nil {
+		return err
+	}
 	return preflightLiveOperatorPolicyRemoval(document)
 }
 
@@ -144,6 +147,9 @@ func preflightUnpreservedLiveOperatorPolicyRemoval(document nftJSONDocument) err
 // may be discarded merely because it uses a SysWarden container.
 func preflightNFTablesForUninstall(ctx context.Context, runner nftCommandRunner) error {
 	if err := preflightConfiguredOperatorPolicyRemoval(); err != nil {
+		return err
+	}
+	if err := preflightLegacyIPTablesUsing(ctx, runner); err != nil {
 		return err
 	}
 	handles, err := listLegacyWireGuardForwardRuleHandles(ctx, runner)

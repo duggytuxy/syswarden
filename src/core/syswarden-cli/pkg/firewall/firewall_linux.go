@@ -182,6 +182,9 @@ func CleanupOwnedCompatibilityRulesForUninstall() error {
 	if err := cleanup(); err != nil {
 		return fmt.Errorf("clean reserved SysWarden nftables tables: %w", err)
 	}
+	if err := preflightLegacyIPTablesUsing(ctx, runner); err != nil {
+		return err
+	}
 	if err := firewallRemovalServiceReattest(); err != nil {
 		return fmt.Errorf("reattest stopped firewall mutators after cleanup: %w", err)
 	}

@@ -216,6 +216,8 @@ func (runner execNFTCommandRunner) Run(ctx context.Context, stdin []byte, args .
 		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "netdev", "syswarden_hw_drop")
 	case slices.Equal(args, []string{"-j", "list", "table", "arp", "syswarden_arp"}):
 		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "arp", "syswarden_arp")
+	case slices.Equal(args, []string{"-j", "list", "table", "ip", "filter"}):
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "ip", "filter")
 	case receiverObservation:
 		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "inet", receiverTable) // #nosec G204 -- Pinned read-only observer; table is a fixed prefix plus exactly twenty lowercase hexadecimal characters.
 	case len(args) == 4 && args[0] == "list" && args[1] == "table":

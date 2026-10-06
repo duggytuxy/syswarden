@@ -286,6 +286,7 @@ func TestNFTGenerationLiveFixture(t *testing.T) {
 		t.Fatal("canceled context changed the kernel", err)
 	}
 	t.Log("Final producer refusal and canceled context preserved the complete ruleset.")
+	testNFTGenerationLiveRuleRetirement(t, ctx, nft, connection)
 }
 
 func FuzzNFTGenerationProtocol(f *testing.F) {

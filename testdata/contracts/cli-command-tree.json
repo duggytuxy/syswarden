@@ -989,7 +989,7 @@
         "type": "bool",
         "default": "false",
         "no_option": "true",
-        "usage": "Explicitly confirm original independent generation inputs when applying historical persistence recovery"
+        "usage": "Confirm original generation evidence and the declared preservation boundary when applying historical recovery"
       },
       {
         "name": "export-operator-policy",
@@ -1016,7 +1016,7 @@
         "name": "historical-inputs",
         "type": "string",
         "default": "",
-        "usage": "Private original generation input capture for historical persistence review"
+        "usage": "Private original generation input capture for historical firewall review"
       },
       {
         "name": "plan-sha256",
@@ -1093,6 +1093,13 @@
         "default": "false",
         "no_option": "true",
         "usage": "Review an exact historical persistent source after product tables are absent"
+      },
+      {
+        "name": "retire-legacy-iptables",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect exact historical IPv4 iptables rule retirement from independent original captures; preserve shared administrator rules"
       }
     ],
     "arg_outcomes": {

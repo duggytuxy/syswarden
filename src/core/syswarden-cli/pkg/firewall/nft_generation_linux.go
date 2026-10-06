@@ -30,6 +30,7 @@ type nftGenerationFence struct {
 	socket     *nftGenerationSocket
 	generation uint32
 	targets    []nftTableTarget
+	rules      []nftGenerationRuleTarget
 	expires    time.Time
 }
 
@@ -50,6 +51,16 @@ func newNFTGenerationFence(ctx context.Context, inspect func(context.Context) ([
 	if inspect == nil {
 		return nil, fmt.Errorf("nftables generation fence requires an independent ownership inspector")
 	}
+	return newNFTMutationFence(ctx, func(ctx context.Context) ([]nftTableTarget, []nftGenerationRuleTarget, error) {
+		targets, err := inspect(ctx)
+		return targets, nil, err
+	})
+}
+
+func newNFTMutationFence(ctx context.Context, inspect func(context.Context) ([]nftTableTarget, []nftGenerationRuleTarget, error)) (*nftGenerationFence, error) {
+	if inspect == nil {
+		return nil, fmt.Errorf("nftables mutation fence requires an independent ownership inspector")
+	}
 	child, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	socket, err := openNFTGenerationSocket()
@@ -66,13 +77,14 @@ func newNFTGenerationFence(ctx context.Context, inspect func(context.Context) ([
 	if err != nil {
 		return nil, err
 	}
-	targets, err := inspect(child)
+	targets, rules, err := inspect(child)
 	if err != nil {
 		return nil, err
 	}
 	// Do not retain a caller-owned slice that could be changed after review.
 	targets = append([]nftTableTarget(nil), targets...)
-	if err := validateNFTGenerationTargets(targets); err != nil {
+	rules = append([]nftGenerationRuleTarget(nil), rules...)
+	if err := validateNFTMutationTargets(targets, rules); err != nil {
 		return nil, err
 	}
 	after, err := socket.generation(child)
@@ -83,7 +95,7 @@ func newNFTGenerationFence(ctx context.Context, inspect func(context.Context) ([
 		return nil, fmt.Errorf("nftables changed during ownership inspection; preserve the reviewed evidence")
 	}
 	accepted = true
-	return &nftGenerationFence{socket: socket, generation: after, targets: targets, expires: time.Now().Add(10 * time.Second)}, nil
+	return &nftGenerationFence{socket: socket, generation: after, targets: targets, rules: rules, expires: time.Now().Add(10 * time.Second)}, nil
 }
 
 // Apply is single-use even on refusal. Never refresh the generation or retry a
@@ -111,7 +123,7 @@ func (fence *nftGenerationFence) apply(ctx context.Context, guard func() error) 
 	if err := child.Err(); err != nil {
 		return err
 	}
-	requests, err := socket.deleteRequests(fence.generation, fence.targets)
+	requests, err := socket.mutationRequests(fence.generation, fence.targets, fence.rules)
 	if err != nil {
 		return err
 	}
@@ -277,11 +289,15 @@ func nftGenerationFamily(family string) (byte, bool) {
 }
 
 func (socket *nftGenerationSocket) deleteRequests(generation uint32, targets []nftTableTarget) ([]nftGenerationMessage, error) {
+	return socket.mutationRequests(generation, targets, nil)
+}
+
+func (socket *nftGenerationSocket) mutationRequests(generation uint32, targets []nftTableTarget, rules []nftGenerationRuleTarget) ([]nftGenerationMessage, error) {
 	// Zero explicitly disables the kernel generation check and is forbidden.
 	if generation == 0 {
 		return nil, fmt.Errorf("zero nftables generation cannot authorize retirement")
 	}
-	if err := validateNFTGenerationTargets(targets); err != nil {
+	if err := validateNFTMutationTargets(targets, rules); err != nil {
 		return nil, err
 	}
 	var encoded [4]byte
@@ -302,6 +318,13 @@ func (socket *nftGenerationSocket) deleteRequests(generation uint32, targets []n
 			return nil, err
 		}
 		request, err := socket.request(unix.NFNL_SUBSYS_NFTABLES<<8|unix.NFT_MSG_DELTABLE, unix.NLM_F_REQUEST|unix.NLM_F_ACK, unix.NLMSG_ERROR, append([]byte{family, 0, 0, 0}, attribute...))
+		if err != nil {
+			return nil, err
+		}
+		requests = append(requests, request)
+	}
+	for _, rule := range rules {
+		request, err := socket.deleteRuleRequest(rule)
 		if err != nil {
 			return nil, err
 		}
@@ -345,7 +368,7 @@ func (socket *nftGenerationSocket) exchange(ctx context.Context, requests []nftG
 		pending[request.sequence] = request
 		packet = append(packet, request.wire...)
 	}
-	if len(pending) == 0 || len(pending) > 6 {
+	if len(pending) == 0 || len(pending) > maximumNFTGenerationRules+2 {
 		return nil, fmt.Errorf("nftables netlink batch has an invalid operation count")
 	}
 	if err := ctx.Err(); err != nil {

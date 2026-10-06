@@ -123,6 +123,71 @@ input evidence, loader authority and reviewed digest. Completion of this route
 covers persistent-source retirement only; repeat the original removal command
 to handle the remaining product state.
 
+## Historical iptables compatibility recovery
+
+The v4.02.8 writer also prepended IPv4 compatibility permissions to `ip filter`
+when the `iptables` executable was already available. These rules have a
+separate recovery boundary. The shared `filter` table is not product ownership,
+and a `SYSWARDEN_CORE` comment alone does not authorize a deletion. Removal
+refuses recognizable unresolved historical state before erasing its payload,
+then repeats that check under the firewall lock and after product cleanup.
+Opaque comments are resolved through a separate read-only iptables observation,
+including a remaining peer-port rule from a partial historical generation.
+A uniquely matching, unmodified rule with committed wrapper-manifest ownership
+keeps its existing cleanup route. Duplicate rules, pending ownership and
+modified expressions remain unresolved. An unrelated administrator comment
+does not become a product ownership marker. The legacy kernel backend is
+inspected separately when present, even if the active alternative uses
+`nf_tables`. Existing manifest-owned cleanup requires the exact matching active
+backend; unowned legacy-backend rules require separate verified recovery.
+
+`recover-removal --retire-legacy-iptables --historical-inputs /root/private-capture/review.json`
+accepts independently retained original generation evidence. The description
+uses schema `syswarden-historical-iptables-inputs-v1`, generation `v4.02.8`, the
+original boot and network namespace identity, and original HA/subnet inputs.
+Its evidence entries, in order, bind `configuration`, `nft-before`,
+`nft-generated`, `iptables-generated`, and `iptables-before`. Every entry names
+a separate private file by basename and SHA-256. The last capture may be omitted
+only when the original nftables observation proves there were no compatibility
+rules. The description and evidence must remain private regular files in a
+private directory under `/root`.
+
+This is an operator-reviewed origin claim, not a historical writer receipt.
+Confirm that the captures are original, that SysWarden was the only writer in
+the recorded generation interval, and that all retained rules belong to the
+administrator or another application. Do not manufacture missing observations
+from the current ruleset. Applying requires `--apply`, the exact
+`--plan-sha256`, and `--confirm-historical-inputs`. Missing evidence, a different
+boot or namespace, a partial generation, unsupported backend, or changed
+container identity keeps recovery incomplete. This route currently supports
+complete canonical IPv4 compatibility blocks on the `nf_tables` backend.
+
+Planning checks the complete original ordered rule delta against the historical
+generator and the independent iptables text capture. Only its added handles
+can be selected. Identical rules already present, and independently reviewed
+later administrator additions, remain untouched. The current shared ruleset,
+retained remainder, source identities and producers are bound to the review.
+The output contains hashes, handles, counts and declared effects without private
+configuration or network addresses.
+
+Applying first makes the product producers quiescent and publishes immutable
+private intent under `/var/backups/syswarden-retired-v1/iptables-v1`. It then
+uses a single kernel generation-bound rule transaction. A concurrent kernel
+change rejects the transaction; a failed operation aborts the entire batch.
+Neither the shared table nor its chains are flushed or deleted. An interrupted
+attempt can resume only from the exact intent and the complete original or
+complete resulting state, never from a partially matching rule list. An exact
+private receipt also distinguishes the reviewed administrator remainder from
+unresolved historical state during subsequent removal checks. That receipt
+cannot authorize a new deletion or accept changed rules.
+
+This route retires runtime compatibility rules only. Independently managed
+iptables persistence and other administrator loaders are not edited or
+reloaded. Review their original sources separately, retain unrelated behavior,
+and verify that product rules do not return after service reload and reboot.
+Complete standalone uninstall, package remove and package purge remain separate
+native verification requirements.
+
 ## Administrator configuration retention
 
 The documented `99-user.toml` override remains administrator-owned. Additional
