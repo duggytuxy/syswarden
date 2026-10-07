@@ -47,13 +47,20 @@ class WireGuardPreflightTests(unittest.TestCase):
     def test_historical_claim_refuses_without_touching_config_or_payload(self) -> None:
         config = self.write("etc/wireguard/wg0.conf", "PostUp = nft add table inet syswarden_wg\nPrivateKey = PRIVATE_TEST_INPUT\n")
         payload = self.write("installed-cli", "old-cli\n")
-        before = (config.read_bytes(), config.stat(), payload.read_bytes(), payload.stat())
+        before = {path: (path.read_bytes(), path.stat()) for path in (config, payload)}
         result = self.run_gate()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Refusing package unpack", result.stderr)
         self.assertNotIn("PRIVATE_TEST_INPUT", result.stdout + result.stderr)
-        after = (config.read_bytes(), config.stat(), payload.read_bytes(), payload.stat())
-        self.assertEqual(before, after)
+        # Inspection can advance atime. Every identity, permission, content and
+        # modification field must remain unchanged, including nanoseconds.
+        for path, (content, metadata) in before.items():
+            self.assertEqual(path.read_bytes(), content)
+            current = path.stat()
+            for field in ("st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+                          "st_size", "st_mtime_ns", "st_ctime_ns"):
+                with self.subTest(path=path.name, field=field):
+                    self.assertEqual(getattr(current, field), getattr(metadata, field))
 
     def test_each_unmanifested_artifact_refuses_even_without_wg0(self) -> None:
         for path in ("etc/wireguard/wg-syswarden.conf", "etc/wireguard/clients/admin-pc.conf",

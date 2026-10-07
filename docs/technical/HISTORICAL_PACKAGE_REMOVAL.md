@@ -47,6 +47,16 @@ package payload and removal barrier. The original native removal command then
 finishes the package transaction. No force option, manual barrier deletion,
 package-database edit or standalone CLI uninstall bypass is introduced.
 
+After a cold boot, systemd can retain the active journald process and its
+invocation while its `ExecStart` accounting shows unset timestamps and PID
+zero. Removal accepts this exact reset shape only after checking the live
+kernel process: the trusted executable inode, default command line, service
+control group, root identity and matching invocation. It pins the process
+directory and rechecks the complete systemd observation. A different nonzero
+command PID, a partial reset or an unverifiable process remains refused.
+The generated journald fragment still requires exact ownership, preservation
+of every other configuration source and verified activation after removal.
+
 ## Required regression coverage
 
 - Reproduce the actual v4.02.8 updater reaching half-configured official v4.10.2.
@@ -59,6 +69,9 @@ package-database edit or standalone CLI uninstall bypass is introduced.
   VPN originals; let the native lifecycle remove the durable barrier.
 - Reinstall the complete native package and verify executable payload, package
   status and reboot behavior.
+- Exercise removal after a cold boot with reset journald command accounting;
+  preserve unrelated logging configuration and verify the replacement active
+  logging process. Reject substituted or unstable process identity.
 - Retain failed attempts separately and repeat the required observations with
   the final signed product. Earlier signed-product results cannot be relabeled.
 

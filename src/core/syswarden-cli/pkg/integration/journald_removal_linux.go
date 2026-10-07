@@ -29,6 +29,10 @@ type journaldRemovalService struct {
 }
 
 func inspectJournaldRemovalService(run managedServiceRunner) (journaldRemovalService, error) {
+	return inspectJournaldRemovalServiceUsing(run, verifyJournaldRemovalProcess)
+}
+
+func inspectJournaldRemovalServiceUsing(run managedServiceRunner, verifyProcess func(journaldRemovalService) error) (journaldRemovalService, error) {
 	var empty journaldRemovalService
 	output, err := run(trustedSystemctlPath, "show", "systemd-journald.service", "--no-pager", "--property="+journaldRemovalProperties)
 	if err != nil {
@@ -95,10 +99,26 @@ func inspectJournaldRemovalService(run managedServiceRunner) (journaldRemovalSer
 		return empty, fmt.Errorf("journald process identity is unavailable")
 	}
 	commandFields := strings.Split(command, " ; ")
-	if commandFields[5] != "pid="+strconv.FormatUint(pid, 10) || commandFields[6] != "code=(null)" {
+	state := journaldRemovalService{pid, started, invocation, properties}
+	if commandFields[6] != "code=(null)" {
 		return empty, fmt.Errorf("journald executable process does not match its active identity")
 	}
-	return journaldRemovalService{pid, started, invocation, properties}, nil
+	if commandFields[5] != "pid="+strconv.FormatUint(pid, 10) {
+		// A process retained across early boot can have intact MainPID and
+		// invocation identity but no per-command execution accounting. Admit
+		// only that exact reset shape, with independent live procfs evidence.
+		if commandFields[3] != "start_time=[n/a]" || commandFields[4] != "stop_time=[n/a]" || commandFields[5] != "pid=0" || verifyProcess == nil {
+			return empty, fmt.Errorf("journald executable process does not match its active identity")
+		}
+		if err := verifyProcess(state); err != nil {
+			return empty, fmt.Errorf("attest journald with reset execution accounting: %w", err)
+		}
+		repeated, err := run(trustedSystemctlPath, "show", "systemd-journald.service", "--no-pager", "--property="+journaldRemovalProperties)
+		if err != nil || !bytes.Equal(output, repeated) {
+			return empty, fmt.Errorf("journald service changed during live process attestation")
+		}
+	}
+	return state, nil
 }
 
 func readJournaldRemovalConfiguration(run managedServiceRunner) ([]byte, error) {
