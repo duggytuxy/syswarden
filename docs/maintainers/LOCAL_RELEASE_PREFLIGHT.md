@@ -31,7 +31,8 @@ Before starting:
 2. Require exactly one recognized `Patch :`, `Minor :`, `Major :` or
    `Upgrade :` transition after the current reviewed release version. Any later
    candidate commits must form one linear, non-versioning chain, preserve every
-   version target and keep `changelog.md` byte-for-byte identical. The release
+   version target and keep `changelog.md` byte-for-byte identical, except for the
+   sealed candidate correction described below. The release
    validator must trace that chain back to the exact transition. This generic
    chain contract validates v4.03.3 and later releases. Earlier immutable
    releases are revalidated from their published tag, asset and digest evidence,
@@ -47,6 +48,28 @@ Before starting:
    manager and container runtime versions before executing a gate.
 
 Any failed entry condition stops the procedure without changing remote state.
+
+## Sealed v4.10.3 change-record correction
+
+The v4.10.3 change record may be completed once after reviewed commit
+`703d767f3379056df52ac3f84307382ec9342b9a`. The policy in
+`scripts/versionctl/candidate_changelog.go` binds that exact parent, the
+unchanged version, the complete before and after SHA-256 digests, and the
+unchanged historical suffix. It accepts only the subject
+`Docs : complete the v4.10.3 correction record`, optionally followed by
+GitHub's numeric squash-merge suffix. Different wording is rejected.
+
+Commit validation accepts the prospective worktree at that parent or its
+immediate, single-parent correction commit. It rejects an existing v4.10.3 tag,
+changed committed bytes, another parent and replay after a later commit.
+The release-chain validator can subsequently recognize that same correction,
+including when verifying the eventual tag, without changing the original
+Patch transition or authorizing another changelog update. Existing tag-to-HEAD,
+review, signing and protected IVV requirements remain mandatory.
+
+This is a reviewed content exception for one candidate, not a general
+same-version changelog editing mechanism. If its exact parent is no longer the
+integration base, stop and review the changed integration context.
 
 ## Workflow coverage ledger
 
@@ -280,7 +303,8 @@ If any local group fails:
 3. rerun the affected group;
 4. rebuild and sign a linear candidate history with exactly one recognized
    version transition and only non-versioning follow-ups that preserve every
-   version target and `changelog.md` byte-for-byte;
+   version target and `changelog.md` byte-for-byte, except for the sealed
+   candidate correction above;
 5. rerun the complete mandatory pre-push gate on that exact clean commit
    because the candidate bytes and SHA changed;
 6. push only the green commit, then request a fresh last-push review.

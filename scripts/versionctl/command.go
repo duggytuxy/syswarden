@@ -19,6 +19,7 @@ type application struct {
 	releaseResetPolicy      *changelogResetPolicy
 	releaseRewritePolicy    *changelogRewritePolicy
 	releaseFollowupPolicies []changelogFollowupPolicy
+	candidateFollowupPolicy *candidateChangelogPolicy
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
@@ -209,7 +210,12 @@ func (app application) runReleaseContract(args []string, stderr io.Writer, track
 					parentChangelog,
 					currentChangelog,
 				); err != nil {
-					return fmt.Errorf("non-versioning release follow-up %s changed changelog.md: %w", currentRef, err)
+					if correctionErr := validateCandidateChangelogCorrection(
+						app.candidateChangelogPolicy(), parentRef, parentVersion,
+						currentVersion, message, parentChangelog, currentChangelog,
+					); correctionErr != nil {
+						return fmt.Errorf("non-versioning release follow-up %s changed changelog.md: %w; candidate correction: %v", currentRef, err, correctionErr)
+					}
 				}
 			}
 			currentRef = parentRef
@@ -586,7 +592,14 @@ func (app application) runValidateCommit(args []string, stderr io.Writer) error 
 			return fmt.Errorf("version changed from %s to %s without a recognized commit prefix", previous, candidate)
 		}
 		if !bytes.Equal(candidateChangelog, baseChangelog) {
-			return errors.New("non-versioning commit must preserve changelog.md byte-for-byte")
+			if err := app.validateUnpublishedChangelogCorrection(repo, *baseRef, previous, candidate, *message, baseChangelog, candidateChangelog); err != nil {
+				return fmt.Errorf("non-versioning commit must preserve changelog.md byte-for-byte unless the exact unpublished correction is approved: %w", err)
+			}
+			if err := validateChangelog(candidateChangelog, candidate); err != nil {
+				return err
+			}
+			fmt.Fprintf(app.out, "Commit validation passed: exact unpublished changelog correction preserves %s and all historical release bytes\n", candidate)
+			return nil
 		}
 		if err := validateChangelog(candidateChangelog, candidate); err != nil {
 			return err
