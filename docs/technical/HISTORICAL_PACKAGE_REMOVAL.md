@@ -47,6 +47,16 @@ package payload and removal barrier. The original native removal command then
 finishes the package transaction. No force option, manual barrier deletion,
 package-database edit or standalone CLI uninstall bypass is introduced.
 
+A later removal phase can retire a list directory before another phase asks
+for operator review. Resuming the original native command must still accept
+the same nftables source parent after that child-directory change. Durable
+graph recovery checks its inode, filesystem UUID, ownership and permissions;
+the directory link count can change as children are added or removed. Every
+source, retained original, include edge and wildcard is rechecked independently.
+Initial preparation, operation-local race checks and regular-file single-link
+requirements remain strict. A replaced directory or modified administrator
+source still prevents removal.
+
 After a cold boot, systemd can retain the active journald process and its
 invocation while its `ExecStart` accounting shows unset timestamps and PID
 zero. Removal accepts this exact reset shape only after checking the live
@@ -67,6 +77,8 @@ of every other configuration source and verified activation after removal.
 - Complete staged preparation and resume the original native removal command.
 - Preserve unrelated firewall rules, the operator's forward policy and private
   VPN originals; let the native lifecycle remove the durable barrier.
+- Resume after an owned sibling directory has been retired, while rejecting
+  replacement directories, changed permissions and altered include sources.
 - Reinstall the complete native package and verify executable payload, package
   status and reboot behavior.
 - Exercise removal after a cold boot with reset journald command accounting;
