@@ -1,29 +1,76 @@
 # Release v4.10.3
 
+> Candidate change record. Publication requires fresh package signatures,
+> protected Patch IVV and independent verification of the public assets.
+
 ### FIXED
 
 - **Historical upgrade boundary:** Screen historical WireGuard namespace claims
-  and unmanifested generated paths in native pre-install scripts before package
-  payload replacement, including calls from an older installed updater. Report
-  the verified staged recovery path without invoking that older CLI. The
-  candidate still requires fresh native first-hop validation and Patch IVV.
+  and unmanifested generated paths before native package payload replacement,
+  including calls from an older installed updater. Report the verified staged
+  recovery path without invoking that older CLI.
 - **Unmanifested dual-generation recovery:** Recognize complete historical
   generated server, client and forwarding files by exact templates and matching
   key relationships. Bind them to the explicit `wg0` retirement plan while
   preserving their bytes. Reject partial, customized or changed evidence.
-- **Preserved historical VPN migration:** Add a separate digest-authorized
-  `recover-wireguard --migrate-legacy-wg-syswarden` operation. Preserve keys,
-  addresses, port and the client file, archive original files privately, replace
-  historical server hooks and publish an exact ownership manifest. Require an
-  inactive, disabled VPN and proven runtime cleanup. Journal each migration,
-  block ordinary mutation while it is pending, and support verified continuation
-  after interruption without overwriting backups.
-
-- **Hardened forwarding compatibility:** Preserve the operator's shared forward
-  chain and its policy while restoring the two historical VPN allowances with
-  manifest-bound rule tokens. Verify activation and remove only exact owned
-  rules and table handles, including a partially absent runtime. Refuse changed
-  ownership or foreign table content without discarding recovery evidence.
+- **Preserved historical VPN migration:** Add digest-authorized
+  `recover-wireguard --migrate-legacy-wg-syswarden`. Preserve keys, addresses,
+  port and client bytes, archive originals privately, replace historical server
+  hooks and publish an exact ownership manifest. Require an inactive, disabled
+  VPN and proven runtime cleanup. Journal migration and resume verified
+  interrupted work without overwriting backups.
+- **Hardened forwarding and durable ownership:** Preserve the administrator's
+  shared forward chain and policy while restoring manifest-bound VPN
+  allowances. Remove only exact owned rules and table handles. Bind generated
+  file identity across filesystem device renumbering while retaining strict
+  byte, metadata and key-relationship verification.
+- **Historical native removal:** Recognize exact supported historical systemd
+  units and rsyslog bridges before service migration. Preserve customized files
+  and the recovery payload on refusal, support verified staged preparation,
+  and resume the original native removal operation.
+- **Optional OSINT availability:** Allow installation and reinstallation to
+  omit a valid optional OSINT supplement when independent sources do not meet
+  the intersection minimum. Warn explicitly and preserve the attested primary
+  snapshot and unrelated policy. Reject malformed sources; explicit feed
+  refresh still reports insufficient corroboration.
+- **Verified removal ordering:** Keep the CLI and durable removal barrier until
+  verified retirement of product runtime and persistent state is complete.
+  Cover standalone uninstall, native remove and native purge independently,
+  including shared-service reloads and reboot persistence.
+- **Historical Fail2ban retirement:** Retire only proven artifacts of the former
+  integration. Preserve administrator jails, filters, actions, bans and shared
+  firewall resources. Bind recovery to original evidence and actual loaders;
+  dedicated-table retirement requires independent action and table evidence.
+- **Shared persistent firewall recovery:** Remove exact product entries while
+  preserving administrator source bytes and effective protection. Support
+  balanced include fragments inside administrator tables and narrowly scoped
+  reloads. Require an exact receiver reset before a literal include to avoid
+  duplicating preserved rules on reload.
+- **Historical persistent-source recovery:** Provide a separate digest-reviewed
+  route for supported historical empty-set firewall sources when independently
+  retained generation inputs exist and all product runtime tables are absent.
+  Do not infer ownership of live populations from matching names or sources.
+- **Administrator configuration retention:** Require an explicit preservation
+  decision for supported customized modular TOML files. Retain original paths,
+  bytes and permissions, including later administrator edits before deferred
+  purge. Preserve supported modes 0600 and 0640 without normalizing them.
+- **Independent administrator policy:** Require an independently installed,
+  persistently loaded and exactly reviewed receiver for supported typed
+  administrator ingress rules before removing the product table. Revalidate
+  source, loader and runtime at each removal boundary.
+- **Historical generated artifacts:** Support reviewed retirement of historical
+  cron records, generated lists, SaaS caches, logs and UI snapshots. Retain
+  original bytes and inodes in private recovery backups. Names, paired hashes
+  and unexpected creation markers alone do not establish ownership.
+- **Standalone payload metadata:** Recognize exact 0750 and 0755 directory modes
+  used by supported payloads. Continue to reject unsafe permissions, special
+  mode bits, changed files and ambiguous ownership.
+- **Historical iptables retirement:** Detect unowned compatibility permissions
+  before erasing the recovery payload. Require independently retained original
+  generation captures and explicit digest review. Retire only original added
+  handles in one kernel generation-bound transaction, preserving identical
+  administrator rules and shared tables. Reject changed evidence, conflicting
+  wrapper ownership and backend mismatches.
 
 ---
 
