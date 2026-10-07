@@ -363,6 +363,17 @@ func runLinuxFirewallGoldenHelper(t *testing.T) {
 	if err := ApplyPolicies(); err != nil {
 		t.Fatalf("ApplyPolicies() in isolated sandbox: %v", err)
 	}
+	receipt, err := readOptionalNFTPolicyOwnership(filepath.Join(linuxFirewallTargetDirectory, nftPolicyOwnershipName))
+	if err != nil {
+		t.Fatal("ApplyPolicies did not leave a readable writer receipt", err)
+	}
+	source, err := readPrivateRootedNFTFile(linuxFirewallTargetFile, maximumNFTJournalFieldBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := currentNFTInputsFromOwnership(source, receipt); err != nil {
+		t.Fatal("the actual writer did not bind its independent inputs", err)
+	}
 }
 
 func writeLinuxFirewallListFixtures(t *testing.T) func() {

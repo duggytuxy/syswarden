@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"syswarden-core/fileorigin"
 	"syswarden-core/telemetry"
 	"syswarden-core/utils"
 	"syswarden-core/webhook"
@@ -728,6 +729,10 @@ func createExclusiveTelemetryLog(path string) (*os.File, error) {
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
 		return nil, fmt.Errorf("new telemetry log is not a regular 0600 file")
 	}
+
+	if err := fileorigin.MarkCreatedLog(file, fileorigin.TelemetryLog); err != nil {
+		log.Printf("[Logger] Product log origin could not be recorded; preserve this log during removal: %v", err)
+	}
 	cleanup = false
 	return file, nil
 }
@@ -740,7 +745,7 @@ func reopenTelemetryLog(path string) (*os.File, error) {
 	if !pathInfo.Mode().IsRegular() {
 		return nil, fmt.Errorf("telemetry log path is not a regular file")
 	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0) // #nosec G304 -- path was bound to a regular file above
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- The regular leaf is identity checked and opened without following links.
 	if err != nil {
 		return nil, err
 	}
@@ -807,6 +812,10 @@ func compactTelemetryGenerationTailWithSync(path string, limit int64, syncDirect
 		return err
 	}
 
+	owned, err := fileorigin.HasLogOrigin(source, fileorigin.TelemetryLog)
+	if err != nil {
+		return fmt.Errorf("inspect retained telemetry log origin: %w", err)
+	}
 	start := sourceInfo.Size() - limit
 	tail := make([]byte, int(limit))
 	if _, err := io.ReadFull(io.NewSectionReader(source, start, limit), tail); err != nil {
@@ -856,6 +865,12 @@ func compactTelemetryGenerationTailWithSync(path string, limit int64, syncDirect
 		return fmt.Errorf("write retained telemetry tail staging file: %w", err)
 	} else if written != len(tail) {
 		return fmt.Errorf("write retained telemetry tail staging file: %w", io.ErrShortWrite)
+	}
+
+	if owned {
+		if err := fileorigin.MarkCreatedLog(temporary, fileorigin.TelemetryLog); err != nil {
+			return fmt.Errorf("retain telemetry log origin during compaction: %w", err)
+		}
 	}
 	if err := temporary.Sync(); err != nil {
 		return fmt.Errorf("sync retained telemetry tail staging file: %w", err)
@@ -1060,7 +1075,7 @@ func newLoggerWithRotationLimit(logPath string, rotationLimit int64) *Logger {
 		}
 	}
 
-	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
+	file, err := openAppendProductLog(logPath, fileorigin.TelemetryLog)
 	if err != nil {
 		log.Printf("[Logger] Warning: failed to open log file %s: %v", logPath, err)
 		return logger

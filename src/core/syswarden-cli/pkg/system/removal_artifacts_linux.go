@@ -310,7 +310,7 @@ func removeDedicatedProductLogTree() error {
 		0,
 		0,
 		0,
-		func(root *os.Root, name string, _ string) error { return root.RemoveAll(name) },
+		refuseUnprovenRemovalEntry,
 		unix.Unlinkat,
 		readProcRemovalMountInfo,
 		sharedRemovalRaceHooks{},
@@ -460,8 +460,30 @@ func removeDedicatedRemovalTreeAtUsingMountInfo(
 func removeDedicatedRemovalTree(path string) error {
 	return removeDedicatedRemovalTreeAt(
 		path, 0, 0,
-		func(root *os.Root, name string, _ string) error { return root.RemoveAll(name) },
+		removeEmptyProductDirectory,
 	)
+}
+
+// A directory's location, permissions and owner do not establish ownership of
+// its children. Finalization only removes an empty directory after the exact
+// file-retirement phases. It must never recurse into unclassified contents.
+func removeEmptyProductDirectory(root *os.Root, name, path string) error {
+	if root == nil || name == "" || filepath.Base(name) != name || name == "." || name == ".." {
+		return fmt.Errorf("empty product-directory removal has an invalid pinned target")
+	}
+	parent, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = parent.Close() }()
+	if err := unix.Unlinkat(int(parent.Fd()), name, unix.AT_REMOVEDIR); err != nil {
+		return fmt.Errorf("product-directory finalization requires verified retirement of its remaining contents; every remaining entry is preserved at %s: %w", path, err)
+	}
+	return parent.Sync()
+}
+
+func refuseUnprovenRemovalEntry(_ *os.Root, _, path string) error {
+	return fmt.Errorf("remaining artifact requires independent file ownership and dependency evidence before removal; preserved at %s", path)
 }
 
 type attestedProductSymlink struct {
@@ -713,6 +735,6 @@ func removeRemovalStateContentsAtUsingMountInfo(
 func removeRemovalStateContents() error {
 	return removeRemovalStateContentsAt(
 		filepath.Dir(RemovalTombstonePath), 0, 0,
-		func(root *os.Root, name string, _ string) error { return root.RemoveAll(name) },
+		refuseUnprovenRemovalEntry,
 	)
 }

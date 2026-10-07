@@ -610,17 +610,18 @@ func TestUninstallTailHasNoAmbientCronProfileOrIgnoredRemovalMutation_SW2_FWBACK
 	preflight := strings.Index(content, "preflightHostProductRemovalArtifacts()")
 	start := strings.Index(content, `fmt.Println("[WARN] Starting verified SysWarden host removal...")`)
 	logRemoval := strings.Index(content, "removeDedicatedProductLogTree()")
-	configRemoval := strings.Index(content, `removeDedicatedRemovalTree("/etc/syswarden")`)
+	configRemoval := strings.Index(content, "FinalizeRetainedOperatorConfiguration()")
+	payloadRetirement := strings.Index(content, "retireStandalonePayloadForRemoval()")
 	tuiLinkRemoval := strings.Index(content, `"/usr/local/bin/syswarden-tui", "/opt/syswarden/bin/syswarden-tui"`)
 	cliLinkRemoval := strings.Index(content, `"/usr/local/bin/syswarden", "/opt/syswarden/bin/syswarden-cli"`)
 	executableRemoval := strings.Index(content, `removeDedicatedRemovalTree("/opt/syswarden")`)
-	if preflight < 0 || start < 0 || logRemoval < 0 || configRemoval < 0 || tuiLinkRemoval < 0 ||
+	if preflight < 0 || start < 0 || logRemoval < 0 || configRemoval < 0 || payloadRetirement < 0 || tuiLinkRemoval < 0 ||
 		cliLinkRemoval < 0 || executableRemoval < 0 || preflight >= start || start >= logRemoval ||
-		logRemoval >= configRemoval || configRemoval >= tuiLinkRemoval || tuiLinkRemoval >= cliLinkRemoval ||
+		logRemoval >= configRemoval || configRemoval >= payloadRetirement || payloadRetirement >= tuiLinkRemoval || tuiLinkRemoval >= cliLinkRemoval ||
 		cliLinkRemoval >= executableRemoval {
 		t.Fatalf(
-			"unsafe uninstall ordering: preflight=%d start=%d log=%d config=%d tui-link=%d cli-link=%d executable=%d",
-			preflight, start, logRemoval, configRemoval, tuiLinkRemoval, cliLinkRemoval, executableRemoval,
+			"unsafe uninstall ordering: preflight=%d start=%d log=%d config=%d payload=%d tui-link=%d cli-link=%d executable=%d",
+			preflight, start, logRemoval, configRemoval, payloadRetirement, tuiLinkRemoval, cliLinkRemoval, executableRemoval,
 		)
 	}
 	if strings.Contains(content, `removeDedicatedRemovalTree("/var/log/syswarden")`) {

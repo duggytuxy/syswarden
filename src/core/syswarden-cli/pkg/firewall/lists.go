@@ -339,6 +339,11 @@ func createPersistentBlocklistInitializationFile(directory *os.Root, target appr
 			return fmt.Errorf("write persistent blocklist initialization file %s: %w", target.name, io.ErrShortWrite)
 		}
 	}
+	if target.name == "syswarden_blacklist.ipv4" || target.name == "syswarden_blacklist.ipv6" || target.name == "syswarden_whitelist.ipv4" || target.name == "syswarden_whitelist.ipv6" {
+		if err := system.MarkCreatedGeneratedList(file, target.name, content); err != nil {
+			fmt.Printf("[WARN] Generated list creation provenance is unavailable; removal will require verified recovery: %v\n", err)
+		}
+	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("sync persistent blocklist initialization file %s: %w", target.name, err)
@@ -620,12 +625,29 @@ func writeListFileInDirectoryFromSnapshot(directory *os.Root, target approvedLis
 }
 
 func writeListFileInDirectoryExpected(directory *os.Root, target approvedListFile, content []byte, expectedDigest *[sha256.Size]byte, beforeRename func() error) error {
+	return writeListFileInDirectoryWithOrigin(directory, target, content, expectedDigest, beforeRename, false)
+}
+
+func writeListFileInDirectoryWithOrigin(directory *os.Root, target approvedListFile, content []byte, expectedDigest *[sha256.Size]byte, beforeRename func() error, automatic bool) error {
 	identity, existed, err := inspectListDestination(directory, target)
 	if err != nil {
 		return fmt.Errorf("inspect list target %s: %w", target.name, err)
 	}
 	if expectedDigest != nil && (!existed || identity.digest != *expectedDigest) {
 		return fmt.Errorf("list target changed after it was read: %s", target.name)
+	}
+	generated := automatic && !existed
+	if automatic && existed {
+		source, _, err := openListFileInRoot(directory, target, os.O_RDONLY, false)
+		if err != nil {
+			return err
+		}
+		opened, statErr := source.Stat()
+		generated, err = system.HasGeneratedListOrigin(source, target.name, identity.digest)
+		closeErr := source.Close()
+		if statErr != nil || err != nil || closeErr != nil || !os.SameFile(opened, identity.info) {
+			return errors.Join(fmt.Errorf("automatic list source changed during origin inspection"), statErr, err, closeErr)
+		}
 	}
 	file, stagingName, err := createListStagingFile(directory, target)
 	if err != nil {
@@ -644,13 +666,25 @@ func writeListFileInDirectoryExpected(directory *os.Root, target approvedListFil
 			return fmt.Errorf("preserve list target owner %s: %w", target.name, err)
 		}
 	}
-	if err := file.Chmod(0600); err != nil {
-		return fmt.Errorf("restrict list staging file for %s: %w", target.name, err)
+	mode := os.FileMode(0600)
+	if automatic && existed {
+		mode = identity.info.Mode().Perm()
+		if mode != 0600 && mode != 0640 {
+			return fmt.Errorf("automatic list update requires private administrator-controlled permissions")
+		}
+	}
+	if err := file.Chmod(mode); err != nil {
+		return fmt.Errorf("preserve safe list staging permissions for %s: %w", target.name, err)
 	}
 	if written, err := file.Write(content); err != nil {
 		return fmt.Errorf("write list staging file for %s: %w", target.name, err)
 	} else if written != len(content) {
 		return fmt.Errorf("write list staging file for %s: %w", target.name, io.ErrShortWrite)
+	}
+	if generated {
+		if err := system.MarkCreatedGeneratedList(file, target.name, content); err != nil {
+			return fmt.Errorf("preserve automatic list creation provenance: %w", err)
+		}
 	}
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync list staging file for %s: %w", target.name, err)

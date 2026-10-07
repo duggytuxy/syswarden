@@ -39,7 +39,7 @@ func preflightStandaloneUninstallWith(executor firewallManagerExecutor, exists f
 		{executable: "dpkg-query", databasePaths: []string{"/var/lib/dpkg/status"},
 			arguments:    []string{"--show", "--showformat=${Package}\\t${db:Status-Status}\\n", "syswarden"},
 			absentOutput: "dpkg-query: no packages found matching syswarden\n",
-			recovery:     "use 'sudo apt-get purge syswarden' for complete package removal, or 'sudo apt-get remove syswarden' to retain package configuration"},
+			recovery:     "use 'sudo apt-get purge syswarden' or 'sudo apt-get remove syswarden' through verified native package removal"},
 		{executable: "rpm", databasePaths: []string{"/usr/lib/sysimage/rpm", "/var/lib/rpm"},
 			arguments:    []string{"--query", "--queryformat", "%{NAME}\\n", "syswarden"},
 			absentOutput: "package syswarden is not installed\n", presentOutput: "syswarden\n",

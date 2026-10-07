@@ -886,12 +886,7 @@ func cleanRHELPackageOwnedDirectory(
 		if _, preserve := allowed[name]; preserve {
 			continue
 		}
-		if err := directory.root.RemoveAll(name); err != nil {
-			return fmt.Errorf("remove RHEL package-owned runtime entry %s: %w", filepath.Join(path, name), err)
-		}
-		if _, err := directory.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
-			return errors.Join(fmt.Errorf("RHEL package-owned runtime entry remains: %s", filepath.Join(path, name)), err)
-		}
+		return fmt.Errorf("RHEL runtime artifact requires independent file retirement before package finalization; preserved at %s", filepath.Join(path, name))
 	}
 	if err := directory.sync(); err != nil {
 		return fmt.Errorf("sync RHEL package-owned runtime cleanup %s: %w", path, err)

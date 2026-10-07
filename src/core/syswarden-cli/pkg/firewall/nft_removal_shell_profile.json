@@ -1,0 +1,614 @@
+{
+  "profile": "shell-pre-v2",
+  "commit": "b1f909c8d774b679f46156443020fa5af45eea33",
+  "source_path": "src/functions/apply_firewall_rules.sh",
+  "source_sha256": "7e4f05b550a2ab01384a635982fdbed9ba39ec04e9ec7cb402d5a2796baca749",
+  "literals": {
+    "front": "table inet syswarden_table {\n    # 3. FRONTLINE CHAIN (Executes BEFORE Fail2ban at priority -10)\n    chain input_frontline {\n        type filter hook input priority filter - 10; policy accept;\n        ct state established,related accept\n",
+    "backend": "    }\n\n    # 4. BACKEND CHAIN (Executes AFTER Fail2ban at priority 10)\n    # Serves as the Zero-Trust Catch-All, allowing legitimate traffic first.\n    chain input_backend {\n        type filter hook input priority filter + 10; policy drop;\n        # 1. Silently drop invalid packets (broken TCP states)\n        ct state invalid drop\n        # 2. Silently drop TCP connection noise (late FIN-ACK/RST on expired conntrack)\n        # Mimics UFW: Only genuine NEW SYN packets are permitted to reach the Catch-All\n        tcp flags & (fin|syn|rst|ack) != syn ct state new drop\n        # 3. Allow established flows\n        ct state established,related accept\n        iifname \"lo\" accept\n        ip protocol icmp accept\n        meta l4proto ipv6-icmp accept\n",
+    "tail": "        # The Catch-All Drop: Any packet surviving Frontline and Fail2ban hits this.\n        limit rate 2/second log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n        drop\n    }\n}\n",
+    "whitelist6": "        ip6 saddr $wl_ip accept\n",
+    "whitelist4": "        ip saddr $wl_ip accept\n",
+    "wg_port": "        udp dport ${WG_PORT:-51820} accept\n",
+    "wg_front": "        iifname { \"wg0\", \"lo\" } accept comment \"SysWarden: Global Trust for VPN\"\n",
+    "ssh_drop": "        tcp dport ${SSH_PORT:-22} log prefix \"[SysWarden-SSH-DROP] \" drop\n",
+    "active_ports": "        tcp dport { ${SSH_PORT:-22}, $ACTIVE_PORTS } accept\n",
+    "quic": "        udp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"\n",
+    "ssh_only": "        tcp dport { ${SSH_PORT:-22} } accept\n",
+    "wg_backend": "        iifname { \"wg0\", \"lo\" } accept\n"
+  },
+  "program": [
+    {
+      "literal": "front"
+    },
+    {
+      "whitelist": true
+    },
+    {
+      "if": "WireGuard",
+      "then": [
+        {
+          "literal": "wg_port"
+        },
+        {
+          "literal": "wg_front"
+        },
+        {
+          "literal": "ssh_drop"
+        }
+      ]
+    },
+    {
+      "literal": "backend"
+    },
+    {
+      "if": "ActivePorts",
+      "then": [
+        {
+          "literal": "active_ports"
+        },
+        {
+          "if": "QUIC",
+          "then": [
+            {
+              "literal": "quic"
+            }
+          ]
+        }
+      ],
+      "else": [
+        {
+          "literal": "ssh_only"
+        }
+      ]
+    },
+    {
+      "if": "WireGuard",
+      "then": [
+        {
+          "literal": "wg_port"
+        },
+        {
+          "literal": "wg_backend"
+        }
+      ]
+    },
+    {
+      "literal": "tail"
+    }
+  ],
+  "semantics": {
+    "front:0": {
+      "kind": "table",
+      "name": "syswarden_table",
+      "object": {
+        "family": "inet",
+        "name": "syswarden_table"
+      }
+    },
+    "front:2": {
+      "kind": "chain",
+      "name": "input_frontline",
+      "object": {
+        "family": "inet",
+        "table": "syswarden_table",
+        "name": "input_frontline",
+        "type": "filter",
+        "hook": "input",
+        "prio": -10,
+        "policy": "accept"
+      }
+    },
+    "front:4": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": [
+                "established",
+                "related"
+              ]
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "backend:4": {
+      "kind": "chain",
+      "name": "input_backend",
+      "object": {
+        "family": "inet",
+        "table": "syswarden_table",
+        "name": "input_backend",
+        "type": "filter",
+        "hook": "input",
+        "prio": 10,
+        "policy": "drop"
+      }
+    },
+    "backend:7": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "invalid"
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "backend:10": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "!=",
+              "left": {
+                "&": [
+                  {
+                    "payload": {
+                      "protocol": "tcp",
+                      "field": "flags"
+                    }
+                  },
+                  {
+                    "|": [
+                      "fin",
+                      "syn",
+                      "rst",
+                      "ack"
+                    ]
+                  }
+                ]
+              },
+              "right": "syn"
+            }
+          },
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": "new"
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "backend:12": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "in",
+              "left": {
+                "ct": {
+                  "key": "state"
+                }
+              },
+              "right": [
+                "established",
+                "related"
+              ]
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "backend:13": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "meta": {
+                  "key": "iifname"
+                }
+              },
+              "right": "lo"
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "backend:14": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "protocol"
+                }
+              },
+              "right": "icmp"
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "backend:15": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "meta": {
+                  "key": "l4proto"
+                }
+              },
+              "right": "ipv6-icmp"
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "ssh_only:0": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "tail:1": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "limit": {
+              "rate": 2,
+              "burst": 5,
+              "per": "second"
+            }
+          },
+          {
+            "log": {
+              "prefix": "[SysWarden-BLOCK] [Catch-All] "
+            }
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "tail:2": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "active_ports:0": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "CombinedPorts"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "CombinedPorts",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "quic:0": {
+      "kind": "rule",
+      "object": {
+        "comment": "SysWarden: QUIC / HTTP3 Support",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "udp",
+                  "field": "dport"
+                }
+              },
+              "right": 443
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "whitelist4:0": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "saddr"
+                }
+              },
+              "right": {
+                "template_parameter": "WhitelistEntry"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "WhitelistEntry",
+          "kind": "addr4",
+          "protocol": "ip",
+          "field": "saddr"
+        }
+      ]
+    },
+    "whitelist6:0": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip6",
+                  "field": "saddr"
+                }
+              },
+              "right": {
+                "template_parameter": "WhitelistEntry"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "WhitelistEntry",
+          "kind": "addr6",
+          "protocol": "ip6",
+          "field": "saddr"
+        }
+      ]
+    },
+    "wg_port:0": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "udp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "WireGuardPort"
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "WireGuardPort",
+          "kind": "ports",
+          "protocol": "udp",
+          "field": "dport"
+        }
+      ]
+    },
+    "wg_front:0": {
+      "kind": "rule",
+      "object": {
+        "comment": "SysWarden: Global Trust for VPN",
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "meta": {
+                  "key": "iifname"
+                }
+              },
+              "right": {
+                "set": [
+                  "lo",
+                  "wg0"
+                ]
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    },
+    "ssh_drop:0": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "tcp",
+                  "field": "dport"
+                }
+              },
+              "right": {
+                "template_parameter": "SSHPort"
+              }
+            }
+          },
+          {
+            "log": {
+              "prefix": "[SysWarden-SSH-DROP] "
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      },
+      "bindings": [
+        {
+          "expression_index": 0,
+          "parameter": "SSHPort",
+          "kind": "ports",
+          "protocol": "tcp",
+          "field": "dport"
+        }
+      ]
+    },
+    "wg_backend:0": {
+      "kind": "rule",
+      "object": {
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "meta": {
+                  "key": "iifname"
+                }
+              },
+              "right": {
+                "set": [
+                  "lo",
+                  "wg0"
+                ]
+              }
+            }
+          },
+          {
+            "accept": null
+          }
+        ]
+      },
+      "bindings": []
+    }
+  }
+}

@@ -138,6 +138,8 @@ type nftTransactionJournal struct {
 	PreviousPersistentExists  bool                  `json:"previous_persistent_exists"`
 	PreviousPersistent        []byte                `json:"previous_persistent"`
 	PreviousPersistentSHA256  string                `json:"previous_persistent_sha256"`
+	CandidateOwnership        []byte                `json:"candidate_ownership,omitempty"`
+	PreviousOwnership         []byte                `json:"previous_ownership,omitempty"`
 }
 
 func nftSHA256Hex(content []byte) string {
@@ -154,6 +156,7 @@ func newNFTTransactionJournal(
 	hadPreviousTables bool,
 	previousDynamicSets nftDynamicSetPresence,
 	candidatePersistent []byte,
+	candidateOwnership ...[]byte,
 ) (*nftTransactionJournal, error) {
 	if err := attestNFTStateDirectory(stateDirectory); err != nil {
 		return nil, fmt.Errorf("attest firewall state directory: %w", err)
@@ -187,6 +190,17 @@ func newNFTTransactionJournal(
 		PreviousPersistentExists:  previousExists,
 		PreviousPersistent:        bytes.Clone(previous),
 		PreviousPersistentSHA256:  nftSHA256Hex(previous),
+	}
+	if len(candidateOwnership) > 1 {
+		return nil, fmt.Errorf("firewall transaction has multiple ownership candidates")
+	}
+	if len(candidateOwnership) == 1 && len(candidateOwnership[0]) > 0 {
+		journal.CandidateOwnership = bytes.Clone(candidateOwnership[0])
+		previousOwnership, ownershipErr := readOptionalNFTPolicyOwnership(filepath.Join(stateDirectory, nftPolicyOwnershipName))
+		if ownershipErr != nil {
+			return nil, fmt.Errorf("preserve previous generated policy ownership: %w", ownershipErr)
+		}
+		journal.PreviousOwnership = previousOwnership
 	}
 	if err := writeNFTTransactionJournal(stateDirectory, journal, true); err != nil {
 		return nil, err
@@ -228,7 +242,7 @@ func validateNFTTransactionJournal(journal *nftTransactionJournal) error {
 	if !journal.HadPreviousTables && journal.PreviousDynamicSets.any() {
 		return fmt.Errorf("firewall transaction journal contains dynamic sets without previous tables")
 	}
-	return nil
+	return validateNFTJournalOwnership(journal)
 }
 
 func marshalNFTTransactionJournal(journal *nftTransactionJournal) ([]byte, error) {
@@ -418,6 +432,9 @@ func recoverPendingNftablesTransaction(ctx context.Context, runner nftCommandRun
 				journal.TransactionID,
 				err,
 			)
+		}
+		if err := commitNFTPolicyOwnership(stateDirectory, journal); err != nil {
+			return fmt.Errorf("recover committed firewall transaction %s: ownership publication is incomplete; preserve the journal: %w", journal.TransactionID, err)
 		}
 		if err := removeNFTTransactionJournal(stateDirectory); err != nil {
 			if nftJournalWasUnlinked(err) {

@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -201,11 +202,24 @@ func (runner execNFTCommandRunner) Run(ctx context.Context, stdin []byte, args .
 			_ = commandFile.Close()
 		}
 	}()
+	receiverTable, receiverObservation := nftOperatorReceiverObservationTarget(args)
 	switch {
 	case len(args) == 3 && args[0] == "-j" && args[1] == "list" && args[2] == "tables":
 		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "tables")
 	case len(args) == 3 && args[0] == "-j" && args[1] == "list" && args[2] == "ruleset":
 		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "ruleset")
+	case slices.Equal(args, []string{"-j", "list", "table", "inet", "syswarden"}):
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "inet", "syswarden")
+	case slices.Equal(args, []string{"-j", "list", "table", "inet", "syswarden_table"}):
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "inet", "syswarden_table")
+	case slices.Equal(args, []string{"-j", "list", "table", "netdev", "syswarden_hw_drop"}):
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "netdev", "syswarden_hw_drop")
+	case slices.Equal(args, []string{"-j", "list", "table", "arp", "syswarden_arp"}):
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "arp", "syswarden_arp")
+	case slices.Equal(args, []string{"-j", "list", "table", "ip", "filter"}):
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "ip", "filter")
+	case receiverObservation:
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "table", "inet", receiverTable) // #nosec G204 -- Pinned read-only observer; table is a fixed prefix plus exactly twenty lowercase hexadecimal characters.
 	case len(args) == 4 && args[0] == "list" && args[1] == "table":
 		target := nftTableTarget{family: args[2], name: args[3]}
 		switch target {
@@ -304,6 +318,7 @@ type nftVerificationPlan struct {
 	chains         map[nftObjectKey]string
 	sets           map[nftObjectKey]int // negative cardinality means existence-only for runtime-owned sets
 	operatorPolicy operatorPolicyVerification
+	generation     *nftPolicyGeneration
 }
 
 type nftTableTarget struct {
@@ -1580,6 +1595,10 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 		return fail("prepare set elements: %v", err)
 	}
 	persistentRules := baseRules + populationRules
+	ownership, err := prepareNFTPolicyOwnership([]byte(persistentRules), verification.generation, transactionID)
+	if err != nil {
+		return fail("prepare generated policy ownership: %v", err)
+	}
 	dynamicSnapshot, err := snapshotNFTDynamicBans(ctx, runner, time.Now())
 	if err != nil {
 		return fail("snapshot dynamic bans: %v", err)
@@ -1664,6 +1683,7 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 		len(existing) > 0,
 		nftDynamicSetPresenceFromSnapshot(dynamicSnapshot),
 		[]byte(persistentRules),
+		ownership,
 	)
 	if err != nil {
 		return fail("create durable recovery journal: %v", err)
@@ -1755,6 +1775,9 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 			return transactionID, fmt.Errorf("firewall transaction %s persisted the candidate but could not persist its journal phase (%v) and rollback failed: %w", transactionID, err, rollbackErr)
 		}
 		return rollbackRestored("rolled back after durable persisted-phase update failed", err)
+	}
+	if err := commitNFTPolicyOwnership(stateDirectory, journal); err != nil {
+		return transactionID, markCommittedFirewallPolicyError(fmt.Errorf("firewall transaction %s is committed and persisted; ownership publication is incomplete and the recovery journal is retained: %w", transactionID, err))
 	}
 	if err := removeNFTTransactionJournal(stateDirectory); err != nil {
 		if nftJournalWasUnlinked(err) {
@@ -1966,6 +1989,9 @@ func listLegacyWireGuardForwardRuleHandles(ctx context.Context, runner nftComman
 	if err != nil {
 		return nil, fmt.Errorf("decode nft ruleset for legacy WireGuard cleanup: %w", err)
 	}
+	if err := preflightLiveOperatorPolicyRemoval(document); err != nil {
+		return nil, err
+	}
 	seen := make(map[uint64]struct{})
 	handles := make([]uint64, 0, 2)
 	for _, entry := range document.NFTables {
@@ -1983,48 +2009,18 @@ func listLegacyWireGuardForwardRuleHandles(ctx context.Context, runner nftComman
 	return handles, nil
 }
 
+// Without a prepared writer-bound session, only proven absence can complete.
+// Reserved names identify candidates for recovery, never permission to delete.
 func cleanupReservedNFTablesForUninstall(ctx context.Context, runner nftCommandRunner) error {
-	legacyHandles, err := listLegacyWireGuardForwardRuleHandles(ctx, runner)
-	if err != nil {
+	if err := preflightNFTablesForUninstall(ctx, runner); err != nil {
 		return err
 	}
-	if len(legacyHandles) > 0 {
-		values := make([]string, 0, len(legacyHandles))
-		for _, handle := range legacyHandles {
-			values = append(values, strconv.FormatUint(handle, 10))
-		}
-		return fmt.Errorf("refusing to remove unowned legacy WireGuard nftables rules: handles %s; remove or attest them explicitly before retrying", strings.Join(values, ", "))
-	}
-
 	existing, err := listExistingReservedNFTablesForUninstall(ctx, runner)
 	if err != nil {
 		return err
 	}
-	wireGuardTarget := nftTableTarget{family: "inet", name: "syswarden_wg"}
-	if existing[wireGuardTarget] {
-		return fmt.Errorf("refusing to remove an unowned WireGuard nftables table; verified manifest-bound cleanup is required before retrying")
-	}
-	for _, target := range syswardenNFTTables {
-		if !existing[target] {
-			continue
-		}
-		output, deleteErr := runner.Run(ctx, nil, "delete", "table", target.family, target.name)
-		if deleteErr != nil {
-			return fmt.Errorf("delete reserved nftables table %s %s: %w: %s", target.family, target.name, deleteErr, strings.TrimSpace(string(output)))
-		}
-	}
-	remaining, err := listExistingReservedNFTablesForUninstall(ctx, runner)
-	if err != nil {
-		return fmt.Errorf("verify reserved nftables cleanup: %w", err)
-	}
-	if len(remaining) > 0 {
-		identities := make([]string, 0, len(remaining))
-		for _, target := range syswardenNFTTables {
-			if remaining[target] {
-				identities = append(identities, target.family+" "+target.name)
-			}
-		}
-		return fmt.Errorf("reserved nftables tables remain after uninstall cleanup: %s", strings.Join(identities, ", "))
+	if len(existing) != 0 {
+		return fmt.Errorf("reserved nftables state lacks a prepared writer-bound retirement plan; preserve source and ownership evidence for verified recovery")
 	}
 	return nil
 }

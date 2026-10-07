@@ -19,6 +19,11 @@ var beginRemoval = func() error {
 }
 var removeOwnedCronStateForRemoval = system.RemoveOwnedCronStateForRemoval
 var prepareFirewallStateForRemoval = system.PrepareFirewallStateForRemoval
+var preflightHistoricalHostForRemoval = system.PreflightHistoricalHostRemoval
+var attestHistoricalHostRemovalComplete = system.AttestHistoricalHostRemovalComplete
+var preflightHistoricalFail2banForRemoval = firewall.PreflightHistoricalFail2banRemoval
+var preflightAdministratorPolicyForRemoval = firewall.PreflightAdministratorPolicyRemoval
+var preflightKnownNFTPersistenceForRemoval = firewall.PreflightKnownNFTPersistenceRemoval
 var cleanupFirewallStateForRemoval = firewall.CleanupOwnedCompatibilityRulesForUninstall
 var removeOwnedWireGuardStateForRemoval = func() error {
 	return system.RemoveOwnedWireGuardArtifactsForRemoval(
@@ -34,11 +39,42 @@ var removeOwnedIntegrationArtifactsForRemoval = integration.RemoveOwnedRsyslogAr
 var removeExactRuntimeSocketForRemoval = system.RemoveExactRuntimeSocketForPackageRemoval
 var removeOwnedRsyslogSELinuxPolicyForRemoval = integration.RemoveOwnedRsyslogSELinuxPolicyForPackageRemoval
 var requireRemovalTombstoneForCISPolicyRemoval = system.RequireRemovalTombstone
+var removeExactJournaldFragmentForRemoval = integration.RemoveExactJournaldFragmentForRemoval
 var removeExactCISHardeningPoliciesForRemoval = security.RemoveExactCISHardeningPoliciesForRemoval
+var attestRuntimeRetirementBeforeNativeErase = system.AttestRuntimeRetirementBeforeNativeErase
+var removePristineDefaultConfigurationForRemoval = system.RemovePristineDefaultConfigurationForRemoval
+var retireRuntimeHistoryForRemoval = firewall.RetireRuntimeHistoryForRemoval
+var retireCreatedProductLogsForRemoval = system.RetireCreatedProductLogsForRemoval
+var retireGeneratedListsForRemoval = system.RetireGeneratedListsForRemoval
+var retireCreatedUISnapshotsForRemoval = system.RetireCreatedUISnapshotsForRemoval
 
 func prepareVerifiedFirewallRemoval() error {
+	if err := preflightKnownNFTPersistenceForRemoval(); err != nil {
+		return fmt.Errorf("persistent firewall recovery is required before removal starts; this read-only preflight has not stopped services or published a new removal barrier: %w", err)
+	}
+	if err := preflightHistoricalHostForRemoval(); err != nil {
+		return fmt.Errorf("historical host recovery is required before removal starts; this read-only preflight has not stopped services or published a new removal barrier: %w", err)
+	}
+	if err := preflightHistoricalFail2banForRemoval(); err != nil {
+		return fmt.Errorf("historical Fail2ban recovery is required before removal starts; this read-only preflight has not published a new removal barrier; preserve any existing evidence: %w", err)
+	}
+	if err := preflightAdministratorPolicyForRemoval(); err != nil {
+		return fmt.Errorf("administrator policy preservation is required before removal starts; this read-only preflight has not stopped services or published a new removal barrier: %w", err)
+	}
 	if err := beginRemoval(); err != nil {
 		return fmt.Errorf("refusing removal before the durable removal barrier is published: %w", err)
+	}
+	if err := preflightHistoricalFail2banForRemoval(); err != nil {
+		return fmt.Errorf("refusing removal before historical Fail2ban recovery; this attempt has not stopped managed services or removed product files, and the durable removal barrier is retained: %w", err)
+	}
+	if err := preflightHistoricalHostForRemoval(); err != nil {
+		return fmt.Errorf("historical host evidence changed before service preparation; the durable removal barrier and product files are retained: %w", err)
+	}
+	if err := preflightAdministratorPolicyForRemoval(); err != nil {
+		return fmt.Errorf("administrator policy changed before service preparation; managed services have not been stopped and the durable removal barrier is retained: %w", err)
+	}
+	if err := preflightKnownNFTPersistenceForRemoval(); err != nil {
+		return fmt.Errorf("persistent firewall evidence changed before service preparation; managed services have not been stopped and the durable removal barrier is retained: %w", err)
 	}
 	if err := prepareFirewallStateForRemoval(); err != nil {
 		return fmt.Errorf(
@@ -57,6 +93,9 @@ func prepareVerifiedFirewallRemoval() error {
 			"refusing removal before exact WireGuard cleanup; the durable removal tombstone is retained; inspect exact historical state with 'sudo syswarden recover-wireguard' before explicit recovery, then retry the original removal command: %w",
 			err,
 		)
+	}
+	if err := preflightHistoricalFail2banForRemoval(); err != nil {
+		return fmt.Errorf("refusing removal because historical Fail2ban evidence changed before firewall cleanup; the durable removal barrier and product files are retained: %w", err)
 	}
 	if err := cleanupFirewallStateForRemoval(); err != nil {
 		return fmt.Errorf(
@@ -109,6 +148,30 @@ func prepareVerifiedFirewallRemoval() error {
 			err,
 		)
 	}
+	if err := removeExactJournaldFragmentForRemoval(); err != nil {
+		return fmt.Errorf("refusing removal before exact journald fragment retirement and verified logging activation; recovery resources and the durable removal barrier are retained: %w", err)
+	}
+	if err := attestHistoricalHostRemovalComplete(); err != nil {
+		return fmt.Errorf("host recovery remains incomplete after exact cleanup; prepared services, the product executable and the durable removal barrier are retained: %w", err)
+	}
+	if err := preflightKnownNFTPersistenceForRemoval(); err != nil {
+		return fmt.Errorf("persistent firewall recovery remains incomplete; prepared services, the product executable and the durable removal barrier are retained: %w", err)
+	}
+	if err := retireGeneratedListsForRemoval(); err != nil {
+		return fmt.Errorf("generated list retirement remains incomplete; preserve administrator input, the CLI and the removal barrier: %w", err)
+	}
+	if err := retireCreatedProductLogsForRemoval(); err != nil {
+		return fmt.Errorf("product log retirement remains incomplete; preserve the CLI and removal barrier; inspect legacy log retention with 'sudo syswarden recover-removal --retain-legacy-logs': %w", err)
+	}
+	if err := retireCreatedUISnapshotsForRemoval(); err != nil {
+		return fmt.Errorf("UI snapshot retirement remains incomplete; preserve the CLI and removal barrier for explicit recovery: %w", err)
+	}
+	if err := retireRuntimeHistoryForRemoval(); err != nil {
+		return fmt.Errorf("runtime history retirement remains incomplete; preserve the CLI and removal barrier: %w", err)
+	}
+	if err := removePristineDefaultConfigurationForRemoval(); err != nil {
+		return fmt.Errorf("default configuration retirement remains incomplete; preserve the CLI and removal barrier: %w", err)
+	}
 	if err := removePreparedServiceArtifacts(); err != nil {
 		return fmt.Errorf(
 			"refusing removal after verified firewall cleanup because exact service artifacts could not be removed; the durable removal barrier is retained: %w",
@@ -130,7 +193,13 @@ var preparePackageRemovalCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return prepareVerifiedFirewallRemoval()
+		if err := prepareVerifiedFirewallRemoval(); err != nil {
+			return err
+		}
+		if err := attestRuntimeRetirementBeforeNativeErase(); err != nil {
+			return fmt.Errorf("refusing native package erase while generated file retirement is incomplete; the CLI and removal barrier must remain available: %w", err)
+		}
+		return nil
 	},
 }
 

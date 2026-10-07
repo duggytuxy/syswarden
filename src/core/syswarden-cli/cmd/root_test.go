@@ -21,6 +21,7 @@ func TestTopLevelCommandContract(t *testing.T) {
 		"list",
 		"manual",
 		"migrate-config",
+		"recover-removal",
 		"recover-wireguard",
 		"reload",
 		"revoke-ssh",

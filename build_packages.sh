@@ -315,17 +315,33 @@ echo "[+] Detected SysWarden Version: v${VERSION}"
 
 # 2. Compile Go Binaries
 echo "[*] Compiling SysWarden Native Go Modules..."
-for module in syswarden-cli syswarden-core syswarden-tui; do
+for module in syswarden-core syswarden-tui syswarden-cli; do
     echo " -> Downloading locked ${module} modules..."
     "${GO_BIN}" -C "${SOURCE_ROOT}/src/core/${module}" mod download
     "${GO_BIN}" -C "${SOURCE_ROOT}/src/core/${module}" mod verify
+    # Compile exact companion bindings into the CLI after both companions.
+    native_link_flags="-s -w"
+    alpine_link_flags="-s -w"
+    if [ "${module}" = syswarden-cli ]; then
+        for binding in standaloneCoreSHA256:syswarden-core standaloneTUISHA256:syswarden-tui; do
+            binding_name=${binding%%:*}
+            binding_binary=${binding#*:}
+            native_digest=$(sha256sum "${PACKAGE_WORKSPACE}/dist/bin/${binding_binary}")
+            alpine_digest=$(sha256sum "${PACKAGE_WORKSPACE}/dist/bin-apk/${binding_binary}")
+            native_link_flags+=" -X syswarden-cli/pkg/system.${binding_name}=${native_digest%% *}"
+            alpine_link_flags+=" -X syswarden-cli/pkg/system.${binding_name}=${alpine_digest%% *}"
+        done
+        signatures_digest=$(sha256sum "${SOURCE_ROOT}/src/core/syswarden-core/signatures.json")
+        native_link_flags+=" -X syswarden-cli/pkg/system.standaloneSignaturesSHA256=${signatures_digest%% *}"
+        alpine_link_flags+=" -X syswarden-cli/pkg/system.standaloneSignaturesSHA256=${signatures_digest%% *}"
+    fi
     echo " -> Compiling ${module}..."
     GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \
         GIT_DIR="${SOURCE_GIT_DIR}" GIT_WORK_TREE="${SOURCE_ROOT}" \
         GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor \
         GIT_CONFIG_VALUE_0=false GOWORK="${SOURCE_ROOT}/go.work" \
         "${GO_BIN}" -C "${SOURCE_ROOT}" build \
-        -buildvcs=true -mod=readonly -trimpath -buildmode=pie -ldflags="-s -w" \
+        -buildvcs=true -mod=readonly -trimpath -buildmode=pie -ldflags="${native_link_flags}" \
         -o "${PACKAGE_WORKSPACE}/dist/bin/${module}" "./src/core/${module}"
     echo " -> Compiling static Alpine ${module}..."
     GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \
@@ -333,7 +349,7 @@ for module in syswarden-cli syswarden-core syswarden-tui; do
         GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor \
         GIT_CONFIG_VALUE_0=false GOWORK="${SOURCE_ROOT}/go.work" \
         "${GO_BIN}" -C "${SOURCE_ROOT}" build \
-        -buildvcs=true -mod=readonly -trimpath -ldflags="-s -w" \
+        -buildvcs=true -mod=readonly -trimpath -ldflags="${alpine_link_flags}" \
         -o "${PACKAGE_WORKSPACE}/dist/bin-apk/${module}" "./src/core/${module}"
 done
 
@@ -880,7 +896,12 @@ syswarden_remove_dedicated_root() {
     syswarden_attest_dedicated_root "${syswarden_root_path}" || return 1
     syswarden_refuse_mounted_path_tree "${syswarden_root_path}" || return 1
     syswarden_attest_dedicated_root "${syswarden_root_path}" || return 1
-    rm -rf -- "${syswarden_root_path}" || return 1
+    # Exact file retirement must finish while the CLI is available.
+    # A later purge has no authority to recursively adopt leftovers.
+    rmdir -- "${syswarden_root_path}" || {
+        printf '%s\n' 'Refusing finalization of a nonempty product directory; all remaining entries are preserved for verified recovery.' >&2
+        return 1
+    }
     syswarden_path_absent "${syswarden_root_path}"
 }
 
@@ -890,7 +911,7 @@ if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1"
     syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
     syswarden_remove_exact_runtime_socket /run/syswarden.sock || exit 1
     syswarden_remove_exact_runtime_socket /run/syswarden-control.sock || exit 1
-    if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
+    if [ "$1" = "remove" ] || [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
         syswarden_select_removal_barrier
         syswarden_barrier_status=$?
         if [ "${syswarden_barrier_status}" -eq 2 ]; then
@@ -912,12 +933,10 @@ if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1"
         done
         syswarden_attest_removal_marker "${syswarden_active_barrier}" || exit 1
         syswarden_remove_dedicated_root /opt/syswarden || exit 1
-        syswarden_remove_dedicated_root /etc/syswarden || exit 1
+        syswarden_finalize_retained_operator_configuration || exit 1
         syswarden_remove_dedicated_root /var/log/syswarden || exit 1
         syswarden_empty_removal_state || exit 1
         syswarden_finalize_removal_state_root || exit 1
-    else
-        syswarden_transition_to_deferred_purge || exit 1
     fi
 fi
 syswarden_refresh_systemd_after_rpm_payload_transition "${1:-}" || exit 1

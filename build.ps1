@@ -159,11 +159,6 @@ if (!$VcsSentinelItem.PSIsContainer -or
 
 $Components = @(
     [PSCustomObject]@{
-        Name = 'syswarden-cli'
-        SourceDir = Join-Path $SourceRoot 'src/core/syswarden-cli'
-        Package = './src/core/syswarden-cli'
-    },
-    [PSCustomObject]@{
         Name = 'syswarden-core'
         SourceDir = Join-Path $SourceRoot 'src/core/syswarden-core'
         Package = './src/core/syswarden-core'
@@ -172,6 +167,11 @@ $Components = @(
         Name = 'syswarden-tui'
         SourceDir = Join-Path $SourceRoot 'src/core/syswarden-tui'
         Package = './src/core/syswarden-tui'
+    },
+    [PSCustomObject]@{
+        Name = 'syswarden-cli'
+        SourceDir = Join-Path $SourceRoot 'src/core/syswarden-cli'
+        Package = './src/core/syswarden-cli'
     }
 )
 
@@ -321,7 +321,16 @@ function Invoke-GoBuild {
     if ($null -ne $Target.BuildMode) {
         $BuildArguments += "-buildmode=$($Target.BuildMode)"
     }
-    $BuildArguments += '-ldflags=-s -w'
+    $LinkFlags = '-s -w'
+    if ($Component.Name -eq 'syswarden-cli') {
+        $CoreDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Target.OutputDir 'syswarden-core')).Hash.ToLowerInvariant()
+        $TuiDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Target.OutputDir 'syswarden-tui')).Hash.ToLowerInvariant()
+        $SignaturesDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $SignaturesSource).Hash.ToLowerInvariant()
+        $LinkFlags += " -X syswarden-cli/pkg/system.standaloneCoreSHA256=$CoreDigest"
+        $LinkFlags += " -X syswarden-cli/pkg/system.standaloneTUISHA256=$TuiDigest"
+        $LinkFlags += " -X syswarden-cli/pkg/system.standaloneSignaturesSHA256=$SignaturesDigest"
+    }
+    $BuildArguments += "-ldflags=$LinkFlags"
     $BuildArguments += '-o'
     $BuildArguments += $TemporaryOutputPath
     $BuildArguments += $Component.Package

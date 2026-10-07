@@ -965,6 +965,152 @@
     }
   },
   {
+    "path": "syswarden recover-removal",
+    "use": "recover-removal",
+    "short": "Inspect bounded recovery for complete product removal",
+    "long": "Inspect one bounded recovery inventory without changing the host. Review its metadata, exact digest and declared effects before applying. Legacy data archival requires stopped product services and explicit confirmation that the files have no other producer. Administrator configuration retention preserves reviewed files at their original paths. Cron and Fail2ban retirement stop managed product services, preserve unrelated protections and retain original files privately. This command does not infer ownership from a filename or create new ownership markers.",
+    "flags": [
+      {
+        "name": "apply",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Apply the exact reviewed recovery plan"
+      },
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "confirm-historical-inputs",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Confirm original generation evidence and the declared preservation boundary when applying historical recovery"
+      },
+      {
+        "name": "export-operator-policy",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Export private typed administrator receiver rules for separate operator review and installation"
+      },
+      {
+        "name": "file-plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Bind historical Fail2ban recovery to the exact reviewed configuration inventory"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for recover-removal"
+      },
+      {
+        "name": "historical-inputs",
+        "type": "string",
+        "default": "",
+        "usage": "Private original generation input capture for historical firewall review"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Authorize only the exact lowercase SHA-256 digest printed by the dry run"
+      },
+      {
+        "name": "preserve-operator-policy",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Review exact independent administrator policy preservation before product removal"
+      },
+      {
+        "name": "resume-unused-fail2ban",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Review current protection before resuming only the remaining proven unused definitions; preserve original evidence"
+      },
+      {
+        "name": "retain-legacy-lists",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect exact private retention of operator-confirmed legacy lists"
+      },
+      {
+        "name": "retain-legacy-logs",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect exact private retention of operator-confirmed legacy product logs"
+      },
+      {
+        "name": "retain-legacy-ui",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect exact private retention of operator-confirmed legacy UI snapshots"
+      },
+      {
+        "name": "retain-operator-config",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Review administrator configuration retention at its original paths across uninstall, remove and purge"
+      },
+      {
+        "name": "retire-legacy-cron",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect exact historical root cron retirement with an original private backup and product service shutdown"
+      },
+      {
+        "name": "retire-legacy-fail2ban",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect verified historical Fail2ban retirement while preserving unrelated jails and the shared service"
+      },
+      {
+        "name": "retire-legacy-fail2ban-persistence",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect exact historical Fail2ban entries in shared persistent rules with private original backups"
+      },
+      {
+        "name": "retire-legacy-firewall-persistence",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Review an exact historical persistent source after product tables are absent"
+      },
+      {
+        "name": "retire-legacy-iptables",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect exact historical IPv4 iptables rule retirement from independent original captures; preserve shared administrator rules"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden recover-removal\"",
+      "2": "unknown command \"arg-1\" for \"syswarden recover-removal\"",
+      "3": "unknown command \"arg-1\" for \"syswarden recover-removal\"",
+      "4": "unknown command \"arg-1\" for \"syswarden recover-removal\""
+    }
+  },
+  {
     "path": "syswarden recover-wireguard",
     "use": "recover-wireguard",
     "short": "Inspect and explicitly recover exact historical WireGuard nftables state",

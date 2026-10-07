@@ -456,7 +456,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("/tmp/syswarden-local-package.XXXXXX", source)
         self.assertIn("scripts/ci/repository_state.py", source)
         capture = source.index(" capture \\\n")
-        compile_loop = source.index("for module in syswarden-cli")
+        compile_loop = source.index("for module in syswarden-core syswarden-tui syswarden-cli")
         verify = source.rindex(" verify \\\n")
         publication = source.rindex("publish_local_artifacts\n")
         self.assertLess(capture, compile_loop)
@@ -4893,7 +4893,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
 
     def test_postremove_payload_absent_reaches_socket_and_tombstone_matrix(self) -> None:
         matrix = (
-            ("deb-remove", "remove", False, True),
+            ("deb-remove", "remove", False, False),
+            ("deb-purge", "purge", False, False),
             ("rpm-final-erase", "0", False, False),
             ("apk-post-deinstall", "4.3.2", True, False),
         )
@@ -5056,7 +5057,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("Root crontab bytes", preremove)
         postremove = self.script("postrm.sh")
         self.assertIn("syswarden_remove_dedicated_root /opt/syswarden", postremove)
-        self.assertIn("syswarden_remove_dedicated_root /etc/syswarden", postremove)
+        self.assertIn("syswarden_finalize_retained_operator_configuration", postremove)
         self.assertIn("syswarden_remove_exact_product_link", postremove)
         self.assertIn("syswarden_remove_exact_runtime_socket", postremove)
         self.assertIn("syswarden_remove_exact_runtime_socket /run/syswarden.sock", postremove)
@@ -5280,6 +5281,7 @@ systemctl() {
         workflow = self.script("postrm.sh")
         local = self.local_build_script("postrm.sh")
         self.assertEqual(workflow, local)
+        self.assertNotIn("syswarden_transition_to_deferred_purge || exit 1", workflow)
         for required in (
             "/var/lib/syswarden/removal-in-progress-v1",
             "/var/lib/syswarden/removed-awaiting-purge-v1",
@@ -5288,7 +5290,6 @@ systemctl() {
             "syswarden_refuse_mounted_path_tree",
             "syswarden_empty_removal_state || exit 1",
             "syswarden_finalize_removal_state_root || exit 1",
-            "syswarden_transition_to_deferred_purge || exit 1",
             "syswarden_resume_unmarked_terminal_state || exit 1",
             "0:0:600:1",
             "= '39'",
@@ -5364,6 +5365,18 @@ systemctl() {
                 (state_root / "operator.json").write_bytes(b"state\n")
                 tombstone.write_bytes(b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n")
                 tombstone.chmod(0o600)
+
+            def retain_fixture_files_outside_product_roots() -> None:
+                # This models a separately completed file phase. The
+                # finalizer must never claim these administrator fixtures.
+                backup = Path(tempfile.mkdtemp(prefix="retained-", dir=root))
+                for directory, name in (
+                    (opt_root, "operator.bin"),
+                    (etc_root, "operator.conf"),
+                    (log_root, "security.log"),
+                    (state_root, "operator.json"),
+                ):
+                    (directory / name).rename(backup / name)
 
             replacements = sorted(
                 (
@@ -5450,6 +5463,14 @@ systemctl() {
                 encoding="ascii",
             )
             populate()
+            refused = run("purge")
+            self.assertNotEqual(refused.returncode, 0, refused.stderr)
+            self.assertEqual((opt_root / "operator.bin").read_bytes(), b"opt\n")
+            self.assertEqual((etc_root / "operator.conf").read_bytes(), b"etc\n")
+            self.assertEqual((log_root / "security.log").read_bytes(), b"log\n")
+            self.assertEqual((state_root / "operator.json").read_bytes(), b"state\n")
+            self.assertTrue(tombstone.is_file())
+            retain_fixture_files_outside_product_roots()
             interrupted = run("purge", fail_finalize=True)
             self.assertEqual(interrupted.returncode, 97, interrupted)
             self.assertFalse(opt_root.exists())
@@ -5462,12 +5483,14 @@ systemctl() {
             self.assertFalse(state_root.exists())
 
             for case_name, argument, alpine in (
-                ("deb", "purge", False),
+                ("deb-remove", "remove", False),
+                ("deb-purge", "purge", False),
                 ("rpm", "0", False),
                 ("apk", "4.03.3", True),
             ):
                 with self.subTest(crash_retry=case_name):
                     populate()
+                    retain_fixture_files_outside_product_roots()
                     crashed = run(
                         argument,
                         alpine=alpine,
@@ -5501,7 +5524,7 @@ systemctl() {
             self.assertEqual((state_root / "operator.json").read_bytes(), b"state\n")
             self.assertTrue(tombstone.is_file())
 
-    def test_deb_remove_then_later_purge_or_reinstall_is_retry_safe(self) -> None:
+    def test_legacy_deferred_purge_or_reinstall_is_retry_safe(self) -> None:
         owner = f"{os.getuid()}:{os.getgid()}"
         postremove = self.script("postrm.sh")
         tail = postremove[postremove.index("syswarden_attest_state_root() {") :]
@@ -5534,6 +5557,18 @@ systemctl() {
                 (state_root / "operator.json").write_bytes(b"state\n")
                 active.write_bytes(b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n")
                 active.chmod(0o600)
+
+            def retain_fixture_files_outside_product_roots() -> None:
+                # Only the already-empty finalization phase is under test.
+                # Keep the administrator canaries in a private fixture backup.
+                backup = Path(tempfile.mkdtemp(prefix="retained-", dir=root))
+                for directory, name in (
+                    (opt_root, "operator.bin"),
+                    (etc_root, "operator.conf"),
+                    (log_root, "security.log"),
+                    (state_root, "operator.json"),
+                ):
+                    (directory / name).rename(backup / name)
 
             replacements = sorted(
                 (
@@ -5610,8 +5645,14 @@ systemctl() {
             def run_postremove(
                 argument: str, *, crash_after_finalizing_move: bool = False
             ) -> subprocess.CompletedProcess[str]:
+                # Exercise the old transition as a legacy fixture only.
+                # Current remove uses the same complete finalizer as purge.
+                program = executable
+                if argument == "legacy-remove":
+                    boundary = '\nif [ "${SYSWARDEN_TEST_ALPINE:-0}" = 1 ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then'
+                    program = executable[:executable.index(boundary)] + "\nsyswarden_transition_to_deferred_purge\n"
                 return subprocess.run(
-                    ("/bin/sh", "-c", executable, "deb-deferred", argument),
+                    ("/bin/sh", "-c", program, "deb-deferred", argument),
                     check=False,
                     capture_output=True,
                     text=True,
@@ -5629,7 +5670,7 @@ systemctl() {
                 encoding="ascii",
             )
             populate()
-            removed = run_postremove("remove")
+            removed = run_postremove("legacy-remove")
             self.assertEqual(removed.returncode, 0, removed)
             self.assertFalse(active.exists())
             self.assertEqual(
@@ -5639,15 +5680,23 @@ systemctl() {
             self.assertEqual((etc_root / "operator.conf").read_bytes(), b"etc\n")
             self.assertEqual((state_root / "operator.json").read_bytes(), b"state\n")
             self.assertEqual((log_root / "security.log").read_bytes(), b"log\n")
-            removed_retry = run_postremove("remove")
+            removed_retry = run_postremove("legacy-remove")
             self.assertEqual(removed_retry.returncode, 0, removed_retry)
+            refused_purge = run_postremove("purge")
+            self.assertNotEqual(refused_purge.returncode, 0, refused_purge.stderr)
+            self.assertEqual((opt_root / "operator.bin").read_bytes(), b"opt\n")
+            self.assertEqual((etc_root / "operator.conf").read_bytes(), b"etc\n")
+            self.assertEqual((log_root / "security.log").read_bytes(), b"log\n")
+            self.assertEqual((state_root / "operator.json").read_bytes(), b"state\n")
+            self.assertTrue(deferred.is_file())
+            retain_fixture_files_outside_product_roots()
             purged = run_postremove("purge")
             self.assertEqual(purged.returncode, 0, purged)
             for product_root in (opt_root, etc_root, log_root, state_root):
                 self.assertFalse(product_root.exists(), product_root)
 
             populate()
-            removed = run_postremove("remove")
+            removed = run_postremove("legacy-remove")
             self.assertEqual(removed.returncode, 0, removed)
             consumed = subprocess.run(
                 (
@@ -5697,7 +5746,7 @@ systemctl() {
                 f"37 36 0:33 / {mounted_reconciliation_child} rw,relatime - ext4 /dev/loop0 rw\n",
                 encoding="ascii",
             )
-            refused_mounted_reconciliation = run_postremove("remove")
+            refused_mounted_reconciliation = run_postremove("legacy-remove")
             self.assertNotEqual(
                 refused_mounted_reconciliation.returncode,
                 0,
@@ -5721,7 +5770,7 @@ systemctl() {
             )
             (mounted_reconciliation_child / "operator.bin").unlink()
             mounted_reconciliation_child.rmdir()
-            removed_after_stale_reappearance = run_postremove("remove")
+            removed_after_stale_reappearance = run_postremove("legacy-remove")
             self.assertEqual(
                 removed_after_stale_reappearance.returncode,
                 0,
@@ -5732,10 +5781,12 @@ systemctl() {
                 deferred.read_bytes(),
                 b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
             )
+            retain_fixture_files_outside_product_roots()
             final_purge = run_postremove("purge")
             self.assertEqual(final_purge.returncode, 0, final_purge)
 
             populate()
+            retain_fixture_files_outside_product_roots()
             crashed_purge = run_postremove(
                 "purge", crash_after_finalizing_move=True
             )
@@ -5760,16 +5811,18 @@ systemctl() {
             self.assertEqual(reinstalled.returncode, 0, reinstalled)
             self.assertFalse(finalizing.exists())
             populate()
-            removed_after_reinstall = run_postremove("remove")
+            removed_after_reinstall = run_postremove("legacy-remove")
             self.assertEqual(
                 removed_after_reinstall.returncode, 0, removed_after_reinstall
             )
+            retain_fixture_files_outside_product_roots()
             purged_after_reinstall = run_postremove("purge")
             self.assertEqual(
                 purged_after_reinstall.returncode, 0, purged_after_reinstall
             )
 
             populate()
+            retain_fixture_files_outside_product_roots()
             crashed_before_failed_reinstall = run_postremove(
                 "purge", crash_after_finalizing_move=True
             )
@@ -5811,6 +5864,7 @@ systemctl() {
             )
             (partial_reinstall_mount / "operator.bin").unlink()
             partial_reinstall_mount.rmdir()
+            retain_fixture_files_outside_product_roots()
             resumed_partial_reinstall_purge = run_postremove("purge")
             self.assertEqual(
                 resumed_partial_reinstall_purge.returncode,
@@ -6840,7 +6894,7 @@ systemctl() {
         self.assertIn("validate_local_apk_license", local)
         self.assertIn("'%{LICENSE}'", local)
 
-    def test_final_removal_deletes_dedicated_state_only_for_purge_equivalents(self) -> None:
+    def test_all_final_native_removals_finalize_verified_state(self) -> None:
         postremove = self.script("postrm.sh")
         main = postremove[
             postremove.rindex(
@@ -6861,6 +6915,7 @@ systemctl() {
             "syswarden_active_barrier=barrier; printf 'barrier\\n'; }\n"
             "syswarden_attest_removal_marker() { :; }\n"
             "syswarden_remove_dedicated_root() { printf 'root:%s\\n' \"$1\"; }\n"
+            "syswarden_finalize_retained_operator_configuration() { printf 'root:/etc/syswarden\\n'; }\n"
             "syswarden_empty_removal_state() { printf 'state-empty\\n'; }\n"
             "syswarden_finalize_removal_state_root() { printf 'tombstone-root\\n'; }\n"
             "syswarden_resume_unmarked_terminal_state() { printf 'terminal-retry\\n'; }\n"
@@ -6875,7 +6930,7 @@ systemctl() {
             + main
         )
         matrix = (
-            ("deb-remove", "remove", False, False),
+            ("deb-remove", "remove", False, True),
             ("deb-purge", "purge", False, True),
             ("rpm-final-erase", "0", False, True),
             ("rpm-upgrade", "1", False, None),
@@ -6897,24 +6952,17 @@ systemctl() {
                     self.assertEqual(calls, ["systemd-refresh:1"])
                     continue
                 self.assertNotIn("systemd-refresh:1", calls)
+                self.assertNotIn("deferred", calls)
                 log_call = "root:/var/log/syswarden"
-                if destructive:
-                    self.assertIn("barrier", calls)
-                    self.assertIn("root:/opt/syswarden", calls)
-                    self.assertIn("root:/etc/syswarden", calls)
-                    self.assertIn(log_call, calls)
-                    self.assertIn("state-empty", calls)
-                    self.assertIn("tombstone-root", calls)
-                    self.assertLess(calls.index(log_call), calls.index("state-empty"))
-                    self.assertLess(calls.index("state-empty"), calls.index("tombstone-root"))
-                else:
-                    self.assertIn("deferred", calls)
-                    self.assertNotIn("barrier", calls)
-                    self.assertNotIn("root:/opt/syswarden", calls)
-                    self.assertNotIn("root:/etc/syswarden", calls)
-                    self.assertNotIn(log_call, calls)
-                    self.assertNotIn("state-empty", calls)
-                    self.assertNotIn("tombstone-root", calls)
+                self.assertTrue(destructive)
+                self.assertIn("barrier", calls)
+                self.assertIn("root:/opt/syswarden", calls)
+                self.assertIn("root:/etc/syswarden", calls)
+                self.assertIn(log_call, calls)
+                self.assertIn("state-empty", calls)
+                self.assertIn("tombstone-root", calls)
+                self.assertLess(calls.index(log_call), calls.index("state-empty"))
+                self.assertLess(calls.index("state-empty"), calls.index("tombstone-root"))
 
     def test_no_package_rollback_implementation_is_claimed(self) -> None:
         scripts = "\n".join(

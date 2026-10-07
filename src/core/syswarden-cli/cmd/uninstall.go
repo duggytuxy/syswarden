@@ -1,13 +1,32 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"syswarden-cli/pkg/system"
 
 	"github.com/spf13/cobra"
 )
 
-var uninstallHostSystem = system.UninstallSystem
+var uninstallHostSystem = func() error {
+	completion, err := renderStandaloneCompletionPayload()
+	if err != nil {
+		return err
+	}
+	if err := system.RemoveStandaloneCompletionPayload(completion); err != nil {
+		return err
+	}
+	return system.UninstallSystem()
+}
+
+func renderStandaloneCompletionPayload() (string, error) {
+	var completion bytes.Buffer
+	if err := rootCmd.GenBashCompletionV2(&completion, !rootCmd.CompletionOptions.DisableDescriptions); err != nil {
+		return "", fmt.Errorf("render exact standalone completion payload: %w", err)
+	}
+	return completion.String(), nil
+}
+
 var preflightStandaloneUninstall = system.PreflightStandaloneUninstall
 
 var uninstallCmd = &cobra.Command{

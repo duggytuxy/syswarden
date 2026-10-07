@@ -30,6 +30,8 @@ var firewallMutatingCLISubcommands = map[string]struct{}{
 	"install":                 {},
 	"migrate-config":          {},
 	"prepare-package-removal": {},
+	"recover-wireguard":       {},
+	"recover-removal":         {},
 	"reload":                  {},
 	"revoke-ssh":              {},
 	"tui":                     {},
@@ -409,11 +411,18 @@ func (scanner firewallRemovalProcessScanner) scan() error {
 }
 
 func scanExactRootSysWardenCLIMutators() error {
-	return productionFirewallRemovalProcessScanner().scan()
+	scanner, err := retainedStandaloneProcessScanner()
+	if err != nil {
+		return err
+	}
+	return scanner.scan()
 }
 
 func scanExactRootSysWardenProcessesAfterServiceStop() error {
-	scanner := productionFirewallRemovalProcessScanner()
+	scanner, err := retainedStandaloneProcessScanner()
+	if err != nil {
+		return err
+	}
 	scanner.rejectCore = true
 	return scanner.scan()
 }

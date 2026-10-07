@@ -23,6 +23,10 @@ const RsyslogAntiForgingPolicy = "# --- SYSWARDEN: Anti Log Forging & CRLF Mitig
 	"$EscapeControlCharactersOnReceive on\n" +
 	"$DropTrailingLFOnReception on\n"
 
+// JournaldForwardingPolicy is shared by setup and exact fragment retirement.
+const JournaldForwardingPolicy = "[Journal]\nForwardToSyslog=yes\n"
+const JournaldForwardingPolicyPath = "/etc/systemd/journald.conf.d/99-syswarden.conf"
+
 // ApplyOSHardening enforces OS-level access and logging restrictions natively.
 func ApplyOSHardening() error {
 	if !config.GlobalConfig.Hardening {
@@ -480,8 +484,8 @@ func applyLogAntiForgingOn(host hardeningHost) error {
 		failures = append(failures, fmt.Errorf("classify journald policy surface: %w", err))
 	} else if systemdInstalled {
 		applied = true
-		content := []byte("[Journal]\nForwardToSyslog=yes\n")
-		logical := "/etc/systemd/journald.conf.d/99-syswarden.conf"
+		content := []byte(JournaldForwardingPolicy)
+		logical := JournaldForwardingPolicyPath
 		validate := func() error {
 			output, err := host.executor.output("systemd-analyze", "cat-config", "systemd/journald.conf")
 			if err != nil {

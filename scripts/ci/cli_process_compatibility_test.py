@@ -39,6 +39,35 @@ def record(
 
 
 class CLIProcessCompatibilityTest(unittest.TestCase):
+    def test_explicit_cache_is_shared_without_changing_source_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shared = root / "shared"
+            with mock.patch.dict(gate.os.environ, {"GOCACHE": str(shared)}, clear=True):
+                baseline = gate.isolated_go_env(root / "baseline")
+                candidate = gate.isolated_go_env(root / "candidate")
+            self.assertEqual(baseline["GOCACHE"], str(shared))
+            self.assertEqual(candidate["GOCACHE"], str(shared))
+            self.assertTrue(shared.is_dir())
+            self.assertFalse((root / "baseline").exists())
+            self.assertFalse((root / "candidate").exists())
+            for env in (baseline, candidate):
+                self.assertEqual(env["GOFLAGS"], "-mod=readonly")
+                self.assertEqual(env["GOTOOLCHAIN"], "local")
+                self.assertEqual(env["GOWORK"], "off")
+
+    def test_unconfigured_cache_remains_private_and_relative_override_refuses(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.dict(gate.os.environ, {}, clear=True):
+                env = gate.isolated_go_env(root / "private")
+            self.assertEqual(env["GOCACHE"], str(root / "private"))
+            self.assertTrue((root / "private").is_dir())
+            with mock.patch.dict(gate.os.environ, {"GOCACHE": "relative"}, clear=True):
+                with self.assertRaisesRegex(gate.CompatibilityError, "absolute cache"):
+                    gate.isolated_go_env(root / "unused")
+            self.assertFalse((root / "unused").exists())
+
     def test_root_help_padding_approval_keeps_hidden_command_absent_and_rejects_content_drift(
         self,
     ) -> None:

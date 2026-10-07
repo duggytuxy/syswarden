@@ -28,6 +28,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"syswarden-core/fileorigin"
 	"syswarden-core/internal/runtimepaths"
 	"syswarden-core/utils"
 
@@ -1230,11 +1231,7 @@ func publishDashboardData(dataFile string, data DashboardData) error {
 	if err != nil {
 		return err
 	}
-	tmpFile := dataFile + ".tmp"
-	if err := os.WriteFile(tmpFile, jsonData, 0600); err != nil {
-		return fmt.Errorf("write dashboard telemetry: %w", err)
-	}
-	if err := os.Rename(tmpFile, dataFile); err != nil {
+	if err := fileorigin.PublishSnapshot(dataFile, fileorigin.DashboardSnapshot, jsonData); err != nil {
 		return fmt.Errorf("publish dashboard telemetry: %w", err)
 	}
 	return nil
@@ -2391,7 +2388,7 @@ func getWAFStats(fwManager FirewallManager) WAF {
 	// Sparkline 24h
 	sparkCache := make(map[string]int)
 	metricsFile := "/var/lib/syswarden/ui/metrics_24h.json"
-	if b, err := os.ReadFile(metricsFile); err == nil { // #nosec
+	if b, err := fileorigin.ReadSnapshotFile(metricsFile, fileorigin.MetricsSnapshot); err == nil {
 		_ = json.Unmarshal(b, &sparkCache)
 	}
 
@@ -2426,7 +2423,7 @@ func getWAFStats(fwManager FirewallManager) WAF {
 	}
 
 	if b, err := json.Marshal(sparkCache); err == nil {
-		_ = os.WriteFile(metricsFile, b, 0600) // #nosec
+		_ = fileorigin.PublishSnapshot(metricsFile, fileorigin.MetricsSnapshot, b)
 	}
 
 	waf.Sparkline24h = spark
