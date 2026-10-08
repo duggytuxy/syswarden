@@ -33,6 +33,20 @@ func matchesNFTPersistenceGraphSource(source nftPersistenceGraphSourceRecord, sn
 		wireguardstate.MatchesRecordedArtifact(actual.Artifact, source.Artifact)
 }
 
+// A directory's link count tracks its immediate subdirectories, not its
+// identity. Other verified removal phases can retire a sibling directory
+// between retries. Keep the recorded inode, filesystem, ownership and mode
+// exact, while rechecking every source, include and wildcard independently.
+// This exception is confined to durable graph recovery. Initial preparation,
+// open-file race checks and regular-file single-link checks remain strict.
+func sameNFTPersistenceRecoveryDirectory(actual, expected legacyFail2banPlanDirectory) bool {
+	if actual.NLink == 0 || expected.NLink == 0 {
+		return false
+	}
+	actual.NLink = expected.NLink
+	return sameLegacyFail2banPlanDirectory(actual, expected)
+}
+
 func verifyNFTPersistenceGraphDirectories(host nftPersistenceFilesystem, record nftPersistenceGraphRecord) error {
 	for _, expected := range record.Directories {
 		directory, err := host.openDirectory(expected.Path)
@@ -45,7 +59,7 @@ func verifyNFTPersistenceGraphDirectories(host nftPersistenceFilesystem, record 
 			return err
 		}
 		actual, err := bindLegacyFail2banPlanDirectory(host, expected.Path, info)
-		if err != nil || !sameLegacyFail2banPlanDirectory(actual, expected) {
+		if err != nil || !sameNFTPersistenceRecoveryDirectory(actual, expected) {
 			return fmt.Errorf("nftables persistence source directory differs from reviewed evidence: %q", expected.Path)
 		}
 	}
