@@ -33,11 +33,16 @@ func ApplyOSHardening() error {
 		return nil
 	}
 
-	fmt.Println("[INFO] Applying strict OS hardening (Crontab, Sudo/Wheel, Profiles)...")
-	host := productionHardeningHost()
+	fmt.Println("[INFO] Applying OS hardening while preserving administrator access...")
+	return applyOSHardeningOn(productionHardeningHost())
+}
+
+func applyOSHardeningOn(host hardeningHost) error {
+	// Account and group membership are administrator policy. Package scripts
+	// may have no SUDO_USER, and the invoking account is not the only admin.
+	// Never infer authority to remove users from sudo, wheel or adm.
 	return runHardeningStages([]hardeningStage{
 		{name: "lock crontab", run: func() error { return lockCrontabOn(host) }},
-		{name: "purge privileged groups", run: func() error { return purgePrivilegedGroupsOn(host) }},
 		{name: "lock user profiles", run: func() error { return lockUserProfilesOn(host) }},
 		{name: "apply log anti-forging", run: func() error { return applyLogAntiForgingOn(host) }},
 		{name: "restrict authentication logs", run: func() error { return restrictAuthLogsOn(host) }},
@@ -53,99 +58,6 @@ func lockCrontabOn(host hardeningHost) error {
 		return fmt.Errorf("remove cron.deny: %w", err)
 	}
 	return nil
-}
-
-func purgePrivilegedGroupsOn(host hardeningHost) error {
-	fmt.Println(" -> Purging non-root users from privileged groups")
-	logWriter, err := authenticationLogWriterOn(host)
-	if err != nil {
-		return err
-	}
-	currentAdmin := os.Getenv("SUDO_USER")
-	if currentAdmin == "" {
-		current, err := user.Current()
-		if err != nil {
-			return fmt.Errorf("identify current administrator: %w", err)
-		}
-		currentAdmin = current.Username
-	}
-
-	snapshot, err := host.snapshot("/etc/group")
-	if err != nil {
-		return err
-	}
-	if !snapshot.existed {
-		return fmt.Errorf("group database is absent")
-	}
-	groups, err := parseGroupMembership(snapshot.content)
-	if err != nil {
-		return err
-	}
-	for _, group := range []string{"sudo", "wheel", "adm"} {
-		for _, member := range groups[group] {
-			if member == "" || member == "root" {
-				continue
-			}
-			if member == currentAdmin {
-				fmt.Printf(" [!] SAFEGUARD: Preserving current admin '%s' in '%s' group\n", member, group)
-				continue
-			}
-			if group == "adm" && member == "syslog" && logWriter.name == "syslog" {
-				fmt.Println(" [!] Preserving the configured rsyslog reader in adm")
-				continue
-			}
-			if err := host.executor.run("gpasswd", "-d", member, group); err != nil {
-				return fmt.Errorf("remove %s from %s: %w", member, group, err)
-			}
-			current, err := host.snapshot("/etc/group")
-			if err != nil {
-				return fmt.Errorf("reinspect group database: %w", err)
-			}
-			currentGroups, err := parseGroupMembership(current.content)
-			if err != nil {
-				return err
-			}
-			if containsString(currentGroups[group], member) {
-				return fmt.Errorf("user %s remains in privileged group %s", member, group)
-			}
-			fmt.Printf(" [-] Removed user '%s' from '%s' group\n", member, group)
-		}
-	}
-	return nil
-}
-
-func parseGroupMembership(content []byte) (map[string][]string, error) {
-	groups := make(map[string][]string)
-	for lineNumber, raw := range strings.Split(string(content), "\n") {
-		if raw == "" {
-			continue
-		}
-		parts := strings.Split(raw, ":")
-		if len(parts) != 4 || parts[0] == "" {
-			return nil, fmt.Errorf("malformed group database line %d", lineNumber+1)
-		}
-		if parts[3] == "" {
-			groups[parts[0]] = nil
-			continue
-		}
-		members := strings.Split(parts[3], ",")
-		for _, member := range members {
-			if member == "" || strings.TrimSpace(member) != member {
-				return nil, fmt.Errorf("malformed member list for group %s", parts[0])
-			}
-		}
-		groups[parts[0]] = members
-	}
-	return groups, nil
-}
-
-func containsString(values []string, expected string) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
 }
 
 const linuxImmutableFileFlag = 0x10

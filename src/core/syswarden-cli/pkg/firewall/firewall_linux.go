@@ -300,12 +300,14 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 		devicesStr = append(devicesStr, fmt.Sprintf("%q", iface)) // format as "eth0"
 	}
 
+	_, _ = nftRules.WriteString(ipv6ControlPlaneSource("netdev"))
 	if len(interfaces) > 1 {
 		fmt.Fprintf(&nftRules, "\tchain ingress_frontline {\n\t\ttype filter hook ingress devices = { %s } priority -500; policy accept;\n", strings.Join(devicesStr, ", "))
 	} else {
 		fmt.Fprintf(&nftRules, "\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"%s\" priority -500; policy accept;\n", interfaces[0])
 	}
 
+	_, _ = nftRules.WriteString(ipv6ControlPlaneDispatch)
 	// 1. Infra Whitelist (Absolute Priority - Bypasses everything)
 	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_whitelist accept\n")
 	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_whitelist6 accept\n")
@@ -385,7 +387,9 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	_, _ = nftRules.WriteString(operatorPolicy.chain)
 
 	// Stateful L4 Protections (Host Input)
+	_, _ = nftRules.WriteString(ipv6ControlPlaneSource("inet"))
 	_, _ = nftRules.WriteString("\tchain stateful_protect {\n\t\ttype filter hook input priority -10; policy drop;\n")
+	_, _ = nftRules.WriteString(ipv6ControlPlaneDispatch)
 	_, _ = nftRules.WriteString("\t\tiifname \"lo\" accept\n")
 	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_whitelist accept\n")
 	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_whitelist6 accept\n")
@@ -595,7 +599,8 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 			},
 			Interfaces: interfaces, ARP: config.GlobalConfig.ArpProtect, ARPAddresses: localIPs,
 		},
-		OperatorChain: operatorPolicy.chain,
+		OperatorChain:    operatorPolicy.chain,
+		IPv6ControlPlane: ipv6ControlPlaneVersion,
 	}
 	runner, err := newExecNFTCommandRunner()
 	if err != nil {

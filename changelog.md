@@ -1,3 +1,31 @@
+# Release v4.10.4
+
+> Candidate change record. Publication requires fresh package signatures,
+> protected Patch IVV and independent verification of the public assets.
+
+### FIXED
+
+- **Persistent IPv6 connectivity:** Generate explicit IPv6 control-plane rules
+  before ingress reputation filtering, strict source policy and input conntrack
+  checks. Preserve neighbour discovery, duplicate address detection, router
+  advertisements, multicast listener discovery and ICMPv6 error delivery.
+  Enforce the local scope and hop limits required for router advertisements and
+  link-local discovery. Keep redirects and unsolicited echo under existing
+  policy instead of accepting all ICMPv6.
+- **DHCPv6 client availability:** Allow IPv6 UDP destination 546 independently
+  of transient listener discovery. Support standard and permitted nonstandard
+  server source ports. Recreate the same bounded rules on policy reload and
+  feed refresh without changing the administrator's firewall frontend.
+- **Exact firewall ownership:** Bind the IPv6 extension to the writer receipt,
+  verify its complete live rules and first dispatch position, and require its
+  exact source and runtime before removal. Preserve historical ownership
+  profiles and refuse modified or unbound extensions.
+- **Administrator access preservation:** Stop automatically removing users from
+  sudo, wheel and adm during OS hardening. Preserve existing group membership
+  and sudo policy regardless of the presence or value of SUDO_USER.
+
+---
+
 # Release v4.10.3
 
 > Candidate change record. Publication requires fresh package signatures,

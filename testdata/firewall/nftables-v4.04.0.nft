@@ -13,8 +13,19 @@ table netdev syswarden_hw_drop {
 	set syswarden_geoip6 { type ipv6_addr; flags interval; auto-merge; }
 	set syswarden_asn { type ipv4_addr; flags interval; auto-merge; }
 	set syswarden_asn6 { type ipv6_addr; flags interval; auto-merge; }
+	chain ipv6-control-plane {
+		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem } accept
+		ip6 saddr fe80::/10 ip6 hoplimit 255 icmpv6 type nd-router-advert icmpv6 code 0 accept
+		ip6 hoplimit 255 icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert } icmpv6 code 0 accept
+		ip6 saddr { ::/128, fe80::/10 } ip6 hoplimit 255 icmpv6 type nd-router-solicit icmpv6 code 0 accept
+		ip6 saddr fe80::/10 ip6 hoplimit 1 icmpv6 type mld-listener-query icmpv6 code 0 accept
+		ip6 saddr { ::/128, fe80::/10 } ip6 hoplimit 1 icmpv6 type { mld-listener-report, mld-listener-done, mld2-listener-report } icmpv6 code 0 accept
+		meta protocol ip6 udp dport 546 accept
+		return
+	}
 	chain ingress_frontline {
 		type filter hook ingress devices = { "eth-test0", "eth-test1" } priority -500; policy accept;
+		jump ipv6-control-plane
 		ip saddr @syswarden_whitelist accept
 		ip6 saddr @syswarden_whitelist6 accept
 		ip saddr . tcp dport @syswarden_whitelist_ports accept
@@ -63,8 +74,19 @@ table inet syswarden {
 		return comment "syswarden:operator-policy:v1:return"
 	}
 
+	chain ipv6-control-plane {
+		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem } accept
+		ip6 saddr fe80::/10 ip6 hoplimit 255 icmpv6 type nd-router-advert icmpv6 code 0 accept
+		ip6 hoplimit 255 icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert } icmpv6 code 0 accept
+		ip6 saddr { ::/128, fe80::/10 } ip6 hoplimit 255 icmpv6 type nd-router-solicit icmpv6 code 0 accept
+		ip6 saddr fe80::/10 ip6 hoplimit 1 icmpv6 type mld-listener-query icmpv6 code 0 accept
+		ip6 saddr { ::/128, fe80::/10 } ip6 hoplimit 1 icmpv6 type { mld-listener-report, mld-listener-done, mld2-listener-report } icmpv6 code 0 accept
+		meta nfproto ipv6 udp dport 546 accept
+		return
+	}
 	chain stateful_protect {
 		type filter hook input priority -10; policy drop;
+		jump ipv6-control-plane
 		iifname "lo" accept
 		ip saddr @syswarden_whitelist accept
 		ip6 saddr @syswarden_whitelist6 accept

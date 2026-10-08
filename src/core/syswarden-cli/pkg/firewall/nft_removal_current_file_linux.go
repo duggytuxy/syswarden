@@ -38,9 +38,10 @@ func (input *nftPreservedOperatorInputs) validate() error {
 }
 
 type nftCurrentPersistenceInputs struct {
-	Base        nftV4028PersistenceInputs   `json:"base"`
-	Populations []nftCurrentPopulation      `json:"populations"`
-	Operator    *nftPreservedOperatorInputs `json:"operator_preservation,omitempty"`
+	Base             nftV4028PersistenceInputs   `json:"base"`
+	Populations      []nftCurrentPopulation      `json:"populations"`
+	Operator         *nftPreservedOperatorInputs `json:"operator_preservation,omitempty"`
+	IPv6ControlPlane string                      `json:"ipv6_control_plane,omitempty"`
 }
 
 type nftCurrentPopulationSpec struct {
@@ -123,6 +124,10 @@ func inspectNFTCurrentPersistentFile(source []byte, input nftCurrentPersistenceI
 		end = len(source)
 	}
 	base := source[:end]
+	base, err := normalizeIPv6ControlPlaneSource(base, input.IPv6ControlPlane)
+	if err != nil {
+		return empty, err
+	}
 	if err := input.Operator.validate(); err != nil {
 		return empty, err
 	}
@@ -304,6 +309,14 @@ func inspectNFTCurrentRuntimeWithClaims(source, inet, ingress, arp []byte, input
 		return nftCurrentPersistenceEvidence{}, err
 	}
 	document, err := inspectNFTPersistence(evidence.base)
+	if err != nil {
+		return nftCurrentPersistenceEvidence{}, err
+	}
+	inet, err = normalizeIPv6ControlPlaneRuntime(inet, "inet", input.IPv6ControlPlane)
+	if err != nil {
+		return nftCurrentPersistenceEvidence{}, err
+	}
+	ingress, err = normalizeIPv6ControlPlaneRuntime(ingress, "netdev", input.IPv6ControlPlane)
 	if err != nil {
 		return nftCurrentPersistenceEvidence{}, err
 	}

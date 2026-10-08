@@ -2143,6 +2143,17 @@ func verifyNftablesStateWithDynamicBans(ctx context.Context, runner nftCommandRu
 	}
 
 	var errs []error
+	if expected.generation != nil && expected.generation.IPv6ControlPlane != "" {
+		if expected.generation.IPv6ControlPlane != ipv6ControlPlaneVersion {
+			errs = append(errs, fmt.Errorf("unsupported IPv6 control-plane verification generation"))
+		} else {
+			for _, family := range []string{"netdev", "inet"} {
+				if err := verifyIPv6ControlPlane(document, family); err != nil {
+					errs = append(errs, err)
+				}
+			}
+		}
+	}
 	for key := range expected.tables {
 		if _, exists := tables[key]; !exists {
 			errs = append(errs, fmt.Errorf("required table %s %s is missing", key.family, key.name))
