@@ -1,10 +1,11 @@
 # Persistent WireGuard filesystem identity
 
-Status: correction under validation for the unpublished v4.10.3 candidate.
-The signed candidate `1920f2065d6280d41211007895f969ea1f4fce36` failed a native
-reboot test. The public stable release remains v4.10.2. New source approval,
-native signatures, a complete signed native campaign and protected Patch IVV
-are required before publication.
+Status: published in v4.10.3 after protected Patch IVV and independent public
+asset verification. The earlier signed candidate
+`1920f2065d6280d41211007895f969ea1f4fce36` failed a native reboot test; that
+failure remains recorded. The final signed product passed a fresh native
+campaign including actual device renumbering and verified restoration. See the
+[publication record](../releases/v4.10.3/README.md) for exact identities and limits.
 
 ## Defect and ownership boundary
 
@@ -65,8 +66,8 @@ historical migration, and forwarding rollback/commit after simulated device
 renumbering. They also preserve refusal for UUID-free device drift and altered
 content, inode or filesystem evidence.
 
-These tests supplement the native campaign. Acceptance still requires actual
-historical first-hop upgrades, half-configured recovery, unchanged clients,
-encrypted bidirectional traffic and NAT, repeated reboots, native purge and
-same-version reinstall using the newly signed candidate. No success claim is
-made for the reporter's production host without its separate verification.
+These tests supplement the completed signed native campaign. Protected IVV
+accepted actual historical first-hop upgrades, half-configured recovery,
+unchanged clients, encrypted bidirectional traffic and NAT, repeated reboots,
+native purge and same-version reinstall within the reviewed scope. A production
+installation still requires its own verification.

@@ -21,7 +21,7 @@ import release_gate
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_CANDIDATE_VERSION = "v4.10.3"
-STABLE_PUBLIC_VERSION = "v4.10.2"
+STABLE_PUBLIC_VERSION = "v4.10.3"
 PUBLIC_REPORT_VERSION = "v4.03.3"
 OPERATIONAL_WIKI_BASELINE_VERSION = "v4.04.3"
 REPORT = REPO_ROOT / (
@@ -170,10 +170,15 @@ class DocumentationGateTest(unittest.TestCase):
             ),
             1,
         )
-        self.assertIn(
-            "The latest IVV-validated, stable public release is "
+        release_statement = (
+            "The latest stable release is "
             f"[{STABLE_PUBLIC_VERSION}](https://github.com/duggytuxy/syswarden/"
-            f"releases/tag/{STABLE_PUBLIC_VERSION}).",
+            f"releases/tag/{STABLE_PUBLIC_VERSION}), validated under IVV "
+            "(Integration, Verification and Validation)."
+        )
+        self.assertEqual(documentation_gate.normalized(readme).count(release_statement), 1)
+        self.assertIn(
+            "Later source builds do not inherit a published release verdict.",
             documentation_gate.normalized(readme),
         )
         self.assertEqual(report.count("## Post-publication record"), 1)
@@ -252,8 +257,8 @@ class DocumentationGateTest(unittest.TestCase):
             [],
         )
         for report_version, wiki_version, key in (
-            ("v4.10.3", OPERATIONAL_WIKI_BASELINE_VERSION, "public_report_version"),
-            (PUBLIC_REPORT_VERSION, "v4.10.3", "operational_wiki_baseline_version"),
+            ("v4.10.4", OPERATIONAL_WIKI_BASELINE_VERSION, "public_report_version"),
+            (PUBLIC_REPORT_VERSION, "v4.10.4", "operational_wiki_baseline_version"),
         ):
             errors = documentation_gate.validate_documentation_version_order(
                 SOURCE_CANDIDATE_VERSION,

@@ -1,17 +1,16 @@
 # Historical WireGuard migration without an ownership manifest
 
-Status: v4.10.3 candidate implementation. The unsigned Debian 13 native
-[rehearsal](WIREGUARD_LEGACY_NATIVE_V4.10.3.md) covers both historical upgrade
-entry points. Protected signing and version-specific Patch IVV remain pending. This document does not authorize a tag
-or publication. The public stable release remains v4.10.2 until verified
-publication. Current public instructions belong at
-[syswarden.io/docs](https://syswarden.io/docs/).
+Status: published in v4.10.3 after protected Patch IVV and independent public
+asset verification. The [publication record](../releases/v4.10.3/README.md)
+binds the final signed product and exact accepted scope. Operator steps belong
+in the [canonical recovery guide](https://syswarden.io/docs/historical-recovery/).
 
-A later signed candidate failed ownership verification after Linux renumbered
-its unchanged filesystem at reboot. Publication is held until the
-[persistent filesystem identity correction](WIREGUARD_FILESYSTEM_IDENTITY.md)
-passes a fresh signed native campaign and protected Patch IVV. Earlier native
-successes do not qualify that failed candidate.
+The unsigned Debian 13 [rehearsal](WIREGUARD_LEGACY_NATIVE_V4.10.3.md) remains
+historical evidence. An earlier signed candidate failed ownership verification
+after filesystem device renumbering. That failed result is preserved. The final
+[filesystem identity correction](WIREGUARD_FILESYSTEM_IDENTITY.md) passed a new
+signed native campaign, including actual renumbering and protected Patch IVV;
+the earlier candidate's outcome is not relabeled.
 
 ## Why the older upgrade fails
 
@@ -38,13 +37,13 @@ not consent for this installation. The recovery commands never stop services.
 Retiring `wg0` and preserving `wg-syswarden` are separate decisions and separate
 plans. If `wg0` must remain operational, do not authorize its retirement.
 
-Use a verified v4.10.3 candidate recovery executable extracted into a private
-directory for an authorized test campaign. Do not replace the installed CLI or
-force package configuration to make the command available. Follow the staged
-extraction approach in the [recovery runbook](WIREGUARD_LEGACY_RECOVERY.md), but
-use the independently verified candidate package, its own metadata and checksum.
-The published v4.10.2 digest in that runbook cannot validate a v4.10.3 package.
-No public v4.10.3 checksum is asserted here.
+Use the authenticated public v4.10.3 recovery executable extracted into a
+private directory. Do not replace the installed CLI or force package
+configuration to make the command available. The
+[canonical recovery guide](https://syswarden.io/docs/historical-recovery/)
+provides the staged extraction command and exact public package checksum.
+The older v4.10.2 runbook retains its historical digest; it cannot authenticate
+a v4.10.3 package.
 
 When a staged executable is required, substitute its absolute path for
 `syswarden` in every command below, including printed apply suggestions.
@@ -59,7 +58,7 @@ Inspect the explicit historical retirement plan:
 sudo syswarden recover-wireguard --retire-legacy-wg0
 ```
 
-The candidate recognizes a complete unmanifested generated `wg-syswarden`
+v4.10.3 recognizes a complete unmanifested generated `wg-syswarden`
 installation only after verifying exact historical server and client templates,
 the generated forwarding setting, matching public/private key relationships,
 matching preshared keys, addresses, port and endpoint. It checks private file
@@ -177,7 +176,11 @@ also verifies an unchanged old updater retry after archiving only its exact,
 checksum-verified stale download. That explicit laboratory step is not an
 automatic cleanup performed by the recovery command.
 
-## Required acceptance before publication
+## Acceptance requirements and completed scope
+
+The protected v4.10.3 IVV satisfied the following requirements within the
+[reviewed plan](../qualification/INTERMEDIATE_ACCEPTANCE_V4.10.3.md). Its dated
+[publication record](../releases/v4.10.3/README.md) preserves the exact result.
 
 Fresh native tests must invoke the actual installed v4.02.8 updater, with its
 binary digest recorded, and document any controlled candidate transport. Calling

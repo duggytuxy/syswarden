@@ -5,8 +5,8 @@ This stable **Patch** release passed its protected intermediate **IVV**.
 An `Upgrade` generation still requires full **IVVQ**; this record does not
 claim that broader qualification.
 
-The patch addresses the historical WireGuard and package removal issues
-reported by **@Randy29800** in [issue #283](https://github.com/duggytuxy/syswarden/issues/283).
+The patch addresses historical WireGuard and package removal boundaries
+tracked in [issue #283](https://github.com/duggytuxy/syswarden/issues/283).
 The [recovery runbook](../../technical/WIREGUARD_LEGACY_RECOVERY.md) covers
 recognized dual-generation state, interrupted removal and older installations
 that cannot upgrade normally while their removal barrier remains present.

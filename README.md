@@ -50,30 +50,15 @@ certification product.
 
 Current source version: **v4.10.3**.
 
-The v4.10.3 candidate adds pre-unpack historical WireGuard screening and
-[preserved VPN migration](docs/technical/WIREGUARD_LEGACY_MIGRATION.md) for exact
-generated state without a manifest. Native first-hop acceptance and Patch IVV
-are pending; it does not inherit the published release's validation verdict.
+The latest stable release is
+[v4.10.3](https://github.com/duggytuxy/syswarden/releases/tag/v4.10.3), validated
+under IVV (Integration, Verification and Validation).
 
-The latest IVV-validated, stable public release is
-[v4.10.2](https://github.com/duggytuxy/syswarden/releases/tag/v4.10.2).
-
-Published on 2 October 2026 with a signed tag, four signed Linux package
-variants and twelve verified release assets. The
-[publication record and verification evidence](docs/releases/v4.10.2/README.md)
-identify the exact tested product, publication commit and Sigstore signatures.
-
-Intermediate `Patch`, `Minor` and `Major` releases follow IVV (Integration,
-Verification and Validation). Version-specific `Upgrade` generations such as v5.00.0 require
-full IVVQ, including Qualification. v4.10.2 is an IVV release and does not claim
-full IVVQ qualification. Later source builds do not inherit its verdict.
-Check each [technical document](docs/technical/) for its exact version and scope.
-
-This patch covers guided retirement of recognized historical WireGuard state,
-early namespace-conflict prevention and consistent native package removal and
-reinstallation. Read the [recovery runbook](docs/technical/WIREGUARD_LEGACY_RECOVERY.md)
-for existing dual-generation or interrupted-removal states. Native packages
-must be removed through their package manager. Credit: @Randy29800.
+Use the [installation guide](https://syswarden.io/docs/getting-started/),
+[historical recovery and removal guide](https://syswarden.io/docs/historical-recovery/)
+and [release verification record](docs/releases/v4.10.3/README.md).
+Intermediate releases follow IVV; `Upgrade` generations require full IVVQ.
+Later source builds do not inherit a published release verdict.
 
 ## Observe, decide, enforce
 
@@ -124,8 +109,8 @@ before enabling synchronization or HA v2.
 
 ## Release inventory and verification
 
-The stable v4.10.2 release publishes a machine-readable SPDX software bill of
-materials, [syswarden-sbom.spdx.json](https://github.com/duggytuxy/syswarden/releases/download/v4.10.2/syswarden-sbom.spdx.json),
+The stable v4.10.3 release publishes a machine-readable SPDX software bill of
+materials, [syswarden-sbom.spdx.json](https://github.com/duggytuxy/syswarden/releases/download/v4.10.3/syswarden-sbom.spdx.json),
 for dependency review. An SBOM is an inventory, not a vulnerability-free claim.
 
 `SHA256SUMS.txt` checks package integrity against the downloaded inventory.
@@ -165,11 +150,11 @@ Operational procedures are centralized in the
 [SysWarden documentation](https://syswarden.io/docs/).
 The former wiki pages are preserved there with search, copyable commands and
 explicit version badges. Historical v4.04.3 procedures retain their original
-scope; use the current getting-started page for the v4.10.2 release.
+scope; use the current getting-started page for the v4.10.3 release.
 
 | Goal | Documentation |
 | --- | --- |
-| Verify and install v4.10.2 | [Get started with the signed release](https://syswarden.io/docs/getting-started/) |
+| Verify and install v4.10.3 | [Get started with the signed release](https://syswarden.io/docs/getting-started/) |
 | Build from an exact reviewed source revision | [Build and install from source](https://syswarden.io/docs/build-from-source/) |
 | Diagnose SSH detection, RHEL CLI paths and HA trust | [Version-aware operator guidance](docs/technical/OPERATOR_VERSION_AND_DIAGNOSTICS.md) |
 | Configure BunkerWeb log inputs | [BunkerWeb log configuration](examples/bunkerweb/README.md) |

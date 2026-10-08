@@ -1,8 +1,10 @@
 # Removal after an interrupted historical upgrade
 
-Status: implementation and unsigned native rehearsal. Fresh signed packages
-and protected v4.10.3 IVV are required before release acceptance. Operator
-instructions belong in [the canonical documentation](https://syswarden.io/docs/).
+Status: published in v4.10.3 after signed native testing, protected Patch IVV
+and independent public asset verification. The
+[publication record](../releases/v4.10.3/README.md) preserves exact identities
+and limits. Operator steps belong in the
+[canonical recovery guide](https://syswarden.io/docs/historical-recovery/).
 
 ## Reproduced failure
 

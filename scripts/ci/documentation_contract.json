@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "stable_public_version": "v4.10.2",
+  "stable_public_version": "v4.10.3",
   "public_report_version": "v4.03.3",
   "operational_wiki_baseline_version": "v4.04.3",
   "current_operational_wiki_pages": [
@@ -56,7 +56,8 @@
   ],
   "required_readme_phrases": [
     "Current source version: **{version}**.",
-    "The latest IVV-validated, stable public release is [{stable_public_version}](https://github.com/duggytuxy/syswarden/releases/tag/{stable_public_version}).",
+    "The latest stable release is [{stable_public_version}](https://github.com/duggytuxy/syswarden/releases/tag/{stable_public_version}), validated under IVV (Integration, Verification and Validation).",
+    "Later source builds do not inherit a published release verdict.",
     "SysWarden is an open-source Linux security orchestrator",
     "SysWarden is not an inline HTTP proxy, a traffic sanitizer or a regulatory certification product.",
     "Authoritative nftables enforcement with bounded firewalld and UFW compatibility",
