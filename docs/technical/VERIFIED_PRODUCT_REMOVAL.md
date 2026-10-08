@@ -1,8 +1,10 @@
 # Verified product removal
 
-Status: implementation under review for the v4.10.3 candidate. This document
-describes code boundaries and review requirements. It does not establish release
-acceptance or replace the operator guidance at <https://syswarden.io/docs/>.
+Status: published in v4.10.3 after protected Patch IVV and independent public
+asset verification. The [publication record](../releases/v4.10.3/README.md)
+defines the accepted scope. This reference describes code boundaries; use the
+[canonical recovery guide](https://syswarden.io/docs/historical-recovery/)
+for operator steps.
 
 ## Removal contract
 
@@ -340,7 +342,7 @@ evidence is not rewritten on retry. This route requires native validation of
 uninstall, remove and purge separately, including shared reload and a real host
 reboot, before it is accepted as release coverage.
 
-## Explicit limits before acceptance
+## Explicit recovery limits
 
 The following states remain refused and require additional bounded recovery
 work. A refusal preserves evidence; it is not complete removal:
@@ -357,7 +359,7 @@ work. A refusal preserves evidence; it is not complete removal:
 - An empty historical dedicated Fail2ban table without separately justified
   table-retirement authority.
 
-The candidate must not be described as covering every historical removal state
+The release must not be described as covering every historical removal state
 while these limits remain. Accepted private recovery backups are inactive
 evidence and must not recreate product state after service reload or reboot.
 

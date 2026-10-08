@@ -41,11 +41,13 @@ invalid sources, cancellation and duplicate origins. An omitted supplement
 must preserve the complete existing directory inventory, file contents,
 provenance and modification times.
 
-Installation and reinstallation must also be exercised with the final signed
-package using independent valid HTTPS fixtures with no common addresses. The
-package must finish configuring, retain its validated Data-Shield snapshot,
-report the unavailable supplement and leave unrelated firewall state intact.
-These requirements do not constitute a completed release verdict.
+The final signed v4.10.3 package passed installation and reinstallation checks
+using independent valid HTTPS fixtures with no common addresses. Configuration
+completed while retaining the validated primary snapshot, reporting the omitted
+supplement and preserving unrelated firewall state. Explicit refresh and
+malformed-source refusal were also checked. The
+[publication record](../releases/v4.10.3/README.md) records protected Patch IVV
+acceptance. Fixture results do not establish live upstream availability.
 
 The upstream lists represent distinct observation sources. See the
 [CINS Army description](https://cinsscore.com/) and the
