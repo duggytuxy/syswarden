@@ -69,73 +69,73 @@ func TestValidateInstalledStandardRPMReleaseFailsClosed(t *testing.T) {
 	}{
 		{
 			name:           "exact standard identity",
-			output:         "syswarden\t0\t4.10.3\t1\tx86_64\n",
-			currentVersion: "v4.10.3",
+			output:         "syswarden\t0\t4.10.4\t1\tx86_64\n",
+			currentVersion: "v4.10.4",
 		},
 		{
 			name:           "exact RHEL package-owned identity",
-			output:         "syswarden\t0\t4.10.3\t1.rhelpo\tx86_64\n",
-			currentVersion: "v4.10.3",
+			output:         "syswarden\t0\t4.10.4\t1.rhelpo\tx86_64\n",
+			currentVersion: "v4.10.4",
 			wantError:      rhelPackageOwnedRPMFilename,
 		},
 		{
 			name:           "unexpected package-owned version",
-			output:         "syswarden\t0\t4.10.4\t1.rhelpo\tx86_64\n",
-			currentVersion: "v4.10.4",
+			output:         "syswarden\t0\t4.10.5\t1.rhelpo\tx86_64\n",
+			currentVersion: "v4.10.5",
 			wantError:      "unrecognized RHEL package-owned RPM version",
 		},
 		{
 			name:           "wrong name",
-			output:         "other\t0\t4.10.3\t1\tx86_64\n",
-			currentVersion: "v4.10.3",
+			output:         "other\t0\t4.10.4\t1\tx86_64\n",
+			currentVersion: "v4.10.4",
 			wantError:      "name",
 		},
 		{
 			name:           "nonzero epoch",
-			output:         "syswarden\t1\t4.10.3\t1\tx86_64\n",
-			currentVersion: "v4.10.3",
+			output:         "syswarden\t1\t4.10.4\t1\tx86_64\n",
+			currentVersion: "v4.10.4",
 			wantError:      "epoch",
 		},
 		{
 			name:           "running and installed version mismatch",
 			output:         "syswarden\t0\t4.04.3\t1\tx86_64\n",
-			currentVersion: "v4.10.3",
+			currentVersion: "v4.10.4",
 			wantError:      "does not match running",
 		},
 		{
 			name:           "unknown release",
-			output:         "syswarden\t0\t4.10.3\t2\tx86_64\n",
-			currentVersion: "v4.10.3",
+			output:         "syswarden\t0\t4.10.4\t2\tx86_64\n",
+			currentVersion: "v4.10.4",
 			wantError:      "not the standard release",
 		},
 		{
 			name:           "wrong architecture",
-			output:         "syswarden\t0\t4.10.3\t1\taarch64\n",
-			currentVersion: "v4.10.3",
+			output:         "syswarden\t0\t4.10.4\t1\taarch64\n",
+			currentVersion: "v4.10.4",
 			wantError:      "architecture",
 		},
 		{
 			name:           "multiple installed identities",
-			output:         "syswarden\t0\t4.10.3\t1\tx86_64\nsyswarden\t0\t4.10.3\t1.rhelpo\tx86_64\n",
-			currentVersion: "v4.10.3",
+			output:         "syswarden\t0\t4.10.4\t1\tx86_64\nsyswarden\t0\t4.10.4\t1.rhelpo\tx86_64\n",
+			currentVersion: "v4.10.4",
 			wantError:      "not canonical",
 		},
 		{
 			name:           "missing final newline",
-			output:         "syswarden\t0\t4.10.3\t1\tx86_64",
-			currentVersion: "v4.10.3",
+			output:         "syswarden\t0\t4.10.4\t1\tx86_64",
+			currentVersion: "v4.10.4",
 			wantError:      "not canonical",
 		},
 		{
 			name:           "oversized identity",
 			output:         strings.Repeat("x", maximumInstalledRPMIdentityBytes+1),
-			currentVersion: "v4.10.3",
+			currentVersion: "v4.10.4",
 			wantError:      "outside the accepted range",
 		},
 		{
 			name:           "invalid running version",
-			output:         "syswarden\t0\t4.10.3\t1\tx86_64\n",
-			currentVersion: "4.10.3",
+			output:         "syswarden\t0\t4.10.4\t1\tx86_64\n",
+			currentVersion: "4.10.4",
 			wantError:      "validate running SysWarden version",
 		},
 	}
@@ -163,7 +163,7 @@ func TestRHELPackageOwnedRPMIsRefusedBeforeReleaseAssetDownload(t *testing.T) {
 	var releaseAssetRequests atomic.Int32
 	client := staticHTTPClient(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path == "/latest" {
-			return testHTTPResponse(http.StatusOK, []byte(`{"tag_name":"v4.10.4"}`)), nil
+			return testHTTPResponse(http.StatusOK, []byte(`{"tag_name":"v4.10.5"}`)), nil
 		}
 		releaseAssetRequests.Add(1)
 		return testHTTPResponse(http.StatusInternalServerError, []byte("unexpected release asset request")), nil
@@ -172,7 +172,7 @@ func TestRHELPackageOwnedRPMIsRefusedBeforeReleaseAssetDownload(t *testing.T) {
 		t.Fatal("installer or activation command ran for the package-owned RPM")
 		return nil
 	})
-	u.currentVersion = "v4.10.3"
+	u.currentVersion = "v4.10.4"
 	u.lookPath = func(name string) (string, error) {
 		if name == "dnf" {
 			return "/usr/bin/dnf", nil
@@ -184,7 +184,7 @@ func TestRHELPackageOwnedRPMIsRefusedBeforeReleaseAssetDownload(t *testing.T) {
 			t.Fatal("RPM release attestation has no deadline")
 		}
 		return validateInstalledStandardRPMRelease(
-			[]byte("syswarden\t0\t4.10.3\t1.rhelpo\tx86_64\n"),
+			[]byte("syswarden\t0\t4.10.4\t1.rhelpo\tx86_64\n"),
 			currentVersion,
 		)
 	}

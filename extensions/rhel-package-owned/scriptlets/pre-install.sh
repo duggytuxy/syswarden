@@ -135,11 +135,11 @@ exact_migration_temporary() {
         fail "Refusing unexpected interrupted enablement target: $path"
     [ "$transaction_count" -gt 1 ] || \
         fail 'Refusing interrupted enablement migration during clean installation.'
-    attest_installed_identity 35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
+    attest_installed_identity 35 0130f6ac2bdb7312d6b5026592e683508fffbf9c4556175bedc9a6287b76d94f 35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
 }
 
 attest_installed_identity() {
-    case "$#" in 2|4|6|8|10) ;; *) fail 'Invalid exact RPM identity allowlist.' ;; esac
+    case "$#" in 2|4|6|8|10|12) ;; *) fail 'Invalid exact RPM identity allowlist.' ;; esac
     [ -x /usr/bin/rpm ] && [ -x /usr/bin/timeout ] && [ -x /usr/bin/mktemp ] || \
         fail 'RPM identity attestation is unavailable during RHEL package-owned migration.'
     identity_file="$(/usr/bin/mktemp /tmp/syswarden-rhelpo-prein.XXXXXXXXXX)" || \
@@ -193,7 +193,8 @@ attest_payload_owner() {
     owner_digest="$(/usr/bin/sha256sum -- "$owner_file" | /usr/bin/awk '{print $1}')"
     owner_is_rhelpo=0
     if [ "$owner_metadata" = '0:0:600:1:35' ] && \
-       { [ "$owner_digest" = c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 ] || \
+       { [ "$owner_digest" = 0130f6ac2bdb7312d6b5026592e683508fffbf9c4556175bedc9a6287b76d94f ] || \
+         [ "$owner_digest" = c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 ] || \
           [ "$owner_digest" = ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 ] || \
          [ "$owner_digest" = 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e ] || \
          [ "$owner_digest" = a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247 ]; }; then
@@ -341,7 +342,7 @@ for preset_candidate in "$preset_marker" "$preset_temporary"; do
     preset_recovery=1
 done
 if [ "$preset_recovery" -eq 1 ]; then
-    attest_installed_identity 35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
+    attest_installed_identity 35 0130f6ac2bdb7312d6b5026592e683508fffbf9c4556175bedc9a6287b76d94f 35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
 fi
 
 exact_systemd_directory /etc/systemd/system 1
@@ -368,7 +369,7 @@ if [ "$1" -gt 1 ]; then
     if [ "$core_present" -eq 1 ] && [ "$firewall_present" -eq 1 ]; then
         attest_installed_identity \
             28 c3dd1e8df980ad039e7ba1c3c7a82625048df88a5636bdb039da6cc1c06de7c9 \
-            35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 \
+            35 0130f6ac2bdb7312d6b5026592e683508fffbf9c4556175bedc9a6287b76d94f 35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 \
             35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e \
             35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
         exact_legacy_source_unit /etc/systemd/system/syswarden-core.service \
@@ -377,9 +378,9 @@ if [ "$1" -gt 1 ]; then
         exact_legacy_source_unit /etc/systemd/system/syswarden-firewall.service \
             989be4b60c43bba830333ef30949376e57658222a48947194395393794e328c1
     elif [ "$core_present" -eq 0 ] && [ "$firewall_present" -eq 0 ]; then
-        attest_installed_identity 35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
+        attest_installed_identity 35 0130f6ac2bdb7312d6b5026592e683508fffbf9c4556175bedc9a6287b76d94f 35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
     else
-        attest_installed_identity 35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
+        attest_installed_identity 35 0130f6ac2bdb7312d6b5026592e683508fffbf9c4556175bedc9a6287b76d94f 35 c21c0b598abe6c6b34c87e93dd89fc81225e2010b42ed7abac8591c51e5a4362 35 ea4edefad74411a906813b1a3efced0294bf2a81c0fc22b7814d113a1242d632 35 9894d0d4b484b491cf2f8ad57fb9649f268b0a238ee3496753fa483840d4b21e 35 a62c66b7e1f03e6da14b42a39fe6cc4c4af3cf518ed78efa025d958dd85d1247
         if [ "$core_present" -eq 1 ]; then
             exact_legacy_source_unit /etc/systemd/system/syswarden-core.service \
                 8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd \

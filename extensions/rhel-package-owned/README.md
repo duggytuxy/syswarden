@@ -221,7 +221,7 @@ sudo stat -Lc '%u:%g:%a:%h:%s' -- \
   /var/lib/.syswarden-rhelpo-postun-recovery-v1
 # Expected: 0:0:700:1:9923
 sudo sha256sum -- /var/lib/.syswarden-rhelpo-postun-recovery-v1
-# Expected SHA-256: 3f48cb07b86f85987d6c6242d5fd26d0251ced64896c1b5e1008dae9935720b9
+# Expected SHA-256: 5e692aca3702e9fba749e91a1d35f30f69955ef7570c5e4f7e74bf01689f5676
 sudo /bin/sh /var/lib/.syswarden-rhelpo-postun-recovery-v1
 ```
 
