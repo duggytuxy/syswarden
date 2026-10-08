@@ -287,10 +287,10 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             self.assertIn('"${BUNDLE_ROOT}/verification/"', signing)
 
     def test_patch_manifest_staging_requires_its_own_package_inventory(self) -> None:
-        for version in ("4.10.1", "4.10.2", "4.10.3"):
+        for version in ("4.10.1", "4.10.2", "4.10.3", "4.10.4"):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 source, destination, original = self.manifest_staging_fixture(Path(temporary), version)
-                for other in ("4.10.0", "4.10.1", "4.10.2", "4.10.3"):
+                for other in ("4.10.0", "4.10.1", "4.10.2", "4.10.3", "4.10.4"):
                     if other == version:
                         continue
                     wrong_release = self.run_manifest_staging(source, destination, "v" + other)
@@ -427,7 +427,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
         self.assertEqual(run({}).returncode, 0)
         self.assertEqual(run({"RELEASE_SHA": "a" * 40}).returncode, 0)
         patches = [{"RELEASE_SHA": "a" * 40, "RELEASE_TAG": release}
-                   for release in ("v4.10.1", "v4.10.2", "v4.10.3")]
+                   for release in ("v4.10.1", "v4.10.2", "v4.10.3", "v4.10.4")]
         for patch in patches:
             self.assertEqual(run(patch).returncode, 0)
             self.assertNotEqual(run({"RELEASE_TAG": patch["RELEASE_TAG"]}).returncode, 0)
@@ -439,7 +439,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             {"EVENT_ACTOR": "other"}, {"EVENT_TRIGGERING_ACTOR": "other"},
             {"RUN_ATTEMPT": "2"}, {"RUNNER_ENVIRONMENT_CONTEXT": "self-hosted"},
             {"NATIVE_RUN_ID": "0"}, {"AUTHORIZATION": "PUBLISH"},
-            {"RELEASE_TAG": "v4.10.4"}, {"RELEASE_TAG": "v5.00.0"},
+            {"RELEASE_TAG": "v4.10.5"}, {"RELEASE_TAG": "v5.00.0"},
         ]:
             with self.subTest(update=update):
                 self.assertNotEqual(run(update).returncode, 0)
