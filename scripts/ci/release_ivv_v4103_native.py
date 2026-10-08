@@ -109,7 +109,7 @@ def verify_archive(plan: dict, objects: dict[str, bytes]) -> None:
     verify_filesystem_observations(observations)
     probes = [frozen.strict_json(data) for name, data in files.items()
               if '/vpn-probe/result-' in '/' + name and name.endswith('.json')]
-    equal(len(probes), 7, 'encrypted traffic probe count differs')
+    equal(len(probes), 11, 'encrypted traffic probe count differs')
     for probe in probes:
         equal(probe['status'], 'PASS', 'encrypted traffic probe failed')
         for key in ('server_and_client_handshake', 'encrypted_bidirectional_transit', 'public_dns_over_vpn_nat'):
@@ -129,7 +129,7 @@ def verify_restoration(manifest: dict, objects: dict[str, bytes]) -> None:
                 'baseline control inventory is not exact')
         require(all(row['passed'] is True for row in state['checks']), 'baseline control failed')
         extra = state['post_restore_checks']
-        require(len(extra) == 7 and all(v is True for v in extra.values()),
+        require(len(extra) == 10 and all(v is True for v in extra.values()),
                 'restoration cleanup is incomplete')
     # The default tmpfs size follows available memory at boot. This restoration
     # changed it by four KiB. Keep every mount flag and all other controls exact.

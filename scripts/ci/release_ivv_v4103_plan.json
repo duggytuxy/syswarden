@@ -2,8 +2,8 @@
   "schema": "syswarden-current-intermediate-ivv-plan/v1",
   "release": "v4.10.3",
   "required_assurance": "IVV",
-  "product_candidate": "3b39b37b0c9da6431a461d83799fc40c18de2e8f",
-  "native_tested_candidate": "3b39b37b0c9da6431a461d83799fc40c18de2e8f",
+  "product_candidate": "0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e",
+  "native_tested_candidate": "0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e",
   "previous_accepted_product": "94d97f07cb5a054669dd66d6efd28ba55db5d173",
   "originating_transition": {
     "commit": "441a1f3edc55a97ac01de72313ea50d9788f78b8",
@@ -23,6 +23,8 @@
     "docs/qualification/INTERMEDIATE_ACCEPTANCE_V4.10.3.md",
     "scripts/ci/candidate_update_verify_v4103.py",
     "scripts/ci/candidate_update_verify_v4103_test.py",
+    "scripts/ci/ivv_native_rpmkeys.py",
+    "scripts/ci/ivv_native_rpmkeys_test.py",
     "scripts/ci/release_ivv_profile.py",
     "scripts/ci/release_ivv_profile_test.py",
     "scripts/ci/release_ivv_v4103.py",
@@ -31,66 +33,68 @@
     "scripts/ci/release_ivv_v4103_native.py",
     "scripts/ci/release_ivv_v4103_native_test.py",
     "scripts/ci/release_ivv_v4103_plan.json",
+    "scripts/ci/release_ivv_v4103_removal.py",
+    "scripts/ci/release_ivv_v4103_removal_test.py",
     "scripts/ci/release_ivv_v4103_test.py",
     "scripts/ci/release_ivv_v4103_workflow_test.py"
   ],
   "product_packages": [
     {
       "path": "packages/syswarden-4.10.3-1.x86_64.rpm",
-      "size": 16277185,
-      "sha256": "73be75723e90ea9253a5955e0d5e7d1ac16637e05c99ba2b5f8f35c103b11cef"
+      "size": 17251325,
+      "sha256": "1d0076c54d342897ae2f14497330762ed12e45bba0ad263be2635b5510652561"
     },
     {
       "path": "packages/syswarden_4.10.3_amd64.deb",
-      "size": 15985602,
-      "sha256": "e94e04db6582c58c836f0206d897378a87405eb2125e0b717ef4385de71e0c47"
+      "size": 16952290,
+      "sha256": "4c7d280a0a58470b341fcdee55f591025a452c7abb2e536e3f5a2b5c04624689"
     },
     {
       "path": "packages/syswarden_4.10.3_amd64.deb.asc",
       "size": 833,
-      "sha256": "75c2ea03ad182ab25116a76c5b8b6d226da18953d7344bbca937fa422df9b08a"
+      "sha256": "9453c31ee78b2d05ae1e2639937fafda1dfa5200e37835363cd51a07176fe36e"
     },
     {
       "path": "packages/syswarden_4.10.3_x86_64.apk",
-      "size": 16190738,
-      "sha256": "6c0853c36b31ae32218184793980fa4fd403a51edf93451321c09b07b79adf72"
+      "size": 17193421,
+      "sha256": "36e76378668b09ea4ee0d9d656e2e4b39a68022723cf02f1a36f7ef0516914b6"
     },
     {
       "path": "rhel-package-owned/packages/syswarden-4.10.3-1.rhelpo.x86_64.rpm",
-      "size": 15973065,
-      "sha256": "280773a6fd4b1ebf812cbf92ff14cc1ad8736f45ebc03a0783b46dccf9b647d0"
+      "size": 16938603,
+      "sha256": "34c4333e21902543a9f184eabdf467d81f9721fc7175fdee6231afe8038ac91a"
     }
   ],
-  "private_input_manifest_sha256": "0b2ae432da87943e860502e93034dbf23bd30cef4b82146a5c49b50e9b3f8ef4",
-  "impact_sha256": "32083cdf20f7b7ab33dbb21ae57531c11e92b9cff07594418b2b77dc80bc8300",
+  "private_input_manifest_sha256": "165174fd9db3df3ec29715b7015fa29d240a252ea97c88b9429eff1b15ab9b2a",
+  "impact_sha256": "99ed2c1f0f7f35b1bfb2ea4104eddd7e9668beedf4400d2a8d67fbf01db50c05",
   "historical_plan_sha256": "9c55f271e99756dcaef42f5f299111f0776958fba04eeb6c985eea3d3053a939",
   "product_native_signing": {
-    "run_id": 37181081563,
-    "artifact_id": 11295630713,
-    "artifact_name": "syswarden-native-signed-packages-qualified-4.10.3-37181081563-1-3b39b37b0c9da6431a461d83799fc40c18de2e8f",
-    "artifact_digest": "sha256:01ce2456c79f29a1506d18b6123f97e3eb5c160e2a29c07ccca66ade7c9823df"
+    "run_id": 37754556972,
+    "artifact_id": 11539258439,
+    "artifact_name": "syswarden-native-signed-packages-qualified-4.10.3-37754556972-1-0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e",
+    "artifact_digest": "sha256:f2428cbfc6223d36b2ff56c959fb1290ee2e2f8899daef137d5ac2d635f55230"
   },
   "updater_producer": {
-    "commit": "3b39b37b0c9da6431a461d83799fc40c18de2e8f",
-    "run_id": 37181887910,
-    "artifact_id": 11295313070,
-    "archive_sha256": "4813be42a75d03e06b08aebdd42376e09f8211877133e1cba6280d00b8d99a79"
+    "commit": "0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e",
+    "run_id": 37755322198,
+    "artifact_id": 11539873232,
+    "archive_sha256": "92d97c2227fb166b8a3413493d2e9dfa7d049278c389db07b9610bd083864c1e"
   },
-  "native_archive_sha256": "bc383401631d5fe49e07fda523cd4c8afd5720cf33bcc629de95cdcfa3d28d4a",
-  "native_manifest_sha256": "ad8487c4d2f995bdb21d32e2032772760115ca1b92414fe6536cbf2a72aa8808",
-  "native_file_count": 305,
+  "native_archive_sha256": "bbfe334a11afdbc3428a97084d16fb4cefcec897b15a890f93e38e05c3a98e4c",
+  "native_manifest_sha256": "ac1659347c15498df233d87c1e71890db35948622d21a8072b83bea34c993987",
+  "native_file_count": 798,
   "native_payloads": {
-    "syswarden_4.10.3_amd64.deb": "e94e04db6582c58c836f0206d897378a87405eb2125e0b717ef4385de71e0c47",
-    "candidate/opt/syswarden/bin/syswarden-cli": "62f56f208aa16f6854acdd98c00f001cb9d789a5827cc29a2e205ffceb4553ff",
-    "updater-bundle/node01/syswarden-update-manifest-v1.json": "08086a9a3678d5f36cc491371311e4070d213aa63189311835440d18444b1d9c",
-    "updater-bundle/node01/syswarden-update-manifest-v1.json.sig": "b51b7b6ce144a91ad5eefc0425a6388a1aa3f74000589757a4e0e4a8d56abd2d",
-    "updater-bundle/node01/syswarden_4.10.3_amd64.deb": "e94e04db6582c58c836f0206d897378a87405eb2125e0b717ef4385de71e0c47"
+    "syswarden_4.10.3_amd64.deb": "4c7d280a0a58470b341fcdee55f591025a452c7abb2e536e3f5a2b5c04624689",
+    "candidate/opt/syswarden/bin/syswarden-cli": "270f779b09ea764bb2e8c7a2949ca54a70ede32b1107117239d4469b035372f5",
+    "updater-bundle/node01/syswarden-update-manifest-v1.json": "f6d6fc494008e228fab32f7ef00aabe018a6f893f97d3c72ada5100bd3533f9d",
+    "updater-bundle/node01/syswarden-update-manifest-v1.json.sig": "ed956eb25a919dcd7f3ef89cdee8f4fa56b20a5af965d0d9e08e805c836563ce",
+    "updater-bundle/node01/syswarden_4.10.3_amd64.deb": "4c7d280a0a58470b341fcdee55f591025a452c7abb2e536e3f5a2b5c04624689"
   },
   "native_assertions": {
     "bootstrap-result.json": {
       "status": "PASS",
-      "installed_cli_sha256": "9348f68fb1fb3b73ec28f56f488853238e5eb60e8041f3524f3c6e65e152098a",
-      "private_logs": true
+      "private_logs": true,
+      "installed_cli_sha256": "9348f68fb1fb3b73ec28f56f488853238e5eb60e8041f3524f3c6e65e152098a"
     },
     "first-hop/result.json": {
       "status": "PASS",
@@ -114,7 +118,7 @@
       "original_files_and_inodes_preserved": true,
       "safe_to_apply": true
     },
-    "candidate-before-reboot/result.json": {
+    "candidate-before-reboot-r2/result.json": {
       "status": "PASS",
       "package": "install ok installed 4.10.3",
       "completed_migration_recognized": true,
@@ -123,10 +127,10 @@
       "ownership_drift_refused": true,
       "failed_units": 0
     },
-    "candidate-after-reboot-r2/result.json": {
+    "candidate-after-reboot/result.json": {
       "status": "PASS",
-      "new_boot_verified": true,
       "package": "install ok installed 4.10.3",
+      "new_boot_verified": true,
       "legacy_wg0_inactive_disabled_absent": true,
       "preserved_vpn_active_enabled": true,
       "client_bytes_preserved": true,
@@ -134,15 +138,21 @@
       "operator_forward_policy": "drop",
       "failed_units": 0
     },
-    "native-removal/result.json": {
-      "status": "PASS",
-      "direct_cli_uninstall_refused": true,
-      "native_purge_complete": true,
-      "already_absent_table_shared_rules_cleaned": true,
-      "operator_rule_and_drop_policy_preserved": true,
-      "private_original_backups_retained": true,
-      "same_version_reinstall": "install ok installed 4.10.3",
-      "executable_payload_present": true
+    "native-removal/reinstall-result.json": {
+      "status": "PASS_NATIVE_REINSTALL",
+      "native_package_status": "install ok installed 4.10.3",
+      "current_signed_payload_verified": true,
+      "prior_operator_configuration_privately_preserved": true,
+      "release_accepted": false,
+      "private_lab_profile_wireguard_disabled": true
+    },
+    "operator-iptables-preservation/after/native-purge-result.json": {
+      "status": "PASS_SIGNED_NATIVE_PURGE_AFTER_OPERATOR_REVIEW_AND_REBOOT",
+      "candidate": "0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e",
+      "package_absent": true,
+      "administrator_files_preserved": 199,
+      "exact_current_shared_forward_chain_preserved": true,
+      "release_accepted": false
     },
     "case2/first-hop/result.json": {
       "status": "PASS",
@@ -163,10 +173,10 @@
     "case2/verification/before-reboot-result.json": {
       "status": "PASS",
       "after_reboot": false,
-      "package": "install ok installed 4.10.3",
       "original_client_bytes_preserved": true,
-      "legacy_wg0_inactive_disabled_absent": true,
       "preserved_vpn_active_enabled": true,
+      "package": "install ok installed 4.10.3",
+      "legacy_wg0_inactive_disabled_absent": true,
       "operator_forward_policy": "drop",
       "owned_shared_rules": 2,
       "failed_units": 0
@@ -174,13 +184,13 @@
     "case2/verification/after-reboot-result.json": {
       "status": "PASS",
       "after_reboot": true,
-      "package": "install ok installed 4.10.3",
       "original_client_bytes_preserved": true,
-      "legacy_wg0_inactive_disabled_absent": true,
       "preserved_vpn_active_enabled": true,
+      "failed_units": 0,
+      "package": "install ok installed 4.10.3",
+      "legacy_wg0_inactive_disabled_absent": true,
       "operator_forward_policy": "drop",
-      "owned_shared_rules": 2,
-      "failed_units": 0
+      "owned_shared_rules": 2
     },
     "case3-owned-upgrade/before-reboot-result.json": {
       "status": "PASS",
@@ -199,41 +209,6 @@
       "vpn_active_enabled": true,
       "failed_units": 0
     },
-    "final-reinstall/before-reboot-result.json": {
-      "status": "PASS",
-      "native_same_version_reinstall": "install ok installed 4.10.3",
-      "complete_executable_payload": true,
-      "failed_units": 0,
-      "stale_ownership_or_removal_barrier": false
-    },
-    "final-reinstall/after-reboot-result.json": {
-      "status": "PASS",
-      "native_same_version_reinstall": "install ok installed 4.10.3",
-      "new_boot_verified": true,
-      "complete_executable_payload": true,
-      "failed_units": 0,
-      "no_stale_wireguard_or_removal_state": true,
-      "operator_forward_policy": "drop",
-      "ssh_namespace_hardening_preserved": true
-    },
-    "modern-signed-updater-r2/result.json": {
-      "status": "PASS",
-      "producer_run": 37181887910,
-      "artifact_id": 11295313070,
-      "initial_native_version": "4.10.2",
-      "final_native_version": "4.10.3",
-      "candidate_cli_sha256": "62f56f208aa16f6854acdd98c00f001cb9d789a5827cc29a2e205ffceb4553ff",
-      "protected_bundle_bytes_verified": true,
-      "embedded_manifest_signature_verified": true,
-      "authenticated_package_installed": true,
-      "failed_units": 0,
-      "negative_cases/0/case": "invalid-signature",
-      "negative_cases/0/rejected_before_installation": true,
-      "negative_cases/0/installed_payload_and_firewall_unchanged": true,
-      "negative_cases/1/case": "modified-package",
-      "negative_cases/1/rejected_before_installation": true,
-      "negative_cases/1/installed_payload_and_firewall_unchanged": true
-    },
     "cold-boot/after-result.json": {
       "status": "PASS",
       "new_boot_verified": true,
@@ -241,29 +216,203 @@
       "manifest_bytes_unchanged": true,
       "candidate_payload_verified": true,
       "vpn_active": true,
-      "actual_device_renumbering": true,
       "failed_units": 0,
+      "actual_device_renumbering": false,
       "ssh_namespace_hardening_preserved": true
+    },
+    "final-reinstall/cold-boot-purge-result.json": {
+      "status": "PASS",
+      "exact_signed_package_purged": true,
+      "journald_owned_policy_absent": true,
+      "journald_ssh_fail2ban_active": true,
+      "operator_configurations_preserved_at_original_paths": true,
+      "barrier_absent": true,
+      "new_boot_verified": true
+    },
+    "final-reinstall/before-reboot-result.json": {
+      "status": "PASS",
+      "native_same_version_reinstall": "install ok installed 4.10.3",
+      "failed_units": 0,
+      "complete_executable_payload": true,
+      "stale_ownership_or_removal_barrier": false
+    },
+    "final-reinstall/after-reboot-result.json": {
+      "status": "PASS",
+      "new_boot_verified": true,
+      "complete_executable_payload": true,
+      "no_stale_wireguard_or_removal_state": true,
+      "operator_forward_policy": "drop",
+      "ssh_namespace_hardening_preserved": true,
+      "native_same_version_reinstall": "install ok installed 4.10.3",
+      "failed_units": 0
+    },
+    "modern-signed-updater/result.json": {
+      "status": "PASS",
+      "product_candidate": "0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e",
+      "producer_run": 37755322198,
+      "protected_bundle_bytes_verified": true,
+      "embedded_manifest_signature_verified": true,
+      "authenticated_package_installed": true,
+      "initial_native_version": "4.10.2",
+      "final_native_version": "4.10.3",
+      "failed_units": 0,
+      "artifact_id": 11539873232,
+      "candidate_cli_sha256": "270f779b09ea764bb2e8c7a2949ca54a70ede32b1107117239d4469b035372f5",
+      "negative_cases/0/case": "invalid-signature",
+      "negative_cases/0/rejected_before_installation": true,
+      "negative_cases/0/installed_payload_and_firewall_unchanged": true,
+      "negative_cases/1/case": "modified-package",
+      "negative_cases/1/rejected_before_installation": true,
+      "negative_cases/1/installed_payload_and_firewall_unchanged": true
+    },
+    "osint-lifecycle/post-reboot-result.json": {
+      "status": "PASS",
+      "source_sha": "0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e",
+      "old_v4102_failure_reproduced": true,
+      "candidate_installation_after_half_configured_failure": true,
+      "malformed_source_still_refused": true,
+      "explicit_refresh_still_reports_disagreement": true,
+      "only_validated_data_shield_entries_published": true,
+      "foreign_rule_and_drop_policy_preserved": true,
+      "system_ca_unchanged": true,
+      "proxy_stopped": true,
+      "reboot_validation": "PASS"
+    },
+    "device-renumbering/after-renumbering-result.json": {
+      "status": "PASS",
+      "actual_device_renumbering": true,
+      "original_manifest_bytes_preserved": true,
+      "exact_signed_payload": true,
+      "independent_services_active": true,
+      "ssh_namespace_hardening_preserved": true
+    },
+    "device-renumbering/after-restoration-result.json": {
+      "status": "PASS",
+      "original_virtual_disk_slots_restored": true,
+      "original_manifest_bytes_preserved": true,
+      "exact_signed_payload": true,
+      "independent_services_active": true,
+      "ssh_namespace_hardening_preserved": true
+    },
+    "operator-iptables-preservation/before/applied.json": {
+      "status": "PASS_SIGNED_OPERATOR_IPTABLES_PRESERVATION",
+      "rule_count": 3,
+      "exact_administrator_policy_preserved": true,
+      "no_deletion_authority": true,
+      "explicit_confirmation_verified": true,
+      "wrong_digest_rejected": true,
+      "stale_boot_plan_rejected": false,
+      "retry_verified": true,
+      "release_accepted": false
+    },
+    "operator-iptables-preservation/after/applied.json": {
+      "status": "PASS_SIGNED_OPERATOR_IPTABLES_PRESERVATION",
+      "rule_count": 3,
+      "exact_administrator_policy_preserved": true,
+      "no_deletion_authority": true,
+      "explicit_confirmation_verified": true,
+      "wrong_digest_rejected": true,
+      "stale_boot_plan_rejected": true,
+      "retry_verified": true,
+      "release_accepted": false
+    },
+    "operator-iptables-preservation-case2/before/applied.json": {
+      "status": "PASS_SIGNED_OPERATOR_IPTABLES_PRESERVATION",
+      "rule_count": 3,
+      "exact_administrator_policy_preserved": true,
+      "no_deletion_authority": true,
+      "explicit_confirmation_verified": true,
+      "wrong_digest_rejected": true,
+      "stale_boot_plan_rejected": false,
+      "retry_verified": true,
+      "release_accepted": false
+    },
+    "operator-iptables-preservation-cold/before/applied.json": {
+      "status": "PASS_SIGNED_OPERATOR_IPTABLES_PRESERVATION",
+      "rule_count": 3,
+      "exact_administrator_policy_preserved": true,
+      "no_deletion_authority": true,
+      "explicit_confirmation_verified": true,
+      "wrong_digest_rejected": true,
+      "stale_boot_plan_rejected": false,
+      "retry_verified": true,
+      "release_accepted": false
+    },
+    "operator-iptables-preservation-modern/before/applied.json": {
+      "status": "PASS_SIGNED_OPERATOR_IPTABLES_PRESERVATION",
+      "rule_count": 3,
+      "exact_administrator_policy_preserved": true,
+      "no_deletion_authority": true,
+      "explicit_confirmation_verified": true,
+      "wrong_digest_rejected": true,
+      "stale_boot_plan_rejected": false,
+      "retry_verified": true,
+      "release_accepted": false
     }
   },
-  "native_cli_sha256": "62f56f208aa16f6854acdd98c00f001cb9d789a5827cc29a2e205ffceb4553ff",
+  "removal_archives": [
+    {
+      "case": "uninstall",
+      "archive_sha256": "03429bbaf983ac4b5354d5b0c3019301bddc3f1cab7489e012de2a3474d50406",
+      "manifest_name": "signed0a0fa7e7-uninstall-post-reboot-manifest.json",
+      "manifest_sha256": "4eed170fdcd48b50d6ba60bbc60ee815e5818159ebb135521b5cd2fcadb60f69",
+      "file_count": 619,
+      "prefix": "case-signed0a0fa7e7-uninstall/"
+    },
+    {
+      "case": "remove_then_purge",
+      "archive_sha256": "7e80832206382d80918a831b2b83fe8c91fc0d1b0b32337d97711b19c8940127",
+      "manifest_name": "signed0a0fa7e7-remove-post-reboot-manifest.json",
+      "manifest_sha256": "ec9b1c10b7059be55dc4c9b4591d6cb509fbeb3fb1786f55ea6cc7ebcc4e1546",
+      "file_count": 625,
+      "prefix": "case-signed0a0fa7e7-remove/"
+    },
+    {
+      "case": "purge",
+      "archive_sha256": "37d12ee759fb76707226173a124163f2a5230984d004de4deb9e078a2900da5c",
+      "manifest_name": "signed0a0fa7e7-purge-post-reboot-manifest.json",
+      "manifest_sha256": "97cd93e4b29c8d2dc7d7b19ccfb56ed0a8db9cc00e53284855dff590b98e6bdf",
+      "file_count": 622,
+      "prefix": "case-signed0a0fa7e7-purge/"
+    },
+    {
+      "case": "remove",
+      "archive_sha256": "ef1395a190b3eb4f4dc461a933770c1e7eefbd237e7c8a0e9c244b32fc954367",
+      "manifest_name": "signed0a0fa7e7-remove-only-remove-post-reboot-manifest.json",
+      "manifest_sha256": "c284413498d234e67fb8548032d32b4ce6fb8c1c0351e3a25d199b613848f613",
+      "file_count": 623,
+      "prefix": "case-signed0a0fa7e7-remove-only-remove/"
+    }
+  ],
+  "native_cli_sha256": "270f779b09ea764bb2e8c7a2949ca54a70ede32b1107117239d4469b035372f5",
   "required_input_ids": [
     "actual-old-updater-first-hop",
     "campaign-integrity",
+    "cold-boot-identity",
+    "cold-boot-journald-purge",
     "current-updater",
     "entry-baseline",
     "final-reinstall",
     "final-reinstall-after-reboot",
     "final-restored-verification",
+    "four-independent-removal-paths",
     "half-configured-recovery",
     "half-configured-vpn-after-reboot",
     "half-configured-vpn-before-reboot",
     "historical-vpn-after-reboot",
     "interrupted-migration",
     "native-archive-integrity",
+    "native-purge-after-administrator-review",
     "native-purge-reinstall",
     "official-half-configured-reproduction",
     "official-v4028-generation",
+    "operator-iptables-preservation-after",
+    "operator-iptables-preservation-before",
+    "operator-iptables-preservation-case2-before",
+    "operator-iptables-preservation-cold-before",
+    "operator-iptables-preservation-modern-before",
+    "optional-osint-recovery",
+    "original-device-mapping-restored",
     "owned-manifest-after-reboot",
     "owned-manifest-upgrade",
     "ownership-refusals",
@@ -272,25 +421,34 @@
     "product-ci",
     "product-support",
     "real-device-renumbering",
-    "retained-connection-ready-r4-transport",
+    "retained-connection-ready-r10-transport",
+    "retained-connection-ready-r11-transport",
+    "retained-connection-ready-r12-transport",
+    "retained-connection-ready-r13-transport",
+    "retained-connection-ready-r15-transport",
+    "retained-connection-ready-r3-transport",
+    "retained-connection-ready-r5-transport",
+    "retained-connection-ready-r7-transport",
     "retained-connection-ready-transport",
-    "retained-native-modern-signed-update-transport",
-    "retained-native-resume-and-upgrade-transport",
+    "retained-native-case3-owned-upgrade-transport",
+    "retained-native-final-reinstall-transport",
+    "retained-native-osint-lifecycle-reviewed-r2-transport",
+    "retained-native-resume-and-upgrade-reviewed-transport",
+    "retained-native-retention-apply-fresh-transport",
+    "retained-native-signed-operator-prepare-transport",
+    "retained-native-vpn-probe-r5-transport",
     "signed-update",
     "source-impact",
     "stage-verification"
   ],
   "claim_limits": [
     "Intermediate Patch IVV only; not full Upgrade IVVQ.",
-    "Recognized historical configurations were generated by official packages with disposable keys. This does not reproduce the reporter host or every upgrade chain.",
-    "The actual v4.02.8 downloader required private preservation of its exact verified stale download under temporary-file protection. Its unchanged executable was retried.",
-    "The original historical updater can return zero despite a printed error. Acceptance uses package state, executable identity and runtime checks.",
-    "Interrupted migration used a reversible directory attribute fault. Process-kill and power-loss durability are not claimed.",
-    "The supplemental modern owned-manifest profile lacks shared forwarding permissions. Traffic uses three temporary operator rules restricted to the probe destinations; no automatic policy repair is claimed.",
-    "The authenticated offline updater case uses the staged signed candidate CLI. The separate first-hop cases use the actual installed historical updater.",
-    "An original updater harness comparison failed only on a live set expiry decreasing from 103 to 102. The preserved capture and separate rerun use a comparator that rejects policy changes and expiry extensions.",
-    "The isolated LAN profile does not qualify live external feeds, Geo/ASN, HA endurance or all supported native platforms.",
-    "No production reporter-host outcome is inferred from these laboratory observations.",
+    "Intermediate Patch IVV only; full Upgrade IVVQ is outside this campaign.",
+    "Native execution covers Debian 13 AMD64. Other package families have verified signatures and content checks, not fresh native execution here.",
+    "The modern signed updater uses the explicit unpublished candidate bundle path. Separate historical first-hop tests execute the installed older updater.",
+    "Process-local synthetic feed sources exercise valid disagreement and malformed input. No live feed service availability claim is made.",
+    "The modern VPN probe requires narrowly scoped temporary administrator forwarding rules on a preserved default-drop shared chain.",
+    "Original transport and harness failures remain private and retained. A successful retry does not erase the preceding observation.",
     "The final snapshot baseline was verified after reapplying only the two original append-only history attributes lost by provider restore. File bytes and identities were preserved. Default tmpfs memory sizing differed by four KiB across boots; all mount flags and other baseline checks remained exact."
   ],
   "preflight_is_acceptance": false,
@@ -306,6 +464,8 @@
     "native-package-consistency",
     "selected-continuity",
     "offline-update",
+    "complete-removal",
+    "optional-osint",
     "restorations"
   ],
   "acceptance_basis": {
@@ -358,10 +518,19 @@
       "current-updater",
       "signed-update"
     ],
+    "complete-removal": [
+      "four-independent-removal-paths",
+      "native-purge-after-administrator-review",
+      "cold-boot-journald-purge"
+    ],
+    "optional-osint": [
+      "optional-osint-recovery"
+    ],
     "restorations": [
       "entry-baseline",
       "final-restored-verification",
-      "campaign-integrity"
+      "campaign-integrity",
+      "original-device-mapping-restored"
     ]
   },
   "post_acceptance_requirements": [
@@ -373,49 +542,49 @@
   ],
   "product_ci": [
     {
-      "workflow": ".github/workflows/scorecard.yml",
-      "run_id": 37180498002
+      "workflow": ".github/workflows/auto-versioning.yml",
+      "run_id": 37750421883
     },
     {
-      "workflow": ".github/workflows/auto-versioning.yml",
-      "run_id": 37180497968
+      "workflow": ".github/workflows/scorecard.yml",
+      "run_id": 37750421964
     },
     {
       "workflow": ".github/workflows/compliance.yml",
-      "run_id": 37180497960
+      "run_id": 37750421986
     },
     {
       "workflow": ".github/workflows/package.yml",
-      "run_id": 37180497986
+      "run_id": 37750422183
     },
     {
       "workflow": ".github/workflows/security-audit.yml",
-      "run_id": 37180497985
+      "run_id": 37750422061
     }
   ],
   "product_release_support": [
     {
-      "id": 11294668087,
+      "id": 11539541291,
       "name": "syswarden-attested-bundle",
-      "size_in_bytes": 15923937,
-      "digest": "sha256:69483a17fb837ca8da80a3f7aba45c9d6bd7b936dd04b3147ac2a6eb10c50931",
-      "run_id": 37180497985,
+      "size_in_bytes": 16902660,
+      "digest": "sha256:a492db6ddb02716d75ad25690993ef2c5fc16c4be215cf2f65f894382dabff7c",
+      "run_id": 37750422061,
       "file": {
         "path": "syswarden-release.tar.gz",
-        "size": 16002133,
-        "sha256": "d175fe86507db9e84ce562f1a253bf049d880cdc7ced9916afe5f0eda5efc94c"
+        "size": 16982271,
+        "sha256": "e0993ff0d0058d3ec9f7768d7a33adbf1489f3a381793ef30517a47eb59a45b7"
       }
     },
     {
-      "id": 11294638604,
+      "id": 11537686454,
       "name": "syswarden-sbom",
       "size_in_bytes": 4056,
-      "digest": "sha256:b7877d44c39d56f0c66b22697cdf84117da1c3be85326aed74d8433f925a3d8c",
-      "run_id": 37180497985,
+      "digest": "sha256:ed44741378b7e75910c515daa3e1de197554be6d5786a549f3e6f73bc7183877",
+      "run_id": 37750422061,
       "file": {
         "path": "syswarden-sbom.spdx.json",
         "size": 79280,
-        "sha256": "87870fbcad241bca086699e30a18358b365a2d4cdfded99fbaecde3fb5ed287b"
+        "sha256": "fb98daeb125e6653812cc716a3c67c5f8029b25538a47f39a709b9f550bc96f1"
       }
     }
   ],
@@ -427,18 +596,18 @@
     },
     {
       "path": "bin/syswarden-cli",
-      "size": 20119854,
-      "sha256": "62f56f208aa16f6854acdd98c00f001cb9d789a5827cc29a2e205ffceb4553ff"
+      "size": 22962478,
+      "sha256": "270f779b09ea764bb2e8c7a2949ca54a70ede32b1107117239d4469b035372f5"
     },
     {
       "path": "bin/syswarden-core",
-      "size": 12284206,
-      "sha256": "17533b63766914698d3d6d6c43f105a27684bd109578f4529d7fb80cfca7d655"
+      "size": 12325166,
+      "sha256": "ab5bf95e0e9e693dc00701f6d034bf79a0cc648a537cc23e79641f7fa7674b64"
     },
     {
       "path": "bin/syswarden-tui",
       "size": 8651054,
-      "sha256": "93bfc596d6aebb131077c0e4e966a835cf7071eb53bbbdbf23f9993ce9f6df86"
+      "sha256": "a61a36735791543af37fd7a55941aedda4dd1873b03a3859eb029a60ebdbd2df"
     }
   ]
 }

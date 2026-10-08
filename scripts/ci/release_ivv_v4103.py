@@ -15,18 +15,20 @@ try:
     from scripts.ci import release_ivv_plan as frozen
     from scripts.ci import release_ivv_v4102 as previous
     from scripts.ci import release_ivv_v4103_native as native
+    from scripts.ci import release_ivv_v4103_removal as removal
 except ModuleNotFoundError:
     import release_ivv_current as historical
     import release_ivv_v4101 as captures
     import release_ivv_plan as frozen
     import release_ivv_v4102 as previous
     import release_ivv_v4103_native as native
+    import release_ivv_v4103_removal as removal
 
 PLAN = Path(__file__).with_name('release_ivv_v4103_plan.json')
 INPUTS = Path(__file__).with_name('release_ivv_v4103_inputs.json')
 IMPACT = Path(__file__).with_name('release_ivv_v4103_impact.json')
-PLAN_SHA256 = '6198c7147c25e11004be88c1d391b56ce4d15b00cddfe2592abbcb86f280252f'
-PRODUCT = '3b39b37b0c9da6431a461d83799fc40c18de2e8f'
+PLAN_SHA256 = 'ccbea1c1ab1ef9f4a6bcda5027ae93371b63d301a6bd5806367a7f9f096ab52f'
+PRODUCT = '0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e'
 PREVIOUS_ACCEPTED = '94d97f07cb5a054669dd66d6efd28ba55db5d173'
 MAX_OBJECT = 128 * 1024 * 1024
 RELATIONS = frozenset({'current-targeted-observation', 'final-restoration',
@@ -108,6 +110,7 @@ def verify_private_inputs(root: Path) -> dict:
     observations = verify_roots(manifest, objects)
     verify_capture_bindings(manifest, objects)
     verify_native_archive(plan, objects)
+    removal.verify_removal_archives(plan, objects)
     verify_restoration(manifest, objects)
     equal(verify_objects(root, manifest), objects, 'private inputs changed during verification')
     equal(load_plan(), plan, 'plan changed during verification')

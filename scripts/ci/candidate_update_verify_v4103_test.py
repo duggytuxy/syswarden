@@ -29,7 +29,9 @@ class CurrentUpdaterProvenanceTests(unittest.TestCase):
         gate.verify_metadata(*self.metadata())
 
     def test_historical_producer_fork_retry_and_wrong_workflow_rejected(self):
-        cases = [('id', 36622881503), ('head_sha', 'f334beaddc5c6005f40d79c7bab4e43598bfc5ed'),
+        cases = [('id', 37181887910),
+                 ('head_sha', '3b39b37b0c9da6431a461d83799fc40c18de2e8f'),
+                 ('id', 36622881503), ('head_sha', 'f334beaddc5c6005f40d79c7bab4e43598bfc5ed'),
                  ('run_attempt', 2), ('run_attempt', True), ('head_branch', 'feature'),
                  ('event', 'push'), ('path', '.github/workflows/native-package-signing.yml'),
                  ('status', 'in_progress'), ('conclusion', 'failure')]
@@ -43,7 +45,7 @@ class CurrentUpdaterProvenanceTests(unittest.TestCase):
                 with self.assertRaises(gate.ivv.PlanError): gate.verify_metadata(run, artifact)
 
     def test_artifact_transplants_and_invalid_types_rejected(self):
-        cases = [('id', 11059596903), ('name', 'other'), ('size_in_bytes', 0),
+        cases = [('id', 11295313070), ('id', 11059596903), ('name', 'other'), ('size_in_bytes', 0),
                  ('digest', 'sha256:' + '0'*64), ('expired', 0)]
         for key, value in cases:
             with self.subTest(key=key):

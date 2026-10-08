@@ -77,6 +77,7 @@ class NativeArchiveTests(unittest.TestCase):
         files = {'candidate.deb':b'authentic', 'required.json':wire(dict(status='PASS'))}
         for i, row in enumerate(filesystem_observations()):
             files[f'filesystem-observations/{i}.json'] = wire(row)
+        for i in range(11):
             files[f'case{i}/vpn-probe/result-proof.json'] = wire(dict(status='PASS',
                 server_and_client_handshake=True, encrypted_bidirectional_transit=True, public_dns_over_vpn_nat=True))
         manifest = dict(schema='syswarden-private-native-evidence-v1', candidate='a'*40,
@@ -121,7 +122,7 @@ class RestorationTests(unittest.TestCase):
         checks.append(dict(check='mount_options_preserved_/tmp',passed=True,
                            detail='rw,nosuid,nodev,size=2007976k,nr_inodes=1048576,inode64'))
         before = dict(all_passed=True,passed=137,total=137,checks=checks,
-                      post_restore_checks={str(i):True for i in range(7)},deviations=['unchanged'])
+                      post_restore_checks={str(i):True for i in range(10)},deviations=['unchanged'])
         after = copy.deepcopy(before)
         after['checks'][-1]['detail'] = after['checks'][-1]['detail'].replace('2007976','2007972')
         return before, after
