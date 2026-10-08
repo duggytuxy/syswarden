@@ -1940,6 +1940,16 @@ func nftVerificationJSON(plan nftVerificationPlan, countGap int) []byte {
 			"family": key.family, "table": key.table, "name": key.name, "elem": elements,
 		}})
 	}
+	if plan.generation != nil && plan.generation.IPv6ControlPlane == ipv6ControlPlaneVersion {
+		for _, family := range []string{"netdev", "inet"} {
+			table, baseChain, _ := ipv6ControlPlaneTarget(family)
+			entries = append(entries, map[string]any{"chain": map[string]any{"family": family, "table": table, "name": ipv6ControlPlaneChain, "handle": 800}})
+			for index, expressions := range ipv6ControlPlaneExpressions(family) {
+				entries = append(entries, nftVerificationRuleEntry(family, table, ipv6ControlPlaneChain, uint64(801+index), "", expressions))
+			}
+			entries = append(entries, nftVerificationRuleEntry(family, table, baseChain, 820, "", []any{map[string]any{"jump": map[string]any{"target": ipv6ControlPlaneChain}}}))
+		}
+	}
 	if plan.operatorPolicy.chainName != "" {
 		entries = append(entries, map[string]any{"chain": map[string]any{
 			"family": "inet", "table": "syswarden", "name": plan.operatorPolicy.chainName, "handle": 500,

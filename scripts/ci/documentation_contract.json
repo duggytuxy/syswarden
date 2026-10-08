@@ -194,9 +194,9 @@
     {
       "case": "root",
       "stream": "stdout",
-      "reason": "Advance the Patch version to v4.10.3 while preserving the bounded built-in operator reference.",
+      "reason": "Advance the Patch version to v4.10.4 while preserving the bounded built-in operator reference.",
       "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
-      "after": "SYSWARDEN v4.10.3 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+      "after": "SYSWARDEN v4.10.4 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
     },
     {
       "case": "help:syswarden update",

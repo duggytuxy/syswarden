@@ -105,6 +105,25 @@ jobs:
               -run '^TestNftablesRulesGolden_SW_QA_001$' ./pkg/firewall
           )
 
+      - name: Verify IPv6 control-plane packets in an isolated kernel namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get install --yes --no-install-recommends nftables iproute2 util-linux
+          test_binary="${RUNNER_TEMP}/syswarden-ipv6-kernel.test"
+          go test -mod=readonly -c -o "${test_binary}" ./src/core/syswarden-cli/pkg/firewall
+          test_context="$(sudo mktemp -d /tmp/syswarden-ipv6-ci.XXXXXXXX)"
+          trap 'sudo rm -rf -- "${test_context}"' EXIT
+          sudo chmod 0755 "${test_context}"
+          sudo install -d -m 0755 "${test_context}/testdata/nft_removal"
+          sudo install -m 0755 "${test_binary}" "${test_context}/kernel.test"
+          sudo install -m 0644 \
+            src/core/syswarden-cli/pkg/firewall/testdata/nft_removal/current_files.json \
+            "${test_context}/testdata/nft_removal/current_files.json"
+          cd "${test_context}"
+          sudo env SYSWARDEN_REQUIRE_IPV6_KERNEL=1 "${test_context}/kernel.test" \
+            -test.run='^TestIPv6ControlPlaneKernel$' -test.count=1 -test.v
+
       - name: Verify formatting
         shell: bash
         run: |

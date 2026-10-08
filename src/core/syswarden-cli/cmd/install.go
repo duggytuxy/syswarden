@@ -179,7 +179,7 @@ var installCmd = &cobra.Command{
 			return installStageError("legacy shell completion reconciliation failed", err)
 		}
 
-		fmt.Println("[SYSWARDEN] v4.10.3 native installation complete.")
+		fmt.Println("[SYSWARDEN] v4.10.4 native installation complete.")
 		return nil
 	},
 }

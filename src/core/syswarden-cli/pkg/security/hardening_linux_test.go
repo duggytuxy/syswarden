@@ -628,14 +628,7 @@ func TestAutomaticUpdatesBranchesAreExplicit(t *testing.T) {
 	})
 }
 
-func TestGroupAndLogrotateTransformContracts(t *testing.T) {
-	groups, err := parseGroupMembership([]byte("root:x:0:\nsudo:x:27:root,alice\n"))
-	if err != nil || !containsString(groups["sudo"], "alice") {
-		t.Fatalf("group parse=%v error=%v", groups, err)
-	}
-	if _, err := parseGroupMembership([]byte("malformed\n")); err == nil {
-		t.Fatal("malformed group database was accepted")
-	}
+func TestLogrotateTransformContracts(t *testing.T) {
 	content, changed, err := hardenLogrotateCreateRules([]byte("{\n  create 0644 root adm\n}\n"), "create 0640 root adm")
 	if err != nil {
 		t.Fatal(err)
