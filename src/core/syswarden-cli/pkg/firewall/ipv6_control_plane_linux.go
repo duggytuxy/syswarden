@@ -64,6 +64,27 @@ func ipv6ControlPlaneExpressions(family string) [][]any {
 	}
 }
 
+const ipv6CodeZeroJSON = `{"match":{"left":{"payload":{"field":"code","protocol":"icmpv6"}},"op":"==","right":0}}`
+const ipv6CodeZeroSymbolJSON = `{"match":{"left":{"payload":{"field":"code","protocol":"icmpv6"}},"op":"==","right":"no-route"}}`
+
+func verifyIPv6ControlPlaneRule(rule *nftJSONRule, family, table string, expected []any) error {
+	// nftables 1.0.9 renders the generic ICMPv6 code-zero datatype as
+	// "no-route", including for ND and MLD. Accept only this exact expression
+	// alias. Preserve the original observation and reject all extra fields.
+	normalized := *rule
+	normalized.Expressions = append([]json.RawMessage(nil), rule.Expressions...)
+	for index, expression := range rule.Expressions {
+		canonical, err := canonicalNFTJSONExpression(expression)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(canonical, []byte(ipv6CodeZeroSymbolJSON)) {
+			normalized.Expressions[index] = json.RawMessage(ipv6CodeZeroJSON)
+		}
+	}
+	return verifyNFTJSONRuleExact(&normalized, family, table, ipv6ControlPlaneChain, "", expected)
+}
+
 func ipv6ControlPlaneTarget(family string) (string, string, error) {
 	switch family {
 	case "inet":
@@ -103,7 +124,7 @@ func verifyIPv6ControlPlane(document nftJSONDocument, family string) error {
 			if rules >= len(wanted) {
 				return fmt.Errorf("extra IPv6 control-plane rule")
 			}
-			if err := verifyNFTJSONRuleExact(rule, family, table, ipv6ControlPlaneChain, "", wanted[rules]); err != nil {
+			if err := verifyIPv6ControlPlaneRule(rule, family, table, wanted[rules]); err != nil {
 				return fmt.Errorf("IPv6 control-plane rule %d: %w", rules, err)
 			}
 			rules++

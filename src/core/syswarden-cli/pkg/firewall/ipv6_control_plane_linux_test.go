@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,62 @@ func TestIPv6ControlPlanePostcheckRejectsDrift(t *testing.T) {
 	}
 }
 
+func TestIPv6ControlPlaneHistoricalCodeZeroRendering(t *testing.T) {
+	plan := operatorPolicyPostcheckPlan(t)
+	plan.generation = &nftPolicyGeneration{IPv6ControlPlane: ipv6ControlPlaneVersion}
+	wire := nftVerificationJSON(plan, 0)
+	for _, family := range []string{"inet", "netdev"} {
+		for _, test := range []struct {
+			name       string
+			expression string
+			accepted   bool
+		}{
+			{"code-zero-symbol", `{"match":{"op":"==","left":{"payload":{"protocol":"icmpv6","field":"code"}},"right":"no-route"}}`, true},
+			{"different-code", `{"match":{"op":"==","left":{"payload":{"protocol":"icmpv6","field":"code"}},"right":"admin-prohibited"}}`, false},
+			{"different-protocol", `{"match":{"op":"==","left":{"payload":{"protocol":"icmp","field":"code"}},"right":"no-route"}}`, false},
+			{"different-field", `{"match":{"op":"==","left":{"payload":{"protocol":"icmpv6","field":"type"}},"right":"no-route"}}`, false},
+			{"different-operator", `{"match":{"op":"!=","left":{"payload":{"protocol":"icmpv6","field":"code"}},"right":"no-route"}}`, false},
+			{"extra-field", `{"match":{"op":"==","left":{"payload":{"protocol":"icmpv6","field":"code"}},"right":"no-route","extra":0}}`, false},
+		} {
+			t.Run(family+"/"+test.name, func(t *testing.T) {
+				document, err := decodeNFTJSON(wire)
+				if err != nil {
+					t.Fatal(err)
+				}
+				changed := 0
+				for _, entry := range document.NFTables {
+					rule := entry.Rule
+					if rule == nil || rule.Family != family || rule.Chain != ipv6ControlPlaneChain {
+						continue
+					}
+					for index, expression := range rule.Expressions {
+						canonical, err := canonicalNFTJSONExpression(expression)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if bytes.Equal(canonical, []byte(ipv6CodeZeroJSON)) {
+							rule.Expressions[index] = json.RawMessage(test.expression)
+							changed++
+						}
+					}
+				}
+				if changed != 5 {
+					t.Fatalf("replaced %d code-zero checks, expected 5", changed)
+				}
+				before, _ := json.Marshal(document)
+				err = verifyIPv6ControlPlane(document, family)
+				if (err == nil) != test.accepted {
+					t.Fatalf("accepted=%t, expected %t: %v", err == nil, test.accepted, err)
+				}
+				after, _ := json.Marshal(document)
+				if !bytes.Equal(before, after) {
+					t.Fatal("verification rewrote the original observation")
+				}
+			})
+		}
+	}
+}
+
 func TestIPv6ControlPlaneKernel(t *testing.T) {
 	const helper = "SYSWARDEN_IPV6_KERNEL_HELPER"
 	if os.Getenv(helper) == "1" {
@@ -175,6 +232,20 @@ func runIPv6ControlPlaneKernel(t *testing.T) {
 				interfaces[name] = true
 			}
 		}
+		// Establish the existing ownership result with this exact nft userland.
+		// nftables 1.0.9 omits ingress device identities from JSON; incomplete
+		// observations must keep failing closed, including after this patch.
+		nft("flush ruleset\n"+fixture.Source, "-f", "-")
+		baselineInet := nft("", "-j", "list", "table", "inet", "syswarden")
+		baselineIngress := nft("", "-j", "list", "table", "netdev", "syswarden_hw_drop")
+		var baselineARP []byte
+		if fixture.ARP {
+			baselineARP = nft("", "-j", "list", "table", "arp", "syswarden_arp")
+		}
+		_, baselineErr := inspectNFTCurrentPersistenceRuntime([]byte(fixture.Source), baselineInet, baselineIngress, baselineARP, fixture.inputs())
+		if baselineErr != nil && (!ipv6KernelLegacyIncompleteIngress(t, baselineIngress) || baselineErr.Error() != "ingress kernel topology includes changed or unrecognized objects, rules or ordering") {
+			t.Fatalf("case %d unexpected baseline ownership failure: %v", index, baselineErr)
+		}
 		source := ipv6ControlPlaneFixtureSource(t, fixture.Source)
 		nft("flush ruleset\n"+source, "-f", "-")
 		observations := make(map[string][]byte)
@@ -196,8 +267,18 @@ func runIPv6ControlPlaneKernel(t *testing.T) {
 		}
 		input := fixture.inputs()
 		input.IPv6ControlPlane = ipv6ControlPlaneVersion
-		if _, err := inspectNFTCurrentPersistenceRuntime([]byte(source), observations["inet"], observations["netdev"], arp, input); err != nil {
-			t.Fatalf("case %d complete retirement proof: %v", index, err)
+		for family, baseline := range map[string][]byte{"inet": baselineInet, "netdev": baselineIngress} {
+			normalized, err := normalizeIPv6ControlPlaneRuntime(observations[family], family, ipv6ControlPlaneVersion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(ipv6KernelTopologyWithoutHandles(t, normalized), ipv6KernelTopologyWithoutHandles(t, baseline)) {
+				t.Fatalf("case %d %s: extension changed the existing topology", index, family)
+			}
+		}
+		_, retirementErr := inspectNFTCurrentPersistenceRuntime([]byte(source), observations["inet"], observations["netdev"], arp, input)
+		if baselineErr == nil && retirementErr != nil || baselineErr != nil && (retirementErr == nil || retirementErr.Error() != baselineErr.Error()) {
+			t.Fatalf("case %d retirement behavior changed: baseline=%v, candidate=%v", index, baselineErr, retirementErr)
 		}
 		// A modified live extension must fail exact retirement, even if its
 		// private persistent bytes and ownership inputs are still intact.
@@ -209,8 +290,45 @@ func runIPv6ControlPlaneKernel(t *testing.T) {
 		if _, err := inspectNFTCurrentPersistenceRuntime([]byte(source), changed, observations["netdev"], arp, input); err == nil {
 			t.Fatal("modified live extension adopted")
 		}
-		t.Logf("case %d: kernel compilation, exact IPv6 postcheck, retirement and mutation refusal passed", index)
+		if baselineErr != nil {
+			t.Logf("case %d: IPv6 kernel postcheck and unchanged topology passed; retirement correctly refuses nftables 1.0.9's incomplete ingress observation", index)
+		} else {
+			t.Logf("case %d: kernel compilation, exact IPv6 postcheck, retirement and mutation refusal passed", index)
+		}
 	}
 	runIPv6ControlPlanePackets(t, nft)
 	fmt.Println("IPv6 control-plane kernel ownership regression passed")
+}
+
+// Compare every observed field and expression except kernel-assigned handles.
+// New rules receive new handles, but the extension must preserve the base model.
+func ipv6KernelTopologyWithoutHandles(t *testing.T, wire []byte) map[string]any {
+	t.Helper()
+	document, err := decodeLegacyFail2banNFTJSON(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range document["nftables"].([]any) {
+		for _, value := range entry.(map[string]any) {
+			delete(value.(map[string]any), "handle")
+		}
+	}
+	return document
+}
+
+func ipv6KernelLegacyIncompleteIngress(t *testing.T, wire []byte) bool {
+	t.Helper()
+	document := ipv6KernelTopologyWithoutHandles(t, wire)
+	oldVersion, missingDevice := false, false
+	for _, entry := range document["nftables"].([]any) {
+		wrapper := entry.(map[string]any)
+		if meta, ok := wrapper["metainfo"].(map[string]any); ok {
+			oldVersion = meta["version"] == "1.0.9"
+		}
+		if chain, ok := wrapper["chain"].(map[string]any); ok && chain["name"] == "ingress_frontline" {
+			_, present := chain["dev"]
+			missingDevice = !present
+		}
+	}
+	return oldVersion && missingDevice
 }

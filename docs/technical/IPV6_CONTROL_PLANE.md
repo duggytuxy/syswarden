@@ -74,8 +74,15 @@ discovery, DHCPv6 delivery, ICMPv6 errors without an existing connection, strict
 source filtering, rejected malformed or out-of-scope discovery, and reloads.
 An independently accepting input chain demonstrates the base-chain interaction.
 Kernel retirement tests cover eight existing generation-input combinations and
-reject a modified live extension. Filesystem-isolated hardening tests preserve
-multiple administrators with and without SUDO_USER.
+reject a modified live extension. With nftables 1.0.9, the suite also verifies
+IPv6 delivery and exact extension normalization, but complete retirement remains
+refused: that userland omits ingress device identities from its JSON output.
+The test establishes the same refusal with the unmodified baseline and does not
+count it as successful removal. Complete native removal requires a userland
+that exposes all ownership evidence.
+
+Filesystem-isolated hardening tests preserve multiple administrators with and
+without SUDO_USER.
 
 Run the mandatory local kernel regression without touching the host firewall:
 
