@@ -5,7 +5,7 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-NATIVE = '3b39b37b0c9da6431a461d83799fc40c18de2e8f'
+NATIVE = '0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e'
 
 
 class PatchWorkflowTests(unittest.TestCase):

@@ -417,6 +417,10 @@ For v4.10.3, use the separately reviewed
 [Patch IVV plan](../qualification/INTERMEDIATE_ACCEPTANCE_V4.10.3.md) and
 `release-ivv-v4103.yml`. The fresh signed-product campaign includes the actual
 historical updater, official half-configured recovery, original VPN client
-preservation and real filesystem device renumbering. The producer verifies all
-305 private native files and final baseline restoration. Its exact protected
-acceptance is required before tagging. Previous IVV verdicts remain unchanged.
+preservation, optional-feed recovery and real filesystem device renumbering.
+The producer verifies all 798 complementary native files, four independent
+removal archives with 576 packet outcomes and final baseline restoration with
+147 checks. CLI uninstall, APT remove, APT purge and deferred purge after an
+administrator edit require separate evidence and completed reboots. Its exact
+protected acceptance is required before tagging. Previous IVV verdicts remain
+unchanged.

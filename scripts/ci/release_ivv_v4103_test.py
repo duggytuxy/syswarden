@@ -2,6 +2,9 @@
 import copy
 import json
 import unittest
+from contextlib import ExitStack
+from pathlib import Path
+from unittest.mock import patch
 from scripts.ci import release_ivv_v4103 as current
 from scripts.ci import release_ivv_consumer_test as earlier
 from scripts.ci import candidate_update_verify_v4103 as updater
@@ -60,16 +63,34 @@ class CurrentInputTests(unittest.TestCase):
             with self.assertRaises(current.frozen.PlanError):
                 current.verify_roots(dict(roots=[row]), objects)
 
+    def test_private_acceptance_requires_independent_removal_validation(self):
+        # Invented inputs isolate the consumption boundary, not archive semantics.
+        with ExitStack() as stack:
+            for name, value in (('load_plan', {'private_input_manifest_sha256': 'a' * 64}),
+                                ('load_manifest', {}), ('verify_objects', {}),
+                                ('verify_roots', []), ('verify_capture_bindings', None),
+                                ('verify_native_archive', None), ('verify_restoration', None)):
+                stack.enter_context(patch.object(current, name, return_value=value))
+            check = stack.enter_context(patch.object(current.removal, 'verify_removal_archives',
+                side_effect=current.frozen.PlanError('incomplete independent removal')))
+            with self.assertRaisesRegex(current.frozen.PlanError, 'incomplete independent removal'):
+                current.verify_private_inputs(Path('/invented-private-inputs'))
+            check.assert_called_once()
+
     def test_plan_binds_fresh_signed_campaign_and_preserves_failures(self):
         plan = current.load_plan()
         manifest = current.load_manifest(plan)
         self.assertEqual(plan['native_tested_candidate'], plan['product_candidate'])
-        self.assertEqual(plan['native_file_count'], 305)
-        self.assertEqual(len(plan['native_assertions']), 17)
+        self.assertEqual(plan['native_file_count'], 798)
+        self.assertEqual(len(plan['native_assertions']), 27)
         self.assertFalse(plan['preflight_is_acceptance'])
-        self.assertEqual(plan['product_native_signing']['artifact_id'], 11295630713)
+        self.assertEqual({row['case'] for row in plan['removal_archives']},
+                         {'uninstall', 'remove', 'purge', 'remove_then_purge'})
+        self.assertIn('complete-removal', plan['required_acceptance_checks'])
+        self.assertIn('optional-osint', plan['required_acceptance_checks'])
+        self.assertEqual(plan['product_native_signing']['artifact_id'], 11539258439)
         failures = [r for r in manifest['roots'] if r['relation'] == 'retained-harness-failure']
-        self.assertEqual(len(failures), 4)
+        self.assertEqual(len(failures), 16)
         self.assertTrue(all(r['assertions']['exit'] != 0 for r in failures))
         self.assertEqual(plan['last_public_release']['tag'], 'v4.10.2')
         self.assertNotIn('src/', '\n'.join(plan['publication_source_change_allowlist']))
