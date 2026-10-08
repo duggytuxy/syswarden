@@ -4,7 +4,8 @@ from pathlib import Path
 import unittest
 from scripts.ci import release_ivv_current as previous
 from scripts.ci import release_ivv_v4101 as patch1
-from scripts.ci import release_ivv_v4102 as current
+from scripts.ci import release_ivv_v4102 as patch2
+from scripts.ci import release_ivv_v4103 as current
 
 
 class RPMIdentityTests(unittest.TestCase):
@@ -15,7 +16,7 @@ class RPMIdentityTests(unittest.TestCase):
                      if isinstance(t, ast.Assign) and isinstance(t.targets[0], ast.Name)
                      and t.targets[0].id in ('PACKAGES', 'TRUST_ROOT_SHA256', 'IMAGE')}
         expected = {Path(row['path']).name: row['sha256']
-                    for module in (previous, patch1, current) for row in module.load_plan()['product_packages']
+                    for module in (previous, patch1, patch2, current) for row in module.load_plan()['product_packages']
                     if row['path'].endswith('.rpm')}
         self.assertEqual(constants['PACKAGES'], expected)
         self.assertEqual(constants['TRUST_ROOT_SHA256'], 'e9c0ffd66f3e6a9addd2b7e347b84e8d92b34d1cc8e4f4f438d02eabe59c3874')
