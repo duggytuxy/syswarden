@@ -992,6 +992,13 @@
         "usage": "Confirm original generation evidence and the declared preservation boundary when applying historical recovery"
       },
       {
+        "name": "confirm-operator-iptables",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Confirm every reviewed shared IPv4 filter rule is administrator-owned and must remain unchanged"
+      },
+      {
         "name": "export-operator-policy",
         "type": "bool",
         "default": "false",
@@ -1023,6 +1030,13 @@
         "type": "string",
         "default": "",
         "usage": "Authorize only the exact lowercase SHA-256 digest printed by the dry run"
+      },
+      {
+        "name": "preserve-operator-iptables",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Review preservation of independently confirmed administrator IPv4 nf_tables compatibility rules"
       },
       {
         "name": "preserve-operator-policy",

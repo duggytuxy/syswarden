@@ -188,6 +188,42 @@ and verify that product rules do not return after service reload and reboot.
 Complete standalone uninstall, package remove and package purge remain separate
 native verification requirements.
 
+## Administrator iptables preservation after a new review
+
+An administrator rule can deliberately have the same comment as an older
+product rule. A comment alone never proves ownership. A historical retirement
+receipt preserves only the exact reviewed remainder in its original boot and
+network namespace. After a reboot or a reload that changes rule handles, its
+previous approval cannot be reused.
+
+After independently verifying that historical product rules are absent, use
+`recover-removal --preserve-operator-iptables` to inspect a new preservation
+plan. This route requires no IPv4 compatibility ownership entries and retains
+the existing historical host and integration preflights. Inspection is possible
+before the removal barrier exists; the ordinary removal path still attests and
+stops product producers independently. It supports the IPv4 `filter` table
+on the `nf_tables` backend only. Legacy-backend ambiguity remains blocked.
+
+Privately review the complete output of `sudo iptables-save -t filter` and
+`sudo nft -a list table ip filter`, plus the administrator's persistent loaders.
+Every remaining rule must belong to the administrator or another application.
+If this cannot be established, preserve the rules and original evidence for
+separate recovery. Do not use this decision to retain unresolved product rules.
+
+Applying requires all three options: `--apply`, the exact `--plan-sha256` from
+the dry run, and `--confirm-operator-iptables`. It creates only a private decision
+under `/var/backups/syswarden-retired-v1/operator-iptables-v1`. No rule, service,
+configuration, ownership manifest or removal barrier is changed by this action.
+The private decision grants preservation, never ownership or deletion authority.
+Then retry the original uninstall, remove or purge command.
+
+The decision binds the complete table structure, rule order, handles, expressions,
+iptables text, boot and network namespace. Packet and byte counters can advance
+normally. Any policy or identity change requires another explicit review.
+Existing manifest-bound rules must use their original cleanup path. This
+preservation decision cannot bypass their ownership checks or the separate
+persistent-source, integration and service removal checks.
+
 ## Administrator configuration retention
 
 The documented `99-user.toml` override remains administrator-owned. Additional

@@ -28,7 +28,7 @@ var applyLegacyCronRetirement = system.ApplyLegacyCronRetirement
 func newRecoverRemovalCommand() *cobra.Command {
 	var retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, retainOperatorConfig, retireHistoricalFirewall, confirmHistoricalInputs, preserveOperatorPolicy, exportOperatorPolicy, apply bool
 	var digest, fileDigest, historicalInputs string
-	var retireLegacyIPTables bool
+	var retireLegacyIPTables, preserveOperatorIPTables, confirmOperatorIPTables bool
 	command := &cobra.Command{
 		Use:   "recover-removal",
 		Short: "Inspect bounded recovery for complete product removal",
@@ -39,7 +39,7 @@ func newRecoverRemovalCommand() *cobra.Command {
 			for _, candidate := range []struct {
 				selected bool
 				kind     string
-			}{{retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}, {retireHistoricalFirewall, "historical-firewall-persistence"}, {retireLegacyIPTables, "historical-iptables"}, {preserveOperatorPolicy, "operator-policy"}, {exportOperatorPolicy, "operator-policy-export"}} {
+			}{{retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}, {retireHistoricalFirewall, "historical-firewall-persistence"}, {retireLegacyIPTables, "historical-iptables"}, {preserveOperatorIPTables, "operator-iptables"}, {preserveOperatorPolicy, "operator-policy"}, {exportOperatorPolicy, "operator-policy-export"}} {
 				if candidate.selected {
 					if selection != "" {
 						return fmt.Errorf("select exactly one legacy retention inventory")
@@ -55,6 +55,15 @@ func newRecoverRemovalCommand() *cobra.Command {
 			}
 			if apply && digest == "" {
 				return fmt.Errorf("--apply requires --plan-sha256 from a reviewed dry run")
+			}
+			if confirmOperatorIPTables && (selection != "operator-iptables" || !apply) {
+				return fmt.Errorf("--confirm-operator-iptables applies only to administrator iptables preservation with --apply")
+			}
+			if selection == "operator-iptables" {
+				if historicalInputs != "" || fileDigest != "" || confirmHistoricalInputs || apply != confirmOperatorIPTables {
+					return fmt.Errorf("administrator iptables preservation requires --confirm-operator-iptables when applying and does not accept historical or Fail2ban inputs")
+				}
+				return runOperatorIPTablesPreservation(cmd, apply, digest, confirmOperatorIPTables)
 			}
 			if selection == "historical-firewall-persistence" || selection == "historical-iptables" {
 				if historicalInputs == "" || fileDigest != "" || confirmHistoricalInputs != apply {
@@ -139,6 +148,8 @@ func newRecoverRemovalCommand() *cobra.Command {
 			return err
 		},
 	}
+	command.Flags().BoolVar(&preserveOperatorIPTables, "preserve-operator-iptables", false, "Review preservation of independently confirmed administrator IPv4 nf_tables compatibility rules")
+	command.Flags().BoolVar(&confirmOperatorIPTables, "confirm-operator-iptables", false, "Confirm every reviewed shared IPv4 filter rule is administrator-owned and must remain unchanged")
 	command.Flags().BoolVar(&preserveOperatorPolicy, "preserve-operator-policy", false, "Review exact independent administrator policy preservation before product removal")
 	command.Flags().BoolVar(&exportOperatorPolicy, "export-operator-policy", false, "Export private typed administrator receiver rules for separate operator review and installation")
 	command.Flags().BoolVar(&retireHistoricalFirewall, "retire-legacy-firewall-persistence", false, "Review an exact historical persistent source after product tables are absent")
