@@ -99,7 +99,7 @@ jobs:
             echo "ERROR: candidate updater signing requires one owner-dispatched exact-main GitHub-hosted run." >&2
             exit 1
           fi
-          if [[ ( "${RELEASE_TAG}" != "v4.10.0" && "${RELEASE_TAG}" != "v4.10.1" && "${RELEASE_TAG}" != "v4.10.2" && "${RELEASE_TAG}" != "v4.10.3" ) || \
+          if [[ ( "${RELEASE_TAG}" != "v4.10.0" && "${RELEASE_TAG}" != "v4.10.1" && "${RELEASE_TAG}" != "v4.10.2" && "${RELEASE_TAG}" != "v4.10.3" && "${RELEASE_TAG}" != "v4.10.4" ) || \
                 ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
                 ! "${PUBLICATION_SHA}" =~ ^[0-9a-f]{40}$ || \
                 "${AUTHORIZATION}" != "SIGN-CANDIDATE-UPDATE-NO-PUBLISH" ]]; then

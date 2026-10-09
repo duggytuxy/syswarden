@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Exact reviewed source version (v4.10.0 or qualified-policy v4.10.1/v4.10.2/v4.10.3)
+        description: Exact reviewed source version (v4.10.0 or qualified-policy v4.10.1/v4.10.2/v4.10.3/v4.10.4)
         required: true
         type: string
       release_sha:
@@ -201,7 +201,7 @@ jobs:
           if [[ "${QUALIFICATION_MODE}" == "bootstrap-recovery" ]]; then
             expected_authorization="REQUALIFY-NATIVE-BOOTSTRAP-NO-PUBLISH"
           fi
-          if [[ ( "${RELEASE_TAG}" != "v4.10.0" && "${RELEASE_TAG}" != "v4.10.1" && "${RELEASE_TAG}" != "v4.10.2" && "${RELEASE_TAG}" != "v4.10.3" ) || \
+          if [[ ( "${RELEASE_TAG}" != "v4.10.0" && "${RELEASE_TAG}" != "v4.10.1" && "${RELEASE_TAG}" != "v4.10.2" && "${RELEASE_TAG}" != "v4.10.3" && "${RELEASE_TAG}" != "v4.10.4" ) || \
                 ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
                 "${AUTHORIZATION}" != "${expected_authorization}" ]]; then
             echo "ERROR: reviewed signing inputs or no-publication authorization are invalid." >&2
