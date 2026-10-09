@@ -48,6 +48,12 @@ reload and feed-driven regeneration. No manual nftables insertion is needed.
 Post-apply verification checks the complete rule expressions, regular-chain
 shape and first dispatch position in both product chains.
 
+Runtime preservation recognizes the exact generated chain name in each of the
+two product tables. It replaces those chains while keeping compatible dynamic
+ban sets in the kernel, so reload, rollback and interrupted recovery do not
+restart their expiration timers. The name exception does not permit other
+hyphenated objects, lookalike names or a set with the chain's name.
+
 The private writer receipt records the exact extension generation. Retirement
 checks its complete source and live topology before normalizing that extension
 for the existing full ownership model. Historical templates remain unchanged.
@@ -73,8 +79,11 @@ new user and network namespaces. It checks router lifetime refresh, neighbour
 discovery, DHCPv6 delivery, ICMPv6 errors without an existing connection, strict
 source filtering, rejected malformed or out-of-scope discovery, and reloads.
 An independently accepting input chain demonstrates the base-chain interaction.
-Kernel retirement tests cover eight existing generation-input combinations and
-reject a modified live extension. With nftables 1.0.9, the suite also verifies
+Kernel tests cover eight existing generation-input combinations, apply two
+complete policy transactions per combination and reject a modified live
+extension. A separate integration test checks live ban-set handles and expiry
+through reload, failed verification, rollback and interrupted recovery with
+both IPv6 chains present. With nftables 1.0.9, the suite also verifies
 IPv6 delivery and exact extension normalization, but complete retirement remains
 refused: that userland omits ingress device identities from its JSON output.
 The test establishes the same refusal with the unmodified baseline and does not
