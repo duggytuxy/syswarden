@@ -913,7 +913,7 @@ class GitleaksContractTests(unittest.TestCase):
         workflow = (
             self.repository / ".github" / "workflows" / "security-audit.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("go-version: '1.26.6'", workflow)
+        self.assertIn("go-version: '1.26.9'", workflow)
         self.assertIn("go install github.com/zricethezav/gitleaks/v8@v8.24.3", workflow)
         self.assertIn('go version -m "${GITLEAKS_BIN}/gitleaks"', workflow)
         self.assertIn(

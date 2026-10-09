@@ -5,6 +5,14 @@
 
 ### FIXED
 
+- **Release toolchain security:** Require Go 1.26.9 for production builds and
+  package provenance, including its October 2026 standard-library security
+  fixes. Preserve historical compiler evidence and reject older or unreviewed
+  compiler versions for new packages.
+- **Feed availability reporting:** Remove the unused provider-homepage latency
+  probe from installation. A redirect from a hosting homepage no longer prints
+  a misleading feed failure. Actual HTTPS feed downloads, independent-source
+  quorum, validation failures and offline attestation remain authoritative.
 - **Persistent IPv6 connectivity:** Generate explicit IPv6 control-plane rules
   before ingress reputation filtering, strict source policy and input conntrack
   checks. Preserve neighbour discovery, duplicate address detection, router

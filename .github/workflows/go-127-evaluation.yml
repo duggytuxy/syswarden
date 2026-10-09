@@ -21,6 +21,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Require the historical evaluation source toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(head -n 1 go.work)" != 'go 1.26.6' ]]; then
+            echo 'ERROR: This historical evaluation requires its original Go 1.26.6 source; it cannot downgrade the current security toolchain.' >&2
+            exit 1
+          fi
+
       - name: Capture candidate repository state
         shell: bash
         run: |

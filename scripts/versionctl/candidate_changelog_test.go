@@ -204,3 +204,24 @@ func TestCandidateChangelogProductionPolicyIsBounded(t *testing.T) {
 		t.Fatalf("unreviewed candidate policy: %#v", approvedCandidateChangelog)
 	}
 }
+
+func TestCandidateChangelogV4104PolicyIsBoundToItsOwnParent(t *testing.T) {
+	want := candidateChangelogPolicy{
+		ParentSHA:       "edf8b40a7bdd011ee788704ba30d8b355234e473",
+		Version:         "v4.10.4",
+		Subject:         "Fix : complete v4.10.4 security and mirror corrections",
+		BaseSHA256:      "15b4656cd27f53f93232f09763a333f865e722f9b6230f6bd10d01dfef058c64",
+		CandidateSHA256: "cfdf9aed98c78348ad1ef41069b5109a90b6de7f38b1663af9976a68315cac5d",
+		HistorySHA256:   "6c403f15b332d5b201a986a3554ea91ebd35308c710737a18096739298e1f2bd",
+	}
+	app := application{}
+	if approvedCandidateChangelogV4104 != want || app.candidateChangelogPolicy(want.ParentSHA) != want {
+		t.Fatal("v4.10.4 correction differs from its exact policy")
+	}
+	if app.candidateChangelogPolicy(approvedCandidateChangelog.ParentSHA) != approvedCandidateChangelog {
+		t.Fatal("historical v4.10.3 correction policy changed")
+	}
+	if app.candidateChangelogPolicy(strings.Repeat("f", 40)) == want {
+		t.Fatal("v4.10.4 correction was selected for an unrelated parent")
+	}
+}

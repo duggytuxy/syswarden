@@ -36,7 +36,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
           cache-dependency-path: |
             go.work.sum
             src/core/syswarden-cli/go.sum
@@ -312,7 +312,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
           cache: false
 
       - name: Install pinned gosec
@@ -430,7 +430,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
           cache: false
 
       - name: Install pinned Gitleaks
@@ -640,7 +640,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
 
       - name: Setup pinned PowerShell 7.6.4
         shell: bash

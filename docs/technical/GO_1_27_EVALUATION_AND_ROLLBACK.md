@@ -3,16 +3,23 @@
 Applies to: the v4.10.0 source candidate and its maintainer-only toolchain
 evaluation. This is not a stable v4.04.3 installation procedure.
 
-## Current release decision
+## Historical release decision
 
-Go 1.26.6 remains the SysWarden release toolchain. The isolated Go 1.27.1
-lane is non-publishing and currently emits only this decision:
+Go 1.26.6 was the v4.10.0 release toolchain. The isolated Go 1.27.1
+lane was non-publishing and emitted this decision:
 
 `defer-go1.27-keep-go1.26.6`
 
 The evaluation does not qualify Go 1.27.1 for a release. Adoption remains
 blocked until separately bound native package, lifecycle, and performance
 evidence is green.
+
+The v4.10.4 candidate uses Go 1.26.9 for the security fixes published on
+October 8, 2026. See the [release toolchain security policy](GO_RELEASE_TOOLCHAIN.md).
+The historical metadata, measurements and rollback target below remain fixed
+to their original versions. They do not authorize a current release build or
+a downgrade to Go 1.26.6. The historical workflow rejects a different source
+toolchain before downloading or executing either historical compiler.
 
 ## Evaluation contract
 
@@ -71,7 +78,10 @@ protocol-relevant CLI, core, telemetry, webhook, and TUI tests with the
 checksum-pinned Go 1.26.6 binary. The rollback proof is sealed only after all
 comparisons and tests pass.
 
-## Maintainer rollback procedure after a future adoption
+## Historical maintainer rollback procedure
+
+This procedure describes the original v4.10.0 evaluation only. Do not use it
+to downgrade the current release toolchain or bypass a security update.
 
 Do not run the rollback helper against an unreviewed or dirty checkout. Create
 a dedicated clean clone or worktree at the affected commit, verify the commit

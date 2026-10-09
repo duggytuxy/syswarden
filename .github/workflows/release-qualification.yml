@@ -175,7 +175,7 @@ jobs:
       - name: Set Up Go for Version Validation
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
           cache: false
 
       - name: Validate Manual Main Pre-Tag Context
@@ -2607,7 +2607,7 @@ jobs:
       - name: Set Up Go for Hosted Signing
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
           cache: false
 
       - name: Revalidate Exact Hosted Candidate Commit

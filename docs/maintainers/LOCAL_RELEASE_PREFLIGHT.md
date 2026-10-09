@@ -71,6 +71,19 @@ This is a reviewed content exception for one candidate, not a general
 same-version changelog editing mechanism. If its exact parent is no longer the
 integration base, stop and review the changed integration context.
 
+## Sealed v4.10.4 change-record correction
+
+The v4.10.4 candidate has a second exact change-record policy, independent of
+the historical v4.10.3 policy. It permits only the immediate child of
+`edf8b40a7bdd011ee788704ba30d8b355234e473` with the subject
+`Fix : complete v4.10.4 security and mirror corrections`, optionally followed
+by GitHub's numeric squash suffix. The policy binds the complete before and
+after changelog hashes and the unchanged historical suffix. It records the
+Go 1.26.9 security update and removal of the obsolete installation homepage
+probe. Existing-tag refusal, version preservation, review and all release
+gates still apply. Any further change requires a separately reviewed policy;
+this does not grant general permission to edit candidate history.
+
 ## Workflow coverage ledger
 
 Every workflow must be classified before a release PR is pushed. A local PASS
@@ -193,7 +206,7 @@ Run the following groups before every push that can affect a release PR.
 
 ### Go modules
 
-For CLI, Core and TUI, run the normal tests, race tests and vet with Go 1.26.6,
+For CLI, Core and TUI, run the normal tests, race tests and vet with Go 1.26.9,
 `GOFLAGS=-mod=readonly`, the repository `go.work` file and isolated per-module
 caches. Run versionctl as its own module with `GOWORK=off`.
 

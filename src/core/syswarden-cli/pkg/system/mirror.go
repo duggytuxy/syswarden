@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-var StandardMirrors = map[string]string{
-	"GitHub":   "https://raw.githubusercontent.com/",
-	"Codeberg": "https://codeberg.org/",
-}
-
 var threatIntelMirrors = map[string][]string{
 	"critical": {
 		"https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/refs/heads/main/prod_critical_data-shield_ipv4_blocklist.txt",
@@ -52,50 +47,6 @@ func ThreatIntelMirrors(listChoice string) []string {
 		key = "critical"
 	}
 	return append([]string(nil), threatIntelMirrors[key]...)
-}
-
-// SelectFastestMirror benchmarks mirrors and selects the fastest one
-func SelectFastestMirror() (string, error) {
-	fmt.Println("[INFO] Benchmarking mirrors...")
-
-	fastestTime := time.Hour
-	fastestURL := StandardMirrors["Codeberg"] // Default fallback
-
-	client := mirrorHTTPClient()
-
-	for name, rawURL := range StandardMirrors {
-		fmt.Printf("Connecting to %s... ", name)
-		if !approvedHTTPSMirror(rawURL) {
-			fmt.Println("FAIL")
-			continue
-		}
-
-		start := time.Now()
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, rawURL, nil)
-		if err != nil {
-			fmt.Println("FAIL")
-			continue
-		}
-		resp, err := client.Do(req)
-
-		if err == nil && resp.StatusCode == 200 {
-			_ = resp.Body.Close()
-			duration := time.Since(start)
-			fmt.Printf("%d ms\n", duration.Milliseconds())
-			if duration < fastestTime {
-				fastestTime = duration
-				fastestURL = rawURL
-			}
-		} else {
-			if resp != nil {
-				_ = resp.Body.Close()
-			}
-			fmt.Println("FAIL")
-		}
-	}
-
-	fmt.Printf("[INFO] Selected Mirror: %s\n", fastestURL)
-	return fastestURL, nil
 }
 
 // MirrorResult holds the benchmark result for a mirror

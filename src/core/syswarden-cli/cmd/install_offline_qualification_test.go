@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,20 @@ import (
 
 	"syswarden-cli/config"
 )
+
+type unexpectedInstallProbe struct{ t *testing.T }
+
+func (probe unexpectedInstallProbe) RoundTrip(request *http.Request) (*http.Response, error) {
+	probe.t.Errorf("unexpected pre-download network request: %s %s", request.Method, request.URL)
+	return nil, errors.New("unexpected network probe")
+}
+
+func rejectInstallNetworkProbes(t *testing.T) {
+	t.Helper()
+	previous := http.DefaultTransport
+	http.DefaultTransport = unexpectedInstallProbe{t: t}
+	t.Cleanup(func() { http.DefaultTransport = previous })
+}
 
 func TestOfflineQualificationActivationMigratesLegacyConfigurationBeforeDefaults(t *testing.T) {
 	root := t.TempDir()
@@ -101,23 +116,18 @@ func TestOfflineQualificationPackageStageFailsClosedOnDependencyAttestation(t *t
 }
 
 func TestOfflineQualificationInstallAttestsFeedsWithoutNetworkCalls(t *testing.T) {
+	rejectInstallNetworkProbes(t)
 	previousConfig := config.GlobalConfig
-	previousMirror := selectFastestMirrorForInstall
 	previousDownload := downloadFeedsForInstall
 	previousAttest := attestOfflineQualificationFeedsForInstall
 	t.Cleanup(func() {
 		config.GlobalConfig = previousConfig
-		selectFastestMirrorForInstall = previousMirror
 		downloadFeedsForInstall = previousDownload
 		attestOfflineQualificationFeedsForInstall = previousAttest
 	})
 	t.Setenv("SYSWARDEN_OFFLINE_QUALIFICATION", "1")
 	t.Setenv("SYSWARDEN_PKG_INSTALL", "1")
 	config.GlobalConfig = &config.Config{ListChoice: "4", GeoCodes: "be", GeoAllowed: "fr"}
-	selectFastestMirrorForInstall = func() (string, error) {
-		t.Fatal("offline qualification benchmarked a network mirror")
-		return "", nil
-	}
 	downloadFeedsForInstall = func(string, string, string, string, string, string, string, string, string, bool, bool) error {
 		t.Fatal("offline qualification invoked the feed downloader")
 		return nil
@@ -143,28 +153,25 @@ func TestOfflineQualificationInstallAttestsFeedsWithoutNetworkCalls(t *testing.T
 	}
 }
 
-func TestOrdinaryPackageInstallRetainsNetworkFeedPath(t *testing.T) {
+func TestOrdinaryPackageInstallDownloadsFeedsWithoutHomepageProbe(t *testing.T) {
+	rejectInstallNetworkProbes(t)
 	previousConfig := config.GlobalConfig
-	previousMirror := selectFastestMirrorForInstall
 	previousDownload := downloadFeedsForInstall
 	previousAttest := attestOfflineQualificationFeedsForInstall
 	t.Cleanup(func() {
 		config.GlobalConfig = previousConfig
-		selectFastestMirrorForInstall = previousMirror
 		downloadFeedsForInstall = previousDownload
 		attestOfflineQualificationFeedsForInstall = previousAttest
 	})
 	t.Setenv("SYSWARDEN_OFFLINE_QUALIFICATION", "")
 	t.Setenv("SYSWARDEN_PKG_INSTALL", "1")
 	config.GlobalConfig = &config.Config{ListChoice: "4"}
-	mirrorCalls := 0
 	downloadCalls := 0
-	selectFastestMirrorForInstall = func() (string, error) {
-		mirrorCalls++
-		return "https://codeberg.org/", nil
-	}
-	downloadFeedsForInstall = func(string, string, string, string, string, string, string, string, string, bool, bool) error {
+	downloadFeedsForInstall = func(mirror string, _ string, _ string, _ string, choice string, _ string, _ string, _ string, _ string, _ bool, _ bool) error {
 		downloadCalls++
+		if mirror != "https://codeberg.org/" || choice != "4" {
+			t.Fatalf("feed selection changed: mirror=%q choice=%q", mirror, choice)
+		}
 		return nil
 	}
 	attestOfflineQualificationFeedsForInstall = func(string, string, string, string, string, string, string, bool) error {
@@ -175,8 +182,14 @@ func TestOrdinaryPackageInstallRetainsNetworkFeedPath(t *testing.T) {
 	if err := prepareNetworkIntelligenceForInstall(); err != nil {
 		t.Fatalf("ordinary network intelligence preparation failed: %v", err)
 	}
-	if mirrorCalls != 1 || downloadCalls != 1 {
-		t.Fatalf("ordinary path mirror=%d download=%d, want 1 each", mirrorCalls, downloadCalls)
+	if downloadCalls != 1 {
+		t.Fatalf("ordinary path downloads=%d, want 1", downloadCalls)
+	}
+	downloadFeedsForInstall = func(string, string, string, string, string, string, string, string, string, bool, bool) error {
+		return errors.New("feed mirror quorum unavailable")
+	}
+	if err := prepareNetworkIntelligenceForInstall(); err == nil || !strings.Contains(err.Error(), "feed mirror quorum unavailable") {
+		t.Fatalf("actual feed failure was not retained: %v", err)
 	}
 }
 

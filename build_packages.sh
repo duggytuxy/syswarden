@@ -143,17 +143,17 @@ fi
 
 GO_TOOLCHAIN_ROOT="$(GOENV=off GOFLAGS='' GOWORK=off GOEXPERIMENT='' GOAMD64=v1 \
     GOCACHEPROG='' \
-    GOTOOLCHAIN=go1.26.6 GOPROXY=off go env GOROOT)" || {
-    echo "[-] Go 1.26.6 is not already installed; refusing an implicit toolchain download." >&2
+    GOTOOLCHAIN=go1.26.9 GOPROXY=off go env GOROOT)" || {
+    echo "[-] Go 1.26.9 is not already installed; refusing an implicit toolchain download." >&2
     exit 1
 }
 GO_BIN="${GO_TOOLCHAIN_ROOT}/bin/go"
 if [ ! -x "${GO_BIN}" ] || [ -L "${GO_BIN}" ]; then
-    echo "[-] Go 1.26.6 executable is not a regular trusted toolchain file." >&2
+    echo "[-] Go 1.26.9 executable is not a regular trusted toolchain file." >&2
     exit 1
 fi
-[ "$(GOTOOLCHAIN=local "${GO_BIN}" version)" = "go version go1.26.6 linux/amd64" ] || {
-    echo "[-] Local package builds require exactly Go 1.26.6 for linux/amd64." >&2
+[ "$(GOTOOLCHAIN=local "${GO_BIN}" version)" = "go version go1.26.9 linux/amd64" ] || {
+    echo "[-] Local package builds require exactly Go 1.26.9 for linux/amd64." >&2
     exit 1
 }
 [ "$(fpm --version)" = "1.17.0" ] || {
