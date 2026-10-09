@@ -230,6 +230,23 @@ class GoToolchainEvaluationTests(unittest.TestCase):
                 f"run block {index} is not valid bash: {result.stderr}",
             )
 
+    def test_historical_workflow_rejects_current_toolchain_before_download(self) -> None:
+        guard = "Require the historical evaluation source toolchain"
+        self.assertLess(
+            self.workflow.index(guard),
+            self.workflow.index("Install checksum-pinned Go toolchains"),
+        )
+        block = next(block for block in self.run_blocks if "head -n 1 go.work" in block)
+        with tempfile.TemporaryDirectory() as directory:
+            for version, expected in (("1.26.6", 0), ("1.26.9", 1), ("1.27.1", 1)):
+                with self.subTest(version=version):
+                    (Path(directory) / "go.work").write_text(f"go {version}\n")
+                    result = subprocess.run(
+                        ["bash", "-c", textwrap.dedent(block)], cwd=directory,
+                        capture_output=True, text=True, check=False,
+                    )
+                    self.assertEqual(result.returncode, expected, result.stderr)
+
     def test_firewall_sandbox_is_enforced_before_functional_tests(self) -> None:
         sandbox_name = "Prepare enforced firewall test sandbox"
         self.assertLess(
@@ -532,7 +549,7 @@ class GoToolchainRollbackTests(unittest.TestCase):
         for relative in self.required[:-1]:
             self.assertIn(b"go 1.27.1\n", (self.root / relative).read_bytes())
 
-    def test_repository_builder_roundtrip_is_byte_exact(self) -> None:
+    def test_current_security_toolchain_is_not_a_historical_rollback_target(self) -> None:
         pristine: dict[str, bytes] = {}
         for relative in self.required:
             source = REPOSITORY / relative
@@ -541,18 +558,8 @@ class GoToolchainRollbackTests(unittest.TestCase):
             shutil.copyfile(source, destination)
             destination.chmod(0o644 if relative != self.builder else 0o755)
             pristine[relative] = destination.read_bytes()
-            if relative == self.builder:
-                destination.write_bytes(
-                    pristine[relative]
-                    .replace(b"go1.26.6", b"go1.27.1")
-                    .replace(b"Go 1.26.6", b"Go 1.27.1")
-                )
-            else:
-                destination.write_bytes(
-                    pristine[relative].replace(b"go 1.26.6\n", b"go 1.27.1\n")
-                )
         result = self.run_rollback()
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(result.returncode, 0)
         for relative, expected in pristine.items():
             self.assertEqual((self.root / relative).read_bytes(), expected)
 

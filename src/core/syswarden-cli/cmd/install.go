@@ -196,7 +196,6 @@ var ensurePersistentBlocklistPairForInstall = firewall.EnsurePersistentBlocklist
 var hostFirewallBackendPreflight = system.PreflightHostFirewallBackend
 var inspectInstallFirewallCompatibility = config.InspectHistoricalDefaultFirewallCompatibility
 var applyInstallFirewallCompatibility = config.ApplyHistoricalDefaultFirewallCompatibility
-var selectFastestMirrorForInstall = system.SelectFastestMirror
 var downloadFeedsForInstall = network.DownloadFeedsForInstall
 var attestOfflineQualificationFeedsForInstall = network.AttestOfflineQualificationFeeds
 var setupWebhooksForInstall = integration.SetupWebhooks
@@ -339,9 +338,8 @@ func prepareNetworkIntelligenceForInstall() error {
 		}
 		return nil
 	}
-	if _, err := selectFastestMirrorForInstall(); err != nil {
-		return installStageError("mirror benchmarking failed", err)
-	}
+	// Feed availability is established by verified downloads and quorum.
+	// A provider homepage HEAD probe does not attest an actual feed.
 	// Phase 2: Network Intelligence
 	fmt.Println("[SYSWARDEN] Starting Network Intelligence Downloader...")
 	if err := downloadFeedsForInstall(

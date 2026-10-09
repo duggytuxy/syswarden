@@ -249,8 +249,8 @@ def validate_build_info(
     vcs_time: str,
 ) -> None:
     first_line = build_info.splitlines()[0] if build_info.splitlines() else ""
-    if re.search(r":\s+go1\.26\.6\s*$", first_line) is None:
-        raise ProvenanceError(f"binary was not built by exactly Go 1.26.6: {path}")
+    if re.search(r":\s+go1\.26\.9\s*$", first_line) is None:
+        raise ProvenanceError(f"binary was not built by exactly Go 1.26.9: {path}")
     settings = parse_build_settings(build_info)
     for expected in (
         "GOOS=linux",

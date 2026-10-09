@@ -390,8 +390,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
     def test_local_builder_is_pinned_readonly_and_source_immutable(self) -> None:
         source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("set -euo pipefail", source)
-        self.assertIn("GOTOOLCHAIN=go1.26.6 GOPROXY=off go env GOROOT", source)
-        self.assertIn("go version go1.26.6 linux/amd64", source)
+        self.assertIn("GOTOOLCHAIN=go1.26.9 GOPROXY=off go env GOROOT", source)
+        self.assertIn("go version go1.26.9 linux/amd64", source)
         self.assertIn(
             'SOURCE_TAG="$(PATH="${GO_TOOLCHAIN_ROOT}/bin:${PATH}" \\\n'
             '    GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \\\n'
@@ -772,7 +772,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         revision = "a" * 40
         commit_time = "2026-09-04T20:03:22Z"
         valid = [
-            "/tmp/artifact: go1.26.6",
+            "/tmp/artifact: go1.26.9",
             "\tbuild\tvcs=git",
             f"\tbuild\tvcs.revision={revision}",
             f"\tbuild\tvcs.time={commit_time}",
@@ -1453,7 +1453,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 self.assertIn(f"inherited {variable}", rejected.stderr)
 
         for check in (
-            '[[ "$(go env GOVERSION)" == "go1.26.6" ]]',
+            '[[ "$(go env GOVERSION)" == "go1.26.9" ]]',
             '[[ "${GOWORK}" == "off" ]]',
             '[[ "${GOENV}" == "off" ]]',
             '[[ "${GOAMD64}" == "v1" ]]',

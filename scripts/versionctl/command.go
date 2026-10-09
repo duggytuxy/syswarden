@@ -211,7 +211,7 @@ func (app application) runReleaseContract(args []string, stderr io.Writer, track
 					currentChangelog,
 				); err != nil {
 					if correctionErr := validateCandidateChangelogCorrection(
-						app.candidateChangelogPolicy(), parentRef, parentVersion,
+						app.candidateChangelogPolicy(parentRef), parentRef, parentVersion,
 						currentVersion, message, parentChangelog, currentChangelog,
 					); correctionErr != nil {
 						return fmt.Errorf("non-versioning release follow-up %s changed changelog.md: %w; candidate correction: %v", currentRef, err, correctionErr)
