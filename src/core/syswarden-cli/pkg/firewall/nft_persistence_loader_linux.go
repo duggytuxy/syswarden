@@ -88,7 +88,7 @@ func decodeNFTPersistenceLoaderStatus(content []byte) (nftPersistenceLoaderStatu
 		if key != "ExecStart" && values[key] == "" {
 			continue
 		}
-		binary, entry, err := decodeNFTPersistenceLoaderCommand(values[key], key == "ExecStop")
+		binary, entry, err := decodeNFTPersistenceLoaderCommand(values[key], key)
 		if err != nil || status.binary != "" && status.binary != binary {
 			return invalid()
 		}
@@ -115,7 +115,7 @@ func decodeNFTPersistenceLoaderStatus(content []byte) (nftPersistenceLoaderStatu
 	return status, nil
 }
 
-func decodeNFTPersistenceLoaderCommand(value string, stop bool) (string, string, error) {
+func decodeNFTPersistenceLoaderCommand(value, operation string) (string, string, error) {
 	invalid := func() (string, string, error) { return "", "", fmt.Errorf("unsupported nftables loader command") }
 	if !strings.HasPrefix(value, "{ ") || !strings.HasSuffix(value, " }") {
 		return invalid()
@@ -131,14 +131,27 @@ func decodeNFTPersistenceLoaderCommand(value string, stop bool) (string, string,
 		return invalid()
 	}
 	binary := strings.TrimPrefix(fields[0], "path=")
-	if binary != "/usr/sbin/nft" && binary != "/usr/bin/nft" {
+	if binary != "/usr/sbin/nft" && binary != "/usr/bin/nft" && binary != "/sbin/nft" {
 		return invalid()
 	}
-	arguments := strings.Split(strings.TrimPrefix(fields[1], "argv[]="), " ")
+	argv := strings.TrimPrefix(fields[1], "argv[]=")
+	if operation == "ExecReload" {
+		// Observe the distribution's literal flush-and-include reload only.
+		// Never execute it: doing so would remove unrelated firewall rules.
+		prefix := binary + " flush ruleset; include \""
+		if strings.HasPrefix(argv, prefix) && strings.HasSuffix(argv, "\";") {
+			entry := strings.TrimSuffix(strings.TrimPrefix(argv, prefix), "\";")
+			if !canonicalNFTPersistencePath(entry, false) || strings.ContainsAny(entry, "\"' ;") || len(entry) > 4096 {
+				return invalid()
+			}
+			return binary, entry, nil
+		}
+	}
+	arguments := strings.Split(argv, " ")
 	if len(arguments) != 3 || arguments[0] != binary {
 		return invalid()
 	}
-	if stop {
+	if operation == "ExecStop" {
 		// Observe the packaged stop command only. Calling it would flush
 		// unrelated protection, so retirement never stops this shared service.
 		if arguments[1] != "flush" || arguments[2] != "ruleset" {
@@ -214,12 +227,14 @@ func queryNFTPersistenceLoaderProperties(ctx context.Context, host nftPersistenc
 }
 
 type nftPersistenceLoaderInspection struct {
-	host    nftPersistenceFilesystem
-	manager nftPersistenceRead
-	status  nftPersistenceLoaderStatus
-	files   map[string]nftPersistenceRead
-	xattrs  map[string]string
-	digest  string
+	host           nftPersistenceFilesystem
+	manager        nftPersistenceRead
+	status         nftPersistenceLoaderStatus
+	files          map[string]nftPersistenceRead
+	xattrs         map[string]string
+	digest         string
+	resolvedBinary string
+	alias          *nftPersistenceLoaderAlias
 }
 
 // A loader attestation binds only this shared service and its effective entry
@@ -236,7 +251,11 @@ func inspectNFTPersistenceLoader(ctx context.Context, host nftPersistenceFilesys
 	if err != nil {
 		return nil, err
 	}
-	paths := append([]string{"/usr/bin/systemctl", inspection.status.binary}, inspection.status.fragments...)
+	inspection.resolvedBinary, inspection.alias, err = resolveNFTPersistenceLoaderBinary(host, inspection.status.binary)
+	if err != nil {
+		return nil, err
+	}
+	paths := append([]string{"/usr/bin/systemctl", inspection.resolvedBinary}, inspection.status.fragments...)
 	sort.Strings(paths)
 	var evidence []nftPersistenceGraphSourceRecord
 	for _, path := range paths {
@@ -247,7 +266,7 @@ func inspectNFTPersistenceLoader(ctx context.Context, host nftPersistenceFilesys
 		if err != nil {
 			return nil, err
 		}
-		if (path == "/usr/bin/systemctl" || path == inspection.status.binary) && snapshot.identity.Mode().Perm()&0111 == 0 {
+		if (path == "/usr/bin/systemctl" || path == inspection.resolvedBinary) && snapshot.identity.Mode().Perm()&0111 == 0 {
 			return nil, fmt.Errorf("nftables loader executable lacks executable permissions")
 		}
 		bound, err := bindNFTPersistenceGraphSource(path, snapshot, attrs, snapshot.content)
@@ -261,7 +280,8 @@ func inspectNFTPersistenceLoader(ctx context.Context, host nftPersistenceFilesys
 		Schema string                            `json:"schema"`
 		Values map[string]string                 `json:"values"`
 		Files  []nftPersistenceGraphSourceRecord `json:"files"`
-	}{"syswarden-nftables-loader-observation-v1", inspection.status.values, evidence})
+		Alias  *nftPersistenceLoaderAlias        `json:"executable_alias,omitempty"`
+	}{"syswarden-nftables-loader-observation-v1", inspection.status.values, evidence, inspection.alias})
 	if err != nil {
 		return nil, err
 	}
@@ -276,6 +296,10 @@ func (inspection *nftPersistenceLoaderInspection) verify(ctx context.Context) er
 	status, err := queryNFTPersistenceLoader(ctx, inspection.host, inspection.manager)
 	if err != nil || !reflect.DeepEqual(status, inspection.status) {
 		return fmt.Errorf("nftables loader effective properties changed after inspection")
+	}
+	binary, alias, err := resolveNFTPersistenceLoaderBinary(inspection.host, status.binary)
+	if err != nil || binary != inspection.resolvedBinary || !reflect.DeepEqual(alias, inspection.alias) {
+		return fmt.Errorf("nftables loader executable alias changed after inspection")
 	}
 	for path, expected := range inspection.files {
 		actual, attrs, err := snapshotNFTPersistenceMetadata(inspection.host, path)
