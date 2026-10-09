@@ -23,6 +23,10 @@ func generatedListOriginRecord(file *os.File, name string, digest [sha256.Size]b
 	if file == nil || !isGeneratedListName(name) {
 		return nil, fmt.Errorf("invalid generated list origin request")
 	}
+	return generatedDataOriginRecord(file, name, digest, "SYSWARDEN_LIST_ORIGIN_V1")
+}
+
+func generatedDataOriginRecord(file *os.File, name string, digest [sha256.Size]byte, schema string) ([]byte, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
@@ -38,7 +42,7 @@ func generatedListOriginRecord(file *os.File, name string, digest [sha256.Size]b
 	if birth.Mask&unix.STATX_BTIME == 0 || birth.Ino != identity.ino {
 		return nil, fmt.Errorf("stable generated list creation identity is unavailable")
 	}
-	return []byte(fmt.Sprintf("SYSWARDEN_LIST_ORIGIN_V1\nname=%s\ninode=%d\nbirth_sec=%d\nbirth_nsec=%d\nsha256=%x\n", name, identity.ino, birth.Btime.Sec, birth.Btime.Nsec, digest)), nil
+	return []byte(fmt.Sprintf("%s\nname=%s\ninode=%d\nbirth_sec=%d\nbirth_nsec=%d\nsha256=%x\n", schema, name, identity.ino, birth.Btime.Sec, birth.Btime.Nsec, digest)), nil
 }
 
 // MarkCreatedGeneratedList records only an exclusive creation or an automatic
@@ -101,8 +105,21 @@ func inspectGeneratedListDirectory(directory *pinnedServiceDirectory) (retainedD
 	}
 	slices.Sort(names)
 	expectedNames := []string{".syswarden_blacklist_pair_v1", ".syswarden_whitelist_pair_v1", "syswarden_blacklist.ipv4", "syswarden_blacklist.ipv6", "syswarden_whitelist.ipv4", "syswarden_whitelist.ipv6"}
-	if !slices.Equal(names, expectedNames) {
-		return result, fmt.Errorf("list inventory includes missing or unrelated entries; preserve it for explicit recovery")
+	for _, name := range names {
+		if !slices.Contains(expectedNames, name) && !IsGeneratedFeedArtifactName(name) {
+			return result, fmt.Errorf("list inventory contains unrelated entries; preserve it for explicit recovery")
+		}
+	}
+	if len(names) > len(expectedNames)+maximumGeneratedFeedArtifacts {
+		return result, fmt.Errorf("generated feed inventory exceeds its bound")
+	}
+	if err := validateGeneratedFeedInventory(names); err != nil {
+		return result, err
+	}
+	for _, name := range expectedNames {
+		if !slices.Contains(names, name) {
+			return result, fmt.Errorf("list inventory includes missing or unrelated entries; preserve it for explicit recovery")
+		}
 	}
 	digest := sha256.New()
 	for _, name := range names {
@@ -110,7 +127,11 @@ func inspectGeneratedListDirectory(directory *pinnedServiceDirectory) (retainedD
 		if err != nil || before.Mode().Perm() != 0600 {
 			return result, fmt.Errorf("generated list entry must be private")
 		}
-		content, err := readRetirementCandidateBounded(directory, name, before, 16<<20)
+		limit := int64(16 << 20)
+		if IsGeneratedFeedArtifactName(name) {
+			limit = MaximumGeneratedFeedBytes
+		}
+		content, err := readRetirementCandidateBounded(directory, name, before, limit)
 		if err != nil {
 			return result, err
 		}
@@ -118,14 +139,20 @@ func inspectGeneratedListDirectory(directory *pinnedServiceDirectory) (retainedD
 		if err != nil {
 			return result, err
 		}
-		if isGeneratedListName(name) {
+		if isGeneratedListName(name) || IsGeneratedFeedArtifactName(name) {
 			file, err := directory.root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 			if err != nil {
 				return result, err
 			}
 			opened, statErr := file.Stat()
 			openedIdentity, identityErr := exactRemovalArtifactIdentity(opened)
-			owned, originErr := HasGeneratedListOrigin(file, name, sha256.Sum256(content))
+			var owned bool
+			var originErr error
+			if isGeneratedListName(name) {
+				owned, originErr = HasGeneratedListOrigin(file, name, sha256.Sum256(content))
+			} else {
+				owned, originErr = HasGeneratedFeedArtifactOrigin(file, name, sha256.Sum256(content))
+			}
 			closeErr := file.Close()
 			if statErr != nil || identityErr != nil || openedIdentity != identity || originErr != nil || closeErr != nil || !owned {
 				return result, fmt.Errorf("list %s lacks exact generated-content provenance; preserve administrator input and inspect explicit recovery", name)

@@ -84,7 +84,11 @@ func inspectLegacyDataDirectory(directory *pinnedServiceDirectory, syncData bool
 	if err != nil {
 		return snapshot, plan, err
 	}
-	if len(entries) == 0 || len(entries) > len(profile.names) {
+	maximum := len(profile.names)
+	if profile.backupKind == "legacy-lists" {
+		maximum += maximumGeneratedFeedArtifacts
+	}
+	if len(entries) == 0 || len(entries) > maximum {
 		return snapshot, plan, fmt.Errorf("legacy data inventory is empty or includes unrelated entries")
 	}
 	names := make([]string, 0, len(entries))
@@ -92,9 +96,17 @@ func inspectLegacyDataDirectory(directory *pinnedServiceDirectory, syncData bool
 		names = append(names, entry.Name())
 	}
 	slices.Sort(names)
+	if profile.backupKind == "legacy-lists" {
+		if err := validateGeneratedFeedInventory(names); err != nil {
+			return snapshot, plan, err
+		}
+	}
 	unmarked := 0
 	for _, name := range names {
 		kind, allowed := profile.names[name]
+		if !allowed && profile.backupKind == "legacy-lists" && IsGeneratedFeedArtifactName(name) {
+			kind, allowed = "feed", true
+		}
 		if !allowed {
 			return snapshot, plan, fmt.Errorf("unrecognized legacy data entry must remain untouched: %q", name)
 		}

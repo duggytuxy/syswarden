@@ -307,19 +307,26 @@ func TestRemovalEntryPointsKeepServicesUntilRuntimeHistoryRetirement(t *testing.
 	priorUI := retireCreatedUISnapshotsForRemoval
 	t.Cleanup(func() { retireCreatedUISnapshotsForRemoval = priorUI })
 	priorHistory, priorServices, priorErase := retireRuntimeHistoryForRemoval, removePreparedServiceArtifacts, attestRuntimeRetirementBeforeNativeErase
+	priorReceipt := removeEmptyFirewallWrapperStateForRemoval
 	t.Cleanup(func() {
 		removeOwnedIntegrationArtifactsForRemoval = priorIntegration
 		retireRuntimeHistoryForRemoval, removePreparedServiceArtifacts, attestRuntimeRetirementBeforeNativeErase = priorHistory, priorServices, priorErase
+		removeEmptyFirewallWrapperStateForRemoval = priorReceipt
 	})
 	removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
 		return integration.RsyslogPackageRemovalOfflineAlreadyComplete, nil
 	}
 	sentinel := errors.New("synthetic unresolved runtime history")
-	retireRuntimeHistoryForRemoval = func() error { return sentinel }
+	retireRuntimeHistoryForRemoval = func() error { return nil }
+	removeEmptyFirewallWrapperStateForRemoval = func() error { return sentinel }
 	retireCreatedProductLogsForRemoval = func() error { return nil }
 	forbidden := func() error { t.Fatal("runtime history lost its recovery resources"); return nil }
 	removePreparedServiceArtifacts, attestRuntimeRetirementBeforeNativeErase = forbidden, forbidden
-	for _, stage := range []string{"history", "ui", "logs", "lists"} {
+	for _, stage := range []string{"receipt", "history", "ui", "logs", "lists"} {
+		if stage == "history" {
+			retireRuntimeHistoryForRemoval = func() error { return sentinel }
+			removeEmptyFirewallWrapperStateForRemoval = func() error { t.Fatal("history refusal crossed the receipt boundary"); return nil }
+		}
 		if stage == "ui" {
 			retireRuntimeHistoryForRemoval = func() error { t.Fatal("snapshot refusal crossed the history boundary"); return nil }
 			retireCreatedUISnapshotsForRemoval = func() error { return sentinel }

@@ -47,6 +47,7 @@ var retireRuntimeHistoryForRemoval = firewall.RetireRuntimeHistoryForRemoval
 var retireCreatedProductLogsForRemoval = system.RetireCreatedProductLogsForRemoval
 var retireGeneratedListsForRemoval = system.RetireGeneratedListsForRemoval
 var retireCreatedUISnapshotsForRemoval = system.RetireCreatedUISnapshotsForRemoval
+var removeEmptyFirewallWrapperStateForRemoval = system.RemoveEmptyFirewallWrapperStateForRemoval
 
 func prepareVerifiedFirewallRemoval() error {
 	if err := preflightKnownNFTPersistenceForRemoval(); err != nil {
@@ -158,7 +159,7 @@ func prepareVerifiedFirewallRemoval() error {
 		return fmt.Errorf("persistent firewall recovery remains incomplete; prepared services, the product executable and the durable removal barrier are retained: %w", err)
 	}
 	if err := retireGeneratedListsForRemoval(); err != nil {
-		return fmt.Errorf("generated list retirement remains incomplete; preserve administrator input, the CLI and the removal barrier: %w", err)
+		return fmt.Errorf("generated list retirement remains incomplete; preserve administrator input, the CLI and the removal barrier; inspect unmarked legacy files with 'sudo syswarden recover-removal --retain-legacy-lists': %w", err)
 	}
 	if err := retireCreatedProductLogsForRemoval(); err != nil {
 		return fmt.Errorf("product log retirement remains incomplete; preserve the CLI and removal barrier; inspect legacy log retention with 'sudo syswarden recover-removal --retain-legacy-logs': %w", err)
@@ -168,6 +169,9 @@ func prepareVerifiedFirewallRemoval() error {
 	}
 	if err := retireRuntimeHistoryForRemoval(); err != nil {
 		return fmt.Errorf("runtime history retirement remains incomplete; preserve the CLI and removal barrier: %w", err)
+	}
+	if err := removeEmptyFirewallWrapperStateForRemoval(); err != nil {
+		return fmt.Errorf("compatibility receipt retirement remains incomplete; preserve the CLI and removal barrier: %w", err)
 	}
 	if err := removePristineDefaultConfigurationForRemoval(); err != nil {
 		return fmt.Errorf("default configuration retirement remains incomplete; preserve the CLI and removal barrier: %w", err)

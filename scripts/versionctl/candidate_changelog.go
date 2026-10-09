@@ -40,12 +40,24 @@ var approvedCandidateChangelogV4104 = candidateChangelogPolicy{
 	HistorySHA256:   "6c403f15b332d5b201a986a3554ea91ebd35308c710737a18096739298e1f2bd",
 }
 
+var approvedCandidateChangelogV4104Removal = candidateChangelogPolicy{
+	ParentSHA:       "6ed6a52d021fc399bc18a4b913ae037c728a8ed1",
+	Version:         "v4.10.4",
+	Subject:         "Fix : complete v4.10.4 native removal corrections",
+	BaseSHA256:      "cfdf9aed98c78348ad1ef41069b5109a90b6de7f38b1663af9976a68315cac5d",
+	CandidateSHA256: "fe62e55f5d43b109b672c040a0e3729127c84a282f57efc4f5603df62331d74b",
+	HistorySHA256:   "6c403f15b332d5b201a986a3554ea91ebd35308c710737a18096739298e1f2bd",
+}
+
 var githubSquashSuffix = regexp.MustCompile(` \(#[1-9][0-9]{0,9}\)$`)
 var fullSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (app application) candidateChangelogPolicy(parentSHA string) candidateChangelogPolicy {
 	if app.candidateFollowupPolicy != nil {
 		return *app.candidateFollowupPolicy
+	}
+	if parentSHA == approvedCandidateChangelogV4104Removal.ParentSHA {
+		return approvedCandidateChangelogV4104Removal
 	}
 	if parentSHA == approvedCandidateChangelogV4104.ParentSHA {
 		return approvedCandidateChangelogV4104

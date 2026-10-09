@@ -225,3 +225,19 @@ func TestCandidateChangelogV4104PolicyIsBoundToItsOwnParent(t *testing.T) {
 		t.Fatal("v4.10.4 correction was selected for an unrelated parent")
 	}
 }
+
+func TestCandidateChangelogV4104RemovalPolicyCannotReplayEarlierCorrections(t *testing.T) {
+	app := application{}
+	policy := app.candidateChangelogPolicy("6ed6a52d021fc399bc18a4b913ae037c728a8ed1")
+	if policy != approvedCandidateChangelogV4104Removal || policy.Subject != "Fix : complete v4.10.4 native removal corrections" ||
+		policy.Version != "v4.10.4" || policy.BaseSHA256 != approvedCandidateChangelogV4104.CandidateSHA256 ||
+		policy.CandidateSHA256 != "fe62e55f5d43b109b672c040a0e3729127c84a282f57efc4f5603df62331d74b" ||
+		policy.HistorySHA256 != approvedCandidateChangelogV4104.HistorySHA256 {
+		t.Fatal("native removal change record differs from its bounded policy")
+	}
+	for _, parent := range []string{approvedCandidateChangelog.ParentSHA, approvedCandidateChangelogV4104.ParentSHA, strings.Repeat("f", 40)} {
+		if app.candidateChangelogPolicy(parent) == policy {
+			t.Fatal("native removal correction was selected for another parent")
+		}
+	}
+}

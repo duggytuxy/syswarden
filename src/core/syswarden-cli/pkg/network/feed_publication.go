@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"syswarden-cli/pkg/system"
 	"time"
 )
 
 const (
 	feedSnapshotMarker         = ".syswarden-snapshot-"
-	maximumFeedSnapshotEntries = 8
+	maximumFeedSnapshotEntries = system.MaximumGeneratedFeedSnapshots
 )
 
 // FeedProvenanceStatus is the bounded public view of an active feed snapshot.
@@ -237,6 +239,27 @@ func cleanupFeedSnapshotsInDirectory(directory *os.Root, target feedFileTarget, 
 		}
 		if _, retained := keepSet[entry.Name()]; retained {
 			continue
+		}
+		if !system.IsGeneratedFeedArtifactName(entry.Name()) {
+			continue
+		}
+		// A digest-shaped name alone does not authorize deletion. Older
+		// unmarked generations remain available for explicit private retention.
+		file, err := directory.OpenFile(entry.Name(), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return err
+		}
+		opened, statErr := file.Stat()
+		owned, originErr := system.HasGeneratedFeedArtifactOrigin(file, entry.Name(), identity.digest)
+		closeErr := file.Close()
+		if statErr != nil || originErr != nil || closeErr != nil || !sameFeedFileState(identity, opened, identity.digest) {
+			return errors.Join(fmt.Errorf("historical feed origin changed during inspection"), statErr, originErr, closeErr)
+		}
+		if !owned {
+			continue
+		}
+		if err := verifyFeedDestination(directory, feedFileTarget{directory: target.directory, name: entry.Name()}, identity, true); err != nil {
+			return err
 		}
 		if err := directory.Remove(entry.Name()); err != nil {
 			return fmt.Errorf("remove historical feed snapshot: %w", err)

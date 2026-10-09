@@ -394,10 +394,10 @@ func runNFTRuntimeRetirementLiveFixture(t *testing.T, owned, sessionMode bool) {
 		}
 		ops := defaultLegacyRetirementFileOps()
 		if index == 7 {
-			// A real administrator change after durable intent must invalidate
+			// A real administrator change after live inspection must invalidate
 			// the kernel generation instead of being deleted with the table.
 			ops.checkpoint = func(phase string) error {
-				if phase == "kernel-retirement-intent-durable" {
+				if phase == "kernel-retirement-inspected" {
 					nft(nil, "add", "rule", "inet", "syswarden", "docker_protect", "counter")
 				}
 				return nil
