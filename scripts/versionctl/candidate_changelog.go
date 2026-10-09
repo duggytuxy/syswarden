@@ -58,12 +58,24 @@ var approvedCandidateChangelogV4104LegacyConfig = candidateChangelogPolicy{
 	HistorySHA256:   "6c403f15b332d5b201a986a3554ea91ebd35308c710737a18096739298e1f2bd",
 }
 
+var approvedCandidateChangelogV4104RemovalRetry = candidateChangelogPolicy{
+	ParentSHA:       "063848c5b0cfdd0e85ad980e4eb2dd07c0464565",
+	Version:         "v4.10.4",
+	Subject:         "Fix : complete v4.10.4 removal retry boundaries",
+	BaseSHA256:      "dd2add8148e26fc5043a571431ef4767de502ee568fc1b2201cf2993b780d063",
+	CandidateSHA256: "21f396beff5f5bbe7f94be51e349f6e98285d6c45d911fe6be27715130baba43",
+	HistorySHA256:   "6c403f15b332d5b201a986a3554ea91ebd35308c710737a18096739298e1f2bd",
+}
+
 var githubSquashSuffix = regexp.MustCompile(` \(#[1-9][0-9]{0,9}\)$`)
 var fullSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (app application) candidateChangelogPolicy(parentSHA string) candidateChangelogPolicy {
 	if app.candidateFollowupPolicy != nil {
 		return *app.candidateFollowupPolicy
+	}
+	if parentSHA == approvedCandidateChangelogV4104RemovalRetry.ParentSHA {
+		return approvedCandidateChangelogV4104RemovalRetry
 	}
 	if parentSHA == approvedCandidateChangelogV4104LegacyConfig.ParentSHA {
 		return approvedCandidateChangelogV4104LegacyConfig

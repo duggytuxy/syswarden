@@ -254,3 +254,16 @@ func TestCandidateChangelogV4104LegacyConfigPolicyIsBoundToItsReviewedParent(t *
 		}
 	}
 }
+
+func TestCandidateChangelogV4104RemovalRetryPolicyIsBoundToItsReviewedParent(t *testing.T) {
+	app := application{}
+	policy := app.candidateChangelogPolicy("063848c5b0cfdd0e85ad980e4eb2dd07c0464565")
+	if policy != approvedCandidateChangelogV4104RemovalRetry || policy.Subject != "Fix : complete v4.10.4 removal retry boundaries" || policy.Version != "v4.10.4" || policy.BaseSHA256 != approvedCandidateChangelogV4104LegacyConfig.CandidateSHA256 || policy.CandidateSHA256 != "21f396beff5f5bbe7f94be51e349f6e98285d6c45d911fe6be27715130baba43" || policy.HistorySHA256 != approvedCandidateChangelogV4104LegacyConfig.HistorySHA256 {
+		t.Fatal("removal retry correction differs from its sealed policy")
+	}
+	for _, parent := range []string{approvedCandidateChangelog.ParentSHA, approvedCandidateChangelogV4104.ParentSHA, approvedCandidateChangelogV4104Removal.ParentSHA, approvedCandidateChangelogV4104LegacyConfig.ParentSHA, strings.Repeat("f", 40)} {
+		if app.candidateChangelogPolicy(parent) == policy {
+			t.Fatal("removal retry correction replayed on another parent")
+		}
+	}
+}

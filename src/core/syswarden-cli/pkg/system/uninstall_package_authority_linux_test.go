@@ -103,3 +103,79 @@ func TestStandaloneUninstallRejectsConflictingNativeManagers(t *testing.T) {
 		t.Fatalf("conflicting claims: %v", err)
 	}
 }
+
+func TestUninstallAllowsOnlyExactlyAttestedSingleRPMProfile(t *testing.T) {
+	sentinel := errors.New("modified RPM profile")
+	for _, test := range []struct {
+		name       string
+		managers   []string
+		present    bool
+		profileErr error
+		queryErr   error
+		wantCall   bool
+		wantError  bool
+	}{
+		{name: "exact optional profile", managers: []string{"rpm"}, present: true, wantCall: true},
+		{name: "ordinary RPM", managers: []string{"rpm"}, wantCall: true, wantError: true},
+		{name: "modified profile", managers: []string{"rpm"}, present: true, profileErr: sentinel, wantCall: true, wantError: true},
+		{name: "multiple managers", managers: []string{"rpm", "apk"}, present: true, wantError: true},
+		{name: "DEB cannot use RPM authority", managers: []string{"dpkg-query"}, present: true, wantError: true},
+		{name: "failed package query", managers: []string{"rpm"}, present: true, queryErr: sentinel, wantError: true},
+		{name: "standalone", managers: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			executor := testFirewallRemovalPackageExecutor(t, test.managers, func(path string, _ ...string) ([]byte, error) {
+				if test.queryErr != nil {
+					return nil, test.queryErr
+				}
+				switch filepath.Base(path) {
+				case "rpm":
+					return []byte("syswarden\n"), nil
+				case "dpkg-query":
+					return []byte("syswarden\tinstalled\n"), nil
+				default:
+					return nil, nil
+				}
+			})
+			err := preflightUninstallWithProfile(executor, func(string) (bool, error) { return false, nil }, func() (bool, error) { called = true; return test.present, test.profileErr })
+			if called != test.wantCall || (err != nil) != test.wantError {
+				t.Fatalf("profile inspection=%v error=%v", called, err)
+			}
+			if test.profileErr != nil && !errors.Is(err, sentinel) {
+				t.Fatal("profile failure lost its cause")
+			}
+		})
+	}
+}
+
+func TestUninstallCompletionPreservesRPMOwnedPayload(t *testing.T) {
+	sentinel := errors.New("ownership changed")
+	for _, test := range []struct {
+		name          string
+		present       bool
+		profileErr    error
+		standaloneErr error
+		wantDelete    bool
+		wantError     bool
+	}{
+		{name: "RPM payload", present: true},
+		{name: "standalone", wantDelete: true},
+		{name: "profile ambiguity", profileErr: sentinel, wantError: true},
+		{name: "package appeared before deletion", standaloneErr: sentinel, wantDelete: true, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			err := removeUninstallCompletionPayloadWith("exact completion", func() (bool, error) { return test.present, test.profileErr }, func(content string) error {
+				called = true
+				if content != "exact completion" {
+					t.Fatal("completion changed")
+				}
+				return test.standaloneErr
+			})
+			if called != test.wantDelete || (err != nil) != test.wantError {
+				t.Fatalf("standalone removal=%v error=%v", called, err)
+			}
+		})
+	}
+}

@@ -555,9 +555,9 @@
     {
       "path": "syswarden uninstall",
       "field": "long",
-      "reason": "Enforce native package removal authority before destructive cleanup and state the standalone removal limits.",
+      "reason": "Explain verified standalone removal, standard native package authority and the separately attested optional RPM runtime-only first phase.",
       "before": "",
-      "after": "Removes a standalone installation after verified cleanup. Native package installations must be removed through their package manager to preserve package database consistency. This destructive operation does not restore every prior host setting."
+      "after": "Removes a standalone installation after verified cleanup. Standard native packages require their package manager. An exactly attested optional RHEL package-owned profile permits runtime preparation only; RPM then removes its preserved payload. This operation does not restore every prior host setting."
     },
     {
       "path": "syswarden uninstall",

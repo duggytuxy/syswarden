@@ -145,6 +145,7 @@ jobs:
             -v
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
             extensions/rhel-package-owned/tests/test_stage.py \
+            extensions/rhel-package-owned/tests/test_retention.py \
             -v
 
       - name: Validate and Export Version Contract

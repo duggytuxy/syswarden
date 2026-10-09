@@ -73,6 +73,17 @@ binaries. Both directories use nonrecursive `rmdir` after metadata and mount
 checks. An extra file, child directory, link or mounted path still stops
 finalization and keeps the removal barrier for recovery.
 
+The v4.10.4 candidate can also resume orphaned WireGuard retirement after a
+native manager removes `wireguard-tools` despite a refused product erase.
+This fallback applies only after the removal path has prepared product services
+and independently established that no WireGuard ownership artifact remains.
+It requires two complete, successful systemd inspections of the exact missing
+unit, with no active process, queued job, unit fragment or drop-in, and two
+independent kernel interface inventories without `wg-syswarden`. A missing
+command is never itself evidence of absence. OpenRC, manifest-owned state and
+the exact tokenized nftables ownership boundary keep their existing checks.
+Active, partial, changing or unreadable evidence preserves the removal barrier.
+
 ## Historical recovery boundaries
 
 `recover-removal` separates inspection from an application authorized by the
@@ -478,3 +489,30 @@ independent installation and record all of the following:
 An isolated container restart is useful integration evidence. It does not
 replace the final hardened-host reboot. Component tests, native rehearsal and
 protected Patch IVV must each retain their actual scope and candidate identity.
+
+## Optional RPM runtime preparation and retry
+
+The explicit package-owned RHEL profile uses two phases: `syswarden uninstall`
+retires runtime state, then the native package manager erases its payload.
+The runtime entry point first verifies the exact installed profile, RPM
+ownership, immutable payload and service state. It leaves the package-owned
+binaries, launchers and completion file for RPM. Standard native packages
+continue to require their package manager for removal.
+
+Archival preserves the original list, log and UI directory inodes in private
+recovery storage. During removal only, the verifier can recognize the absence
+of those three exact RPM-owned directories under a valid removal barrier.
+It can also recover an empty root-owned `0700` skeleton after an interrupted
+creation. It rejects every other RPM verification deviation. Before authorizing
+erase it restores empty `0750` directories through pinned parent descriptors,
+independently of a restrictive caller umask. Activation still requires the
+complete installed directory tree.
+
+The documented operator module and explicitly retained TOML files remain at
+their original paths. Runtime preparation and the RPM PREUN and POSTUN helpers
+validate the same bounded retention authority. Later administrator edits do
+not authorize deletion. Unknown entries, unsafe metadata and altered retention
+records prevent finalization and preserve the recovery boundary. Empty product
+directories are removed after payload erase; directories needed by retained
+administrator configuration remain. The package helpers never execute a
+SysWarden product binary.

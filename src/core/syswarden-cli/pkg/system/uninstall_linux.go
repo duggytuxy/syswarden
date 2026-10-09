@@ -84,8 +84,8 @@ func productionFirewallRemovalPreparationHost() firewallRemovalPreparationHost {
 		resolveWireGuardExe:        resolveWireGuardRemovalExecutable,
 		wireGuardInterface:         inspectWireGuardRemovalInterface,
 		attestSystemdUnit:          attestSystemdFirewallRemovalUnitFile,
-		attestRHELPackageOwned:     attestInstalledRHELPackageOwnedProfile,
-		attestRHELPackageUnit:      attestRHELPackageOwnedUnit,
+		attestRHELPackageOwned:     attestInstalledRHELPackageOwnedProfileForRemoval,
+		attestRHELPackageUnit:      attestRHELPackageOwnedUnitForRemoval,
 		attestSystemdDropIns:       attestSystemdRemovalDropIns,
 		attestOpenRCUnit:           attestOpenRCFirewallRemovalUnit,
 		openRCUnitPresent:          inspectOpenRCFirewallRemovalUnitPresence,
@@ -930,7 +930,7 @@ func PrepareFirewallStateForRemoval() error {
 	rhelPackageOwned := false
 	if !IsAlpine() {
 		var err error
-		rhelPackageOwned, err = attestInstalledRHELPackageOwnedProfile()
+		rhelPackageOwned, err = attestInstalledRHELPackageOwnedProfileForRemoval()
 		if err != nil {
 			return fmt.Errorf("attest RHEL package-owned profile before service preparation: %w", err)
 		}
@@ -966,7 +966,7 @@ func UninstallSystem() error {
 	rhelPackageOwned := false
 	if !IsAlpine() {
 		var err error
-		rhelPackageOwned, err = attestInstalledRHELPackageOwnedProfile()
+		rhelPackageOwned, err = attestInstalledRHELPackageOwnedProfileForRemoval()
 		if err != nil {
 			return fmt.Errorf("attest RHEL package-owned profile before host removal: %w", err)
 		}
@@ -1005,7 +1005,7 @@ func UninstallSystem() error {
 
 	fmt.Println("[WARN] Starting verified SysWarden host removal...")
 	if rhelPackageOwned {
-		present, err := attestInstalledRHELPackageOwnedProfile()
+		present, err := attestInstalledRHELPackageOwnedProfileForRemoval()
 		if err != nil || !present {
 			return errors.Join(
 				fmt.Errorf("RHEL package-owned payload changed before runtime cleanup"), err,
@@ -1015,7 +1015,7 @@ func UninstallSystem() error {
 			return fmt.Errorf("prepare RHEL package-owned payload for RPM erase: %w", err)
 		}
 		fmt.Println("[READY] Verified runtime state is removed and the exact RPM payload is preserved.")
-		fmt.Println("[ACTION] Complete removal with: rpm -e syswarden-4.10.0-1.rhelpo.x86_64")
+		fmt.Printf("[ACTION] Complete removal with: rpm -e syswarden-%s-1.rhelpo.x86_64\n", rhelPackageOwnedRPMVersion)
 		return nil
 	}
 
