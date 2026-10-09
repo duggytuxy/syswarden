@@ -5,6 +5,22 @@
 
 ### FIXED
 
+- **Native removal on RHEL-family hosts:** Recognize the standard nftables
+  loader's exact reload form and pinned executable path. Create a missing
+  recovery-backup parent through its trusted parent descriptor without
+  changing existing shared storage. Retire only the exact empty compatibility
+  receipt after its permissions have been reconciled. Finalize an empty binary
+  directory left by the native manager before removing its product parent;
+  preserve unexpected entries and the removal barrier on refusal.
+- **Bounded firewall retirement:** Synchronize the kernel removal intent before
+  opening the short-lived generation fence. Recheck live ownership, producer
+  state and the exact durable intent without extending the timeout or weakening
+  protection against concurrent changes.
+- **Generated feed retirement:** Bind newly published feed artifacts to their
+  inode, creation time and content. Preserve that authority only across proven
+  writer replacements. Retain old unmarked generations until the operator
+  approves their exact private backup; never infer ownership from a filename.
+  Keep publication and retirement size and generation limits consistent.
 - **Release toolchain security:** Require Go 1.26.9 for production builds and
   package provenance, including its October 2026 standard-library security
   fixes. Preserve historical compiler evidence and reject older or unreviewed

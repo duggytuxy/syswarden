@@ -136,8 +136,8 @@ func readLegacyFail2banPlan(host nftPersistenceFilesystem, digest string) (legac
 	return record, nil
 }
 
-// Only the private subtree is created. The shared /var/backups parent must
-// already be trusted. Existing directories are verified, never chmodded or
+// The private subtree and an absent shared backup parent are created only
+// during application. Existing directories are verified, never chmodded or
 // adopted from unsafe metadata. Every directory and parent are synced even
 // when retrying a creation whose previous sync may have failed.
 func ensureLegacyRetirementPrivateDirectory(host nftPersistenceFilesystem, path string, ops legacyRetirementFileOps) error {
@@ -151,6 +151,10 @@ func prepareLegacyRetirementPrivateDirectory(host nftPersistenceFilesystem, path
 	parentPath := filepath.Dir(path)
 	if parentPath != "/var/backups" {
 		if err := prepareLegacyRetirementPrivateDirectory(host, parentPath, ops, create); err != nil {
+			return err
+		}
+	} else if create {
+		if err := ensureLegacyRetirementBackupParent(host, ops); err != nil {
 			return err
 		}
 	}

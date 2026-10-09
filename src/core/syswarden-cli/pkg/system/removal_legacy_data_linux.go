@@ -62,7 +62,11 @@ func inspectLegacyDataFile(directory *pinnedServiceDirectory, name, kind string,
 	if err != nil || before.Mode().Perm() != 0600 {
 		return identity, "", false, fmt.Errorf("legacy data must have private metadata")
 	}
-	content, err := readRetirementCandidateBounded(directory, name, before, 16<<20)
+	limit := int64(16 << 20)
+	if kind == "feed" {
+		limit = MaximumGeneratedFeedBytes
+	}
+	content, err := readRetirementCandidateBounded(directory, name, before, limit)
 	if err != nil {
 		return identity, "", false, err
 	}
@@ -92,6 +96,9 @@ func inspectLegacyDataFile(directory *pinnedServiceDirectory, name, kind string,
 		if kind == "list" || kind == "saas-cache" {
 			attribute = generatedListOriginAttribute
 		}
+		if kind == "feed" {
+			attribute = generatedFeedOriginAttribute
+		}
 		var marker [512]byte
 		_, originErr := unix.Fgetxattr(int(file.Fd()), attribute, marker[:])
 		if originErr == nil {
@@ -101,7 +108,9 @@ func inspectLegacyDataFile(directory *pinnedServiceDirectory, name, kind string,
 			if kind == "saas-cache" {
 				return identity, "", false, fmt.Errorf("legacy SaaS retention cannot override an unsupported creation marker")
 			}
-			if kind == "list" {
+			if kind == "feed" {
+				proven, err = HasGeneratedFeedArtifactOrigin(file, name, digest)
+			} else if kind == "list" {
 				proven, err = HasGeneratedListOrigin(file, name, digest)
 			} else {
 				checked, _, checkErr := inspectCreatedProductSnapshot(directory, name, kind, false)

@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	linuxWrapperStateVersion       = "syswarden-firewall-wrappers-v3"
+	linuxWrapperStateVersion       = system.FirewallWrapperStateVersion
 	zonedLinuxWrapperStateVersion  = "syswarden-firewall-wrappers-v2"
 	legacyLinuxWrapperStateVersion = "syswarden-firewall-wrappers-v1"
 	firewalldSourceZone            = "trusted"

@@ -84,6 +84,18 @@ probe. Existing-tag refusal, version preservation, review and all release
 gates still apply. Any further change requires a separately reviewed policy;
 this does not grant general permission to edit candidate history.
 
+### Sealed native-removal follow-up
+
+A separate v4.10.4 policy permits only the immediate child of
+`6ed6a52d021fc399bc18a4b913ae037c728a8ed1` with subject
+`Fix : complete v4.10.4 native removal corrections`, optionally followed by
+GitHub's numeric squash suffix. Its exact before and after changelog hashes
+record the RHEL loader, durable retirement, generated feed and empty receipt
+corrections. The entire historical suffix is unchanged. This narrowly bound
+policy does not replace either earlier policy or permit replay on another
+parent. Existing-tag refusal, unchanged version, review and fresh release
+checks remain mandatory.
+
 ## Workflow coverage ledger
 
 Every workflow must be classified before a release PR is pushed. A local PASS

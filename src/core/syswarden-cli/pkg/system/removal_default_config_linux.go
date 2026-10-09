@@ -131,7 +131,7 @@ func readDefaultRetirementCandidate(parent *pinnedServiceDirectory, name string,
 }
 
 func readRetirementCandidateBounded(parent *pinnedServiceDirectory, name string, before os.FileInfo, limit int64) ([]byte, error) {
-	if limit < 1 || limit > 16<<20 {
+	if limit < 1 || limit > MaximumGeneratedFeedBytes {
 		return nil, fmt.Errorf("retirement candidate read limit is invalid")
 	}
 	identity, err := exactRemovalArtifactIdentity(before)

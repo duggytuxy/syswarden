@@ -19,6 +19,7 @@ func init() {
 	attestRuntimeRetirementBeforeNativeErase = func() error { return nil }
 	removePristineDefaultConfigurationForRemoval = func() error { return nil }
 	retireRuntimeHistoryForRemoval = func() error { return nil }
+	removeEmptyFirewallWrapperStateForRemoval = func() error { return nil }
 	retireCreatedProductLogsForRemoval = func() error { return nil }
 	retireGeneratedListsForRemoval = func() error { return nil }
 	retireCreatedUISnapshotsForRemoval = func() error { return nil }
