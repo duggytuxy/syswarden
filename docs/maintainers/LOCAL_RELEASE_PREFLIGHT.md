@@ -96,6 +96,16 @@ policy does not replace either earlier policy or permit replay on another
 parent. Existing-tag refusal, unchanged version, review and fresh release
 checks remain mandatory.
 
+## Sealed v4.10.4 inactive configuration correction
+
+The unpublished change record may be completed after reviewed commit
+`9e82ceb01bd334795046c0c4c18b749d1447625e` with the exact subject
+`Fix : retain inactive v4.10.4 configuration backups`, optionally followed by
+GitHub's numeric squash suffix. Its separate policy binds that parent, unchanged
+version, complete before and after digests, and unchanged historical suffix.
+Earlier correction policies and published release records remain immutable.
+This correction requires fresh reviewed signatures and native IVV.
+
 ## Workflow coverage ledger
 
 Every workflow must be classified before a release PR is pushed. A local PASS

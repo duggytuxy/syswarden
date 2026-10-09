@@ -5,6 +5,12 @@
 
 ### FIXED
 
+- **Inactive legacy configuration retention:** Add exact, operator-reviewed
+  private archival of migration backups that otherwise block native erase.
+  Preserve original bytes and inodes, keep active administrator configuration
+  untouched, resume verified interrupted moves and reject changed evidence.
+  Maintain the final removal barrier until every remaining artifact has a
+  separate verified outcome.
 - **Native removal on RHEL-family hosts:** Recognize the standard nftables
   loader's exact reload form and pinned executable path. Create a missing
   recovery-backup parent through its trusted parent descriptor without

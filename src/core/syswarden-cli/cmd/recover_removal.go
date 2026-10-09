@@ -12,6 +12,9 @@ import (
 var inspectOperatorConfigurationRetention = system.InspectOperatorConfigurationRetention
 var applyOperatorConfigurationRetention = system.ApplyOperatorConfigurationRetention
 
+var inspectLegacyConfigRetention = system.InspectLegacyConfigRetention
+var applyLegacyConfigRetention = system.ApplyLegacyConfigRetention
+
 var inspectLegacyLogRetention = system.InspectLegacyLogRetention
 var applyLegacyLogRetention = system.ApplyLegacyLogRetention
 var inspectLegacyDataRetention = system.InspectLegacyDataRetention
@@ -26,7 +29,7 @@ var inspectLegacyCronRetirement = system.InspectLegacyCronRetirement
 var applyLegacyCronRetirement = system.ApplyLegacyCronRetirement
 
 func newRecoverRemovalCommand() *cobra.Command {
-	var retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, retainOperatorConfig, retireHistoricalFirewall, confirmHistoricalInputs, preserveOperatorPolicy, exportOperatorPolicy, apply bool
+	var retainLegacyConfig, retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, retainOperatorConfig, retireHistoricalFirewall, confirmHistoricalInputs, preserveOperatorPolicy, exportOperatorPolicy, apply bool
 	var digest, fileDigest, historicalInputs string
 	var retireLegacyIPTables, preserveOperatorIPTables, confirmOperatorIPTables bool
 	command := &cobra.Command{
@@ -39,7 +42,7 @@ func newRecoverRemovalCommand() *cobra.Command {
 			for _, candidate := range []struct {
 				selected bool
 				kind     string
-			}{{retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}, {retireHistoricalFirewall, "historical-firewall-persistence"}, {retireLegacyIPTables, "historical-iptables"}, {preserveOperatorIPTables, "operator-iptables"}, {preserveOperatorPolicy, "operator-policy"}, {exportOperatorPolicy, "operator-policy-export"}} {
+			}{{retainLegacyConfig, "config"}, {retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}, {retireHistoricalFirewall, "historical-firewall-persistence"}, {retireLegacyIPTables, "historical-iptables"}, {preserveOperatorIPTables, "operator-iptables"}, {preserveOperatorPolicy, "operator-policy"}, {exportOperatorPolicy, "operator-policy-export"}} {
 				if candidate.selected {
 					if selection != "" {
 						return fmt.Errorf("select exactly one legacy retention inventory")
@@ -114,13 +117,17 @@ func newRecoverRemovalCommand() *cobra.Command {
 			var backup string
 			var err error
 			if apply {
-				if selection == "logs" {
+				if selection == "config" {
+					plan, backup, err = applyLegacyConfigRetention(digest)
+				} else if selection == "logs" {
 					plan, backup, err = applyLegacyLogRetention(digest)
 				} else {
 					plan, backup, err = applyLegacyDataRetention(selection, digest)
 				}
 			} else {
-				if selection == "logs" {
+				if selection == "config" {
+					plan, err = inspectLegacyConfigRetention()
+				} else if selection == "logs" {
 					plan, err = inspectLegacyLogRetention()
 				} else {
 					plan, err = inspectLegacyDataRetention(selection)
@@ -144,6 +151,10 @@ func newRecoverRemovalCommand() *cobra.Command {
 				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Legacy data retention completed. Private backup: %s\nResume the original native remove/purge or standalone uninstall command to finish remaining cleanup.\n", backup)
 				return err
 			}
+			if selection == "config" {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Dry run only. Confirm that the listed file is an inactive legacy configuration backup with no other consumer or producer. Applying moves this one original inode into a private archive without deleting its bytes. Active configuration remains untouched. Review other backups separately if reported by a later removal attempt. Apply with: sudo syswarden recover-removal --retain-legacy-config --apply --plan-sha256 %s\n", actual)
+				return err
+			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Dry run only. Confirm that every listed file is legacy SysWarden data with no other producer. All original bytes will be retained privately. After reviewing this exact inventory, apply with: sudo syswarden recover-removal --retain-legacy-%s --apply --plan-sha256 %s\n", selection, actual)
 			return err
 		},
@@ -157,6 +168,7 @@ func newRecoverRemovalCommand() *cobra.Command {
 	command.Flags().BoolVar(&retireLegacyIPTables, "retire-legacy-iptables", false, "Inspect exact historical IPv4 iptables rule retirement from independent original captures; preserve shared administrator rules")
 	command.Flags().BoolVar(&confirmHistoricalInputs, "confirm-historical-inputs", false, "Confirm original generation evidence and the declared preservation boundary when applying historical recovery")
 	command.Flags().BoolVar(&retainOperatorConfig, "retain-operator-config", false, "Review administrator configuration retention at its original paths across uninstall, remove and purge")
+	command.Flags().BoolVar(&retainLegacyConfig, "retain-legacy-config", false, "Inspect private archival of one operator-confirmed inactive legacy configuration backup")
 	command.Flags().BoolVar(&retainLegacyLogs, "retain-legacy-logs", false, "Inspect exact private retention of operator-confirmed legacy product logs")
 	command.Flags().BoolVar(&retainLegacyLists, "retain-legacy-lists", false, "Inspect exact private retention of operator-confirmed legacy lists")
 	command.Flags().BoolVar(&retainLegacyUI, "retain-legacy-ui", false, "Inspect exact private retention of operator-confirmed legacy UI snapshots")
