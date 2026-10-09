@@ -36,6 +36,15 @@ flush a shared ruleset or edit a package database to force completion.
 | Core runtime history | `pkg/runtimehistory`, `pkg/firewall/nft_removal_claims_*` | Active and retired claims match actual kernel state before private history archival. |
 | Generated host artifacts | `pkg/system/removal_*`, `syswarden-core/fileorigin` | Original identity and bytes are retained where required; unknown directory contents are never recursively adopted. |
 | Administrator configuration | `pkg/system/removal_operator_retention_*`, `cmd/recover_operator_configuration.go` | An explicit retention decision preserves reviewed TOML files at their original paths, including later administrator edits. |
+
+The v4.10.4 candidate also recognizes the standard RHEL-family nftables loader
+whose reload command contains a literal `flush ruleset; include` sequence.
+Inspection records its exact absolute include path without executing the
+command. It accepts `/sbin/nft` through a root-owned, stable `/sbin` link to
+`/usr/sbin` and binds the link identity and resolved executable. Other link
+targets, injected commands and changed evidence are refused. The shared
+persistence reader still rejects symlinks, and retirement never stops or
+reloads the shared nftables service.
 | Native finalization | `scripts/ci/package_removal_state.sh`, package scriptlets | No unretired product state is left behind; the documented administrator override and explicitly reviewed configuration survive. |
 
 ## Historical recovery boundaries
