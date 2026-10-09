@@ -49,12 +49,24 @@ var approvedCandidateChangelogV4104Removal = candidateChangelogPolicy{
 	HistorySHA256:   "6c403f15b332d5b201a986a3554ea91ebd35308c710737a18096739298e1f2bd",
 }
 
+var approvedCandidateChangelogV4104LegacyConfig = candidateChangelogPolicy{
+	ParentSHA:       "9e82ceb01bd334795046c0c4c18b749d1447625e",
+	Version:         "v4.10.4",
+	Subject:         "Fix : retain inactive v4.10.4 configuration backups",
+	BaseSHA256:      "fe62e55f5d43b109b672c040a0e3729127c84a282f57efc4f5603df62331d74b",
+	CandidateSHA256: "dd2add8148e26fc5043a571431ef4767de502ee568fc1b2201cf2993b780d063",
+	HistorySHA256:   "6c403f15b332d5b201a986a3554ea91ebd35308c710737a18096739298e1f2bd",
+}
+
 var githubSquashSuffix = regexp.MustCompile(` \(#[1-9][0-9]{0,9}\)$`)
 var fullSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (app application) candidateChangelogPolicy(parentSHA string) candidateChangelogPolicy {
 	if app.candidateFollowupPolicy != nil {
 		return *app.candidateFollowupPolicy
+	}
+	if parentSHA == approvedCandidateChangelogV4104LegacyConfig.ParentSHA {
+		return approvedCandidateChangelogV4104LegacyConfig
 	}
 	if parentSHA == approvedCandidateChangelogV4104Removal.ParentSHA {
 		return approvedCandidateChangelogV4104Removal

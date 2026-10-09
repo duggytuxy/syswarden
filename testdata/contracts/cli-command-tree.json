@@ -1053,6 +1053,13 @@
         "usage": "Review current protection before resuming only the remaining proven unused definitions; preserve original evidence"
       },
       {
+        "name": "retain-legacy-config",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect private archival of one operator-confirmed inactive legacy configuration backup"
+      },
+      {
         "name": "retain-legacy-lists",
         "type": "bool",
         "default": "false",

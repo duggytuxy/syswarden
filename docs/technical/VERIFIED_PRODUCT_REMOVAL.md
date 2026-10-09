@@ -315,6 +315,43 @@ be distinguished from an active product installation; they do not load rules or
 start services. Flat legacy configuration and arbitrary directory contents are
 outside this modular retention route.
 
+## Inactive legacy configuration backups
+
+This route is part of the unpublished v4.10.4 candidate. It requires fresh
+signed-package IVV and is not available in the published v4.10.3 CLI.
+
+A migrated flat configuration can leave a private `.bak` or `.migrated` file
+under `/opt/syswarden`. A familiar name does not establish product ownership.
+Removal preserves such a file and the recovery CLI until its retention is
+reviewed. For a removal already in progress, inspect:
+
+```sh
+sudo syswarden recover-removal --retain-legacy-config
+```
+
+This bounded route selects one inactive backup at a time from
+`syswarden-auto.conf.bak`, `syswarden-auto.conf.migrated` and
+`syswarden-auto.conf.migration_backup.migrated`. It excludes the active flat
+configuration and unfinished migration sources. Pending modular migration,
+active product services, links, shared inodes, unsafe permissions and files
+larger than 1 MiB prevent archival. Inspection prints metadata and an exact
+plan digest without exposing configuration values.
+
+Confirm independently that the selected file is an inactive legacy backup with
+no other consumer or producer. Apply with the same flag, `--apply` and the exact
+`--plan-sha256` from that dry run. The original inode and bytes move to a private
+`legacy-config-<digest>` directory under `/var/backups/syswarden-retired-v1`.
+The canonical plan is synchronized before the move. Recovery never overwrites
+an existing backup or copies across filesystems. A repeated application verifies
+the retained original; changed evidence or a recreated source stops recovery.
+
+Retry the original uninstall, remove or purge command. Another backup needs its
+own review. Active administrator configuration remains outside this archival
+operation, and customized TOML still uses `--retain-operator-config` to remain
+at its original path. The private archive is inactive recovery material, not a
+remaining product installation. Preserve its confidentiality and do not restore
+it automatically during a later installation.
+
 ## Independent administrator policy preservation
 
 Typed administrator ingress accepts in `modules/99-user.toml` can have active

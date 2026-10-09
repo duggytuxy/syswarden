@@ -241,3 +241,16 @@ func TestCandidateChangelogV4104RemovalPolicyCannotReplayEarlierCorrections(t *t
 		}
 	}
 }
+
+func TestCandidateChangelogV4104LegacyConfigPolicyIsBoundToItsReviewedParent(t *testing.T) {
+	app := application{}
+	policy := app.candidateChangelogPolicy("9e82ceb01bd334795046c0c4c18b749d1447625e")
+	if policy != approvedCandidateChangelogV4104LegacyConfig || policy.Subject != "Fix : retain inactive v4.10.4 configuration backups" || policy.Version != "v4.10.4" || policy.BaseSHA256 != approvedCandidateChangelogV4104Removal.CandidateSHA256 || policy.CandidateSHA256 != "dd2add8148e26fc5043a571431ef4767de502ee568fc1b2201cf2993b780d063" || policy.HistorySHA256 != approvedCandidateChangelogV4104Removal.HistorySHA256 {
+		t.Fatal("inactive configuration correction differs from its exact bounded policy")
+	}
+	for _, parent := range []string{approvedCandidateChangelog.ParentSHA, approvedCandidateChangelogV4104.ParentSHA, approvedCandidateChangelogV4104Removal.ParentSHA, strings.Repeat("f", 40)} {
+		if app.candidateChangelogPolicy(parent) == policy {
+			t.Fatal("inactive configuration correction replayed on an unrelated parent")
+		}
+	}
+}
