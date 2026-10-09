@@ -5,7 +5,6 @@ package firewall
 import (
 	"bytes"
 	"context"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -124,7 +123,7 @@ func TestNFTRHELLoaderRejectsUnsupportedAliasTargets(t *testing.T) {
 			if (err == nil) != allowed {
 				t.Fatal("incorrect executable alias boundary", err)
 			}
-			if allowed && (path != "/usr/sbin/nft" || alias == nil || alias.Target != target || alias.UID != uint32(os.Geteuid())) {
+			if allowed && (path != "/usr/sbin/nft" || alias == nil || alias.Target != target || alias.UID != host.expectedUID) {
 				t.Fatal("incomplete alias identity")
 			}
 		})
