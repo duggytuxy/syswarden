@@ -21,6 +21,9 @@ REVIEWED = {
     'v4.10.3': ('release_ivv_v4103', 'candidate_update_verify_v4103',
                '.github/workflows/release-ivv-v4103.yml',
                '0a0fa7e7669fe61c36b6ed84e27a42d71cc7063e'),
+    'v4.10.4': ('release_ivv_v4104', 'candidate_update_verify_v4104',
+               '.github/workflows/release-ivv-v4104.yml',
+               '0e966d409b6b9d19116597edee1feafad0c83688'),
 }
 
 

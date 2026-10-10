@@ -69,6 +69,8 @@ The existing frozen qualification contracts and their historical verdicts remain
 
 The separately versioned [v4.10.3 Patch plan](../qualification/INTERMEDIATE_ACCEPTANCE_V4.10.3.md) binds fresh signed-product observations for the actual historical updater, half-configured recovery, original VPN client continuity and filesystem device renumbering. Its protected producer and three independent publisher consumers preserve the earlier acceptance identities.
 
+The separately versioned [v4.10.4 Patch plan](../qualification/INTERMEDIATE_ACCEPTANCE_V4.10.4.md) binds fresh signed Debian migration and removal, AlmaLinux IPv6 renewal and native lifecycle, optional RPM recovery, bounded kernel performance and both final restorations. The previous accepted product retains its original identity. Public release references advance only after protected acceptance and downloaded asset verification.
+
 ## Read-only implementation
 
 `./scripts/versioning.sh release-track --repo . --tag v4.10.0` validates the same source, changelog and linear release history as `validate-release`, but also works before a tag is created. It emits JSON identifying the candidate, originating transition, prefix, track and intervening corrective commits. An existing tag must still resolve to HEAD. Historical versions before the existing v4.03.3 release-chain boundary remain outside this command; the v0 examples above illustrate version arithmetic.
