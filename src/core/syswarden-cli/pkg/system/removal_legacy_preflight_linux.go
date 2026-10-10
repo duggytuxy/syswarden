@@ -262,6 +262,27 @@ func attestStandaloneCompletionPayloadAbsent() error {
 	return nil
 }
 
+// RemoveUninstallCompletionPayload preserves the opt-in profile's RPM-owned
+// completion. Standalone deletion still requires independently absent package
+// registration, even if the profile changes between inspections.
+func RemoveUninstallCompletionPayload(content string) error {
+	return removeUninstallCompletionPayloadWith(content, attestInstalledRHELPackageOwnedProfileForRemoval, RemoveStandaloneCompletionPayload)
+}
+
+func removeUninstallCompletionPayloadWith(content string, attestProfile func() (bool, error), removeStandalone func(string) error) error {
+	if attestProfile == nil || removeStandalone == nil {
+		return fmt.Errorf("uninstall completion authority is unavailable")
+	}
+	present, err := attestProfile()
+	if err != nil {
+		return fmt.Errorf("attest completion payload authority: %w", err)
+	}
+	if present {
+		return nil
+	}
+	return removeStandalone(content)
+}
+
 // RemoveStandaloneCompletionPayload retires only the exact current completion
 // rendered by the running CLI. Package registration, a modified completion,
 // unsafe metadata or another hard link prevents deletion. The pinned

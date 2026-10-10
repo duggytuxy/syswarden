@@ -14,12 +14,12 @@ if [ "$1" -eq 0 ]; then
         printf '%s\n' 'RHEL package-owned post-uninstall recovery helper is absent.' >&2
         exit 1
     }
-    [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$helper")" = '0:0:700:1:9923' ] || {
+    [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$helper")" = '0:0:700:1:20541' ] || {
         printf '%s\n' 'RHEL package-owned post-uninstall recovery helper metadata is not exact.' >&2
         exit 1
     }
     [ "$(/usr/bin/sha256sum -- "$helper" | /usr/bin/awk '{print $1}')" = \
-        5e692aca3702e9fba749e91a1d35f30f69955ef7570c5e4f7e74bf01689f5676 ] || {
+        b4773497827abdaa6d9ab0ea23e5a05a71c316d590380b55b6cd0a7044887bb8 ] || {
         printf '%s\n' 'RHEL package-owned post-uninstall recovery helper content is not exact.' >&2
         exit 1
     }

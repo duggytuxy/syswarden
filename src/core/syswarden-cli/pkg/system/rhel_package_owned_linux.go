@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,6 +212,7 @@ type rhelPackageOwnedAttestationHost struct {
 	queryInstalled          func() ([]byte, error)
 	queryFileOwner          func(string) ([]byte, error)
 	verifyInstalledPayload  func() ([]byte, error)
+	removalBarrier          func() error
 	attestRecoveryTemporary func(
 		*pinnedServiceDirectory, string, string, uint32, uint32,
 	) (os.FileInfo, bool, error)
@@ -427,7 +429,8 @@ func (host rhelPackageOwnedAttestationHost) attest() (bool, error) {
 			return false, errors.Join(fmt.Errorf("RHEL package ownership changed during attestation: %s", expected.path), err)
 		}
 	}
-	if err := host.attestRequiredDirectories(); err != nil {
+	retired, err := host.inspectRequiredDirectories()
+	if err != nil {
 		return false, err
 	}
 	if err := host.attestAdditionalPayloadOwnership(); err != nil {
@@ -437,11 +440,8 @@ func (host rhelPackageOwnedAttestationHost) attest() (bool, error) {
 		return false, err
 	}
 	verification, err := host.verifyInstalledPayload()
-	if err != nil {
-		return false, fmt.Errorf("verify exact RHEL package-owned RPM payload: %w", err)
-	}
-	if len(verification) != 0 {
-		return false, fmt.Errorf("rpm verification reported RHEL package-owned payload deviations")
+	if err := attestRHELPackageOwnedVerification(verification, err, retired); err != nil {
+		return false, err
 	}
 	installedAfter, err := host.queryInstalled()
 	if err != nil || !bytes.Equal(installedBefore, installedAfter) {
@@ -449,6 +449,10 @@ func (host rhelPackageOwnedAttestationHost) attest() (bool, error) {
 	}
 	if err := host.attestPriorityUnitsAbsent(); err != nil {
 		return false, err
+	}
+	confirmed, err := host.inspectRequiredDirectories()
+	if err != nil || !maps.Equal(retired, confirmed) {
+		return false, errors.Join(fmt.Errorf("RHEL package-owned directory state changed during attestation"), err)
 	}
 	return true, nil
 }
@@ -509,11 +513,12 @@ func (host rhelPackageOwnedAttestationHost) attestRecoveryBoundaries() error {
 	return nil
 }
 
-func (host rhelPackageOwnedAttestationHost) attestRequiredDirectories() error {
+func (host rhelPackageOwnedAttestationHost) inspectRequiredDirectories() (map[string]string, error) {
+	retired := make(map[string]string)
 	for _, expected := range rhelPackageOwnedRequiredDirectories {
 		path, err := host.rooted(expected.path)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := attestRHELPackageOwnedDirectory(
 			path,
@@ -522,10 +527,14 @@ func (host rhelPackageOwnedAttestationHost) attestRequiredDirectories() error {
 			host.expectedUID,
 			host.expectedGID,
 		); err != nil {
-			return fmt.Errorf("attest RHEL package-owned required directory %s: %w", expected.path, err)
+			state, retiredErr := host.attestRetiredRuntimeDirectory(expected.path, path)
+			if retiredErr != nil {
+				return nil, errors.Join(fmt.Errorf("attest retired RHEL package-owned directory %s: %w", expected.path, err), retiredErr)
+			}
+			retired[expected.path] = state
 		}
 	}
-	return nil
+	return retired, nil
 }
 
 func (host rhelPackageOwnedAttestationHost) attestAdditionalPayloadOwnership() error {
@@ -713,8 +722,14 @@ func attestInstalledRHELPackageOwnedProfile() (bool, error) {
 	return productionRHELPackageOwnedAttestationHost().attest()
 }
 
-func attestRHELPackageOwnedUnit(path string) error {
-	present, err := attestInstalledRHELPackageOwnedProfile()
+func attestInstalledRHELPackageOwnedProfileForRemoval() (bool, error) {
+	host := productionRHELPackageOwnedAttestationHost()
+	host.removalBarrier = RequireRemovalTombstone
+	return host.attest()
+}
+
+func attestRHELPackageOwnedUnitForRemoval(path string) error {
+	present, err := attestInstalledRHELPackageOwnedProfileForRemoval()
 	if err != nil || !present {
 		return errors.Join(fmt.Errorf("RHEL package-owned profile is not exactly attested"), err)
 	}
@@ -967,6 +982,9 @@ func prepareRHELPackageOwnedRuntimeForEraseAt(
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect RHEL package-owned erase-ready marker: %w", err)
 	}
+	if err := restoreRetiredRHELPackageOwnedDirectories(root, expectedUID, expectedGID, attestPackagePayload); err != nil {
+		return err
+	}
 	identities := make(map[string]removalArtifactIdentity, len(rhelPackageOwnedRuntimeDirectories))
 	for _, path := range rhelPackageOwnedRuntimeDirectories {
 		identity, err := attestRHELPackageOwnedRuntimeDirectory(
@@ -1003,15 +1021,27 @@ func prepareRHELPackageOwnedRuntimeForEraseAt(
 	if err := attestPackagePayload(); err != nil {
 		return fmt.Errorf("attest complete RPM payload before runtime cleanup: %w", err)
 	}
+	retained, err := retainedOperatorConfigurationPaths(rooted(operatorRetentionRecordsPath))
+	if err != nil {
+		return fmt.Errorf("attest operator retention before RPM finalization: %w", err)
+	}
+	attestConfiguration := func() error {
+		current, err := retainedOperatorConfigurationPaths(rooted(operatorRetentionRecordsPath))
+		if err != nil || !maps.Equal(current, retained) {
+			return errors.Join(fmt.Errorf("operator retention authority changed before RPM finalization"), err)
+		}
+		return attestRuntimeRetirementRootWithRetention(rooted("/etc/syswarden"), "/etc/syswarden", expectedUID, expectedGID, nil, retained)
+	}
+	if err := attestConfiguration(); err != nil {
+		return err
+	}
 
 	steps := []struct {
 		path    string
 		allowed []string
 	}{
-		{path: "/etc/syswarden/config/modules"},
 		{path: "/etc/syswarden/lists"},
 		{path: "/etc/syswarden/tls"},
-		{path: "/etc/syswarden/config", allowed: []string{"modules"}},
 		{path: "/etc/syswarden", allowed: []string{"config", "lists", "tls"}},
 		{path: "/var/lib/syswarden/ui"},
 		{path: "/var/lib/syswarden", allowed: []string{"ui", removalTombstoneName}},
@@ -1048,6 +1078,9 @@ func prepareRHELPackageOwnedRuntimeForEraseAt(
 	if err := attestPackagePayload(); err != nil {
 		return fmt.Errorf("reattest complete RPM payload after runtime cleanup: %w", err)
 	}
+	if err := attestConfiguration(); err != nil {
+		return err
+	}
 	if markerExisted {
 		markerDirectory, err := openExistingRemovalStateDirectory(filepath.Dir(markerPath), expectedUID, expectedGID)
 		if err != nil {
@@ -1080,7 +1113,7 @@ func prepareRHELPackageOwnedRuntimeForErase() error {
 	return prepareRHELPackageOwnedRuntimeForEraseAt(
 		"/", rhelPackageOwnedEraseReadyPath, 0, 0,
 		func() error {
-			present, err := attestInstalledRHELPackageOwnedProfile()
+			present, err := attestInstalledRHELPackageOwnedProfileForRemoval()
 			if err != nil || !present {
 				return errors.Join(fmt.Errorf("exact RHEL package-owned profile is not present"), err)
 			}

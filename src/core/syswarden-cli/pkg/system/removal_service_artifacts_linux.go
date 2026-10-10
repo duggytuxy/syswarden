@@ -587,7 +587,7 @@ func RemovePreparedServiceArtifactsForRemoval() error {
 	rhelPackageOwned := false
 	if !IsAlpine() {
 		var err error
-		rhelPackageOwned, err = attestInstalledRHELPackageOwnedProfile()
+		rhelPackageOwned, err = attestInstalledRHELPackageOwnedProfileForRemoval()
 		if err != nil {
 			return fmt.Errorf("attest RHEL package-owned profile before service artifact removal: %w", err)
 		}
@@ -636,7 +636,7 @@ func RemovePreparedServiceArtifactsForRemoval() error {
 		if err := attestRHELPackageOwnedEnablementAbsentAt("/"); err != nil {
 			return err
 		}
-		present, err := attestInstalledRHELPackageOwnedProfile()
+		present, err := attestInstalledRHELPackageOwnedProfileForRemoval()
 		if err != nil || !present {
 			return errors.Join(
 				fmt.Errorf("RHEL package-owned payload changed while preserving it for RPM erase"), err,

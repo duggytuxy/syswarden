@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 umask 077
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 helper=/var/lib/.syswarden-rhelpo-postun-recovery-v1
 marker=/var/lib/.syswarden-rhelpo-erase-ready-v1
@@ -46,13 +48,210 @@ remove_empty_directory() {
     absent "$path" || fail "Residual RPM directory remains after recovery: $path"
 }
 
+# BEGIN shared operator configuration retention
+syswarden_path_absent() {
+    [ ! -e "$1" ] && [ ! -L "$1" ]
+}
+
+syswarden_refuse_mounted_path_tree() {
+    syswarden_mount_root="$1"
+    [ -r /proc/self/mountinfo ] || {
+        printf 'Refusing removal without readable mount topology: %s\n' "${syswarden_mount_root}" >&2
+        return 1
+    }
+    if ! awk -v root="${syswarden_mount_root}" '
+        {
+            mountpoint = $5
+            gsub(/\\040/, " ", mountpoint)
+            gsub(/\\011/, "\t", mountpoint)
+            gsub(/\\012/, "\n", mountpoint)
+            gsub(/\\134/, "\\", mountpoint)
+            if (mountpoint == root || index(mountpoint, root "/") == 1) {
+                exit 42
+            }
+        }
+    ' /proc/self/mountinfo; then
+        printf 'Refusing removal across a mounted product path: %s\n' "${syswarden_mount_root}" >&2
+        return 1
+    fi
+}
+
+syswarden_attest_dedicated_root() {
+    syswarden_root_path="$1"
+    syswarden_path_absent "${syswarden_root_path}" && return 0
+    [ ! -L "${syswarden_root_path}" ] && [ -d "${syswarden_root_path}" ] || {
+        printf 'Refusing unsafe dedicated product root: %s\n' "${syswarden_root_path}" >&2
+        return 1
+    }
+    case "$(stat -c '%u:%g:%a' "${syswarden_root_path}")" in
+        0:0:700|0:0:750|0:0:755) ;;
+        *) printf 'Refusing unsafe dedicated product root metadata: %s\n' "${syswarden_root_path}" >&2; return 1 ;;
+    esac
+}
+
+syswarden_operator_retention_record_has_path() (
+    retention_record="$1"
+    retention_target="$2"
+    [ ! -L "${retention_record}" ] && [ -f "${retention_record}" ] || exit 1
+    case "$(stat -c '%u:%g:%a:%h' "${retention_record}")" in 0:0:600:1) ;; *) exit 1 ;; esac
+    retention_size=$(stat -c '%s' "${retention_record}") || exit 1
+    [ "${retention_size}" -gt 0 ] && [ "${retention_size}" -le 65536 ] || exit 1
+    retention_identity=$(stat -c '%d:%i:%u:%g:%a:%h:%s:%y:%z' "${retention_record}") || exit 1
+    exec 3<"${retention_record}" || exit 1
+    [ "$(stat -Lc '%d:%i:%u:%g:%a:%h:%s:%y:%z' /proc/self/fd/3)" = "${retention_identity}" ] || exit 1
+    retention_hash=$(sha256sum /proc/self/fd/3) || exit 1
+    retention_hash=${retention_hash%% *}
+    [ "${retention_record##*/}" = "${retention_hash}.retention" ] || exit 1
+    retention_last=$(tail -c 1 /proc/self/fd/3) || exit 1
+    [ -z "${retention_last}" ] || exit 1
+    LC_ALL=C awk -F '\t' -v target="${retention_target}" '
+        function bounded(value, maximum) {
+            return value ~ /^(0|[1-9][0-9]*)$/ &&
+                (length(value) < length(maximum) ||
+                (length(value) == length(maximum) && "x" value <= "x" maximum))
+        }
+        NR == 1 { if ($0 != "SYSWARDEN_OPERATOR_CONFIGURATION_RETENTION_V1") bad = 1; next }
+        NR == 2 { if ($0 != "explicit-operator-retention-at-original-paths") bad = 1; next }
+        {
+            path = $2
+            prefix = "/etc/syswarden/config/modules/"
+            name = substr(path, length(prefix) + 1)
+            allowed = path == "/etc/syswarden/config/config.toml" ||
+                (index(path, prefix) == 1 && length(name) >= 6 && length(name) <= 128 &&
+                name ~ /^[A-Za-z0-9_][A-Za-z0-9_.-]*[.]toml$/)
+            if (NF != 13 || $1 != "file" || !allowed || NR > 130 ||
+                (previous != "" && "x" previous >= "x" path) ||
+                !bounded($3, "18446744073709551615") || !bounded($4, "18446744073709551615") || $4 == "0" ||
+                ($5 != "33152" && $5 != "33184") || $6 != "0" || $7 != "0" ||
+                !bounded($8, "262144") || !bounded($9, "9223372036854775807") ||
+                !bounded($10, "999999999") || !bounded($11, "9223372036854775807") ||
+                !bounded($12, "999999999") || length($13) != 64 || $13 !~ /^[0-9a-f]+$/) bad = 1
+            previous = path
+            if (path == target) found = 1
+        }
+        END { if (bad || NR < 3) exit 1; if (!found) exit 2 }
+    ' /proc/self/fd/3
+    retention_status=$?
+    [ "$(stat -c '%d:%i:%u:%g:%a:%h:%s:%y:%z' "${retention_record}")" = "${retention_identity}" ] || exit 1
+    [ "$(stat -Lc '%d:%i:%u:%g:%a:%h:%s:%y:%z' /proc/self/fd/3)" = "${retention_identity}" ] || exit 1
+    exit "${retention_status}"
+)
+
+syswarden_operator_configuration_retained() (
+    [ "$1" = /etc/syswarden/config/modules/99-user.toml ] && exit 0
+    retention_directory=/var/backups/syswarden-retired-v1/operator-configuration
+    retention_seen=0
+    retention_found=0
+    for retention_parent in /var/backups /var/backups/syswarden-retired-v1 "${retention_directory}"; do
+        syswarden_path_absent "${retention_parent}" && exit 1
+        syswarden_attest_dedicated_root "${retention_parent}" || exit 1
+        syswarden_refuse_mounted_path_tree "${retention_parent}" || exit 1
+        if [ "${retention_parent}" != /var/backups ]; then
+            [ "$(stat -c '%a' "${retention_parent}")" = 700 ] || exit 1
+        fi
+    done
+    retention_directory_identity=$(stat -c '%d:%i:%u:%g:%a:%y:%z' "${retention_directory}") || exit 1
+    for retention_record in "${retention_directory}"/* "${retention_directory}"/.[!.]* "${retention_directory}"/..?*; do
+        syswarden_path_absent "${retention_record}" && continue
+        retention_seen=$((retention_seen + 1))
+        [ "${retention_seen}" -le 128 ] || exit 1
+        retention_status=0
+        syswarden_operator_retention_record_has_path "${retention_record}" "$1" || retention_status=$?
+        case "${retention_status}" in 0) retention_found=1 ;; 2) ;; *) exit 1 ;; esac
+    done
+    [ "$(stat -c '%d:%i:%u:%g:%a:%y:%z' "${retention_directory}")" = "${retention_directory_identity}" ] || exit 1
+    [ "${retention_found}" -eq 1 ]
+)
+
+# The documented operator module and explicitly reviewed additional files are
+# retained. Neither gives deletion authority over adjacent or unknown entries.
+# Subshells keep recursive inventory variables local on every supported shell.
+syswarden_attest_retained_config_tree() (
+    config_path="$1"
+    config_logical="$2"
+    syswarden_path_absent "${config_path}" && exit 0
+    syswarden_attest_dedicated_root "${config_path}" || exit 1
+    syswarden_refuse_mounted_path_tree "${config_path}" || exit 1
+    for config_entry in "${config_path}"/* "${config_path}"/.[!.]* "${config_path}"/..?*; do
+        syswarden_path_absent "${config_entry}" && continue
+        config_name=${config_entry##*/}
+        case "${config_logical}/${config_name}" in
+            /etc/syswarden/config|/etc/syswarden/lists|/etc/syswarden/tls|/etc/syswarden/config/modules)
+                syswarden_attest_retained_config_tree "${config_entry}" "${config_logical}/${config_name}" || exit 1 ;;
+            *)
+                if ! syswarden_operator_configuration_retained "${config_logical}/${config_name}"; then
+                    printf 'Unretired configuration entry remains: %s\n' "${config_entry}" >&2
+                    exit 1
+                fi
+                [ ! -L "${config_entry}" ] && [ -f "${config_entry}" ] || exit 1
+                case "$(stat -c '%u:%g:%a:%h' "${config_entry}")" in
+                    0:0:600:1|0:0:640:1) ;;
+                    *) exit 1 ;;
+                esac ;;
+        esac
+    done
+)
+
+syswarden_finalize_retained_config_tree() (
+    config_path="$1"
+    config_logical="$2"
+    syswarden_path_absent "${config_path}" && exit 0
+    syswarden_attest_retained_config_tree "${config_path}" "${config_logical}" || exit 1
+    config_identity=$(stat -c '%d:%i:%u:%g:%a' "${config_path}") || exit 1
+    for config_entry in "${config_path}"/* "${config_path}"/.[!.]* "${config_path}"/..?*; do
+        syswarden_path_absent "${config_entry}" && continue
+        config_name=${config_entry##*/}
+        if ! syswarden_operator_configuration_retained "${config_logical}/${config_name}"; then
+            syswarden_finalize_retained_config_tree "${config_entry}" "${config_logical}/${config_name}" || exit 1
+        fi
+    done
+    syswarden_attest_retained_config_tree "${config_path}" "${config_logical}" || exit 1
+    [ "$(stat -c '%d:%i:%u:%g:%a' "${config_path}")" = "${config_identity}" ] || exit 1
+    for config_entry in "${config_path}"/* "${config_path}"/.[!.]* "${config_path}"/..?*; do
+        syswarden_path_absent "${config_entry}" || exit 0
+    done
+    # rmdir cannot remove or follow a concurrent file, link or nonempty tree.
+    rmdir -- "${config_path}" || exit 1
+    sync || exit 1
+    syswarden_path_absent "${config_path}"
+)
+
+syswarden_assert_retained_operator_configuration() (
+    syswarden_path_absent /etc/syswarden && exit 0
+    syswarden_attest_retained_config_tree /etc/syswarden /etc/syswarden || exit 1
+    syswarden_assert_nonempty_retained_config_tree /etc/syswarden
+)
+
+syswarden_assert_nonempty_retained_config_tree() (
+    config_path="$1"
+    config_count=0
+    for config_entry in "${config_path}"/* "${config_path}"/.[!.]* "${config_path}"/..?*; do
+        syswarden_path_absent "${config_entry}" && continue
+        case "${config_entry}" in
+            /etc/syswarden/config|/etc/syswarden/config/modules)
+                syswarden_assert_nonempty_retained_config_tree "${config_entry}" || exit 1 ;;
+            *) syswarden_operator_configuration_retained "${config_entry}" || exit 1 ;;
+        esac
+        config_count=$((config_count + 1))
+    done
+    [ "${config_count}" -gt 0 ]
+)
+
+syswarden_finalize_retained_operator_configuration() {
+    syswarden_attest_retained_config_tree /etc/syswarden /etc/syswarden || return 1
+    syswarden_finalize_retained_config_tree /etc/syswarden /etc/syswarden || return 1
+    syswarden_assert_retained_operator_configuration
+}
+
+# END shared operator configuration retention
+
 assert_terminal_directories_absent() {
+    syswarden_assert_retained_operator_configuration || fail 'Unreviewed configuration remains after RPM erase.'
     for path in \
         /usr/lib/systemd/system/syswarden-firewall.service.d \
         /usr/libexec/syswarden \
         /usr/share/doc/syswarden \
         /opt/syswarden \
-        /etc/syswarden \
         /var/lib/syswarden \
         /var/log/syswarden; do
         absent "$path" || fail "Refusing recovery without its authorization marker while residue remains: $path"
@@ -118,6 +317,16 @@ assert_rpm_payload_absent() {
     done
 }
 
+# PREUN calls this read-only mode only after digest and RPM ownership checks.
+# It never invokes a product binary or publishes an erase authorization.
+if [ "$#" -eq 1 ] && [ "$1" = inspect-configuration-v1 ]; then
+    [ "$0" = /usr/libexec/syswarden/rhelpo-postun-recovery-v1 ] || fail 'Configuration inspection helper path is not exact.'
+    [ -f "$0" ] && [ ! -L "$0" ] || fail 'Configuration inspection helper is not a regular file.'
+    [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h' -- "$0")" = '0:0:755:1' ] || fail 'Configuration inspection helper metadata is not exact.'
+    syswarden_attest_retained_config_tree /etc/syswarden /etc/syswarden || fail 'Unreviewed configuration remains before RPM erase.'
+    exit 0
+fi
+
 recovery_mode=operator
 if [ "$#" -eq 1 ] && [ "$1" = rpm-postun-v1 ]; then
     recovery_mode=rpm-postun
@@ -158,6 +367,7 @@ if [ "$recovery_mode" = operator ]; then
 fi
 
 assert_rpm_payload_absent
+syswarden_attest_retained_config_tree /etc/syswarden /etc/syswarden || fail 'Unreviewed configuration blocks post-uninstall recovery.'
 
 if absent "$marker"; then
     absent "$tombstone" || fail 'Removal tombstone remains without its erase-ready marker.'
@@ -204,11 +414,7 @@ remove_empty_directory /usr/libexec/syswarden 755
 remove_empty_directory /usr/share/doc/syswarden 755
 remove_empty_directory /opt/syswarden/bin 755
 remove_empty_directory /opt/syswarden 755
-remove_empty_directory /etc/syswarden/config/modules 750
-remove_empty_directory /etc/syswarden/config 750
-remove_empty_directory /etc/syswarden/lists 750
-remove_empty_directory /etc/syswarden/tls 750
-remove_empty_directory /etc/syswarden 750
+syswarden_finalize_retained_operator_configuration || fail 'Cannot finalize retained operator configuration.'
 remove_empty_directory /var/lib/syswarden/ui 750
 remove_empty_directory /var/log/syswarden 750
 
@@ -225,6 +431,7 @@ if [ -d /run/systemd/system ] && [ -x /usr/bin/systemctl ]; then
         fail 'systemd daemon reload failed during post-uninstall recovery.'
 fi
 
+syswarden_assert_retained_operator_configuration || fail 'Configuration changed before removal finalization.'
 /usr/bin/timeout 30 /usr/bin/sync || fail 'Cannot make post-uninstall cleanup durable.'
 
 exact_regular "$marker" 600 71 \

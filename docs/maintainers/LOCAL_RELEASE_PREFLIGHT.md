@@ -106,6 +106,18 @@ version, complete before and after digests, and unchanged historical suffix.
 Earlier correction policies and published release records remain immutable.
 This correction requires fresh reviewed signatures and native IVV.
 
+## Sealed v4.10.4 removal retry correction
+
+The unpublished record may be completed only after reviewed commit
+`063848c5b0cfdd0e85ad980e4eb2dd07c0464565`, using the exact subject
+`Fix : complete v4.10.4 removal retry boundaries`, optionally followed by
+GitHub's numeric squash suffix. The policy binds this parent, the unchanged
+version, both complete changelog hashes and the unchanged historical suffix.
+It records dependency-absent removal retry, optional RPM runtime preparation,
+operator configuration retention and the upstream `x/net` security update.
+Existing policies remain unchanged.
+Fresh reviewed merge, protected signatures and native IVV are still required.
+
 ## Workflow coverage ledger
 
 Every workflow must be classified before a release PR is pushed. A local PASS

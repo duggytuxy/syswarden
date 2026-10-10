@@ -1345,7 +1345,7 @@
     "path": "syswarden uninstall",
     "use": "uninstall",
     "short": "Delete SysWarden services, rules, configuration, data, and logs",
-    "long": "Removes a standalone installation after verified cleanup. Native package installations must be removed through their package manager to preserve package database consistency. This destructive operation does not restore every prior host setting.",
+    "long": "Removes a standalone installation after verified cleanup. Standard native packages require their package manager. An exactly attested optional RHEL package-owned profile permits runtime preparation only; RPM then removes its preserved payload. This operation does not restore every prior host setting.",
     "flags": [
       {
         "name": "config",
