@@ -1,7 +1,7 @@
 # Verified product removal
 
-Status: published in v4.10.3 after protected Patch IVV and independent public
-asset verification. The [publication record](../releases/v4.10.3/README.md)
+Status: published in v4.10.4 after protected Patch IVV and independent public
+asset verification. The [publication record](../releases/v4.10.4/README.md)
 defines the accepted scope. This reference describes code boundaries; use the
 [canonical recovery guide](https://syswarden.io/docs/historical-recovery/)
 for operator steps.
@@ -38,7 +38,7 @@ flush a shared ruleset or edit a package database to force completion.
 | Administrator configuration | `pkg/system/removal_operator_retention_*`, `cmd/recover_operator_configuration.go` | An explicit retention decision preserves reviewed TOML files at their original paths, including later administrator edits. |
 | Native finalization | `scripts/ci/package_removal_state.sh`, package scriptlets | No unretired product state is left behind; the documented administrator override and explicitly reviewed configuration survive. |
 
-The v4.10.4 candidate also recognizes the standard RHEL-family nftables loader
+v4.10.4 also recognizes the standard RHEL-family nftables loader
 whose reload command contains a literal `flush ruleset; include` sequence.
 Inspection records its exact absolute include path without executing the
 command. It accepts `/sbin/nft` through a root-owned, stable `/sbin` link to
@@ -47,20 +47,20 @@ targets, injected commands and changed evidence are refused. The shared
 persistence reader still rejects symlinks, and retirement never stops or
 reloads the shared nftables service.
 
-The candidate also creates a missing `/var/backups` parent through an attested
+v4.10.4 also creates a missing `/var/backups` parent through an attested
 `/var` directory descriptor when applying retirement. Existing shared backup
 storage keeps its owner, mode and contents. Read-only inspection creates nothing;
 unsafe metadata, links and concurrent replacement remain errors. The parent is
 synchronized before publishing recovery journals or moving original files.
 
-Candidate nftables retirement synchronizes its exact kernel intent before opening
+Nftables retirement synchronizes its exact kernel intent before opening
 the short-lived generation fence. It then repeats full live ownership inspection
 and checks that its source and inputs match that intent. The final guard rechecks
 producer quiescence, the original synchronized intent inode and bytes, and the
 boot and network namespace. Concurrent kernel changes still invalidate the
 single-use transaction. No timeout is extended and no ownership check is skipped.
 
-After successful firewall cleanup and runtime-history retirement, the candidate
+After successful firewall cleanup and runtime-history retirement, v4.10.4
 also removes the empty current compatibility-wrapper receipt. Its exact header,
 private mode and single-link inode are checked through the existing quarantined
 file-removal path. A receipt with owned or pending permissions, older syntax or
@@ -73,7 +73,7 @@ binaries. Both directories use nonrecursive `rmdir` after metadata and mount
 checks. An extra file, child directory, link or mounted path still stops
 finalization and keeps the removal barrier for recovery.
 
-The v4.10.4 candidate can also resume orphaned WireGuard retirement after a
+v4.10.4 can also resume orphaned WireGuard retirement after a
 native manager removes `wireguard-tools` despite a refused product erase.
 This fallback applies only after the removal path has prepared product services
 and independently established that no WireGuard ownership artifact remains.
@@ -106,7 +106,7 @@ Recovery retains their exact bytes and inodes, including incomplete cache
 generations, without interpreting them as firewall input. Changed inputs,
 unexpected creation markers and unrelated directory entries cause refusal.
 
-For v4.10.4 candidate publications, the feed writer marks newly created threat
+In v4.10.4, the feed writer marks newly created threat
 feed compatibility files, provenance commits and immutable snapshots with their
 exact name, inode, creation time and content hash. Automatic refresh preserves
 that origin only when replacing an already proven file. It never adopts an
@@ -328,8 +328,8 @@ outside this modular retention route.
 
 ## Inactive legacy configuration backups
 
-This route is part of the unpublished v4.10.4 candidate. It requires fresh
-signed-package IVV and is not available in the published v4.10.3 CLI.
+This route is available in v4.10.4 and passed signed-package testing and
+protected Patch IVV. It is not available in the older v4.10.3 CLI.
 
 A migrated flat configuration can leave a private `.bak` or `.migrated` file
 under `/opt/syswarden`. A familiar name does not establish product ownership.

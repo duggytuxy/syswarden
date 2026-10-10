@@ -6,6 +6,12 @@ also defines an optional hardware-dependent local prequalification rehearsal.
 Neither phase replaces the required checks on the merged `main` SHA or the
 protected remote qualification.
 
+The current stable release is v4.10.4. Its
+[publication record](../releases/v4.10.4/README.md) records completed protected
+Patch IVV and independent public asset verification. The sealed candidate
+corrections below describe historical preparation boundaries. They do not
+authorize changing the published tag, signed artifacts or original evidence.
+
 ## Authority boundary
 
 The preflight and rehearsal phases are read-only with respect to GitHub and

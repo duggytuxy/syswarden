@@ -1,6 +1,8 @@
 # Feed Availability Diagnostics
 
-Applies to: the v4.10.4 candidate. Publication and native IVV remain pending.
+Applies to: published v4.10.4 after signed native testing, protected Patch IVV
+and independent public asset verification. The
+[publication record](../releases/v4.10.4/README.md) defines the accepted scope.
 
 Older installers displayed a generic mirror latency check before downloading
 network intelligence. That check sent an HTTP HEAD request to provider root
@@ -9,7 +11,7 @@ specific raw feed URL can return HTTP 200. Because the probe refused redirects
 and accepted only HTTP 200, it could print `FAIL` even when the feed was
 available. Its selected-mirror result was already unused by installation.
 
-The candidate removes this obsolete installation probe. It retains actual
+v4.10.4 removes this obsolete installation probe. It retains actual
 feed downloads and their security checks. It does not start following
 redirects, choose a single source instead of a quorum, or hide download errors.
 
@@ -30,5 +32,5 @@ appear successful.
 
 The regression checks prohibit pre-download network probes, preserve the
 configured feed selection, propagate an actual downloader failure and retain
-the offline path. The full signed-package IVV remains a separate release
-requirement.
+the offline path. The completed signed-package IVV is recorded in the
+publication record. It does not guarantee future availability of external feeds.
