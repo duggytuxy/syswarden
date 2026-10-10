@@ -1,0 +1,115 @@
+{
+  "status": "public-release-independently-verified",
+  "checked_at": "2026-10-10T15:24:29.712728+00:00",
+  "release": "v4.10.4",
+  "release_id": 409028153,
+  "publication_commit": "c4bb1f7fdf48fd80652b6870af5babda0b16ad6e",
+  "product_candidate": "0e966d409b6b9d19116597edee1feafad0c83688",
+  "publisher_run_id": 38061490741,
+  "publisher_run_attempt": 1,
+  "earlier_publisher_attempt_failed": false,
+  "protected_ivv_run_id": 38059926721,
+  "required_assurance": "IVV",
+  "accepted_checks": 15,
+  "release_metadata_stable": true,
+  "latest_release_verified": true,
+  "exact_ivv_package_and_updater_bytes_retained": true,
+  "assets": [
+    {
+      "name": "RELEASE_SHA256SUMS.txt",
+      "asset_id": 628284531,
+      "size": 1035,
+      "sha256": "10f57844a22296b671a3fa465f97569c33b4dfccb6fd31107e2659fec1b978a3",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "asset_id": 628284524,
+      "size": 283,
+      "sha256": "4f6a10d8e66b5c5e83db2373aea63904e98043e7c8dee5f616af449a59640ffc",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "plumber-report.zip",
+      "asset_id": 628284526,
+      "size": 127114,
+      "sha256": "db391e2fa20b43597c005b383af29140fed9489cdc17f5cdd6a0b5365b3ef2a4",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-4.10.4-1.rhelpo.x86_64.rpm",
+      "asset_id": 628284527,
+      "size": 16993245,
+      "sha256": "444b31018b89dae93244841248f6be84494d40ea7019554ba8121531b2466ea4",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-4.10.4-1.x86_64.rpm",
+      "asset_id": 628284525,
+      "size": 17303647,
+      "sha256": "7e4a7a2bc0b4a9d7304c4e091547f8122da1c780b008a469117b7665c846b56c",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-release.tar.gz",
+      "asset_id": 628284553,
+      "size": 17043683,
+      "sha256": "e62848affd6df8748a0bbcec74ab83d25bdba74c08904229a09ff4b6ae173df0",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-sbom.spdx.json",
+      "asset_id": 628284557,
+      "size": 79282,
+      "sha256": "a71c94e7759fabf8bf8262a9f4a07b156760707545c17b36bbd139688742348d",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-update-manifest-v1.json",
+      "asset_id": 628284556,
+      "size": 671,
+      "sha256": "79191ccba52dc3ff6d0d41e1f1ec2607594dc6f91ebb42bb9bf1ddeb66db571e",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden-update-manifest-v1.json.sig",
+      "asset_id": 628284576,
+      "size": 89,
+      "sha256": "dea4de096954a1e8678e1bc815b671b97fca8280fab6fb80bc976783327de6ca",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden_4.10.4_amd64.deb",
+      "asset_id": 628284581,
+      "size": 17015594,
+      "sha256": "228c19d73a9191fc01942c741eb6d6bfb1a90381d096f2fb6d18af8988777cdf",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden_4.10.4_amd64.deb.asc",
+      "asset_id": 628284588,
+      "size": 833,
+      "sha256": "81fcf79f03ff96d724fa5dbc8faa4fb9203f68d564904fe0dd4aa3dad0edf3c2",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    },
+    {
+      "name": "syswarden_4.10.4_x86_64.apk",
+      "asset_id": 628284597,
+      "size": 17261164,
+      "sha256": "8a0b3d6da3a3d409d47aafd932181a7321ed881e249dbe10e04ccbfdc8c9425a",
+      "public_download_without_credentials": true,
+      "original_release_attestation_verified": true
+    }
+  ]
+}

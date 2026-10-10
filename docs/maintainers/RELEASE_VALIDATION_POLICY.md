@@ -69,7 +69,7 @@ The existing frozen qualification contracts and their historical verdicts remain
 
 The separately versioned [v4.10.3 Patch plan](../qualification/INTERMEDIATE_ACCEPTANCE_V4.10.3.md) binds fresh signed-product observations for the actual historical updater, half-configured recovery, original VPN client continuity and filesystem device renumbering. Its protected producer and three independent publisher consumers preserve the earlier acceptance identities.
 
-The separately versioned [v4.10.4 Patch plan](../qualification/INTERMEDIATE_ACCEPTANCE_V4.10.4.md) binds fresh signed Debian migration and removal, AlmaLinux IPv6 renewal and native lifecycle, optional RPM recovery, bounded kernel performance and both final restorations. The previous accepted product retains its original identity. Public release references advance only after protected acceptance and downloaded asset verification.
+The separately versioned [v4.10.4 Patch plan](../qualification/INTERMEDIATE_ACCEPTANCE_V4.10.4.md) binds fresh signed Debian migration and removal, AlmaLinux IPv6 renewal and native lifecycle, optional RPM recovery, bounded kernel performance and both final restorations. All fifteen protected IVV checks passed before production review and independent verification of the twelve public files. The [dated publication record](../releases/v4.10.4/README.md) establishes this outcome and its limits. The previous accepted product retains its original identity. Public release references advance only after protected acceptance and downloaded asset verification.
 
 ## Read-only implementation
 

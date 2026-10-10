@@ -1,8 +1,9 @@
 # IPv6 control-plane preservation
 
-The v4.10.4 source candidate addresses issue #304. It is not a publication or
-IVV acceptance statement. The latest published release remains v4.10.3 until
-protected publication and independent public verification are complete.
+Published in v4.10.4 after protected Patch IVV and independent public asset
+verification. The [publication record](../releases/v4.10.4/README.md) binds
+the accepted scope and artifacts. Operator guidance is available in the
+[IPv6 and administrator-access guide](https://syswarden.io/docs/ipv6-and-administrator-access/).
 
 ## Policy boundary
 
