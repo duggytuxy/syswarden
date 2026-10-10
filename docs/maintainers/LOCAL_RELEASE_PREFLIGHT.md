@@ -22,6 +22,13 @@ controls and host-bound controls that the local runner cannot provide must be
 listed explicitly as remote-only. They must never be reported as locally
 passed.
 
+Functional and race tests use `-count=1` to execute fresh results. Preserve the
+shared Go compilation cache: the disabled cache is only the test-result cache.
+File-heavy fixtures can generate large result-cache input logs, followed by
+expensive filesystem validation after the test process has already exited.
+Record the command wall time separately from the package duration printed by
+Go. Keep all tests, race checks, vet and the existing job timeout in place.
+
 ## Entry conditions
 
 Before starting:
@@ -137,7 +144,7 @@ remains mandatory on the exact GitHub candidate or merged SHA.
 | `scorecard.yml` | Workflow and policy contract tests | GitHub repository posture, Scorecard service result and SARIF publication |
 | `compliance.yml` | Workflow and policy contract tests | Plumber service execution, GitHub OIDC result and remote score publication |
 | `release-qualification.yml` | Optional native lifecycle, kernel and evidence-schema rehearsal when matching hardware and inputs exist | Protected environment review, ephemeral runner identity, authoritative run and artifact IDs, hosted sealing and exact reuse of the protected candidate updater material |
-| `release-ivv.yml`, `release-ivv-v4101.yml`, `release-ivv-v4102.yml`, `release-ivv-v4103.yml` | Pinned private-proof integrity, selective continuity review, native publishing signatures, original binary bundle/SBOM, current updater and rejection tests | Exact owner-approved main producer, private ephemeral runner, GitHub attestation, unique immutable result and independent IVV consumers at all three publication boundaries |
+| `release-ivv.yml`, `release-ivv-v4101.yml`, `release-ivv-v4102.yml`, `release-ivv-v4103.yml`, `release-ivv-v4104.yml` | Pinned private-proof integrity, selective continuity review, native publishing signatures, original binary bundle/SBOM, current updater and rejection tests | Exact owner-approved main producer, private ephemeral runner, GitHub attestation, unique immutable result and independent IVV consumers at all three publication boundaries |
 | `release-manager.yml` | Static release gates, version and signature checks, asset inventory and non-mutating negative tests | Ruleset revalidation, protected dispatch, tag creation, production approval and public Release publication |
 
 ## Candidate-bound Act event

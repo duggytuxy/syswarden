@@ -24,7 +24,8 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(previous.load_plan()['private_input_manifest_sha256'], 'ca7b71603aa2758ee140daaa467d1a8fa39a8d50a7e3b3cbec1107d09f033567')
         self.assertEqual(profiles.load('v4.10.3').product, patch3.PRODUCT)
         self.assertNotEqual(profiles.load('v4.10.3').workflow, newest.workflow)
-        for release in ('v4.10.4', 'v5.00.0', 'v6.00.0', None):
+        self.assertEqual(profiles.load('v4.10.4').product, '0e966d409b6b9d19116597edee1feafad0c83688')
+        for release in ('v4.10.5', 'v5.00.0', 'v6.00.0', None):
             with self.assertRaises(previous.frozen.PlanError): profiles.load(release)
 
     def classification(self, release='v4.10.1', prefix='Patch', track='intermediate-validation'):
