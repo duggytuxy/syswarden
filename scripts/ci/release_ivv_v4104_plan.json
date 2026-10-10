@@ -24,6 +24,8 @@
     "docs/qualification/INTERMEDIATE_ACCEPTANCE_V4.10.4.md",
     "scripts/ci/candidate_update_verify_v4104.py",
     "scripts/ci/candidate_update_verify_v4104_test.py",
+    "scripts/ci/ivv_native_rpmkeys.py",
+    "scripts/ci/ivv_native_rpmkeys_test.py",
     "scripts/ci/release_ivv_profile.py",
     "scripts/ci/release_ivv_profile_test.py",
     "scripts/ci/release_ivv_v4104.py",
