@@ -22,6 +22,13 @@ controls and host-bound controls that the local runner cannot provide must be
 listed explicitly as remote-only. They must never be reported as locally
 passed.
 
+Functional and race tests use `-count=1` to execute fresh results. Preserve the
+shared Go compilation cache: the disabled cache is only the test-result cache.
+File-heavy fixtures can generate large result-cache input logs, followed by
+expensive filesystem validation after the test process has already exited.
+Record the command wall time separately from the package duration printed by
+Go. Keep all tests, race checks, vet and the existing job timeout in place.
+
 ## Entry conditions
 
 Before starting:

@@ -18,6 +18,7 @@
   },
   "publication_source_change_allowlist": [
     ".github/workflows/release-ivv-v4104.yml",
+    ".github/workflows/security-audit.yml",
     "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md",
     "docs/maintainers/RELEASE_VALIDATION_POLICY.md",
     "docs/qualification/INTERMEDIATE_ACCEPTANCE_V4.10.4.md",
