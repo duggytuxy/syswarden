@@ -154,10 +154,12 @@ payload identity substitution with recomputed hashes, input ownership, budgets
 and sequence exhaustion. Fuzzing checks bounded inspection and exact encoding
 round trips. These are component tests, not real disk crash or reboot tests.
 
-WP03 remains open for the actual storage authority and owner-only file access,
-safe creation and locking, partial-write and synchronization handling, durable
-commit semantics, authenticated checkpoint key lifecycle and anti-rollback
-authority, bounded retention/rotation, disk pressure, visible acquisition loss,
+The separate [Linux storage component](JOURNAL_STORAGE.md) now implements private
+file access, safe creation and cooperating-process locking, partial-write
+preservation and synchronized append. It is not connected to production.
+WP03 remains open for persistent storage authority, authenticated checkpoint
+key lifecycle and anti-rollback authority, bounded retention/rotation,
+disk pressure, visible acquisition loss,
 redacted exports and measured recovery. Native interruption, service restart,
 flood and disk-pressure campaigns must validate those implementations before
 any production reader or writer is enabled.

@@ -24,6 +24,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 11. [Shared percentage catalog and bound rate reports](RATE_SNAPSHOT.md).
 12. [Bounded event journal frames and recovery inspection](EVENT_JOURNAL.md).
 13. [Authenticated journal segment checkpoints](JOURNAL_CHECKPOINT.md).
+14. [Bounded Linux journal segment storage](JOURNAL_STORAGE.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -57,9 +58,11 @@ Typed incident relationships and their declared support were reviewed in PR #322
 The shared percentage catalog and rate reports were reviewed in PR #323, with
 explicit population partitions, uncertainty, sampling and deterministic rounding.
 Bounded event journal frames and recovery inspection were reviewed in PR #324.
-The next slice authenticates segment checkpoints against independent scoped keys
-and continuity anchors. Durable storage, trust lifecycle and retention remain
-unimplemented.
+Authenticated segment checkpoints against independent scoped keys and continuity
+anchors were reviewed in PR #325. The next slice adds bounded Linux segment
+storage, cooperating-process locking, synchronized append and authenticated
+read-only reopen. It remains disconnected from production. Durable anchor
+persistence, trust lifecycle, retention and integrated recovery remain future work.
 The remaining schemas and shared consumer integration still follow the agreed
 authority contract. No record alone grants response authority.
 

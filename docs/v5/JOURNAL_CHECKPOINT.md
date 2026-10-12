@@ -145,9 +145,11 @@ and caller budgets. Fuzzing covers arbitrary signatures and correctly signed
 but untrusted metadata. Public deterministic test keys have no operational
 authority and must never be deployed.
 
-WP03 remains open for secure file ownership and locking, durable append and
-sync, atomic anchor persistence, actual key lifecycle and revocation, recovery
-after interruption, rotation/retention, visible acquisition loss, redaction
+The separate [Linux storage component](JOURNAL_STORAGE.md) adds private file
+ownership, cooperating-process locking, synchronized append and authenticated
+read-only reopen. It remains inactive and does not persist trusted anchors.
+WP03 remains open for atomic anchor persistence, actual key lifecycle and
+revocation, recovery after interruption, rotation/retention, visible acquisition loss, redaction
 and measured disk-pressure/flood behavior. These component checks are not
 native crash, reboot or release acceptance.
 
