@@ -67,6 +67,12 @@ not a financial allocation.
   durable anchor persistence and global equivocation remain separate work.
 - UI changes: shared verdicts and evidence quality, stable selection, supported
   scope, inert rendering, empty versus unavailable states and read-only behavior.
+- Linux segment storage: private ownership, descriptor-relative exclusive
+  creation, independent process locks, synchronized append, cursor conflicts,
+  uncertain writes, preserved partial tails, bounded reads and authenticated
+  read-only reopen. See [Journal storage](JOURNAL_STORAGE.md). Temporary-file
+  and process-interruption tests do not establish physical power-loss durability
+  or native reboot acceptance. Persistent anchor coordination remains separate.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,
