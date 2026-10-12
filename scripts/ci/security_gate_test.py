@@ -841,6 +841,8 @@ class ActFixtureTests(unittest.TestCase):
             "FuzzLegacyProjection",
             "FuzzNodeSnapshotRoundTrip",
             "FuzzPolicyDecisionRoundTrip",
+            "FuzzActionOutcomeRoundTrip",
+            "FuzzControlSnapshotRoundTrip",
         ):
             self.assertEqual(workflow.count(target), 1)
 

@@ -29,9 +29,10 @@ flowchart LR
     A -. Separate observed evidence .-> C[Current control record]
 ```
 
-The last two records are future contracts. Neither a decision nor a successful
-input comparison establishes an action result or current protection. The
-diagram grants no execution permission.
+The [action/control read contracts](ACTION_AND_CONTROL.md) now describe the
+last two records; the response engine and actual verifier remain future work.
+Neither a decision nor a successful input comparison establishes an action
+result or current protection. The diagram grants no execution permission.
 
 ## Record fields
 
@@ -159,8 +160,9 @@ reused identifiers, changed event/policy bytes and frozen v4 rejection. The
 fuzz target enforces deterministic round trips, zero output on rejection and
 rejection of a different ingestion identity. No reference is fetched in tests.
 
-WP02 remains open for incident, action outcome, current control and evidence
-schemas, the rate catalog and shared consumer adoption. WP08 remains open for
+WP02 remains open for incident and evidence schemas, the rate catalog and
+shared consumer adoption. The [action/control slice](ACTION_AND_CONTROL.md)
+adds read records without an execution engine. WP08 remains open for
 the response engine and its acceptance criteria. Package tests do not prove
 cross-consumer agreement, a native enforcement path, partner IVV or full v5
 Upgrade acceptance. No stable release documentation changes with this slice.
