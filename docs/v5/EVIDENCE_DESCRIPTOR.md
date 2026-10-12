@@ -170,5 +170,7 @@ zero output on failure, epoch isolation and byte tampering.
 
 This is contract development validation, not incident correlation, durable
 storage, authenticated ingestion, safe redaction, signed capsules, native
-partner IVV or v5 acceptance. WP02 and WP10 stay open. Incident schemas, the
-shared rate catalog and consumer adoption follow separately.
+partner IVV or v5 acceptance. WP02 and WP10 stay open. The [incident relation contract](INCIDENT_RELATION.md) separately binds typed
+endpoints and their declared support without treating a descriptor as proof of
+causality. Remaining incident/journal behavior, the shared rate catalog and
+consumer adoption follow separately.

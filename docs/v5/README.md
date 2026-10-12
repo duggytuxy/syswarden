@@ -20,6 +20,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 7. [Policy decision records and exact input binding](POLICY_DECISION.md).
 8. [Action history and scoped control reports](ACTION_AND_CONTROL.md).
 9. [Evidence objects and explicit transformation lineage](EVIDENCE_DESCRIPTOR.md).
+10. [Incident relationships without invented causality](INCIDENT_RELATION.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -48,7 +49,8 @@ and the complete acceptance-to-evidence map still require review. It leaves
 reviewed in PR #317; node identity and read snapshots were reviewed in PR #318.
 Historical policy decisions and exact input binding were reviewed in PR #319.
 Historical action outcomes and scoped control reports were reviewed in PR #320.
-The next slice pins evidence objects and their explicit transformation lineage.
+Evidence objects and transformation lineage were reviewed in PR #321.
+The next slice pins typed incident relationships and their declared support.
 The remaining schemas and shared consumer integration still follow the agreed
 authority contract. No record alone grants response authority.
 

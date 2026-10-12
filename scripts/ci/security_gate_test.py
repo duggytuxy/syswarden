@@ -845,6 +845,8 @@ class ActFixtureTests(unittest.TestCase):
             "FuzzControlSnapshotRoundTrip",
             "FuzzEvidenceDescriptorRoundTrip",
             "FuzzEvidencePayloadBinding",
+            "FuzzIncidentRelationRoundTrip",
+            "FuzzIncidentRecordReference",
         ):
             self.assertEqual(workflow.count(target), 1)
 
