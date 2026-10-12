@@ -1,0 +1,2 @@
+Synthetic partition fixture only; no live membership evidence.
+{"state":"present","eligible":"10","matched":"7","other":"1","unknown":"1","stale":"1","excluded":"2"}

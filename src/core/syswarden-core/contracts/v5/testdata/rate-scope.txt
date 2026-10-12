@@ -1,0 +1,1 @@
+Synthetic authorized scope: cluster.fixture.1, generation.fixture.1, group.fixture.1.
