@@ -248,6 +248,8 @@ jobs:
           fuzz_target src/core/syswarden-cli ./pkg/firewall FuzzIsValidIP
           fuzz_target src/core/syswarden-cli ./pkg/network FuzzHASyncPayloadJSON
           fuzz_target src/core/syswarden-core ./engine FuzzEngineNetworkAndURLInput
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzEventRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzLegacyProjection
 
       - name: Run golangci-lint
         shell: bash
