@@ -159,5 +159,7 @@ causal validation, consumer agreement or native IVV result.
 [BunkerWeb](BUNKERWEB_COMPATIBILITY.md) retains its wire API, automatic
 source-owned TTL bans, HA fencing and log ingestion. No dashboard, incident
 record or interactive approval becomes mandatory for the integration.
-WP02/WP06 stay open for the remaining schemas, rate catalog, journal/replay,
-authoritative correlation and shared consumer adoption.
+The [rate catalog](RATE_SNAPSHOT.md) separately binds percentage reports to
+explicit populations without turning them into incident or protection verdicts.
+WP02/WP06 stay open for journal/replay, authoritative correlation, authenticated
+input resolution and shared consumer adoption.
