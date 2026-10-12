@@ -17,6 +17,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 4. [Validation profile and resource limits](VALIDATION_PLAN.md).
 5. [Shared event envelope and conservative v4 projection](EVENT_ENVELOPE.md).
 6. [Node identity and read snapshot](NODE_SNAPSHOT.md).
+7. [Policy decision records and exact input binding](POLICY_DECISION.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -42,9 +43,10 @@ records. Version transitions follow the existing reviewed release process.
 This first slice leaves #223 open: numeric budgets, the final supported matrix
 and the complete acceptance-to-evidence map still require review. It leaves
 #224 open: the first executable event envelope and frozen v4 projection were
-reviewed in PR #317; node identity and read snapshots are the next slice. The
-remaining schemas and shared consumer integration still follow the agreed
-authority contract.
+reviewed in PR #317; node identity and read snapshots were reviewed in PR #318.
+The next slice defines historical policy decisions and exact input binding.
+The remaining schemas and shared consumer integration still follow the agreed
+authority contract. No record alone grants response authority.
 
 Detailed operator guidance belongs at https://syswarden.io/docs/ when the
 corresponding feature exists. Keep the product README focused on the stable

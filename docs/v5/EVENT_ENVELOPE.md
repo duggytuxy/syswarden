@@ -15,8 +15,10 @@ security checks include it. There is no new service, dependency or module.
 
 No production handler, logger, CLI, TUI or dashboard imports this package yet.
 Cross-consumer adoption is subsequent work, not demonstrated by package tests.
-The envelope contains references to future policy, action, current-control and
-evidence records. It does not implement those contracts or resolve references.
+The envelope contains references to separate policy, action, current-control
+and evidence records. The [policy decision contract](POLICY_DECISION.md) binds
+its complete immutable input event separately. Action, current-control and
+evidence contracts remain future work. The envelope does not resolve references.
 
 The [BunkerWeb compatibility boundary](BUNKERWEB_COMPATIBILITY.md) is unchanged.
 In particular, the envelope is not accepted by `/ha/sync` and cannot request a
