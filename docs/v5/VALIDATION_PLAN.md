@@ -55,6 +55,11 @@ not a financial allocation.
 
 - Shared schemas: golden, malformed, duplicate, unknown-version, compatibility
   and migration fixtures; preserve existing public protocol/telemetry fields.
+- Journal framing: exact payload bytes, independently bound start/end cursors,
+  every interrupted-write position, corruption without resynchronization,
+  replay/reorder, scope substitution, byte/frame limits and sequence exhaustion.
+  See [Event journal](EVENT_JOURNAL.md). These component checks do not prove
+  durable commits, crash recovery on disk or authenticated checkpoints.
 - UI changes: shared verdicts and evidence quality, stable selection, supported
   scope, inert rendering, empty versus unavailable states and read-only behavior.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),

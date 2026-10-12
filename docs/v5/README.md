@@ -22,6 +22,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 9. [Evidence objects and explicit transformation lineage](EVIDENCE_DESCRIPTOR.md).
 10. [Incident relationships without invented causality](INCIDENT_RELATION.md).
 11. [Shared percentage catalog and bound rate reports](RATE_SNAPSHOT.md).
+12. [Bounded event journal frames and recovery inspection](EVENT_JOURNAL.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -52,8 +53,10 @@ Historical policy decisions and exact input binding were reviewed in PR #319.
 Historical action outcomes and scoped control reports were reviewed in PR #320.
 Evidence objects and transformation lineage were reviewed in PR #321.
 Typed incident relationships and their declared support were reviewed in PR #322.
-The next slice pins the shared percentage catalog and rate reports with explicit
-population partitions, uncertainty, sampling and deterministic rounding.
+The shared percentage catalog and rate reports were reviewed in PR #323, with
+explicit population partitions, uncertainty, sampling and deterministic rounding.
+The next slice defines bounded event journal frames and recovery inspection.
+It does not implement durable storage, authenticated checkpoints or retention.
 The remaining schemas and shared consumer integration still follow the agreed
 authority contract. No record alone grants response authority.
 
