@@ -1,0 +1,1 @@
+Synthetic observation: marker=fixture-original; detail=[redacted].

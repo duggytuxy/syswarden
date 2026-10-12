@@ -27,6 +27,10 @@ protection. A verified action may later expire, be rolled back, be replaced
 by an administrator or become unobservable. An unreachable node does not
 prove its control absent. A reachable node does not prove it effective.
 
+The [evidence descriptor](EVIDENCE_DESCRIPTOR.md) separately pins stored object
+bytes and transformation lineage. A descriptor or hash match alone does not
+prove that an action succeeded or that a control is effective.
+
 These are declared statements. A forged well-formed statement can pass the
 codec. Authenticated producers, authorized scope, immutable journal context,
 resolved target/plan definitions and validated evidence are mandatory before
@@ -201,6 +205,6 @@ targets cover round trips, zero output on failure and cross-owner rejection.
 This is targeted development validation. It does not demonstrate an actual
 firewall effect, durable response engine, reference resolver, partner IVV,
 cross-consumer agreement or full v5 Upgrade acceptance. No runtime or server
-is changed. WP02 remains open for incident/evidence schemas, the shared rate
-catalog and consumer adoption. WP08 remains open for response execution and
-all its acceptance criteria.
+is changed. WP02 remains open for incident schemas, the shared rate catalog,
+remaining evidence relationships and consumer adoption. WP08 remains open for
+response execution and all its acceptance criteria.
