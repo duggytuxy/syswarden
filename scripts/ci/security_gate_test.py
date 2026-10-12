@@ -849,6 +849,8 @@ class ActFixtureTests(unittest.TestCase):
             "FuzzIncidentRecordReference",
             "FuzzRateSnapshotRoundTrip",
             "FuzzRateArithmetic",
+            "FuzzEventJournalScan",
+            "FuzzEventJournalEncoding",
         ):
             self.assertEqual(workflow.count(target), 1)
 
