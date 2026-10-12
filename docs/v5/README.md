@@ -16,6 +16,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 3. [BunkerWeb compatibility and dashboard integration](BUNKERWEB_COMPATIBILITY.md).
 4. [Validation profile and resource limits](VALIDATION_PLAN.md).
 5. [Shared event envelope and conservative v4 projection](EVENT_ENVELOPE.md).
+6. [Node identity and read snapshot](NODE_SNAPSHOT.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -40,9 +41,10 @@ records. Version transitions follow the existing reviewed release process.
 
 This first slice leaves #223 open: numeric budgets, the final supported matrix
 and the complete acceptance-to-evidence map still require review. It leaves
-#224 open: the first executable event envelope and frozen v4 projection are
-under review; the remaining schemas and shared consumer integration still
-follow the agreed authority contract.
+#224 open: the first executable event envelope and frozen v4 projection were
+reviewed in PR #317; node identity and read snapshots are the next slice. The
+remaining schemas and shared consumer integration still follow the agreed
+authority contract.
 
 Detailed operator guidance belongs at https://syswarden.io/docs/ when the
 corresponding feature exists. Keep the product README focused on the stable

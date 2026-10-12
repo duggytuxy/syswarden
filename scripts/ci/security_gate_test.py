@@ -839,6 +839,7 @@ class ActFixtureTests(unittest.TestCase):
             "FuzzEngineNetworkAndURLInput",
             "FuzzEventRoundTrip",
             "FuzzLegacyProjection",
+            "FuzzNodeSnapshotRoundTrip",
         ):
             self.assertEqual(workflow.count(target), 1)
 
