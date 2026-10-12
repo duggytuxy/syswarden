@@ -5,6 +5,10 @@ and #225. This slice defines in-memory encoding and inspection of exact event
 bytes. It implements no file writer, authenticated checkpoint, retention or
 production consumer. The published baseline remains v4.10.4.
 
+The subsequent [checkpoint contract](JOURNAL_CHECKPOINT.md) verifies signed
+segment statements against independent authority. It still does not implement
+the durable storage or trust lifecycle described in the remaining work below.
+
 ## Responsibility and trust boundary
 
 A journal entry records one ingestion occurrence of an identified
@@ -115,8 +119,8 @@ flowchart TD
 
 SHA-256 provides consistency relative to trusted anchors, not authentication.
 An attacker who can replace both journal bytes and locally stored anchors can
-recompute the chain. No current helper authenticates checkpoints, detects all
-events lost before ingestion or defeats a compromised root account. Do not
+recompute the chain. The framing helpers authenticate no checkpoints, detect no
+events lost before ingestion and cannot defeat a compromised root account. Do not
 advertise this codec as tamper-proof or as a complete durable evidence journal.
 
 ## Bounds and sensitive data

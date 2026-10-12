@@ -60,6 +60,11 @@ not a financial allocation.
   replay/reorder, scope substitution, byte/frame limits and sequence exhaustion.
   See [Event journal](EVENT_JOURNAL.md). These component checks do not prove
   durable commits, crash recovery on disk or authenticated checkpoints.
+- Checkpoint authentication: canonical signed bytes, exact scoped public keys,
+  sequence-bound authorization, replay/rollback against a protected prior anchor,
+  explicit key rotation, empty segments and byte verification after signature
+  verification. See [Journal checkpoints](JOURNAL_CHECKPOINT.md). Key lifecycle,
+  durable anchor persistence and global equivocation remain separate work.
 - UI changes: shared verdicts and evidence quality, stable selection, supported
   scope, inert rendering, empty versus unavailable states and read-only behavior.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
