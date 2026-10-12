@@ -73,6 +73,11 @@ not a financial allocation.
   read-only reopen. See [Journal storage](JOURNAL_STORAGE.md). Temporary-file
   and process-interruption tests do not establish physical power-loss durability
   or native reboot acceptance. Persistent anchor coordination remains separate.
+- Checkpoint publication: serialized freeze, exact authenticated byte binding,
+  bounded candidate/signature files, no-replace publication, phase-by-phase
+  storage failures, preserved interruption evidence and authenticated read-only
+  reopen. See [Checkpoint publication](JOURNAL_PUBLICATION.md). A readable file
+  is not a protected continuity commit; physical power-loss IVV remains separate.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,

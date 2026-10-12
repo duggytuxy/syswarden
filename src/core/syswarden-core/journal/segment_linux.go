@@ -1,5 +1,5 @@
 // Package journal implements inactive, bounded Linux journal segment storage.
-// It does not provision trust, persist checkpoints or ingest production events.
+// It does not provision trust, advance protected anchors or ingest production events.
 package journal
 
 import (
@@ -72,6 +72,7 @@ type Segment struct {
 	receipt          Receipt
 	stamp            unix.Stat_t
 	sealed, poisoned bool
+	created          bool
 }
 
 func validName(name string) bool {
@@ -135,14 +136,18 @@ func openDirectory(directory *os.File) (*os.File, error) {
 }
 
 func (s *Segment) attest() (unix.Stat_t, error) {
+	return attestEntry(s.directory, s.file, s.name)
+}
+
+func attestEntry(directory *os.File, file segmentFile, name string) (unix.Stat_t, error) {
 	var dir, fd, entry unix.Stat_t
-	if err := unix.Fstat(int(s.directory.Fd()), &dir); err != nil || !privateDirectory(dir) {
+	if err := unix.Fstat(int(directory.Fd()), &dir); err != nil || !privateDirectory(dir) {
 		return fd, errors.Join(ErrUnsafeStorage, err)
 	}
-	if err := unix.Fstat(int(s.file.Fd()), &fd); err != nil || !privateFile(fd) {
+	if err := unix.Fstat(int(file.Fd()), &fd); err != nil || !privateFile(fd) {
 		return fd, errors.Join(ErrUnsafeStorage, err)
 	}
-	if err := unix.Fstatat(int(s.directory.Fd()), s.name, &entry, unix.AT_SYMLINK_NOFOLLOW); err != nil || !privateFile(entry) || entry.Dev != fd.Dev || entry.Ino != fd.Ino {
+	if err := unix.Fstatat(int(directory.Fd()), name, &entry, unix.AT_SYMLINK_NOFOLLOW); err != nil || !privateFile(entry) || entry.Dev != fd.Dev || entry.Ino != fd.Ino {
 		return fd, errors.Join(ErrUnsafeStorage, err)
 	}
 	return fd, nil
@@ -192,7 +197,7 @@ func acquire(directory *os.File, name string, start contracts.JournalCursor, lim
 	if err != nil {
 		return nil, errors.Join(err, dir.Close())
 	}
-	s := &Segment{directory: dir, file: diskFile{os.NewFile(uintptr(fd), "journal-segment")}, name: name, limits: limits, receipt: Receipt{Start: start, End: start}, sealed: !create}
+	s := &Segment{directory: dir, file: diskFile{os.NewFile(uintptr(fd), "journal-segment")}, name: name, limits: limits, receipt: Receipt{Start: start, End: start}, sealed: !create, created: create}
 	st, err := s.attest()
 	if err != nil || st.Size > int64(limits.MaxBytes) || (create && st.Size != 0) {
 		return nil, errors.Join(ErrUnsafeStorage, err, s.Close())
@@ -329,6 +334,10 @@ func (s *Segment) Append(expected contracts.JournalCursor, payload []byte) (Rece
 func (s *Segment) Snapshot() (Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.snapshot()
+}
+
+func (s *Segment) snapshot() (Snapshot, error) {
 	if err := s.usable(); err != nil {
 		return Snapshot{}, err
 	}

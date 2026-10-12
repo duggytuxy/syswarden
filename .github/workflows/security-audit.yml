@@ -264,6 +264,7 @@ jobs:
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzEventJournalEncoding
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzJournalCheckpointVerification
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzJournalCheckpointSignedStatements
+          fuzz_target src/core/syswarden-core ./journal FuzzCheckpointPublicationBundle
 
       - name: Run golangci-lint
         shell: bash
