@@ -252,6 +252,8 @@ jobs:
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzLegacyProjection
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzNodeSnapshotRoundTrip
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzPolicyDecisionRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzActionOutcomeRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzControlSnapshotRoundTrip
 
       - name: Run golangci-lint
         shell: bash
