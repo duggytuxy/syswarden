@@ -1,0 +1,1 @@
+Synthetic immutable policy bytes for decision binding tests only.
