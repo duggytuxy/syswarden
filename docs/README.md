@@ -18,3 +18,7 @@ maintainer procedures. Frozen candidate plans, signed evidence and historical
 reports keep their original dates, identities and pre-publication wording.
 They are not statements of the current release status. Use the dated publication
 record for the accepted outcome and the canonical documentation for operation.
+
+The [v5 foundation](v5/README.md) records proposed scope, trust boundaries,
+BunkerWeb compatibility and validation planning for the next generation. It
+does not describe features available in the current stable release.
