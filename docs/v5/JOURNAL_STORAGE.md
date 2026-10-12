@@ -96,8 +96,9 @@ and is idempotent. It does not retry sync or remove any artifact.
 and after reading, and verifies the full frame chain against this handle's
 known start/end. It returns owned bytes. A failure exposes no partial snapshot.
 The snapshot is sensitive data, not a redacted export or permission grant.
-The caller must quiesce writers before selecting the final snapshot for a
-checkpoint and closing the handle; a snapshot alone does not freeze appends.
+Use [Freeze and checkpoint publication](JOURNAL_PUBLICATION.md) to select the
+final snapshot and disable append under the same mutex. A plain snapshot alone
+does not freeze appends.
 
 `OpenSealedSegment` verifies raw checkpoint bytes and their detached signature
 against independent trust, reads the bounded file and verifies all bytes and
@@ -115,11 +116,12 @@ or silently accept its valid prefix. Existing in-memory prefix inspection can
 describe damage but does not authorize changing the stored evidence.
 
 Neither `Receipt` nor `Snapshot` is a signed checkpoint or a durable trusted
-anchor. This slice does not store keys/checkpoints, freeze or sign snapshots,
-commit a proposed anchor, serialize persistent anchor updates or supply a
-global witness. Protected anchor persistence and its ordering with signing and
-segment publication remain explicit WP03 work. Replacing both history and
-trusted prior state still defeats local rollback checks.
+anchor. The separate [publication workflow](JOURNAL_PUBLICATION.md) freezes the
+segment and persists verified checkpoint/signature bytes. It does not hold keys,
+sign snapshots, commit a proposed anchor, serialize persistent anchor updates
+or supply a global witness. Protected anchor persistence and its ordering with
+signing and segment publication remain explicit WP03 work. Replacing both
+history and trusted prior state still defeats local rollback checks.
 
 ## Evidence and outstanding work
 
