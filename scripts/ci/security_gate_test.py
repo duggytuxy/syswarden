@@ -843,6 +843,8 @@ class ActFixtureTests(unittest.TestCase):
             "FuzzPolicyDecisionRoundTrip",
             "FuzzActionOutcomeRoundTrip",
             "FuzzControlSnapshotRoundTrip",
+            "FuzzEvidenceDescriptorRoundTrip",
+            "FuzzEvidencePayloadBinding",
         ):
             self.assertEqual(workflow.count(target), 1)
 

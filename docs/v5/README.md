@@ -19,6 +19,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 6. [Node identity and read snapshot](NODE_SNAPSHOT.md).
 7. [Policy decision records and exact input binding](POLICY_DECISION.md).
 8. [Action history and scoped control reports](ACTION_AND_CONTROL.md).
+9. [Evidence objects and explicit transformation lineage](EVIDENCE_DESCRIPTOR.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -46,7 +47,8 @@ and the complete acceptance-to-evidence map still require review. It leaves
 #224 open: the first executable event envelope and frozen v4 projection were
 reviewed in PR #317; node identity and read snapshots were reviewed in PR #318.
 Historical policy decisions and exact input binding were reviewed in PR #319.
-The next slice separates historical action outcomes from scoped control reports.
+Historical action outcomes and scoped control reports were reviewed in PR #320.
+The next slice pins evidence objects and their explicit transformation lineage.
 The remaining schemas and shared consumer integration still follow the agreed
 authority contract. No record alone grants response authority.
 
