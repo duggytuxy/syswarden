@@ -1,5 +1,5 @@
 // Package journal implements inactive, bounded Linux journal segment storage.
-// It does not provision trust, advance protected anchors or ingest production events.
+// It does not provision trust, establish independent restart state or ingest production events.
 package journal
 
 import (

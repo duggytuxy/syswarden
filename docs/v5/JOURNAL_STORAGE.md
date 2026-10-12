@@ -119,9 +119,11 @@ Neither `Receipt` nor `Snapshot` is a signed checkpoint or a durable trusted
 anchor. The separate [publication workflow](JOURNAL_PUBLICATION.md) freezes the
 segment and persists verified checkpoint/signature bytes. It does not hold keys,
 sign snapshots, commit a proposed anchor, serialize persistent anchor updates
-or supply a global witness. Protected anchor persistence and its ordering with
-signing and segment publication remain explicit WP03 work. Replacing both
-history and trusted prior state still defeats local rollback checks.
+or supply a global witness. The separate
+[local continuity component](JOURNAL_CONTINUITY.md) adds bounded anchor persistence
+after publication verification and synchronization. Its independent authority
+provisioning and restart-state custody remain WP03 work. Replacing both history
+and trusted prior state still defeats local rollback checks.
 
 ## Evidence and outstanding work
 
@@ -137,7 +139,7 @@ contract. These component tests do not prove power-loss persistence, device
 cache behavior, filesystem support, retention, deployment permissions or
 native crash/reboot acceptance. Volatile filesystems are not durable storage
 merely because their sync call succeeds. WP03 must qualify the actual storage
-profile and complete signing/key lifecycle, serialized durable anchors,
+profile and complete signing/key lifecycle, protected authority integration,
 rotation/retention, interrupted-tail recovery, visible acquisition loss,
 redaction and measured disk-pressure/flood behavior before integration.
 

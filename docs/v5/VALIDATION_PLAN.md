@@ -78,6 +78,12 @@ not a financial allocation.
   storage failures, preserved interruption evidence and authenticated read-only
   reopen. See [Checkpoint publication](JOURNAL_PUBLICATION.md). A readable file
   is not a protected continuity commit; physical power-loss IVV remains separate.
+- Local continuity: independent bootstrap and expected resume head, full bounded
+  chain validation, stored publication authentication/synchronization before
+  anchor append, concurrent stale requests, capacity and counter exhaustion,
+  uncertain complete/partial tails, safe file metadata and fault injection.
+  See [Protected continuity](JOURNAL_CONTINUITY.md). Authority provisioning,
+  independent restart-head custody and authorized recovery remain unimplemented.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,

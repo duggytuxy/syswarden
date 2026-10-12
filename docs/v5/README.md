@@ -26,6 +26,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 13. [Authenticated journal segment checkpoints](JOURNAL_CHECKPOINT.md).
 14. [Bounded Linux journal segment storage](JOURNAL_STORAGE.md).
 15. [Frozen journal checkpoints and durable publication](JOURNAL_PUBLICATION.md).
+16. [Protected local journal continuity](JOURNAL_CONTINUITY.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -62,10 +63,12 @@ Bounded event journal frames and recovery inspection were reviewed in PR #324.
 Authenticated segment checkpoints against independent scoped keys and continuity
 anchors were reviewed in PR #325. Bounded Linux segment storage,
 cooperating-process locking, synchronized append and authenticated read-only
-reopen were reviewed in PR #326. It remains disconnected from production. Durable anchor
-persistence, trust lifecycle, retention and integrated recovery remain future work.
-The publication follow-up adds an atomic freeze boundary and synchronized,
-non-replacing checkpoint files. It does not commit protected continuity anchors.
+reopen were reviewed in PR #326. Frozen checkpoint publication and historical
+reopen were reviewed in PR #327. The continuity follow-up persists bounded
+local anchors after exact storage authentication and synchronization, with an
+independently supplied restart head. These components remain disconnected from
+production. Authority provisioning, independent restart-state custody, reviewed
+uncertain-outcome recovery, key lifecycle and retention remain future work.
 The remaining schemas and shared consumer integration still follow the agreed
 authority contract. No record alone grants response authority.
 

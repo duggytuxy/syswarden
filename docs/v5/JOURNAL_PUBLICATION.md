@@ -17,7 +17,9 @@ Stable remains v4.10.4. No production path imports this component.
    returns a local publication receipt.
 3. A future protected continuity authority must compare and durably commit the
    proposed next anchor against its exact prior state. This final decision is
-   not implemented by either preceding operation.
+   not implemented by either preceding operation. The separate
+   [local continuity store](JOURNAL_CONTINUITY.md) supplies a bounded commit
+   primitive with independently supplied bootstrap and restart expectations.
 
 ```mermaid
 flowchart TD
@@ -144,7 +146,12 @@ crash recovery, rotation, retention and protection against anchor replacement.
 Replacing both history and its prior trusted state still defeats local rollback
 checks. No global witness or root-tamper resistance is claimed.
 
-WP03 remains open for that authority, production key lifecycle, interrupted-tail
+The [local continuity component](JOURNAL_CONTINUITY.md) now reopens and
+resynchronizes actual published storage before a bounded anchor append. It
+requires independently protected initial/restart state and does not provision
+that authority or resolve uncertain outcomes automatically.
+
+WP03 remains open for authority integration, production key lifecycle, interrupted-tail
 recovery, retention, explicit acquisition loss, redacted exports and native IVV.
 BunkerWeb synchronization, source-owned temporary bans, TTL, retries, HA and
 independence from the future dashboard remain unchanged. Refs #225 and #224.

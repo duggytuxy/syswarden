@@ -147,11 +147,13 @@ authority and must never be deployed.
 
 The separate [Linux storage component](JOURNAL_STORAGE.md) adds private file
 ownership, cooperating-process locking, synchronized append and authenticated
-read-only reopen. It remains inactive and does not persist trusted anchors.
-WP03 remains open for atomic anchor persistence, actual key lifecycle and
-revocation, recovery after interruption, rotation/retention, visible acquisition loss, redaction
-and measured disk-pressure/flood behavior. These component checks are not
-native crash, reboot or release acceptance.
+read-only reopen. It remains inactive; the separate
+[local continuity store](JOURNAL_CONTINUITY.md) persists bounded anchor records
+with independent initial/restart expectations. WP03 remains open for authority
+integration, actual key lifecycle and revocation, reviewed recovery after
+interruption, rotation/retention, visible acquisition loss, redaction and measured
+disk-pressure/flood behavior. These component checks are not native crash, reboot
+or release acceptance.
 
 The package remains disconnected from production. BunkerWeb synchronization,
 source-owned ban lifetimes, HA behavior and dashboard independence are
