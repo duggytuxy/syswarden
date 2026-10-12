@@ -237,21 +237,26 @@ func verifyArtifact(directory *os.File, file segmentFile, name string, want []by
 }
 
 func readCheckpointArtifact(directory *os.File, name string) ([]byte, error) {
+	data, _, err := readCheckpointSnapshot(directory, name)
+	return data, err
+}
+
+func readCheckpointSnapshot(directory *os.File, name string) ([]byte, unix.Stat_t, error) {
 	var before unix.Stat_t
 	if err := unix.Fstatat(int(directory.Fd()), name, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil || !privateFile(before) || before.Size > maxCheckpointBundleBytes {
-		return nil, errors.Join(ErrUnsafeStorage, err)
+		return nil, unix.Stat_t{}, errors.Join(ErrUnsafeStorage, err)
 	}
 	fd, err := unix.Openat(int(directory.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK|unix.O_NOCTTY, 0)
 	if err != nil {
-		return nil, err
+		return nil, unix.Stat_t{}, err
 	}
 	file := diskFile{os.NewFile(uintptr(fd), "journal-checkpoint")}
 	data, err := readCheckpointFile(directory, file, name, before)
 	err = errors.Join(err, file.Close())
 	if err != nil {
-		return nil, err
+		return nil, unix.Stat_t{}, err
 	}
-	return data, nil
+	return data, before, nil
 }
 
 func readCheckpointFile(directory *os.File, file segmentFile, name string, expected unix.Stat_t) ([]byte, error) {

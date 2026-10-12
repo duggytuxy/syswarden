@@ -83,7 +83,12 @@ not a financial allocation.
   anchor append, concurrent stale requests, capacity and counter exhaustion,
   uncertain complete/partial tails, safe file metadata and fault injection.
   See [Protected continuity](JOURNAL_CONTINUITY.md). Authority provisioning,
-  independent restart-head custody and authorized recovery remain unimplemented.
+  independent restart-head custody and partial/corrupt-tail recovery remain open.
+- Reviewed complete-anchor recovery: one-record eligibility, read-only plans,
+  exact approval binding to bytes/resources/trust/budgets, current scoped signature
+  verification, ordered resynchronization, no byte mutation, stale/corrupt/extra
+  tails and fault injection. See [Reviewed recovery](JOURNAL_RECOVERY.md). A plan
+  digest is not an authenticated principal; external custody and native IVV remain.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,

@@ -266,6 +266,7 @@ jobs:
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzJournalCheckpointSignedStatements
           fuzz_target src/core/syswarden-core ./journal FuzzCheckpointPublicationBundle
           fuzz_target src/core/syswarden-core ./journal FuzzAnchorLedger
+          fuzz_target src/core/syswarden-core ./journal FuzzAnchorRecoveryTail
 
       - name: Run golangci-lint
         shell: bash

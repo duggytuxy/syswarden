@@ -150,6 +150,8 @@ The [local continuity component](JOURNAL_CONTINUITY.md) now reopens and
 resynchronizes actual published storage before a bounded anchor append. It
 requires independently protected initial/restart state and does not provision
 that authority or resolve uncertain outcomes automatically.
+[Reviewed complete-anchor recovery](JOURNAL_RECOVERY.md) adds a separate exact-plan
+resynchronization path, without modifying published bytes.
 
 WP03 remains open for authority integration, production key lifecycle, interrupted-tail
 recovery, retention, explicit acquisition loss, redacted exports and native IVV.

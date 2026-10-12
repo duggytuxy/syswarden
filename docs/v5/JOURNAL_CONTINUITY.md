@@ -44,11 +44,14 @@ search for the newest-looking record or silently repair an interrupted tail.
 
 If a previous operation returned an uncertain result, obtaining a new expected
 head is a separate recovery authorization. Reading an unexpected candidate and
-passing it back as `expected` would bypass the intended trust boundary. That
-recovery policy, independent restart-head custody and its atomic integration
-remain outstanding. A complete record that was not acknowledged is therefore
-preserved and rejected against the old expected head, even if its checksum is
-valid. Absence of a record likewise does not authorize resetting the bootstrap.
+passing it back as `expected` would bypass the intended trust boundary. The
+ordinary resume path remains unchanged. A separate
+[reviewed recovery operation](JOURNAL_RECOVERY.md) can resynchronize exactly one
+complete extra record after full publication authentication and independent
+approval of the exact plan. Independent restart-head custody and its atomic
+integration remain outstanding. A complete record is still rejected by ordinary
+resume against the old expected head, even if its checksum is valid. Absence of
+a record likewise does not authorize resetting the bootstrap.
 
 ## Compare, verify storage, then persist
 
@@ -141,7 +144,7 @@ a fixed-budget fuzz target, including 32-bit length handling checks.
 
 These checks do not establish physical power-loss durability, native reboot IVV,
 full-disk acceptance, authority service isolation or complete WP03 recovery.
-Independent restart-state custody, reviewed uncertain-outcome recovery, production
+Independent restart-state custody, partial/corrupt-tail recovery, production
 key lifecycle, rotation/retention, visible acquisition loss, redacted exports and
 deployment IVV remain open in #225. Shared consumer integration remains open in
 #224. BunkerWeb synchronization, source-owned TTL, retries, HA and independence
