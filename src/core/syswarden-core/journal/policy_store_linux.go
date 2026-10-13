@@ -260,13 +260,16 @@ func (l *policyLease) refresh() error {
 	return nil
 }
 func (l *policyLease) append(next CustodyPolicySnapshot, op string) error {
+	return l.appendWithApproval(next, op, nil)
+}
+func (l *policyLease) appendWithApproval(next CustodyPolicySnapshot, op string, approval *policyChangeAudit) error {
 	if l.tip.count >= MaxPolicyRecords {
 		return ErrFull
 	}
 	if err := l.unchanged(); err != nil {
 		return err
 	}
-	frame, err := policyFrame(next, l.tip.count+1, op, l.tip.hash)
+	frame, err := policyFrameWithApproval(next, l.tip.count+1, op, l.tip.hash, approval)
 	if err != nil {
 		return err
 	}

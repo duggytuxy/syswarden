@@ -37,8 +37,11 @@ Operational admission always checks the current trusted clock and enabled state.
 These are trusted storage primitives, not authenticated administrative endpoints.
 The embedding authority must independently authorize the caller and update
 intent before invoking them. Possession of a signed document or an operational
-UID grant does not approve installation or disable. Administrative authentication,
-decision audit, provisioning, distribution and key rotation are still unfinished.
+UID grant does not approve installation or disable. The
+[reviewed administrative coordinator](REVIEWED_POLICY_ADMINISTRATION.md) now
+requires a separate authorizer and retains the exact decision binding with its
+policy transition. The actual authentication/audit provider, provisioning,
+distribution and key rotation remain unfinished.
 A change in checkpoint enrollment cannot silently migrate the custody backend.
 
 ## Bounded canonical ledger
@@ -47,12 +50,14 @@ Each frame contains a four-byte big-endian JSON length, exact compact JSON and a
 32-byte chained SHA-256. The hash input is ASCII
 `syswarden/custody-policy-record/v1`, one zero byte, the previous checksum
 (32 zero bytes for bootstrap), then the JSON. Fields in struct order are `schema`,
-`sequence`, `operation`, `enabled`, `policy` and `signature`. The schema is
+`sequence`, `operation`, `enabled`, `policy` and `signature`, followed by optional
+`approval` for reviewed administrative changes. Older records omit that field
+without changing their canonical bytes. The schema is
 `syswarden.custody-policy-record.v1`; the signed policy is embedded canonical JSON
 and its Ed25519 signature is lowercase hexadecimal. Sequence is a decimal string.
 Unknown/duplicate fields, alternate encodings and transitions fail closed.
 
-Limits are 256 records, 16,896 JSON bytes per record and 4,334,592 bytes per file.
+Limits are 256 records, 17,408 JSON bytes per record and 4,465,664 bytes per file.
 The last record is reserved for a disabled state: an enabled install cannot consume
 it. `Disable` requires no fresh issuer signature and can use that reserved slot.
 A full ledger refuses further changes. There is no eviction, compaction, truncation
@@ -138,7 +143,7 @@ Python/OpenSSL independently reproduce the canonical signed bootstrap vector.
 Fixed-budget fuzzing, race detection, Linux 386 and full-core regression complement
 these tests. They do not prove physical power-loss durability or native IVV.
 
-Before activation: authenticated administrative orchestration, OS/service isolation,
+Before activation: the actual authentication/audit provider, OS/service isolation,
 bounded request processing and denial auditing, key lifecycle, incomplete-state
 recovery, compaction/retention, visible loss, redaction and consumer integration
 remain open in #225 and #224. No live socket or authority service is installed.
