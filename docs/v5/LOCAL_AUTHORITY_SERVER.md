@@ -167,8 +167,34 @@ private; never echo them to clients or public logs.
 existing read/write cancellation. An executing approved durable mutation retains
 its credential-bearing peer until it finishes; its reply is suppressed during
 shutdown. The method returns a busy indication while `Serve` is still draining.
+The kernel listener is closed immediately, but the endpoint entry, ownership
+receipt, private pin and both lifecycle locks stay owned until all workers return.
+Repeated or concurrent `Close` calls cannot skip that wait. The transport and
+underlying authority must also report no admitted work before cleanup can start,
+including defensive internal use without a running supervisor worker set.
+
+A new connection can now receive `ECONNREFUSED` while a prior approved operation
+is still completing. During this interval, independent endpoint/pin leases refuse
+startup and both recovery trust-source modes before any approval provider is
+called. The listener stop is idempotent and caches its result; final cleanup does
+not close it a second time. After all workers return, `Serve` performs the exact
+cleanup below. An unused server can still be closed directly without starting it.
 Wait for `Serve` to return before treating shutdown as complete. Blocking trusted
 callbacks or storage operations have no promised hard cancellation deadline.
+The component never interrupts or rolls back an approved durable mutation.
+
+```mermaid
+flowchart TD
+    C[Close requested] --> T[Refuse new transport operations]
+    T --> S[Close kernel listener and cancel input waits]
+    S --> B{Workers or admitted operations remain}
+    B -->|Yes| K[Keep endpoint, receipt, pin and both locks]
+    K --> D[Return busy and let accepted work drain]
+    D --> B
+    B -->|No| V[Recheck exact owned lifecycle evidence]
+    V --> U[Retire endpoint and pin in synchronized order]
+    U --> R[Release owned descriptors and report completion]
+```
 
 The listener never uses Go's automatic pathname removal. Cleanup rechecks the
 owned directory, exact socket inode, type, mode, owner/group, link count and ACL.
@@ -190,9 +216,12 @@ that this handle has already proven; the fixed name alone is never sufficient.
 
 A peer disconnect or shutdown can follow a committed mutation. Missing replies
 must lead to verified resume or exact reviewed inspection, not automatic replay.
-The existing authority storage locks remain held while approved operations drain.
-Neither pathname removal nor a successful socket close proves that durable work
-has finished.
+The authority storage and lifecycle locks remain held while approved operations
+drain. A successful listener close or refused connect alone does not establish
+completion. The server's ordered cleanup is a cooperating component guarantee;
+external recovery still requires independently verified supervisor quiescence.
+Advisory locks do not authenticate arbitrary processes or stop a compromised
+service UID/root from violating the protocol.
 
 ## Evidence and remaining acceptance
 
@@ -200,6 +229,12 @@ Component tests exercise real Unix pathname sockets, valid resume/commit/reopen,
 generic denials, timeouts, capacity, pacing, concurrent lifecycle, approved-write
 drain, descriptor ownership, directory rename, occupied paths, malformed startup,
 POSIX ACLs, socket substitution and preservation of modified artifacts.
+Deterministically blocked policy operations verify retained locks and unchanged
+lifecycle evidence during shutdown, refusal of both recovery modes before approval,
+concurrent close, post-drain cleanup, success/denial/expiry behavior and changed-pin
+preservation. Lost replies remain suppressed without reversing an approved write.
+These local component tests complement the separate-UID gate; they do not provide
+a production supervisor or authenticate a human recovery decision.
 
 The mandatory [ordinary-user gate](UNPRIVILEGED_ASSURANCE.md) now includes the
 actual listener: an unintended group member can connect but cannot mutate the

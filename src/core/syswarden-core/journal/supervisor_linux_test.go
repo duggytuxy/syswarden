@@ -203,8 +203,8 @@ func TestAuthorityServerDrainsApprovedMutation(t *testing.T) {
 	if !errors.Is(s.Close(), ErrAuthorityServerBusy) {
 		t.Fatal("active drain not reported")
 	}
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("admission endpoint retained", err)
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatal("draining endpoint evidence removed", err)
 	}
 	select {
 	case err := <-done:

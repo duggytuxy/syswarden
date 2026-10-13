@@ -27,6 +27,8 @@ type authoritySocket struct {
 	path                  string
 	bound                 bool
 	closed                bool
+	listeningStopped      bool
+	listenCloseErr        error
 	closeErr              error
 	recordFile            segmentFile
 	record                []byte
@@ -176,6 +178,27 @@ func (s *authoritySocket) Attest() error {
 	return s.attestLocked()
 }
 
+// stopListening wakes accepts and refuses new connects without releasing either
+// lifecycle lock or removing evidence. The server calls Close only after drain.
+func (s *authoritySocket) stopListening() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopListeningLocked()
+}
+
+func (s *authoritySocket) stopListeningLocked() error {
+	if !s.listeningStopped {
+		s.listeningStopped = true
+		if s.listener != nil {
+			s.listenCloseErr = s.listener.Close()
+		}
+	}
+	return s.listenCloseErr
+}
+
 // Close never uses Go's automatic pathname unlink. A changed or unprovable entry
 // is retained, even on startup failure; it must not be silently reclaimed later.
 func (s *authoritySocket) Close() error {
@@ -187,9 +210,7 @@ func (s *authoritySocket) Close() error {
 	if s.closed {
 		return s.closeErr
 	}
-	if s.listener != nil {
-		s.closeErr = s.listener.Close()
-	}
+	s.closeErr = s.stopListeningLocked()
 	if s.bound {
 		// Preserve both entries after an uncertain record write or any changed
 		// evidence. Neither a socket basename nor a partial record permits removal.

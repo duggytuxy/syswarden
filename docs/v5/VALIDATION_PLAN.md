@@ -136,7 +136,11 @@ not a financial allocation.
   A separately locked private creator-written pin now supplies recovery trust
   across process death, with exact review binding, ordered retirement, fault
   preservation and additional ordinary-user file probes. Startup never adopts
-  stale entries. Trusted provisioning, deployed recovery
+  stale entries. Deterministic pending-operation fixtures now verify that stop
+  closes admission while retaining both lifecycle leases and all evidence until
+  drain, refusing either offline recovery mode before approval and preserving
+  success/denial/expiry outcomes through concurrent close.
+  Trusted provisioning, deployed recovery
   providers, service isolation and native evidence remain open.
 - Authenticated local client: pinned protected endpoint, kernel service UID/GID
   checked before sending, one nonqueued call, bounded canonical request/reply and

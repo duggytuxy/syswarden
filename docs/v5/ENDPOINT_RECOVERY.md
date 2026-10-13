@@ -52,6 +52,12 @@ refusals; the probe sends no application bytes and always closes its descriptor.
 This uses the Linux semantics in
 [connect(2)](https://man7.org/linux/man-pages/man2/connect.2.html).
 
+The cooperating local server now retains both endpoint and private-pin leases
+through the complete worker/operation drain. Closing its listener does not release
+these locks or remove evidence. Both local-pin and external-digest recovery paths
+therefore refuse a draining server before invoking the approval provider, even
+when the connection probe would otherwise see a refused connection.
+
 Neither this probe nor the advisory directory lock proves that all old accepted
 connections or durable work have stopped. The separately trusted supervisor must
 establish and maintain service quiescence for the complete recovery call. Locks
