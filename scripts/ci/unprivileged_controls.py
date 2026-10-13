@@ -25,6 +25,9 @@ def required_tests() -> set[str]:
         cases.add(f"{ROOT_TEST}/endpoint-{attack}")
     for operation in ("resume", "commit", "inspect-recovery", "apply-recovery", "inspect-policy", "apply-policy"):
         cases.add(f"{ROOT_TEST}/endpoint-ungranted-{operation}")
+    for attack in ("read", "overwrite", "append", "truncate", "unlink", "rename", "hardlink", "chmod", "chown"):
+        cases.add(f"{ROOT_TEST}/endpoint-owner-{attack}")
+    cases.add(f"{ROOT_TEST}/process-endpoint-crash-preservation")
     for case in ("private-socket", "endpoint-outside-group", "client-rejects-impostor", "endpoint-uid-quota", "authorized-operation-after-attacks"):
         cases.add(f"{ROOT_TEST}/{case}")
     for case in ("service-start", "client-resume", "client-private-storage", "client-process-interference", "client-no-administration", "stranger-private-storage", "client-commit", "client-replay-refused", "service-stop", "service-restart", "client-resume-after-restart", "service-final-stop"):

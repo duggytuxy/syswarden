@@ -22,9 +22,13 @@ socket reachable must never make policy, custody or journal files group-readable
 The fixed endpoint `authority-v1.sock` must not already exist. Construction binds
 relative to the owned directory through `/proc/self/fd`, sets and verifies the
 socket's service UID, selected group and `0660` mode, and only then starts listening.
-The socket must have one link and no POSIX ACL. Existing files, symlinks, directories
-and stale sockets are preserved and reported as startup failures. A separate,
-reviewed lifecycle procedure is required after an unclean exit leaves a socket.
+The socket must have one link and no POSIX ACL. Its final inode metadata is pinned,
+including modification/change timestamps. Before listening, the constructor also
+creates a private `.authority-v1-owner` receipt in the same endpoint directory.
+Existing socket or receipt entries, including files, symlinks, directories, FIFOs
+and stale sockets, are preserved and reported as startup failures. A receipt
+without a socket also blocks startup. A separate reviewed recovery procedure
+remains required after an unclean exit; these records are never adopted here.
 
 These are Linux pathname-socket assumptions, documented in
 [unix(7)](https://man7.org/linux/man-pages/man7/unix.7.html). The conversion to a Go
@@ -55,6 +59,42 @@ flowchart LR
     A --> P{Independent approval when required}
     P --> J[Existing durable authority]
 ```
+
+## Durable endpoint ownership evidence
+
+The receipt has schema `syswarden.authority-endpoint-owner.v1`. It binds a fresh
+32-byte random nonce to the already created directory/socket device and inode,
+UID/GID and socket change timestamp. Numeric values are exact decimal strings.
+The format implies directory `0750` and socket `0660`; neither mode is configurable.
+It contains no network address, policy, key or user-supplied path. The nonce is a
+creation identifier, not a password, signature, approval or bearer credential.
+
+Creation uses a fixed basename, `O_EXCL`, no-follow descriptor-relative operations,
+mode `0600`, service ownership, one link and no POSIX ACL. Its file group can be the
+service's private primary group rather than the endpoint's client group. Its bytes
+are canonical JSON, bounded to 1,024 bytes. There is one kernel write, followed by
+file synchronization, directory synchronization and exact readback of the entry,
+metadata and bytes. The separate directory synchronization follows the requirement
+described in [fsync(2)](https://man7.org/linux/man-pages/man2/fsync.2.html).
+Only then may the listener start. One extra file descriptor
+remains open for the endpoint lifetime; each endpoint attestation checks the same
+bounded receipt without accepting a replacement or reparsing external JSON.
+
+Zero/partial writes, write errors, synchronization errors and failed readback leave
+both the created socket and every receipt byte in place, with a startup error and
+no listener. Descriptors and the cooperating-process lock are released. Repeating
+startup cannot overwrite this state. A crash before receipt creation can still
+leave an unmarked socket; it likewise blocks startup and is not reclaimed.
+Successful `fsync` calls and process-crash tests do not prove physical power-loss
+behavior on all filesystems. A later reader cannot infer that a previous `fsync`
+completed merely because the record exists.
+
+This receipt derives its trust from independently protected service provisioning
+and the live creator's pinned metadata and bytes. It does not resist a compromised
+service UID, root or kernel, authenticate an arbitrary discovered file, or authorize
+future deletion by itself. There is no new recovery command or wire operation.
+Offline recovery validation, independent approval and safe lifecycle integration
+remain separate work. Preserve ambiguous state for that procedure.
 
 ## Concurrency, pacing and diagnostics
 
@@ -116,10 +156,17 @@ callbacks or storage operations have no promised hard cancellation deadline.
 
 The listener never uses Go's automatic pathname removal. Cleanup rechecks the
 owned directory, exact socket inode, type, mode, owner/group, link count and ACL.
-Only that unchanged socket is unlinked. Modified, replaced or unprovable entries
-remain in place with an error, including across repeated `Close` calls. The owned
-directory is never deleted. Partial startup failure uses the same bounded ownership
-check; it does not reclaim an arbitrary entry merely because the name matches.
+The private receipt must also match its exact creator-owned inode, metadata and
+bytes. Only after both checks succeed is the socket unlinked, then the unchanged
+receipt, followed by directory synchronization. If receipt removal fails after the
+socket is gone, that intermediate state remains visible as an error. Failed final
+synchronization is an uncertain cleanup outcome. `Close` retains the first result;
+it does not retry removal later after observing a replacement.
+
+Modified, replaced or unprovable entries remain in place with an error. Uncertain
+receipt creation preserves both entries. The owned directory is never deleted.
+A startup failure before a receipt was created may remove only the exact socket
+that this handle has already proven; the fixed name alone is never sufficient.
 
 A peer disconnect or shutdown can follow a committed mutation. Missing replies
 must lead to verified resume or exact reviewed inspection, not automatic replay.
@@ -139,9 +186,15 @@ actual listener: an unintended group member can connect but cannot mutate the
 endpoint or obtain any of the six authority results. An account outside the group
 cannot connect. The private-resource inventory remains unchanged, and authorized
 resume/commit/reopen still succeeds. The client follow-up adds a kernel-identity
-impostor case. The non-root process and peer-quota follow-ups bring the named gate
-to 100 cases, including authorized commit, fresh-process resume and a second UID
-being served while an ungranted account holds an incomplete connection. Incomplete
+impostor case. The non-root process, peer-quota and endpoint-lifecycle follow-ups
+bring the named gate to 110 cases, including authorized commit, fresh-process
+resume and a second UID
+being served while an ungranted account holds an incomplete connection. Nine
+further probes deny ordinary-user reads and changes to the private receipt. A
+real service process is also deliberately killed after readiness; the exact
+receipt survives, and a fresh service refuses to adopt or delete either entry.
+Storage-fault tests separately retain zero, partial and complete uncertain bytes,
+reject unsafe receipts and exercise clean removal and partial cleanup. Incomplete
 or skipped dedicated evidence is a failure.
 
 This is component isolation evidence, not deployed-service or native distribution

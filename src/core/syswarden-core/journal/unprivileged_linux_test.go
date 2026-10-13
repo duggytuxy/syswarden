@@ -176,6 +176,14 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 			requireAdversarialSnapshot(t, before, dirs)
 		})
 	}
+	for _, attack := range []string{"read", "overwrite", "append", "truncate", "unlink", "rename", "hardlink", "chmod", "chown"} {
+		t.Run("endpoint-owner-"+attack, func(t *testing.T) {
+			name := filepath.Join(endpointPath, AuthorityEndpointRecordName)
+			before := adversarialSnapshot(t, []string{name})
+			runAdversary(t, canary, attack, name, nil)
+			requireAdversarialSnapshot(t, before, []string{name})
+		})
+	}
 	t.Run("endpoint-outside-group", func(t *testing.T) { runAdversary(t, canary, "outside-socket", endpointName, nil) })
 	for _, request := range requests {
 		t.Run("endpoint-ungranted-"+request.Operation, func(t *testing.T) {

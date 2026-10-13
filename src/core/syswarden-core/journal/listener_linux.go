@@ -19,15 +19,19 @@ var ErrAuthorityEndpoint = errors.New("unsafe local authority endpoint")
 // directory lock. Only trusted provisioning chooses its directory and group.
 // Client-reachable directories must be distinct from private authority storage.
 type authoritySocket struct {
-	mu        sync.Mutex
-	directory *os.File
-	listener  *net.UnixListener
-	dirStamp  unix.Stat_t
-	entry     unix.Stat_t
-	path      string
-	bound     bool
-	closed    bool
-	closeErr  error
+	mu                    sync.Mutex
+	directory             *os.File
+	listener              *net.UnixListener
+	dirStamp              unix.Stat_t
+	entry                 unix.Stat_t
+	path                  string
+	bound                 bool
+	closed                bool
+	closeErr              error
+	recordFile            segmentFile
+	record                []byte
+	recordStamp           unix.Stat_t
+	recordReady, preserve bool
 }
 
 func noAuthorityACL(get func(string) (int, error)) error {
@@ -55,6 +59,12 @@ func authoritySocketDirectory(dir *os.File, group uint32) (unix.Stat_t, error) {
 	return st, err
 }
 func openAuthoritySocket(directory *os.File, group uint32, backlog int) (*authoritySocket, error) {
+	return openAuthoritySocketWithRecord(directory, group, backlog, (*authoritySocket).createEndpointRecord)
+}
+
+// The internal writer seam permits deterministic storage-failure tests. Callers
+// use openAuthoritySocket; no request or public startup option selects a writer.
+func openAuthoritySocketWithRecord(directory *os.File, group uint32, backlog int, record func(*authoritySocket) error) (*authoritySocket, error) {
 	if directory == nil || group > math.MaxInt32 || backlog < 1 || backlog > MaxAuthorityPeers {
 		return nil, ErrInvalidOptions
 	}
@@ -78,6 +88,10 @@ func openAuthoritySocket(directory *os.File, group uint32, backlog int) (*author
 	}
 	if err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		return fail(errors.Join(ErrLocked, err))
+	}
+	var existing unix.Stat_t
+	if err = unix.Fstatat(fd, AuthorityEndpointRecordName, &existing, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, unix.ENOENT) {
+		return fail(errors.Join(ErrAuthorityEndpoint, err))
 	}
 	// Linux bind has no bindat. Resolve the fixed basename through our owned
 	// descriptor, not the caller's mutable path or working directory.
@@ -104,11 +118,22 @@ func openAuthoritySocket(directory *os.File, group uint32, backlog int) (*author
 	if err = unix.Fchmodat(fd, AuthoritySocketName, 0660, 0); err != nil {
 		return fail(err)
 	}
-	s.entry.Mode = unix.S_IFSOCK | 0660
+	if err = unix.Fstatat(fd, AuthoritySocketName, &s.entry, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return fail(err)
+	}
+	if err = s.attestSocketLocked(); err != nil {
+		return fail(err)
+	}
+	if record == nil {
+		return fail(ErrInvalidOptions)
+	}
+	if err = record(s); err != nil {
+		return fail(err)
+	}
 	if err = s.attestLocked(); err != nil {
 		return fail(err)
 	}
-	// No accept is possible until final permissions and ownership are proven.
+	// No accept is possible until ownership evidence and its directory are synced.
 	if err = unix.Listen(socket, backlog); err != nil {
 		return fail(err)
 	}
@@ -128,6 +153,9 @@ func openAuthoritySocket(directory *os.File, group uint32, backlog int) (*author
 	return s, nil
 }
 func (s *authoritySocket) attestLocked() error {
+	return errors.Join(s.attestSocketLocked(), s.attestEndpointRecord())
+}
+func (s *authoritySocket) attestSocketLocked() error {
 	if s.closed || !s.bound {
 		return ErrClosed
 	}
@@ -136,7 +164,7 @@ func (s *authoritySocket) attestLocked() error {
 		return errors.Join(ErrAuthorityEndpoint, err)
 	}
 	var entry unix.Stat_t
-	if err = unix.Fstatat(int(s.directory.Fd()), AuthoritySocketName, &entry, unix.AT_SYMLINK_NOFOLLOW); err != nil || entry.Mode&(unix.S_IFMT|07777) != unix.S_IFSOCK|0660 || entry.Uid != dir.Uid || entry.Gid != dir.Gid || entry.Nlink != 1 || entry.Dev != s.entry.Dev || entry.Ino != s.entry.Ino {
+	if err = unix.Fstatat(int(s.directory.Fd()), AuthoritySocketName, &entry, unix.AT_SYMLINK_NOFOLLOW); err != nil || entry.Mode&(unix.S_IFMT|07777) != unix.S_IFSOCK|0660 || entry.Uid != dir.Uid || entry.Gid != dir.Gid || entry.Nlink != 1 || entry.Dev != s.entry.Dev || entry.Ino != s.entry.Ino || !sameStamp(entry, s.entry) {
 		return errors.Join(ErrAuthorityEndpoint, err)
 	}
 	return noAuthorityACL(func(name string) (int, error) { return unix.Lgetxattr(s.path, name, nil) })
@@ -162,19 +190,32 @@ func (s *authoritySocket) Close() error {
 		s.closeErr = s.listener.Close()
 	}
 	if s.bound {
-		dir, err := authoritySocketDirectory(s.directory, s.dirStamp.Gid)
-		var entry unix.Stat_t
-		if err == nil {
-			err = unix.Fstatat(int(s.directory.Fd()), AuthoritySocketName, &entry, unix.AT_SYMLINK_NOFOLLOW)
+		// Preserve both entries after an uncertain record write or any changed
+		// evidence. Neither a socket basename nor a partial record permits removal.
+		err := s.attestSocketLocked()
+		if s.preserve {
+			err = errors.Join(err, ErrCommitUncertain)
+		} else if s.recordFile != nil {
+			err = errors.Join(err, s.attestEndpointRecord())
 		}
 		if err == nil {
-			err = noAuthorityACL(func(name string) (int, error) { return unix.Lgetxattr(s.path, name, nil) })
+			err = unix.Unlinkat(int(s.directory.Fd()), AuthoritySocketName, 0)
+			if err == nil && s.recordReady {
+				// Keep the receipt if socket removal failed. If receipt removal
+				// fails after socket removal, preserve that exact intermediate state.
+				err = s.attestEndpointRecord()
+				if err == nil {
+					err = unix.Unlinkat(int(s.directory.Fd()), AuthorityEndpointRecordName, 0)
+				}
+			}
+			if syncErr := s.directory.Sync(); syncErr != nil {
+				err = errors.Join(err, ErrCommitUncertain, syncErr)
+			}
 		}
-		if err != nil || dir.Dev != s.dirStamp.Dev || dir.Ino != s.dirStamp.Ino || entry.Mode != s.entry.Mode || entry.Gid != s.entry.Gid || entry.Uid != s.entry.Uid || entry.Dev != s.entry.Dev || entry.Ino != s.entry.Ino || entry.Nlink != 1 {
-			s.closeErr = errors.Join(s.closeErr, ErrAuthorityEndpoint, err)
-		} else {
-			s.closeErr = errors.Join(s.closeErr, unix.Unlinkat(int(s.directory.Fd()), AuthoritySocketName, 0))
-		}
+		s.closeErr = errors.Join(s.closeErr, err)
+	}
+	if s.recordFile != nil {
+		s.closeErr = errors.Join(s.closeErr, s.recordFile.Close())
 	}
 	if s.directory != nil {
 		s.closeErr = errors.Join(s.closeErr, s.directory.Close())

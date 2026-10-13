@@ -105,7 +105,12 @@ follow-up exercises the actual service under a non-root identity with separate
 authorized and ungranted clients, protected-file refusals and fresh-process
 resume after a durable commit, reviewed in PR #341. The peer-quota follow-up adds explicit simultaneous
 connection ceilings per kernel UID before framing, preserves charged slots through
-shutdown drain and verifies service to another UID during incomplete input.
+shutdown drain and verifies service to another UID during incomplete input,
+reviewed in PR #342. The endpoint-lifecycle follow-up persists a bounded private
+ownership receipt before listening, preserves interrupted or changed evidence and
+removes only the exact live creator's socket and receipt during clean shutdown.
+A real process-kill test verifies preservation and refusal on the next startup;
+reviewed stale-endpoint recovery remains unfinished.
 These components and tests supply no identity
 provider or installed OS-isolated service.
 These components remain disconnected from production. Authenticated authority

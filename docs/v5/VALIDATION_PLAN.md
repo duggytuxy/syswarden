@@ -126,12 +126,17 @@ not a financial allocation.
   workers, paced admission, timeouts and approved-operation drain. See
   [Local server](LOCAL_AUTHORITY_SERVER.md). The cross-UID gate also verifies group
   reachability without authorization and refusal outside the selected group.
-  Trusted provisioning, deployed service isolation and native evidence remain open.
+  The endpoint receipt adds exclusive private creation, synchronized write/readback
+  before listen, preservation of uncertain or changed evidence, exact ordered
+  socket/receipt removal, and startup refusal after a real process kill.
+  Ordinary-user receipt reads and mutations are separately denied. No new recovery
+  mutation or stale-entry adoption is implemented. Trusted provisioning, deployed
+  service isolation and native evidence remain open.
 - Authenticated local client: pinned protected endpoint, kernel service UID/GID
   checked before sending, one nonqueued call, bounded canonical request/reply and
   EOF, operation/result binding, private plan shape/digest validation, cancellation
   and explicit uncertain outcomes without automatic replay. See
-  [Local client](LOCAL_AUTHORITY_CLIENT.md). The mandatory 100-case cross-UID gate
+  [Local client](LOCAL_AUTHORITY_CLIENT.md). The mandatory 110-case cross-UID gate
   includes an impostor listener that receives zero bytes despite expected socket
   metadata. Service identity is not human authentication or independent approval;
   trusted discovery, deployed lifecycle and native evidence remain open.
