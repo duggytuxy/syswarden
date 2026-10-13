@@ -1,0 +1,76 @@
+"""Reject incomplete or skipped evidence from the mandatory cross-UID gate."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+ROOT_TEST = "TestLocalUnprivilegedBoundary"
+PACKAGE = "syswarden-core/journal"
+MAX_REPORT_BYTES = 4 * 1024 * 1024
+
+
+def required_tests() -> set[str]:
+    cases = {ROOT_TEST}
+    for resource in ("policy", "custody", "anchor", "segment", "checkpoint"):
+        for attack in ("read", "overwrite", "append", "truncate", "unlink", "rename", "hardlink", "chmod", "chown"):
+            cases.add(f"{ROOT_TEST}/{resource}/{attack}")
+    for resource in ("policy", "custody", "anchor", "journal"):
+        for attack in ("create", "symlink", "replace-directory"):
+            cases.add(f"{ROOT_TEST}/{resource}/{attack}")
+    for operation in ("resume", "commit", "inspect-recovery", "apply-recovery", "inspect-policy", "apply-policy"):
+        cases.add(f"{ROOT_TEST}/ungranted-peer/{operation}")
+    for case in ("private-socket", "authorized-operation-after-attacks"):
+        cases.add(f"{ROOT_TEST}/{case}")
+    return cases
+
+
+def verify(data: bytes) -> int:
+    if not data or len(data) > MAX_REPORT_BYTES:
+        raise ValueError("empty or oversized cross-UID report")
+    required = required_tests()
+    started: set[str] = set()
+    passed: set[str] = set()
+    package_started = False
+    package_passed = False
+    for line in data.splitlines():
+        event = json.loads(line)
+        if not isinstance(event, dict) or event.get("Package") != PACKAGE or package_passed:
+            raise ValueError("invalid report envelope or data after package completion")
+        action, test = event.get("Action"), event.get("Test")
+        if action in ("skip", "fail"):
+            raise ValueError("cross-UID evidence contains a skip or failure")
+        if action == "output":
+            continue
+        if test is None:
+            if action == "start" and not package_started:
+                package_started = True
+            elif action == "pass" and package_started and passed == required:
+                package_passed = True
+            else:
+                raise ValueError("invalid or incomplete package completion")
+        elif not package_started or test not in required:
+            raise ValueError("unexpected test identity")
+        elif action == "run" and test not in started:
+            started.add(test)
+        elif action == "pass" and test in started and test not in passed:
+            passed.add(test)
+        else:
+            raise ValueError("duplicate or invalid test transition")
+    if not package_passed or started != required or passed != required:
+        raise ValueError("missing mandatory cross-UID evidence")
+    return len(required) - 1
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--report", required=True, type=Path)
+    args = parser.parse_args()
+    with args.report.open("rb") as stream:
+        count = verify(stream.read(MAX_REPORT_BYTES + 1))
+    print(f"Verified {count} cross-UID component cases with no skipped evidence.")
+
+
+if __name__ == "__main__":
+    main()

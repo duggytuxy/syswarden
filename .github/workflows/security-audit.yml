@@ -124,6 +124,25 @@ jobs:
           sudo env SYSWARDEN_REQUIRE_IPV6_KERNEL=1 "${test_context}/kernel.test" \
             -test.run='^TestIPv6ControlPlaneKernel$' -test.count=1 -test.v
 
+      - name: Verify unprivileged local tampering boundaries
+        shell: bash
+        env:
+          GOMAXPROCS: '2'
+        run: |
+          set -euo pipefail
+          test_binary="${RUNNER_TEMP}/syswarden-cross-uid.test"
+          report="${RUNNER_TEMP}/syswarden-cross-uid.jsonl"
+          go test -mod=readonly -p=2 -c -o "${test_binary}" ./src/core/syswarden-core/journal
+          (
+            cd src/core/syswarden-core/journal
+            go tool test2json -t -p syswarden-core/journal \
+              sudo -n env SYSWARDEN_REQUIRE_CROSS_UID=1 GOMAXPROCS=2 \
+              "${test_binary}" -test.run='^TestLocalUnprivilegedBoundary$' \
+              -test.count=1 -test.v=test2json -test.timeout=2m
+          ) | tee "${report}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/unprivileged_controls.py --report "${report}"
+          rm -- "${test_binary}"
+
       - name: Verify formatting
         shell: bash
         run: |
