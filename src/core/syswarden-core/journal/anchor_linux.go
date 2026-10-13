@@ -167,6 +167,13 @@ type AnchorStore struct {
 }
 
 func acquireAnchor(directory *os.File, initial contracts.JournalCheckpointAnchor, create bool) (*AnchorStore, error) {
+	return acquireAnchorMode(directory, initial, create, false)
+}
+
+func acquireAnchorMode(directory *os.File, initial contracts.JournalCheckpointAnchor, create, readOnly bool) (*AnchorStore, error) {
+	if create && readOnly {
+		return nil, ErrInvalidOptions
+	}
 	if _, err := encodeAnchor(initial); err != nil {
 		return nil, err
 	}
@@ -175,6 +182,9 @@ func acquireAnchor(directory *os.File, initial contracts.JournalCheckpointAnchor
 		return nil, err
 	}
 	flags := unix.O_RDWR | unix.O_APPEND | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK | unix.O_NOCTTY
+	if readOnly {
+		flags = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK | unix.O_NOCTTY
+	}
 	if create {
 		flags |= unix.O_CREAT | unix.O_EXCL
 	} else {
@@ -273,21 +283,29 @@ func (a *AnchorStore) unchanged() error {
 }
 
 func (a *AnchorStore) readState() (anchorState, error) {
-	if err := a.unchanged(); err != nil {
+	data, err := a.readExact()
+	if err != nil {
 		return anchorState{}, err
 	}
+	return scanAnchors(data, a.initial)
+}
+
+func (a *AnchorStore) readExact() ([]byte, error) {
+	if err := a.unchanged(); err != nil {
+		return nil, err
+	}
 	if a.stamp.Size <= 0 || a.stamp.Size > maxAnchorFile {
-		return anchorState{}, ErrAnchorFormat
+		return nil, ErrAnchorFormat
 	}
 	data := make([]byte, int(a.stamp.Size))
 	n, err := a.file.ReadAt(data, 0)
 	if err != nil || n != len(data) {
-		return anchorState{}, errors.Join(ErrAnchorFormat, err)
+		return nil, errors.Join(ErrAnchorFormat, err)
 	}
 	if err = a.unchanged(); err != nil {
-		return anchorState{}, err
+		return nil, err
 	}
-	return scanAnchors(data, a.initial)
+	return data, nil
 }
 
 // Current returns a value only after checking the entire protected file.
