@@ -151,3 +151,8 @@ The bounded ledger fuzz target now includes reviewed history. Race, Linux 386 an
 full-core regression supplement these component checks, not native acceptance.
 
 Refs #225 and #224. Neither work package is complete.
+
+The [fixed-resource authority composition](LOCAL_AUTHORITY.md) now routes the
+existing coordinators through a bounded canonical dispatcher with owned startup
+resources. It does not implement a listener, authentication/audit provider or
+OS-isolated provisioning, and remains disconnected from production.

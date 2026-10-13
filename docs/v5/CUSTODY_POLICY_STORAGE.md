@@ -149,3 +149,8 @@ recovery, compaction/retention, visible loss, redaction and consumer integration
 remain open in #225 and #224. No live socket or authority service is installed.
 BunkerWeb keeps its existing API, source-owned bans, TTL, retries and HA behavior,
 independent of dashboard identity and journal availability.
+
+The [fixed-resource authority composition](LOCAL_AUTHORITY.md) now routes the
+existing coordinators through a bounded canonical dispatcher with owned startup
+resources. It does not implement a listener, authentication/audit provider or
+OS-isolated provisioning, and remains disconnected from production.
