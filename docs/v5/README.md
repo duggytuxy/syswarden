@@ -37,6 +37,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 24. [Bounded local authority transport](LOCAL_AUTHORITY_TRANSPORT.md).
 25. [Unprivileged local attack assurance](UNPRIVILEGED_ASSURANCE.md).
 26. [Bounded local authority listener and supervisor](LOCAL_AUTHORITY_SERVER.md).
+27. [Authenticated local authority client](LOCAL_AUTHORITY_CLIENT.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -96,8 +97,11 @@ PR #335. The transport follow-up adds bounded framing and I/O deadlines on accep
 Unix peers, ancillary-input rejection, connection capacity and controlled shutdown.
 It was reviewed in PR #336. The ordinary-user component gate was reviewed in
 PR #338. The listener follow-up adds an explicitly provisioned pathname endpoint,
-fixed paced workers, exact cleanup and further separate-UID checks. It supplies
-no identity provider or installed OS-isolated service.
+fixed paced workers, exact cleanup and further separate-UID checks, reviewed in
+PR #339. The client follow-up pins the provisioned endpoint, verifies the kernel
+service identity before sending and validates bounded request-bound replies, with
+no automatic retry after an uncertain outcome. Neither component supplies an
+identity provider or installed OS-isolated service.
 These components remain disconnected from production. Authenticated authority
 provisioning, OS isolation, incomplete backend/intent recovery, key lifecycle and
 retention remain future work.

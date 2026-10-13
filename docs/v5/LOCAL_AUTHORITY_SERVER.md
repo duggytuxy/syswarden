@@ -34,8 +34,8 @@ cannot redirect this component's cleanup into a replacement directory.
 
 Provisioning must protect the client-visible pathname and its ancestors. This
 component owns a descriptor, not an authenticated client discovery mechanism.
-A client must use a trusted provisioned endpoint and validate the service identity
-as part of the future client implementation. A malicious service UID or root,
+The [client component](LOCAL_AUTHORITY_CLIENT.md) pins a trusted provisioned
+endpoint and validates the kernel service identity before sending any request. A malicious service UID or root,
 mount-namespace replacement and compromised client provisioning remain outside the
 ordinary-user claim. There is no abstract socket, TCP listener or remote endpoint.
 
@@ -133,11 +133,12 @@ The mandatory [ordinary-user gate](UNPRIVILEGED_ASSURANCE.md) now includes the
 actual listener: an unintended group member can connect but cannot mutate the
 endpoint or obtain any of the six authority results. An account outside the group
 cannot connect. The private-resource inventory remains unchanged, and authorized
-resume/commit/reopen still succeeds. The named gate has 80 cases; incomplete or
+resume/commit/reopen still succeeds. The client follow-up adds a kernel-identity
+impostor case, bringing the named gate to 81 cases; incomplete or
 skipped dedicated evidence is a failure.
 
 This is component isolation evidence, not deployed-service or native distribution
-acceptance. Production provisioning, authenticated clients, separate service
+acceptance. Production provisioning, deployed clients, separate service
 identity and sandbox, approval/audit providers, key lifecycle, stale-socket
 recovery and package lifecycle remain unfinished. The incomplete custody/intent
 recovery and retention work also remains open. No native server test is implied.

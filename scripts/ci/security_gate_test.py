@@ -853,6 +853,7 @@ class ActFixtureTests(unittest.TestCase):
             "FuzzEventJournalEncoding",
             "FuzzJournalCheckpointVerification",
             "FuzzJournalCheckpointSignedStatements",
+            "FuzzAuthorityResponse",
         ):
             self.assertEqual(workflow.count(target), 1)
 

@@ -25,7 +25,7 @@ def required_tests() -> set[str]:
         cases.add(f"{ROOT_TEST}/endpoint-{attack}")
     for operation in ("resume", "commit", "inspect-recovery", "apply-recovery", "inspect-policy", "apply-policy"):
         cases.add(f"{ROOT_TEST}/endpoint-ungranted-{operation}")
-    for case in ("private-socket", "endpoint-outside-group", "authorized-operation-after-attacks"):
+    for case in ("private-socket", "endpoint-outside-group", "client-rejects-impostor", "authorized-operation-after-attacks"):
         cases.add(f"{ROOT_TEST}/{case}")
     return cases
 

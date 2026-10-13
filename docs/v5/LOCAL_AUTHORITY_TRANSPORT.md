@@ -82,7 +82,9 @@ sequenceDiagram
 
 Success uses the same four-byte length prefix followed by the existing canonical
 `syswarden.local-authority-response.v1` document, then connection close. Clients
-must require a complete length-bounded response and EOF. The response may contain
+must require a complete length-bounded response and EOF. The inactive
+[client component](LOCAL_AUTHORITY_CLIENT.md) adds kernel service identity checks,
+endpoint pinning and request-bound reply validation. The response may contain
 private inspection plans and must remain inside the authorized local channel.
 
 For an admitted request that fails, the transport attempts a four-byte zero length
