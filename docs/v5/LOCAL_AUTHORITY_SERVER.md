@@ -7,6 +7,12 @@ The published baseline remains v4.10.4. Refs #225, #224 and #337, all partial.
 
 ## Explicit provisioning and trust
 
+The optional [protected-layout startup](PROVISIONED_AUTHORITY.md) opens the existing
+server from one private state-directory descriptor and fixed no-follow children,
+with a separate endpoint. It retains a root lease through drain and rechecks child
+identity around accepts. The original explicit-descriptor path below remains
+available. Neither path provisions accounts, independent trust or OS isolation.
+
 Trusted startup supplies the existing fixed authority resources, transport limits,
 an open endpoint-directory descriptor, a distinct private pin-directory descriptor,
 an explicit numeric group and an accept interval. There is no account lookup, directory creation, stale-socket takeover,

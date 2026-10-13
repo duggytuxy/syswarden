@@ -125,9 +125,18 @@ prepares synthetic signed policy/publication files, transfers ownership, starts
 children and verifies before/after results. It never handles client operations on
 behalf of the service. No system account, unit or host configuration is created.
 
+The child now uses [protected-layout startup](PROVISIONED_AUTHORITY.md) with the
+literal five-directory private layout and a separate endpoint. Existing private
+storage cases also refuse listing or changing permissions on the state root and
+verify its unchanged metadata. That root supplies an additional traversal boundary;
+these process cases do not independently prove leaf permissions through an
+accessible parent. The earlier direct storage probes still expose their ancestors
+to test leaf protection separately. The named gate stays at 113 cases, with no new
+child process, skipped evidence or timeout change.
+
 | Test identity | Provisioned access | Authority |
 | --- | --- | --- |
-| Service UID/GID 65533 | Private resource directories `0700`, files `0600`; one supplementary endpoint group 65534. | Opens and owns the actual bounded server and existing authority stores. |
+| Service UID/GID 65533 | Private state root and resource directories `0700`, files `0600`; one supplementary endpoint group 65534. | Opens and owns the actual bounded server and existing authority stores. |
 | Client UID/GID 65534 | Endpoint directory `0750` and socket `0660`; no supplementary groups or private resource descriptors. | Synthetic signed policy grants only resume and commit. |
 | Unrelated UID 65532, GID 65534 | Same endpoint reachability; no supplementary groups or private resource descriptors. | No operation grant. |
 

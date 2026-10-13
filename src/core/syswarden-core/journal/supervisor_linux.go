@@ -50,6 +50,7 @@ type LocalAuthorityServer struct {
 	started   bool
 	status    AuthorityServerStatus
 	failure   error
+	layout    *authorityLayout
 }
 
 func OpenLocalAuthorityServer(c AuthorityServerConfig) (*LocalAuthorityServer, error) {
@@ -113,7 +114,7 @@ func (s *LocalAuthorityServer) failed(err error) {
 }
 func (s *LocalAuthorityServer) worker() {
 	for s.permit() {
-		if err := s.socket.Attest(); err != nil {
+		if err := errors.Join(s.layout.attest(), s.socket.Attest()); err != nil {
 			s.failed(err)
 			return
 		}
@@ -122,7 +123,7 @@ func (s *LocalAuthorityServer) worker() {
 			s.failed(err)
 			return
 		}
-		if err = s.socket.Attest(); err != nil {
+		if err = errors.Join(s.layout.attest(), s.socket.Attest()); err != nil {
 			_ = peer.Close()
 			s.failed(err)
 			return
@@ -203,5 +204,5 @@ func (s *LocalAuthorityServer) Close() error {
 	if busy || errors.Is(err, ErrAuthorityTransportBusy) || errors.Is(err, ErrAuthorityBusy) {
 		return errors.Join(err, ErrAuthorityServerBusy)
 	}
-	return errors.Join(err, socket.Close())
+	return errors.Join(err, socket.Close(), s.layout.close())
 }

@@ -147,6 +147,14 @@ not a financial allocation.
   success/denial/expiry outcomes through concurrent close.
   Trusted provisioning, deployed recovery
   providers, service isolation and native evidence remain open.
+- Protected-layout startup: five fixed private children opened relative to a
+  trusted root descriptor, no-follow metadata/ACL checks, refused conflicts and
+  unchanged failed-startup state, bounded descriptor cleanup and a root lease
+  retained through drain. Child replacement is rejected before serving. The
+  existing non-root process gate now exercises this actual startup path, including
+  private-root attacks, commit, restart and reviewed stale-endpoint recovery.
+  See [Protected authority layout](PROVISIONED_AUTHORITY.md). Trusted path discovery,
+  account creation, installed OS isolation and native acceptance remain open.
 - Authenticated local client: pinned protected endpoint, kernel service UID/GID
   checked before sending, one nonqueued call, bounded canonical request/reply and
   EOF, operation/result binding, private plan shape/digest validation, cancellation
