@@ -20,10 +20,14 @@ const endpointRecoveryDomain = "syswarden/authority-endpoint-recovery/v1\x00"
 // EndpointRecoveryConfig is trusted offline provisioning, never request data.
 // ExpectedRecordSHA256 must be retained independently while the creator is known
 // and attested. Hashing discovered stale bytes is not an acceptable trust source.
+// Alternatively, PinDirectory supplies the server's separately protected durable
+// pin. Exactly one source is required. The local pin is included in the review
+// and retired only after the complete endpoint removal is synchronized.
 // Peer supplies kernel credentials of the administrator's authenticated channel.
 // The executor uses the service UID; the requester needs no protected file access.
 type EndpointRecoveryConfig struct {
 	Directory            *os.File
+	PinDirectory         *os.File
 	GroupID              uint32
 	ExpectedRecordSHA256 string
 	Peer                 *net.UnixConn
@@ -68,16 +72,23 @@ type EndpointRecoveryResult struct {
 }
 
 type endpointRecoveryDocument struct {
-	Schema       string           `json:"schema"`
-	Operation    string           `json:"operation"`
-	RecordSHA256 string           `json:"record_sha256"`
-	Record       json.RawMessage  `json:"record"`
-	Directory    recoveryResource `json:"directory"`
-	Socket       recoveryResource `json:"socket"`
-	RecordFile   recoveryResource `json:"record_file"`
-	UID          string           `json:"actor_uid"`
-	GID          string           `json:"actor_gid"`
-	PID          string           `json:"actor_pid"`
+	Schema       string               `json:"schema"`
+	Operation    string               `json:"operation"`
+	RecordSHA256 string               `json:"record_sha256"`
+	Record       json.RawMessage      `json:"record"`
+	Directory    recoveryResource     `json:"directory"`
+	Socket       recoveryResource     `json:"socket"`
+	RecordFile   recoveryResource     `json:"record_file"`
+	Pin          *endpointRecoveryPin `json:"pin,omitempty"`
+	UID          string               `json:"actor_uid"`
+	GID          string               `json:"actor_gid"`
+	PID          string               `json:"actor_pid"`
+}
+
+type endpointRecoveryPin struct {
+	Directory recoveryResource `json:"directory"`
+	File      recoveryResource `json:"file"`
+	SHA256    string           `json:"sha256"`
 }
 
 // The attestation adapter owns no socket and must never use authoritySocket.Close:
@@ -91,9 +102,9 @@ type endpointRecoveryLease struct {
 }
 
 func (l *endpointRecoveryLease) close() error {
-	var err error
+	err := l.s.pin.close()
 	if l.s.recordFile != nil {
-		err = l.s.recordFile.Close()
+		err = errors.Join(err, l.s.recordFile.Close())
 	}
 	if l.s.directory != nil {
 		err = errors.Join(err, l.s.directory.Close())
@@ -102,7 +113,8 @@ func (l *endpointRecoveryLease) close() error {
 }
 
 func openEndpointRecovery(c EndpointRecoveryConfig) (_ *endpointRecoveryLease, err error) {
-	if c.Directory == nil || c.GroupID > math.MaxInt32 || !validRecoveryApproval(c.ExpectedRecordSHA256) || c.Now == nil || c.Authorizer == nil {
+	if c.Directory == nil || c.GroupID > math.MaxInt32 || c.Now == nil || c.Authorizer == nil ||
+		(c.PinDirectory == nil && !validRecoveryApproval(c.ExpectedRecordSHA256)) || (c.PinDirectory != nil && c.ExpectedRecordSHA256 != "") {
 		return nil, ErrEndpointRecoveryApproval
 	}
 	l := &endpointRecoveryLease{config: c}
@@ -113,6 +125,13 @@ func openEndpointRecovery(c EndpointRecoveryConfig) (_ *endpointRecoveryLease, e
 	}()
 	if err = l.guard(); err != nil {
 		return nil, err
+	}
+	if c.PinDirectory != nil {
+		l.s.pin, err = readEndpointPin(c.PinDirectory)
+		if err != nil {
+			return nil, err
+		}
+		l.config.ExpectedRecordSHA256 = recoveryDigest(l.s.pin.record)
 	}
 	raw, err := c.Directory.SyscallConn()
 	if err != nil {
@@ -154,7 +173,7 @@ func openEndpointRecovery(c EndpointRecoveryConfig) (_ *endpointRecoveryLease, e
 	}
 	s.record = make([]byte, int(s.recordStamp.Size))
 	n, err := s.recordFile.ReadAt(s.record, 0)
-	if err != nil || n != len(s.record) || recoveryDigest(s.record) != c.ExpectedRecordSHA256 {
+	if err != nil || n != len(s.record) || recoveryDigest(s.record) != l.config.ExpectedRecordSHA256 {
 		return nil, errors.Join(ErrAuthorityEndpoint, err)
 	}
 	var record endpointOwnershipRecord
@@ -217,10 +236,19 @@ func (l *endpointRecoveryLease) plan() (EndpointRecoveryPlan, error) {
 	if err != nil {
 		return EndpointRecoveryPlan{}, err
 	}
+	var pin *endpointRecoveryPin
+	if p := l.s.pin; p != nil {
+		var st unix.Stat_t
+		if err = unix.Fstat(int(p.directory.Fd()), &st); err != nil {
+			return EndpointRecoveryPlan{}, err
+		}
+		pin = &endpointRecoveryPin{Directory: bindRecoveryResource(st), File: bindRecoveryResource(p.stamp), SHA256: recoveryDigest(p.data)}
+	}
 	data, err := json.Marshal(endpointRecoveryDocument{
 		Schema: "syswarden.authority-endpoint-recovery.v1", Operation: "retire-stale-endpoint",
 		RecordSHA256: l.config.ExpectedRecordSHA256, Record: l.s.record,
 		Directory: bindRecoveryResource(dir), Socket: bindRecoveryResource(l.s.entry), RecordFile: bindRecoveryResource(l.s.recordStamp),
+		Pin: pin,
 		UID: strconv.FormatUint(uint64(l.peer.Uid), 10), GID: strconv.FormatUint(uint64(l.peer.Gid), 10), PID: strconv.FormatInt(int64(l.peer.Pid), 10),
 	})
 	if err != nil {
@@ -298,6 +326,9 @@ func applyEndpointRecovery(c EndpointRecoveryConfig, approved string, ops endpoi
 				}
 				err = errors.Join(err, endpointAbsent(int(l.s.directory.Fd()), AuthoritySocketName), endpointAbsent(int(l.s.directory.Fd()), AuthorityEndpointRecordName))
 			}
+			if err == nil {
+				err = errors.Join(l.s.pin.retire(ops), l.guard())
+			}
 		}
 		err = errors.Join(err, l.close())
 		if err != nil {
@@ -325,7 +356,7 @@ func applyEndpointRecovery(c EndpointRecoveryConfig, approved string, ops endpoi
 	if err != nil || dir.Dev != l.s.dirStamp.Dev || dir.Ino != l.s.dirStamp.Ino {
 		return result, errors.Join(ErrAuthorityEndpoint, err)
 	}
-	if err = errors.Join(l.guard(), l.s.attestEndpointRecord(), endpointAbsent(fd, AuthoritySocketName)); err != nil {
+	if err = errors.Join(l.guard(), l.s.attestEndpointRecord(), l.s.pin.attest(), endpointAbsent(fd, AuthoritySocketName)); err != nil {
 		return result, err
 	}
 	if err = ops.unlink(fd, AuthorityEndpointRecordName, 0); err != nil {

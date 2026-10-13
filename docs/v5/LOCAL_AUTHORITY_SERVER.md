@@ -8,8 +8,8 @@ The published baseline remains v4.10.4. Refs #225, #224 and #337, all partial.
 ## Explicit provisioning and trust
 
 Trusted startup supplies the existing fixed authority resources, transport limits,
-an open endpoint-directory descriptor, an explicit numeric group and an accept
-interval. There is no account lookup, directory creation, stale-socket takeover,
+an open endpoint-directory descriptor, a distinct private pin-directory descriptor,
+an explicit numeric group and an accept interval. There is no account lookup, directory creation, stale-socket takeover,
 automatic enrollment, default grant or discovery of a trust root.
 
 The endpoint directory must be owned by the effective service UID, with exactly
@@ -18,6 +18,12 @@ Its independent open file description holds an exclusive nonblocking directory
 lock. This directory is separate from authority storage, whose existing `0700`
 directories and `0600` files remain private to the service identity. Making the
 socket reachable must never make policy, custody or journal files group-readable.
+
+The mandatory `PinDirectory` is separately provisioned, service-owned `0700`
+storage without POSIX ACLs. It cannot alias the endpoint or any policy, custody,
+anchor or journal directory. An independent nonblocking exclusive lock remains
+held for its full lifetime. An existing `.authority-v1-pin` entry blocks startup
+before a socket is created. No directory or account is created by this component.
 
 The fixed endpoint `authority-v1.sock` must not already exist. Construction binds
 relative to the owned directory through `/proc/self/fd`, sets and verifies the
@@ -76,12 +82,19 @@ are canonical JSON, bounded to 1,024 bytes. There is one kernel write, followed 
 file synchronization, directory synchronization and exact readback of the entry,
 metadata and bytes. The separate directory synchronization follows the requirement
 described in [fsync(2)](https://man7.org/linux/man-pages/man2/fsync.2.html).
-Only then may the listener start. One extra file descriptor
-remains open for the endpoint lifetime; each endpoint attestation checks the same
-bounded receipt without accepting a replacement or reparsing external JSON.
+The constructor then writes a second, independent `.authority-v1-pin` file into
+`PinDirectory`, with the same exclusive creation, single-write, synchronization
+and readback contract. Only after both stages succeed may the listener start.
+The pin has schema `syswarden.authority-endpoint-pin.v1`, is bounded to 2,048 bytes,
+and binds the exact receipt bytes and SHA-256 to its private directory's device,
+inode and UID/GID. It is a service-owned, single-linked `0600` regular file without
+ACL. Receipt, pin and private pin-directory descriptors remain open; every endpoint
+attestation checks the retained metadata and bytes without accepting replacements.
+A fresh recovery process reads this protected pin rather than deriving trust by
+hashing whatever endpoint receipt it discovers.
 
 Zero/partial writes, write errors, synchronization errors and failed readback leave
-both the created socket and every receipt byte in place, with a startup error and
+the created socket and all available receipt/pin bytes in place, with a startup error and
 no listener. Descriptors and the cooperating-process lock are released. Repeating
 startup cannot overwrite this state. A crash before receipt creation can still
 leave an unmarked socket; it likewise blocks startup and is not reclaimed.
@@ -94,7 +107,8 @@ and the live creator's pinned metadata and bytes. It does not resist a compromis
 service UID, root or kernel, authenticate an arbitrary discovered file, or authorize
 future deletion by itself. There is no new recovery command or wire operation.
 The separate [reviewed endpoint recovery](ENDPOINT_RECOVERY.md) component admits
-only a complete pair against an independently retained live receipt pin, with
+only a complete pair against this protected creator-written pin or an independently
+retained external live receipt digest, with
 explicit quiescence and authorization/audit providers. Startup never invokes it.
 Ambiguous or partial state and deployed recovery integration remain separate work.
 
@@ -158,9 +172,13 @@ callbacks or storage operations have no promised hard cancellation deadline.
 
 The listener never uses Go's automatic pathname removal. Cleanup rechecks the
 owned directory, exact socket inode, type, mode, owner/group, link count and ACL.
-The private receipt must also match its exact creator-owned inode, metadata and
-bytes. Only after both checks succeed is the socket unlinked, then the unchanged
-receipt, followed by directory synchronization. If receipt removal fails after the
+The private receipt and independent pin must also match their exact creator-owned
+inodes, metadata and bytes. Only after these checks succeed is the socket unlinked,
+then the unchanged receipt, followed by endpoint-directory synchronization.
+Only after successful endpoint cleanup is the exact pin rechecked and removed,
+followed by private-directory synchronization and absence verification. Any failed
+endpoint removal or synchronization preserves the pin. A failed pin unlink or
+synchronization is also uncertain, and cannot be silently retried. If receipt removal fails after the
 socket is gone, that intermediate state remains visible as an error. Failed final
 synchronization is an uncertain cleanup outcome. `Close` retains the first result;
 it does not retry removal later after observing a replacement.
@@ -197,7 +215,9 @@ real service process is also deliberately killed after readiness; the exact
 receipt survives, and a fresh service refuses to adopt or delete either entry.
 Two recovery cases then deny a different ordinary UID and exercise independently
 reviewed recovery, fresh-process restart and verified resume with unchanged
-journal resources.
+journal resources. The new process reads the persisted pin itself, without a
+parent-supplied receipt hash. The existing authorized and stranger storage probes
+also refuse pin reads, writes, unlink, rename, hardlink, symlink and mode changes.
 Storage-fault tests separately retain zero, partial and complete uncertain bytes,
 reject unsafe receipts and exercise clean removal and partial cleanup. Incomplete
 or skipped dedicated evidence is a failure.

@@ -228,12 +228,12 @@ func TestAuthorityEndpointRecordRetainedAfterSocketRemoval(t *testing.T) {
 	}
 }
 
-func testEndpointProcessCrash(t *testing.T, c processFixtureConfig) string {
+func testEndpointProcessCrash(t *testing.T, c processFixtureConfig) {
 	t.Helper()
 	p := startProcessService(t, t, c)
 	name := filepath.Join(c.Endpoint, AuthorityEndpointRecordName)
-	before := adversarialSnapshot(t, []string{name})
-	pin := recoveryDigest(readFile(t, name))
+	paths := []string{name, filepath.Join(c.PinDirectory, AuthorityEndpointPinName)}
+	before := adversarialSnapshot(t, paths)
 	if err := p.cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -251,14 +251,13 @@ func testEndpointProcessCrash(t *testing.T, c processFixtureConfig) string {
 	case <-time.After(5 * time.Second):
 		t.Fatal("test service did not exit")
 	}
-	requireAdversarialSnapshot(t, before, []string{name})
+	requireAdversarialSnapshot(t, before, paths)
 	c.ExpectStaleEndpoint = true
 	refused := processCommand(t, t, "service", c, processServiceID, processServiceID, []uint32{processClientID})
 	refused.start(t)
 	refused.wait(t)
-	requireAdversarialSnapshot(t, before, []string{name})
+	requireAdversarialSnapshot(t, before, paths)
 	if _, err := os.Lstat(filepath.Join(c.Endpoint, AuthoritySocketName)); err != nil {
 		t.Fatal("fresh process deleted interrupted endpoint", err)
 	}
-	return pin
 }

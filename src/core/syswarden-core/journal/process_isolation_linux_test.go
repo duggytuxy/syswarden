@@ -28,13 +28,14 @@ const processStrangerID = 65532
 // This is synthetic parent-controlled test provisioning, not a deployable
 // configuration loader or an authentication/approval provider.
 type processFixtureConfig struct {
-	Paths                 []string
-	Endpoint              string
-	Root                  CustodyPolicyTrust
-	Expected              contracts.JournalCheckpointAnchor
-	ServicePID            int
-	ExpectStaleEndpoint   bool
-	RecoverEndpointSHA256 string
+	Paths               []string
+	Endpoint            string
+	Root                CustodyPolicyTrust
+	Expected            contracts.JournalCheckpointAnchor
+	ServicePID          int
+	ExpectStaleEndpoint bool
+	RecoverEndpoint     bool
+	PinDirectory        string
 }
 
 type authorityTestProcess struct {
@@ -196,12 +197,20 @@ func testAuthorityProcessBoundary(t *testing.T) {
 	if err := chmodFixture(endpoint, 0750); err != nil {
 		t.Fatal(err)
 	}
+	_, c.PinDirectory = testDirectory(t)
+	if err := chmodFixture(filepath.Dir(c.PinDirectory), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(c.PinDirectory, processServiceID, processServiceID); err != nil {
+		t.Fatal(err)
+	}
 	before := adversarialSnapshot(t, c.Paths)
 	var server *authorityTestProcess
 	if !t.Run("process-service-start", func(child *testing.T) { server = startProcessService(child, t, c) }) {
 		return
 	}
 	c.ServicePID = server.cmd.Process.Pid
+	protectedPin := adversarialSnapshot(t, []string{c.PinDirectory})
 	for _, item := range []struct {
 		name, mode string
 		uid        uint32
@@ -214,6 +223,7 @@ func testAuthorityProcessBoundary(t *testing.T) {
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			runProcessClient(t, item.mode, c, item.uid)
+			requireAdversarialSnapshot(t, protectedPin, []string{c.PinDirectory})
 			requireAdversarialSnapshot(t, before, c.Paths)
 		})
 	}
@@ -256,7 +266,8 @@ func testAuthorityProcessBoundary(t *testing.T) {
 		}
 	})
 	t.Run("process-endpoint-crash-preservation", func(t *testing.T) {
-		c.RecoverEndpointSHA256 = testEndpointProcessCrash(t, c)
+		testEndpointProcessCrash(t, c)
+		c.RecoverEndpoint = true
 		requireAdversarialSnapshot(t, after, c.Paths)
 	})
 	t.Run("process-endpoint-recovery-denied", func(t *testing.T) {
@@ -363,8 +374,8 @@ func TestAuthorityProcessChild(t *testing.T) {
 }
 func processServiceChild(t *testing.T, c processFixtureConfig) {
 	t.Helper()
-	dirs := make([]*os.File, 0, 5)
-	for _, path := range append(append([]string{}, c.Paths...), c.Endpoint) {
+	dirs := make([]*os.File, 0, 6)
+	for _, path := range append(append([]string{}, c.Paths...), c.Endpoint, c.PinDirectory) {
 		dir, err := openFixtureDirectory(path)
 		if err != nil {
 			t.Fatal(err)
@@ -373,11 +384,11 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 		dirs = append(dirs, dir)
 	}
 	config := LocalAuthorityConfig{PolicyDirectory: dirs[0], CustodyDirectory: dirs[1], AnchorDirectory: dirs[2], JournalDirectory: dirs[3], PolicyRoot: c.Root, Enrollment: testEnrollment(), Limits: testLimits(), Now: func() time.Time { return policyNow(testCustodyPolicy()) }}
-	if c.RecoverEndpointSHA256 != "" && !c.ExpectStaleEndpoint {
-		// Parent retained this pin before SIGKILL and waited for service exit.
+	if c.RecoverEndpoint && !c.ExpectStaleEndpoint {
+		// The new process reads the creator's durable private pin after exit.
 		// The synthetic callback models supervisor approval, not human MFA.
 		peer, _ := custodySocketPair(t, unix.SOCK_STREAM)
-		recovery := EndpointRecoveryConfig{Directory: dirs[4], GroupID: processClientID, ExpectedRecordSHA256: c.RecoverEndpointSHA256, Peer: peer, Now: config.Now,
+		recovery := EndpointRecoveryConfig{Directory: dirs[4], GroupID: processClientID, PinDirectory: dirs[5], Peer: peer, Now: config.Now,
 			Authorizer: endpointTestAuthorizer(func(r EndpointRecoveryRequest) (EndpointRecoveryDecision, error) { return endpointTestDecision(r), nil }),
 		}
 		plan := endpointPlan(t, recovery)
@@ -385,7 +396,7 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 			t.Fatal("reviewed non-root recovery failed", err)
 		}
 	}
-	server, err := OpenLocalAuthorityServer(AuthorityServerConfig{Authority: config, Transport: testTransportLimits(), Directory: dirs[4], GroupID: processClientID, AcceptInterval: MinAuthorityAcceptInterval})
+	server, err := OpenLocalAuthorityServer(AuthorityServerConfig{Authority: config, Transport: testTransportLimits(), Directory: dirs[4], PinDirectory: dirs[5], GroupID: processClientID, AcceptInterval: MinAuthorityAcceptInterval})
 	if c.ExpectStaleEndpoint {
 		if server != nil || !errors.Is(err, ErrAuthorityEndpoint) {
 			t.Fatal("fresh service did not preserve stale endpoint", err)
@@ -412,7 +423,7 @@ func processClientChild(t *testing.T, c processFixtureConfig, mode string) {
 	t.Helper()
 	if mode == "private-storage" {
 		_, checkpoint := checkpointNames(testName)
-		paths := []string{filepath.Join(c.Paths[0], policyFileName), filepath.Join(c.Paths[1], custodyFileName), filepath.Join(c.Paths[2], anchorName), filepath.Join(c.Paths[3], testName), filepath.Join(c.Paths[3], checkpoint)}
+		paths := []string{filepath.Join(c.Paths[0], policyFileName), filepath.Join(c.Paths[1], custodyFileName), filepath.Join(c.Paths[2], anchorName), filepath.Join(c.Paths[3], testName), filepath.Join(c.Paths[3], checkpoint), filepath.Join(c.PinDirectory, AuthorityEndpointPinName)}
 		for _, path := range paths {
 			for _, flags := range []int{unix.O_RDONLY, unix.O_WRONLY | unix.O_APPEND} {
 				fd, err := unix.Open(path, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -423,6 +434,18 @@ func processClientChild(t *testing.T, c processFixtureConfig, mode string) {
 				if !errors.Is(err, unix.EACCES) {
 					t.Fatal("unexpected storage refusal", err)
 				}
+			}
+		}
+		pin := filepath.Join(c.PinDirectory, AuthorityEndpointPinName)
+		for _, mutate := range []func() error{
+			func() error { return os.Remove(pin) },
+			func() error { return os.Rename(pin, pin+".moved") },
+			func() error { return os.Link(pin, pin+".alias") },
+			func() error { return os.Symlink("untrusted", filepath.Join(c.PinDirectory, "replacement")) },
+			func() error { return chmodFixture(pin, 0640) },
+		} {
+			if err := mutate(); !errors.Is(err, unix.EACCES) {
+				t.Fatal("ordinary user reached pin mutation", err)
 			}
 		}
 		return
@@ -445,7 +468,7 @@ func processClientChild(t *testing.T, c processFixtureConfig, mode string) {
 
 	if mode == "endpoint-recovery-denied" {
 		peer, _ := custodySocketPair(t, unix.SOCK_STREAM)
-		recovery := EndpointRecoveryConfig{Directory: dir, GroupID: processClientID, ExpectedRecordSHA256: c.RecoverEndpointSHA256, Peer: peer,
+		recovery := EndpointRecoveryConfig{Directory: dir, GroupID: processClientID, ExpectedRecordSHA256: strings.Repeat("0", 64), Peer: peer,
 			Now: func() time.Time { return policyNow(testCustodyPolicy()) },
 			Authorizer: endpointTestAuthorizer(func(EndpointRecoveryRequest) (EndpointRecoveryDecision, error) {
 				t.Fatal("ordinary user reached trusted approval")

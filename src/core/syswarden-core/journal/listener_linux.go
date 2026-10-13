@@ -32,6 +32,7 @@ type authoritySocket struct {
 	record                []byte
 	recordStamp           unix.Stat_t
 	recordReady, preserve bool
+	pin                   *endpointPin
 }
 
 func noAuthorityACL(get func(string) (int, error)) error {
@@ -153,7 +154,7 @@ func openAuthoritySocketWithRecord(directory *os.File, group uint32, backlog int
 	return s, nil
 }
 func (s *authoritySocket) attestLocked() error {
-	return errors.Join(s.attestSocketLocked(), s.attestEndpointRecord())
+	return errors.Join(s.attestSocketLocked(), s.attestEndpointRecord(), s.pin.attest())
 }
 func (s *authoritySocket) attestSocketLocked() error {
 	if s.closed || !s.bound {
@@ -198,6 +199,7 @@ func (s *authoritySocket) Close() error {
 		} else if s.recordFile != nil {
 			err = errors.Join(err, s.attestEndpointRecord())
 		}
+		err = errors.Join(err, s.pin.attest())
 		if err == nil {
 			err = unix.Unlinkat(int(s.directory.Fd()), AuthoritySocketName, 0)
 			if err == nil && s.recordReady {
@@ -211,12 +213,19 @@ func (s *authoritySocket) Close() error {
 			if syncErr := s.directory.Sync(); syncErr != nil {
 				err = errors.Join(err, ErrCommitUncertain, syncErr)
 			}
+			if err == nil {
+				err = s.pin.retire(endpointRecoveryOps{unlink: unix.Unlinkat, sync: (*os.File).Sync})
+			}
+			if err != nil {
+				err = errors.Join(ErrCommitUncertain, err)
+			}
 		}
 		s.closeErr = errors.Join(s.closeErr, err)
 	}
 	if s.recordFile != nil {
 		s.closeErr = errors.Join(s.closeErr, s.recordFile.Close())
 	}
+	s.closeErr = errors.Join(s.closeErr, s.pin.close())
 	if s.directory != nil {
 		s.closeErr = errors.Join(s.closeErr, s.directory.Close())
 	}

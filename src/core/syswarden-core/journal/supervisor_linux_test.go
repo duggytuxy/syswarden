@@ -18,7 +18,8 @@ func serverFixture(t *testing.T) (authorityFixtureState, AuthorityServerConfig, 
 	t.Helper()
 	f := authorityFixture(t)
 	dir, path, gid := endpointFixture(t)
-	return f, AuthorityServerConfig{Authority: f.config, Transport: testTransportLimits(), Directory: dir, GroupID: gid, AcceptInterval: MinAuthorityAcceptInterval}, filepath.Join(path, AuthoritySocketName)
+	pin, _ := testDirectory(t)
+	return f, AuthorityServerConfig{Authority: f.config, Transport: testTransportLimits(), Directory: dir, PinDirectory: pin, GroupID: gid, AcceptInterval: MinAuthorityAcceptInterval}, filepath.Join(path, AuthoritySocketName)
 }
 func testServer(t *testing.T, c AuthorityServerConfig) *LocalAuthorityServer {
 	t.Helper()
