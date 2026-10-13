@@ -54,6 +54,10 @@ optional implementation details:
   a second unprotected file or an acknowledgement without persistence does not
   satisfy this contract.
 
+The inactive [local admission component](CUSTODY_ADMISSION.md) now verifies
+signed policy and exact Unix peer operation grants. It does not replace the
+independent recovery authorizer, policy lease or protected deployment boundary.
+
 The current coordinator checks state shape, scope, comparisons and readbacks. It
 cannot make a dishonest or faulty backend durable, isolated or authenticated.
 There is deliberately no permissive built-in backend.

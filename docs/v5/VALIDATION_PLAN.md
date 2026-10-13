@@ -89,6 +89,11 @@ not a financial allocation.
   verification, ordered resynchronization, no byte mutation, stale/corrupt/extra
   tails and fault injection. See [Reviewed recovery](JOURNAL_RECOVERY.md). A plan
   digest is not an authenticated principal; external custody and native IVV remain.
+- Local custody admission: signed canonical policy, independent exact current
+  pins, scope/key-purpose separation, validity, kernel peer credentials, explicit
+  operation grants and recovery-approval separation. See [Custody admission](CUSTODY_ADMISSION.md).
+  Same-UID socket fixtures do not establish cross-UID service isolation, current
+  policy persistence or production lease/lifetime enforcement.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,
