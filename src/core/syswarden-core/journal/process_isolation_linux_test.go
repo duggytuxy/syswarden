@@ -28,11 +28,12 @@ const processStrangerID = 65532
 // This is synthetic parent-controlled test provisioning, not a deployable
 // configuration loader or an authentication/approval provider.
 type processFixtureConfig struct {
-	Paths      []string
-	Endpoint   string
-	Root       CustodyPolicyTrust
-	Expected   contracts.JournalCheckpointAnchor
-	ServicePID int
+	Paths               []string
+	Endpoint            string
+	Root                CustodyPolicyTrust
+	Expected            contracts.JournalCheckpointAnchor
+	ServicePID          int
+	ExpectStaleEndpoint bool
 }
 
 type authorityTestProcess struct {
@@ -253,6 +254,10 @@ func testAuthorityProcessBoundary(t *testing.T) {
 			t.Fatal("restarted socket survived clean shutdown", err)
 		}
 	})
+	t.Run("process-endpoint-crash-preservation", func(t *testing.T) {
+		testEndpointProcessCrash(t, c)
+		requireAdversarialSnapshot(t, after, c.Paths)
+	})
 }
 
 func TestAuthorityProcessChild(t *testing.T) {
@@ -357,6 +362,12 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 	}
 	config := LocalAuthorityConfig{PolicyDirectory: dirs[0], CustodyDirectory: dirs[1], AnchorDirectory: dirs[2], JournalDirectory: dirs[3], PolicyRoot: c.Root, Enrollment: testEnrollment(), Limits: testLimits(), Now: func() time.Time { return policyNow(testCustodyPolicy()) }}
 	server, err := OpenLocalAuthorityServer(AuthorityServerConfig{Authority: config, Transport: testTransportLimits(), Directory: dirs[4], GroupID: processClientID, AcceptInterval: MinAuthorityAcceptInterval})
+	if c.ExpectStaleEndpoint {
+		if server != nil || !errors.Is(err, ErrAuthorityEndpoint) {
+			t.Fatal("fresh service did not preserve stale endpoint", err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

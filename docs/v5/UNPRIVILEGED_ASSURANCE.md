@@ -34,7 +34,7 @@ groups, zero effective/permitted/inheritable/ambient capabilities, and
 child can perform ordinary I/O, rather than accepting a globally broken process
 as proof of security.
 
-The 100 mandatory cases cover:
+The 110 mandatory cases cover:
 
 - Reading, opening for overwrite/append/truncation, unlinking, replacement by
   rename, hard-linking, chmod and chown against policy, custody, anchor, segment
@@ -50,6 +50,9 @@ The 100 mandatory cases cover:
   unlink, rename, hardlink, chmod, chown, entry creation, symlink insertion and
   directory substitution. The child belongs to the endpoint group but cannot write
   its directory or become its owner.
+- Reads, overwrite/append/truncate opens, unlink, rename, hardlink, chmod and
+  chown against the private endpoint ownership receipt: nine cases. Endpoint
+  group membership cannot read or alter the service-owned `0600` receipt.
 - Actual client/listener denial of all six framed operations for that ungranted group
   member, plus one connection refusal with a different primary group and no
   supplementary groups: seven cases. The socket remains `0660`, directory `0750`;
@@ -68,6 +71,10 @@ The 100 mandatory cases cover:
   attacks: one case.
 - A separately executed non-root service, authorized client and ungranted peer,
   including protected storage and restart behavior: 18 cases, detailed below.
+- Deliberate process crash after the service reports readiness: one case. The
+  exact private endpoint receipt remains, and a fresh service process refuses
+  startup without modifying it or deleting the stale socket. This is preservation
+  and refusal evidence, not automatic crash recovery or physical power-loss IVV.
 
 The test exposes its harness ancestors so their permissions cannot accidentally
 provide the protection attributed to product resource directories. Access probes
