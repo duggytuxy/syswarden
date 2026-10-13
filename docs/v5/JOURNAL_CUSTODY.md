@@ -56,7 +56,9 @@ optional implementation details:
 
 The inactive [local admission component](CUSTODY_ADMISSION.md) now verifies
 signed policy and exact Unix peer operation grants. It does not replace the
-independent recovery authorizer, policy lease or protected deployment boundary.
+independent recovery authorizer or protected deployment boundary. The
+[policy-storage follow-up](CUSTODY_POLICY_STORAGE.md) provides an outer policy
+lease and lifetime checks for the four high-level coordinator entry points.
 
 The current coordinator checks state shape, scope, comparisons and readbacks. It
 cannot make a dishonest or faulty backend durable, isolated or authenticated.
