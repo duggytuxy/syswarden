@@ -142,7 +142,7 @@ non-root service/client campaign verifies actual commit, private-storage refusal
 ungranted operations and exact resume after a clean service process restart.
 
 Production provisioning, isolated service identities and sandboxing, actual
-identity/approval/audit providers, safe restart discovery, per-client request-rate controls,
+identity/approval/audit providers, safe restart discovery, deployment-specific rate policy,
 durable denial auditing, key lifecycle, incomplete intent recovery, retention,
 shared consumer integration and native IVV remain open. Component success does
 not establish installed-product isolation or v5 acceptance. BunkerWeb keeps its

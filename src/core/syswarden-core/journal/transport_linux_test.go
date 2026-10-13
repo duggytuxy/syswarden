@@ -19,7 +19,7 @@ import (
 )
 
 func testTransportLimits() AuthorityTransportLimits {
-	return AuthorityTransportLimits{MaxPeers: 2, MaxPeersPerUID: 2, ReadTimeout: time.Second, WriteTimeout: time.Second}
+	return AuthorityTransportLimits{MaxPeers: 2, MaxPeersPerUID: 2, ReadTimeout: time.Second, WriteTimeout: time.Second, RequestsPerUID: MaxAuthorityRequestsPerWindow, MaxRateUIDs: 8, RateWindow: time.Second}
 }
 func transportFixture(t *testing.T) (authorityFixtureState, *LocalAuthorityTransport) {
 	t.Helper()

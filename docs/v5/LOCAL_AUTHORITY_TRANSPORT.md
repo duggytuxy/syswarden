@@ -18,6 +18,9 @@ provisioning and independently trusted identity/audit providers.
 | --- | --- |
 | Simultaneous peers per kernel UID | Explicit `MaxPeersPerUID`, from 1 through `MaxPeers`, across all phases. |
 | Registered peers | Explicit `MaxPeers`, from 1 through 8 per transport. |
+| Admitted connections per UID and window | Explicit `RequestsPerUID`, from 1 through 1,024; each connection carries at most one request. |
+| Admission window | Explicit `RateWindow`, from 1 second through 1 minute, starting at the UID's first admission. |
+| Historical UID slots | Explicit `MaxRateUIDs`, from 1 through 256, allocated once at startup. |
 | Read phase | Positive explicit duration, at most 5 seconds, including header, body and final EOF. |
 | Write phase | Positive explicit duration, at most 5 seconds, including header and body. |
 | Request body | 1 through 18,432 bytes, checked before allocation. |
@@ -37,19 +40,58 @@ Both peer ceilings must be supplied explicitly; zero, negative or inconsistent
 limits are rejected before the authority is opened. Choose `MaxPeersPerUID` below
 `MaxPeers` when different UIDs must retain concurrency. Equal limits deliberately
 provide only the global ceiling, including the single-peer configuration. The
-small fixed registry holds at most eight live UID observations, without a separate
-historical UID map or queue. A slot remains charged during reading, authority
+small live registry holds at most eight UID observations. A separate fixed registry
+retains bounded admission history. A live slot remains charged during reading, authority
 execution, reply writing and shutdown drain, until the peer is closed and released.
 Malformed input, timeout, disconnect and success all release it after completion.
 Quota refusal closes the excess socket without reading input or returning a UID,
 quota value or private denial reason. It does not evict an admitted operation.
 
-This is a concurrency ceiling, not a requests-per-second limit, signed operation
-grant, reserved administrative lane or scheduler. A group member can still fill
+Neither ceiling grants an operation, reserves an administrative lane or schedules
+fair access. A group member can still fill
 the kernel backlog, race for newly available capacity or combine several accounts.
 Clients under one service UID also share its ceiling. Trusted callbacks and storage
 retain their existing non-cancellable blocking limits. Total process RSS and fleet
 capacity also need separate measurements.
+
+## Admission frequency and bounded UID history
+
+All three admission-frequency limits must be explicit and valid before authority
+resources are opened. After checking kernel credentials and live-peer ceilings,
+registration consumes one unit under the same transport mutex, before any frame
+read or body allocation. Duplicate active objects and capacity refusals do not
+consume another unit. Once admitted, success, malformed input, policy denial,
+timeout and disconnect all consume that unit. Releasing a live peer does not
+refund it, so reconnecting cannot reset the window.
+
+Processes sharing one kernel UID share its budget. Request IDs, claimed usernames
+and wire fields cannot choose a bucket. This is local admission control, not human
+authentication, dashboard RBAC, MFA or an authorization grant.
+
+The fixed slice stores at most 256 UID records. It creates no per-request history
+allocation, timer or goroutine. A new UID can use only an empty or expired slot;
+it never evicts unexpired history. When all slots are occupied, an unseen UID is
+refused while a known UID can still spend its remaining budget. Trusted startup
+must size the table for the expected identities. Saturation can deny legitimate
+new identities until a slot expires; it is not a fairness guarantee.
+
+The internal monotonic-capable `time.Now` clock is independent of the signed-policy
+wall clock and cannot be supplied in a request or startup configuration. A zero or
+backwards observation refuses admission without resetting history. Expired slots
+are reused during admission, without background expiration work. History belongs
+to this transport instance and resets on restart; it is not durable auditing, a
+security verdict or a percentage KPI.
+
+These are fixed windows, not smooth pacing or a sliding requests-per-second cap.
+A client can spend the end of one window immediately before the next window's
+budget becomes available. Existing accept pacing and concurrent-peer ceilings
+still apply. Exhaustion closes the new connection before framing, without a wire
+body, UID, quota value or retry hint. It never cancels an already approved durable
+write or makes automatic mutation replay safe.
+
+This bounds admitted work and UID-history storage. Kernel-backlog floods, colluding
+UIDs, reserved administrative capacity, OS isolation and native capacity evidence
+remain separate work.
 
 `ServePeer` takes exclusive ownership of one already connected Unix stream socket.
 The caller must not read, write, close, duplicate or submit another wrapper around
@@ -110,8 +152,8 @@ private inspection plans and must remain inside the authorized local channel.
 
 For an admitted request that fails, the transport attempts a four-byte zero length
 and no body. Internal Go errors, file paths, signatures, policy details and denial
-reasons are never serialized. Full-capacity, invalid-peer or closing connections
-may be closed without a reply. Rejecting unread input can cause a Linux connection
+reasons are never serialized. Full-capacity, invalid-peer, closing or rate-exhausted
+connections may be closed without a reply. Rejecting unread input can cause a Linux connection
 reset; a deadline or failed write can also truncate a denial or success response.
 These are transport failures, not successful operation responses. The transport
 never appends a second denial frame after a failed success write and never drains
@@ -157,6 +199,13 @@ account, refuses a second process with the same UID before framing and successfu
 resumes from a different authorized UID while the slow connection remains active.
 Protected storage is unchanged, and disconnect releases the slot.
 
+Frequency tests cover invalid startup bounds, spent quota after peer release,
+fixed-window boundary bursts, expiry, full history without eviction, independent
+UID budgets, clock refusal and concurrent registration. The mandatory separate-UID
+gate first admits a malformed request from an ungranted account, then refuses its
+reconnection before input despite available live-peer capacity. A different
+authorized UID still resumes with unchanged private storage.
+
 Ancillary tests pass multiple file descriptors at the header, body and tail and verify no references remain.
 A bounded kernel send buffer verifies write timeout and an incomplete reply.
 
@@ -168,7 +217,7 @@ not add another JSON parser or change a signed schema.
 
 The [listener follow-up](LOCAL_AUTHORITY_SERVER.md) adds endpoint ownership,
 paced workers and separate cross-UID evidence. OS-isolated service provisioning,
-real authentication and audit providers, per-client request-rate policy, issuer/key
+real authentication and audit providers, deployment-specific rate policy, issuer/key
 lifecycle, incomplete-state recovery, retention and shared consumer integration
 remain unfinished. Transport-only tests do not establish cross-UID isolation,
 physical power-loss safety, native IVV or v5 acceptance. No production

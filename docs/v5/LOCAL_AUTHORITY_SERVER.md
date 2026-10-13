@@ -60,7 +60,8 @@ flowchart LR
     D --> Q[Bounded kernel listen backlog]
     Q --> W[Fixed paced workers]
     W --> M{Endpoint metadata and inode}
-    M --> T[One bounded transport frame]
+    M --> R{Kernel UID capacity and admission window}
+    R --> T[One bounded transport frame]
     T --> A{Kernel peer and signed policy}
     A --> P{Independent approval when required}
     P --> J[Existing durable authority]
@@ -125,6 +126,7 @@ internal request retry.
 | --- | --- |
 | Fixed workers and active accepted peers | Existing `MaxPeers`, 1 through 8. |
 | Simultaneous peers per UID | Explicit `MaxPeersPerUID`, 1 through `MaxPeers`; enforced before framing, using kernel credentials. |
+| Admission frequency per UID | Explicit transport budget and fixed window, with at most 256 historical UID slots; checked before framing. |
 | Listen backlog | Explicitly requested as `MaxPeers`; actual queue behavior belongs to the Linux kernel, not an exact portable connection-count guarantee. |
 | Accept interval | Explicit 10 milliseconds through 1 second, shared by all workers. |
 | Outstanding pacing reservations | At most one per fixed worker. |
@@ -143,7 +145,10 @@ Choosing a ceiling below `MaxPeers` prevents that UID from holding all transport
 slots at once. Workers can still briefly accept and refuse its excess sockets,
 which count as failed exchanges. There is no reserved worker or fair scheduling
 guarantee: the kernel backlog, repeated attempts and colluding UIDs remain denial
-of service concerns. Process RSS/CPU limits, request-rate limits, systemd/OpenRC
+of service concerns. The transport's [admission-frequency limits](LOCAL_AUTHORITY_TRANSPORT.md#admission-frequency-and-bounded-uid-history)
+add fixed windows and bounded UID history, with explicit saturation refusal.
+They permit bursts at window boundaries and reset on restart. They reserve no
+worker and do not police the kernel backlog. Process RSS/CPU limits, systemd/OpenRC
 isolation and fleet capacity measurements remain separate acceptance work.
 
 Malformed, unauthorized, busy or timed-out peers receive the transport's generic
@@ -242,7 +247,7 @@ endpoint or obtain any of the six authority results. An account outside the grou
 cannot connect. The private-resource inventory remains unchanged, and authorized
 resume/commit/reopen still succeeds. The client follow-up adds a kernel-identity
 impostor case. The non-root process, peer-quota and endpoint-lifecycle follow-ups
-bring the named gate to 112 cases, including authorized commit, fresh-process
+bring the named gate to 113 cases, including authorized commit, fresh-process
 resume and a second UID
 being served while an ungranted account holds an incomplete connection. Nine
 further probes deny ordinary-user reads and changes to the private receipt. A
@@ -253,6 +258,10 @@ reviewed recovery, fresh-process restart and verified resume with unchanged
 journal resources. The new process reads the persisted pin itself, without a
 parent-supplied receipt hash. The existing authorized and stranger storage probes
 also refuse pin reads, writes, unlink, rename, hardlink, symlink and mode changes.
+The admission-frequency case first admits malformed input from an ungranted UID,
+then refuses its reconnection before reading despite spare concurrent-peer capacity.
+Another authorized UID still resumes, with private bytes unchanged. Separate
+deterministic tests cover bounded history, expiry and simultaneous registration.
 Storage-fault tests separately retain zero, partial and complete uncertain bytes,
 reject unsafe receipts and exercise clean removal and partial cleanup. Incomplete
 or skipped dedicated evidence is a failure.
