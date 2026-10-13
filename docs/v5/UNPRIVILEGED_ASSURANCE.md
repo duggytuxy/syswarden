@@ -34,7 +34,7 @@ groups, zero effective/permitted/inheritable/ambient capabilities, and
 child can perform ordinary I/O, rather than accepting a globally broken process
 as proof of security.
 
-The 99 mandatory cases cover:
+The 100 mandatory cases cover:
 
 - Reading, opening for overwrite/append/truncation, unlinking, replacement by
   rename, hard-linking, chmod and chown against policy, custody, anchor, segment
@@ -58,6 +58,12 @@ The 99 mandatory cases cover:
   fixture parent deliberately deposits the child's listening socket into a protected
   directory with the expected metadata. Only kernel identity distinguishes it;
   the fixture does not assert that an ordinary user can change root-owned files.
+- Per-UID concurrency isolation: one case. An ungranted account holds an
+  incomplete connection; a second process with the same UID is refused before
+  sending a request. A different authorized UID resumes while the first peer
+  remains registered, then the first peer disconnects and releases its slot.
+  This verifies the two-worker/one-peer-per-UID configuration, not flood resistance
+  or guaranteed fairness. A test-only stop pipe carries one byte and no authority.
 - Authorized client resume, commit and independently reopened resume after the
   attacks: one case.
 - A separately executed non-root service, authorized client and ungranted peer,

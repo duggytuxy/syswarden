@@ -19,7 +19,7 @@ import (
 )
 
 func testTransportLimits() AuthorityTransportLimits {
-	return AuthorityTransportLimits{MaxPeers: 2, ReadTimeout: time.Second, WriteTimeout: time.Second}
+	return AuthorityTransportLimits{MaxPeers: 2, MaxPeersPerUID: 2, ReadTimeout: time.Second, WriteTimeout: time.Second}
 }
 func transportFixture(t *testing.T) (authorityFixtureState, *LocalAuthorityTransport) {
 	t.Helper()
@@ -107,7 +107,7 @@ func transportWaitPhase(t *testing.T, tr *LocalAuthorityTransport, peer *net.Uni
 		tr.mu.Lock()
 		got, ok := tr.peers[peer]
 		tr.mu.Unlock()
-		if ok && got == want {
+		if ok && got.phase == want {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -325,6 +325,7 @@ func TestAuthorityTransportCapacityDuplicateAndCloseReaders(t *testing.T) {
 
 func TestAuthorityTransportDrainsMutationAndSuppressesLostReply(t *testing.T) {
 	f, tr := transportFixture(t)
+	tr.limits.MaxPeersPerUID = 1
 	plan := authorityReply(t, tr.authority, f.peer, authorityRequest{Operation: "inspect-policy", Change: &authorityChange{Operation: "disable"}})
 	f.administrator.approved = plan.PlanSHA256
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -340,15 +341,28 @@ func TestAuthorityTransportDrainsMutationAndSuppressesLostReply(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("apply did not enter")
 	}
+	if transportUIDCount(tr, hostTestUID(t)) != 1 {
+		t.Fatal("executing operation lost its UID slot")
+	}
+	other, _ := custodySocketPair(t, unix.SOCK_STREAM)
+	if err := tr.ServePeer(other); !errors.Is(err, ErrAuthorityTransportBusy) {
+		t.Fatal("executing operation did not consume UID quota", err)
+	}
 	if err := tr.Close(); !errors.Is(err, ErrAuthorityTransportBusy) {
 		t.Fatal(err)
 	}
 	if _, err := custodyPeer(server); err != nil {
 		t.Fatal("executing peer closed before credential recheck", err)
 	}
+	if transportUIDCount(tr, hostTestUID(t)) != 1 {
+		t.Fatal("draining operation released its quota before completion")
+	}
 	close(release)
 	if err := transportResult(t, done); !errors.Is(err, ErrClosed) {
 		t.Fatal("lost reply not reported", err)
+	}
+	if transportUIDCount(tr, hostTestUID(t)) != 0 {
+		t.Fatal("drained operation retained its UID quota")
 	}
 	data, err := io.ReadAll(client)
 	if err != nil || len(data) != 0 {
@@ -503,7 +517,7 @@ func TestAuthorityTransportWriteTimeoutAndReplyBounds(t *testing.T) {
 }
 
 func TestAuthorityTransportInvalidConfigurationAndPeer(t *testing.T) {
-	for _, kind := range []string{"zero-peers", "excess-peers", "zero-read", "negative-write", "excess-read", "excess-write", "missing-authority"} {
+	for _, kind := range []string{"zero-peers", "excess-peers", "zero-uid-peers", "negative-uid-peers", "excess-uid-peers", "zero-read", "negative-write", "excess-read", "excess-write", "missing-authority"} {
 		t.Run(kind, func(t *testing.T) {
 			f := authorityFixture(t)
 			l := testTransportLimits()
@@ -513,6 +527,12 @@ func TestAuthorityTransportInvalidConfigurationAndPeer(t *testing.T) {
 				l.MaxPeers = 0
 			case "excess-peers":
 				l.MaxPeers = MaxAuthorityPeers + 1
+			case "zero-uid-peers":
+				l.MaxPeersPerUID = 0
+			case "negative-uid-peers":
+				l.MaxPeersPerUID = -1
+			case "excess-uid-peers":
+				l.MaxPeersPerUID = l.MaxPeers + 1
 			case "zero-read":
 				l.ReadTimeout = 0
 			case "negative-write":
