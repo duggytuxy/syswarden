@@ -165,3 +165,8 @@ Related contracts: [Policy admission](CUSTODY_ADMISSION.md),
 [Reviewed policy administration](REVIEWED_POLICY_ADMINISTRATION.md),
 [Local custody storage](LOCAL_CUSTODY_STORAGE.md),
 [Validation plan](VALIDATION_PLAN.md).
+
+The [bounded local transport](LOCAL_AUTHORITY_TRANSPORT.md) now provides one-request
+framing, I/O deadlines, accepted-peer limits and draining connection ownership.
+It still requires an isolated listener/supervisor and actual identity/audit providers
+before activation. The low-level dispatcher remains independent of socket I/O.
