@@ -32,6 +32,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 19. [Bounded local restart-custody storage](LOCAL_CUSTODY_STORAGE.md).
 20. [Signed policy and local custody admission](CUSTODY_ADMISSION.md).
 21. [Protected policy storage and custody leases](CUSTODY_POLICY_STORAGE.md).
+22. [Reviewed custody policy administration](REVIEWED_POLICY_ADMINISTRATION.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -81,8 +82,11 @@ reviewed in PR #331. The admission follow-up verifies signed enrollment/access
 policy against an independent current pin and binds high-level operations to
 kernel-observed local peer identities, reviewed in PR #332. The policy-storage
 follow-up adds bounded protected current-policy history, serialized updates and
-per-operation admission/lifetime checks around the existing coordinator.
-It supplies no listener or authority service.
+per-operation admission/lifetime checks around the existing coordinator, reviewed
+in PR #333. The administrative follow-up binds exact private plans to independent
+inspection/apply authorization and stores the decision audit reference in the
+same frame as the policy update. It supplies no identity provider, listener or
+authority service.
 These components remain disconnected from production. Authenticated authority
 provisioning, OS isolation, incomplete backend/intent recovery, key lifecycle and
 retention remain future work.

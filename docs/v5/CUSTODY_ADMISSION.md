@@ -159,6 +159,9 @@ full-core and static checks supplement these component tests. They do not establ
 cross-UID deployment isolation, physical persistence or native acceptance.
 
 The policy-storage follow-up provides bounded persistence and component lifetime
-checks, including preserved uncertain completion. Provisioning orchestration,
+checks, including preserved uncertain completion. The separate
+[reviewed administration coordinator](REVIEWED_POLICY_ADMINISTRATION.md) requires
+independent exact-plan approval and retains its decision binding with the update.
+Operational grants never imply administration. Provisioning orchestration,
 OS isolation, key lifecycle, incomplete recovery, retention, loss,
 redaction and shared consumers remain open in #225 and #224.

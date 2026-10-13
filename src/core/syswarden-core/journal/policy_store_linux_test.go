@@ -520,6 +520,17 @@ func FuzzCustodyPolicyLedger(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(frame)
+	p := testCustodyPolicy()
+	p.Revision++
+	next := signedPolicySnapshot(f, p, true)
+	var previous [sha256.Size]byte
+	copy(previous[:], frame[len(frame)-sha256.Size:])
+	audit := policyChangeAudit{PlanSHA256: strings.Repeat("a", 64), DecisionSHA256: strings.Repeat("d", 64), UID: "0", NotBefore: "1800000001", NotAfter: "1800000121"}
+	reviewed, err := policyFrameWithApproval(next, 2, "install", previous, &audit)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(append(bytes.Clone(frame), reviewed...))
 	f.Add([]byte{})
 	f.Add([]byte(`{}`))
 	f.Fuzz(func(t *testing.T, data []byte) {

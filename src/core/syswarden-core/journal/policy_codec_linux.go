@@ -15,7 +15,7 @@ import (
 
 const (
 	MaxPolicyRecords   = 256
-	maxPolicyRecord    = MaxCustodyPolicyBytes + 512
+	maxPolicyRecord    = MaxCustodyPolicyBytes + 1024
 	maxPolicyFile      = MaxPolicyRecords * (4 + maxPolicyRecord + sha256.Size)
 	policyFileName     = "custody-policy-v1.swp"
 	policyRecordSchema = "syswarden.custody-policy-record.v1"
@@ -32,13 +32,35 @@ type CustodyPolicySnapshot struct {
 }
 
 type policyRecord struct {
-	Schema    string          `json:"schema"`
-	Sequence  string          `json:"sequence"`
-	Operation string          `json:"operation"`
-	Enabled   bool            `json:"enabled"`
-	Policy    json.RawMessage `json:"policy"`
-	Signature string          `json:"signature"`
+	Schema    string             `json:"schema"`
+	Sequence  string             `json:"sequence"`
+	Operation string             `json:"operation"`
+	Enabled   bool               `json:"enabled"`
+	Policy    json.RawMessage    `json:"policy"`
+	Signature string             `json:"signature"`
+	Approval  *policyChangeAudit `json:"approval,omitempty"`
 }
+
+// The protected record binds an independently audited administrative decision
+// to the exact transition. It is not a portable approval or an identity proof.
+type policyChangeAudit struct {
+	PlanSHA256     string `json:"plan_sha256"`
+	DecisionSHA256 string `json:"decision_sha256"`
+	UID            string `json:"actor_uid"`
+	NotBefore      string `json:"not_before"`
+	NotAfter       string `json:"not_after"`
+}
+
+func validPolicyChangeAudit(a *policyChangeAudit) bool {
+	if a == nil {
+		return true
+	}
+	uid, e1 := strconv.ParseUint(a.UID, 10, 32)
+	start, e2 := custodyUint(a.NotBefore, 253402300799)
+	end, e3 := custodyUint(a.NotAfter, 253402300799)
+	return e1 == nil && uid < math.MaxUint32 && strconv.FormatUint(uid, 10) == a.UID && e2 == nil && e3 == nil && start > 0 && end > start && end-start <= MaxPolicyApprovalSeconds && validRecoveryApproval(a.PlanSHA256) && validRecoveryApproval(a.DecisionSHA256)
+}
+
 type policyTip struct {
 	snapshot     CustodyPolicySnapshot
 	hash         [sha256.Size]byte
@@ -102,13 +124,19 @@ func policyTransition(before, after CustodyPolicySnapshot, operation string) boo
 	return e1 == nil && e2 == nil && sameRestartState(s1, s2)
 }
 func encodePolicyRecord(s CustodyPolicySnapshot, n int, op string) ([]byte, error) {
+	return encodePolicyRecordWithApproval(s, n, op, nil)
+}
+func encodePolicyRecordWithApproval(s CustodyPolicySnapshot, n int, op string, approval *policyChangeAudit) ([]byte, error) {
 	if n < 1 || n > MaxPolicyRecords || (n == MaxPolicyRecords && s.Trust.Enabled) || (op != "bootstrap" && op != "install" && op != "disable") {
+		return nil, ErrPolicyState
+	}
+	if !validPolicyChangeAudit(approval) || (approval != nil && (n == 1 || op == "bootstrap")) {
 		return nil, ErrPolicyState
 	}
 	if _, err := authenticatePolicySnapshot(s); err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(policyRecord{Schema: policyRecordSchema, Sequence: strconv.Itoa(n), Operation: op, Enabled: s.Trust.Enabled, Policy: s.Document, Signature: hex.EncodeToString(s.Signature)})
+	data, err := json.Marshal(policyRecord{Schema: policyRecordSchema, Sequence: strconv.Itoa(n), Operation: op, Enabled: s.Trust.Enabled, Policy: s.Document, Signature: hex.EncodeToString(s.Signature), Approval: approval})
 	if err != nil || len(data) > maxPolicyRecord {
 		return nil, ErrPolicyState
 	}
@@ -124,7 +152,10 @@ func policyHash(previous [sha256.Size]byte, doc []byte) [sha256.Size]byte {
 	return out
 }
 func policyFrame(s CustodyPolicySnapshot, n int, op string, previous [sha256.Size]byte) ([]byte, error) {
-	doc, err := encodePolicyRecord(s, n, op)
+	return policyFrameWithApproval(s, n, op, previous, nil)
+}
+func policyFrameWithApproval(s CustodyPolicySnapshot, n int, op string, previous [sha256.Size]byte, approval *policyChangeAudit) ([]byte, error) {
+	doc, err := encodePolicyRecordWithApproval(s, n, op, approval)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +192,7 @@ func decodePolicyRecord(doc []byte, root CustodyPolicyTrust) (CustodyPolicySnaps
 	trust.Revision = p.Revision
 	trust.PolicySHA256 = recoveryDigest(w.Policy)
 	s := CustodyPolicySnapshot{Trust: trust, Document: w.Policy, Signature: sig}
-	canonical, err := encodePolicyRecord(s, int(n), w.Operation)
+	canonical, err := encodePolicyRecordWithApproval(s, int(n), w.Operation, w.Approval)
 	if err != nil || !bytes.Equal(canonical, doc) {
 		return CustodyPolicySnapshot{}, w, ErrPolicyState
 	}

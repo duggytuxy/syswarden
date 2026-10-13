@@ -100,6 +100,12 @@ not a financial allocation.
   independent recovery approval and no automatic retry. See
   [Policy storage](CUSTODY_POLICY_STORAGE.md). These component tests do not establish
   authenticated administration, service isolation, clock integrity or native IVV.
+- Reviewed policy administration: separate inspection/apply decisions, exact
+  signed before/after state and resource/peer binding, bounded approval validity,
+  atomic transition/audit-reference persistence, stale/replayed plans, unavailable
+  authorization, uncertain writes and old-format continuity. See
+  [Reviewed administration](REVIEWED_POLICY_ADMINISTRATION.md). The actual identity
+  and audit providers, isolated service and native acceptance remain separate.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,
