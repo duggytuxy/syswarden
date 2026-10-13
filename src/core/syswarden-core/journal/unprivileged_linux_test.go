@@ -184,11 +184,56 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 	if server.Status().Accepted != 6 || server.Status().Completed != 0 {
 		t.Fatal("ungranted group member accepted", server.Status())
 	}
+	t.Run("client-rejects-impostor", func(t *testing.T) {
+		fakeDir := filepath.Join(work, "impostor-endpoint")
+		if err := os.Mkdir(fakeDir, 0750); err != nil {
+			t.Fatal(err)
+		}
+		owned, err := openFixtureDirectory(fakeDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = owned.Close() }()
+		fakeSocket := filepath.Join(canary, AuthoritySocketName)
+		runAdversary(t, canary, "fake-service", fakeSocket, func(_ *exec.Cmd) {
+			ready := filepath.Join(canary, "listener-ready")
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				if _, err := os.Lstat(ready); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("impostor not ready")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			// Deliberately deposit the attacker's already listening socket in an
+			// otherwise correctly provisioned directory and repair its metadata.
+			// Only the kernel listener identity still distinguishes the impostor.
+			name := filepath.Join(fakeDir, AuthoritySocketName)
+			if err := os.Rename(fakeSocket, name); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chown(name, 0, 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := chmodFixture(name, 0660); err != nil {
+				t.Fatal(err)
+			}
+			client := testAuthorityClient(t, AuthorityClientConfig{Directory: owned, ServiceUID: 0, ServiceGID: 0, SocketGID: 0, Timeout: time.Second})
+			data, err := client.Call(authorityMessage(t, authorityRequest{Operation: "resume"}))
+			if data != nil || !errors.Is(err, ErrAuthorityService) || errors.Is(err, ErrAuthorityOutcomeUnknown) {
+				t.Fatal("impostor received a request", err)
+			}
+		})
+		requireAdversarialSnapshot(t, before, dirs)
+	})
 	t.Run("authorized-operation-after-attacks", func(t *testing.T) {
 		// The same listener must still serve an authorized real peer after every
 		// refused attack, rather than merely returning denials to all callers.
-		authorityAnchor(t, serverRequest(t, endpointName, authorityRequest{Operation: "resume"}), f.files.expected)
-		authorityAnchor(t, serverRequest(t, endpointName, authorityRequest{Operation: "commit", Segment: testName}), f.files.next)
+		client := testAuthorityClient(t, AuthorityClientConfig{Directory: endpoint, ServiceUID: 0, ServiceGID: 0, SocketGID: adversaryID, Timeout: time.Second})
+		authorityAnchor(t, clientReply(t, client, authorityRequest{Operation: "resume"}), f.files.expected)
+		authorityAnchor(t, clientReply(t, client, authorityRequest{Operation: "commit", Segment: testName}), f.files.next)
 		stopServer(t, server, done)
 		reopened := openAuthority(t, f.config)
 		authorityAnchor(t, authorityReply(t, reopened, f.peer, authorityRequest{Operation: "resume"}), f.files.next)
@@ -309,39 +354,71 @@ func TestLocalUnprivilegedChild(t *testing.T) {
 	}
 	defer func() { _ = canary.Remove("probe") }()
 	target := os.Getenv("SYSWARDEN_CROSS_UID_TARGET")
+	if strings.HasPrefix(attack, "framed-") {
+		r := authorityRequest{Operation: strings.TrimPrefix(attack, "framed-")}
+		switch r.Operation {
+		case "commit":
+			r.Segment = testName
+		case "apply-recovery":
+			r.PlanSHA256 = strings.Repeat("0", 64)
+		case "inspect-policy":
+			r.Change = &authorityChange{Operation: "disable"}
+		case "apply-policy":
+			r.Change = &authorityChange{Operation: "disable"}
+			r.PlanSHA256 = strings.Repeat("0", 64)
+		}
+		dir, err := openFixtureDirectory(filepath.Dir(target))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = dir.Close() }()
+		client, err := OpenLocalAuthorityClient(AuthorityClientConfig{Directory: dir, ServiceUID: 0, ServiceGID: 0, SocketGID: adversaryID, Timeout: time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = client.Close() }()
+		body, err := client.Call(authorityMessage(t, r))
+		if body != nil || !errors.Is(err, ErrAuthorityDenied) || !errors.Is(err, ErrAuthorityOutcomeUnknown) {
+			t.Fatal("ungranted client obtained a result", err)
+		}
+		println("cross-UID attacker completed")
+		return
+	}
 	switch attack {
-	case "private-socket", "outside-socket", "request", "framed-resume", "framed-commit", "framed-inspect-recovery", "framed-apply-recovery", "framed-inspect-policy", "framed-apply-policy":
+	case "fake-service":
+		listener, err := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: target})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listener.SetUnlinkOnClose(false)
+		defer func() { _ = listener.Close() }()
+		if err := canary.WriteFile("listener-ready", []byte("ready"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := listener.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		peer, err := listener.AcceptUnix()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = peer.Close() }()
+		if err := peer.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(io.LimitReader(peer, 1))
+		if err != nil || len(data) != 0 {
+			t.Fatal("client disclosed request to wrong service UID", err)
+		}
+		println("cross-UID attacker completed")
+		return
+	case "private-socket", "outside-socket", "request":
 		var conn *net.UnixConn
 		conn, err = net.DialUnix("unix", nil, &net.UnixAddr{Net: "unix", Name: target})
 		if err == nil {
 			defer func() { _ = conn.Close() }()
 		}
-		if strings.HasPrefix(attack, "framed-") {
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err = conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-				t.Fatal(err)
-			}
-			r := authorityRequest{Operation: strings.TrimPrefix(attack, "framed-")}
-			switch r.Operation {
-			case "commit":
-				r.Segment = testName
-			case "apply-recovery":
-				r.PlanSHA256 = strings.Repeat("0", 64)
-			case "inspect-policy":
-				r.Change = &authorityChange{Operation: "disable"}
-			case "apply-policy":
-				r.Change = &authorityChange{Operation: "disable"}
-				r.PlanSHA256 = strings.Repeat("0", 64)
-			}
-			transportSend(t, conn, transportFrame(authorityMessage(t, r)))
-			if body := transportRead(t, conn); len(body) != 0 {
-				t.Fatal("ungranted peer received authority result")
-			}
-			println("cross-UID attacker completed")
-			return
-		}
+
 		if attack == "request" {
 			if err != nil {
 				t.Fatal(err)

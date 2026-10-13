@@ -34,7 +34,7 @@ groups, zero effective/permitted/inheritable/ambient capabilities, and
 child can perform ordinary I/O, rather than accepting a globally broken process
 as proof of security.
 
-The 80 cases cover:
+The 81 cases cover:
 
 - Reading, opening for overwrite/append/truncation, unlinking, replacement by
   rename, hard-linking, chmod and chown against policy, custody, anchor, segment
@@ -50,12 +50,16 @@ The 80 cases cover:
   unlink, rename, hardlink, chmod, chown, entry creation, symlink insertion and
   directory substitution. The child belongs to the endpoint group but cannot write
   its directory or become its owner.
-- Actual listener denial of all six framed operations for that ungranted group
+- Actual client/listener denial of all six framed operations for that ungranted group
   member, plus one connection refusal with a different primary group and no
   supplementary groups: seven cases. The socket remains `0660`, directory `0750`;
   no test-only public permission is needed for this listener.
-- Authorized resume, commit and independently reopened resume after the attacks:
-  one case.
+- Wrong-UID listener rejected before any request bytes: one case. The privileged
+  fixture parent deliberately deposits the child's listening socket into a protected
+  directory with the expected metadata. Only kernel identity distinguishes it;
+  the fixture does not assert that an ordinary user can change root-owned files.
+- Authorized client resume, commit and independently reopened resume after the
+  attacks: one case.
 
 The test exposes its harness ancestors so their permissions cannot accidentally
 provide the protection attributed to product resource directories. Access probes
@@ -74,7 +78,8 @@ capability in the dedicated job is an error, never a green skip.
 The CI parent runs on a disposable runner. Local verification can use the existing
 rootless `podman unshare` namespace instead, with no new image or container cache.
 Both modes test kernel identity separation. The actual
-[listener component](LOCAL_AUTHORITY_SERVER.md) uses the production framing and
+[listener](LOCAL_AUTHORITY_SERVER.md) and [client](LOCAL_AUTHORITY_CLIENT.md)
+components use the production framing and
 permission checks with synthetic authority resources. The earlier deliberately
 reachable dispatcher probe remains a harness-only socket. Neither test establishes
 deployed package ownership, SELinux/AppArmor policy, feed pipeline, process
