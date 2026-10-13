@@ -165,3 +165,8 @@ independent exact-plan approval and retains its decision binding with the update
 Operational grants never imply administration. Provisioning orchestration,
 OS isolation, key lifecycle, incomplete recovery, retention, loss,
 redaction and shared consumers remain open in #225 and #224.
+
+The [fixed-resource authority composition](LOCAL_AUTHORITY.md) now routes the
+existing coordinators through a bounded canonical dispatcher with owned startup
+resources. It does not implement a listener, authentication/audit provider or
+OS-isolated provisioning, and remains disconnected from production.

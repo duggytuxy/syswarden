@@ -33,6 +33,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 20. [Signed policy and local custody admission](CUSTODY_ADMISSION.md).
 21. [Protected policy storage and custody leases](CUSTODY_POLICY_STORAGE.md).
 22. [Reviewed custody policy administration](REVIEWED_POLICY_ADMINISTRATION.md).
+23. [Fixed-resource local authority composition](LOCAL_AUTHORITY.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -85,8 +86,10 @@ follow-up adds bounded protected current-policy history, serialized updates and
 per-operation admission/lifetime checks around the existing coordinator, reviewed
 in PR #333. The administrative follow-up binds exact private plans to independent
 inspection/apply authorization and stores the decision audit reference in the
-same frame as the policy update. It supplies no identity provider, listener or
-authority service.
+same frame as the policy update, reviewed in PR #334. The composition follow-up
+binds those existing operations to fixed startup resources and a bounded canonical
+request dispatcher, with one active operation and draining shutdown. It supplies
+no identity provider, listener or OS-isolated service.
 These components remain disconnected from production. Authenticated authority
 provisioning, OS isolation, incomplete backend/intent recovery, key lifecycle and
 retention remain future work.

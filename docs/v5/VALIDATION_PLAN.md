@@ -106,6 +106,12 @@ not a financial allocation.
   authorization, uncertain writes and old-format continuity. See
   [Reviewed administration](REVIEWED_POLICY_ADMINISTRATION.md). The actual identity
   and audit providers, isolated service and native acceptance remain separate.
+- Fixed-resource authority composition: owned startup descriptors and roots,
+  canonical bounded requests, all six existing operation routes, unchanged
+  authority checks, no-write denials, cross-handle exclusion, fixed limits and
+  concurrent/draining close. See [Local authority](LOCAL_AUTHORITY.md). Socket
+  transport, isolated provisioning, identity/audit providers and native acceptance
+  remain separate; no service is activated by these tests.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,
