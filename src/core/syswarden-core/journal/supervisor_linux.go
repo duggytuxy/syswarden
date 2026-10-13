@@ -17,11 +17,14 @@ var ErrAuthorityServerBusy = errors.New("local authority server is running or dr
 
 // AuthorityServerConfig is trusted startup input. Provision a distinct 0750
 // endpoint directory owned by the service UID and explicitly selected group.
+// PinDirectory must be separately provisioned, service-owned 0700 storage with
+// no ACL, distinct from the endpoint and all four private authority resources.
 // Group reachability never grants an operation; signed UID policy still applies.
 type AuthorityServerConfig struct {
 	Authority      LocalAuthorityConfig
 	Transport      AuthorityTransportLimits
 	Directory      *os.File
+	PinDirectory   *os.File
 	GroupID        uint32
 	AcceptInterval time.Duration
 }
@@ -57,7 +60,7 @@ func OpenLocalAuthorityServer(c AuthorityServerConfig) (*LocalAuthorityServer, e
 	if err != nil {
 		return nil, err
 	}
-	socket, err := openAuthoritySocket(c.Directory, c.GroupID, c.Transport.MaxPeers)
+	socket, err := openPinnedAuthoritySocket(c)
 	if err != nil {
 		return nil, errors.Join(err, tr.Close())
 	}

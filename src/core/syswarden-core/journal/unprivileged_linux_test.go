@@ -155,7 +155,8 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 	limits := testTransportLimits()
 	limits.MaxPeersPerUID = 1
 	limits.ReadTimeout = MaxAuthorityIOTimeout
-	server := testServer(t, AuthorityServerConfig{Authority: f.config, Transport: limits, Directory: endpoint, GroupID: adversaryID, AcceptInterval: MinAuthorityAcceptInterval})
+	pin, _ := testDirectory(t)
+	server := testServer(t, AuthorityServerConfig{Authority: f.config, Transport: limits, Directory: endpoint, PinDirectory: pin, GroupID: adversaryID, AcceptInterval: MinAuthorityAcceptInterval})
 	done := runServer(server)
 	endpointName := filepath.Join(endpointPath, AuthoritySocketName)
 	var socketBefore unix.Stat_t

@@ -71,14 +71,17 @@ The 112 mandatory cases cover:
   attacks: one case.
 - A separately executed non-root service, authorized client and ungranted peer,
   including protected storage and restart behavior: 18 cases, detailed below.
+  Both private-storage probes also attempt pin read/write, unlink, rename, hardlink,
+  symlink insertion and mode changes. All are denied; the pin inventory stays
+  unchanged. This expands those cases without adding separate child processes.
 - Deliberate process crash after the service reports readiness: one case. The
-  exact private endpoint receipt remains, and a fresh service process refuses
+  exact private endpoint receipt and independent durable pin remain, and a fresh service process refuses
   startup without modifying it or deleting the stale socket. This is preservation
   and refusal evidence, not automatic crash recovery or physical power-loss IVV.
 - Reviewed endpoint recovery after that crash: two cases. Another ordinary UID
   cannot inspect or apply recovery. A separately provisioned non-root service
-  uses the independently retained pre-crash receipt pin and a synthetic review
-  provider, retires only the stale pair, starts a new endpoint, serves verified
+  reads the creator-written pin from protected storage without a parent-supplied
+  receipt digest, uses a synthetic review provider, retires the stale pair and pin, starts a new endpoint, serves verified
   resume and stops cleanly. Journal resources stay unchanged. See
   [Endpoint recovery](ENDPOINT_RECOVERY.md) for missing production providers and
   deliberately refused partial states.

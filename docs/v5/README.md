@@ -113,7 +113,11 @@ removes only the exact live creator's socket and receipt during clean shutdown.
 This ownership evidence was reviewed in PR #343. A real process-kill test verifies
 preservation and refusal on the next startup. The recovery follow-up adds
 independently pinned, separately approved retirement of a complete stale endpoint
-pair and verifies non-root restart/resume without changing journal resources.
+pair and verifies non-root restart/resume without changing journal resources,
+reviewed in PR #344. The pin-custody follow-up creates independently protected
+lifecycle evidence before listening, reads it in a fresh recovery process and
+retires it only after synchronized endpoint cleanup. It preserves uncertain
+state and rejects changes without creating a new recovery command.
 Ambiguous or partial endpoint state and deployed recovery providers remain open.
 These components and tests supply no identity
 provider or installed OS-isolated service.
