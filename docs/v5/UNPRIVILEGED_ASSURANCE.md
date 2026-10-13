@@ -34,7 +34,7 @@ groups, zero effective/permitted/inheritable/ambient capabilities, and
 child can perform ordinary I/O, rather than accepting a globally broken process
 as proof of security.
 
-The 112 mandatory cases cover:
+The 113 mandatory cases cover:
 
 - Reading, opening for overwrite/append/truncation, unlinking, replacement by
   rename, hard-linking, chmod and chown against policy, custody, anchor, segment
@@ -67,6 +67,11 @@ The 112 mandatory cases cover:
   remains registered, then the first peer disconnects and releases its slot.
   This verifies the two-worker/one-peer-per-UID configuration, not flood resistance
   or guaranteed fairness. A test-only stop pipe carries one byte and no authority.
+- Per-UID admission frequency: one case. After an admitted malformed request,
+  the same ordinary UID reconnects without sending input and is refused despite
+  available concurrent-peer capacity. A different authorized UID resumes and
+  private storage stays unchanged. This proves spent quota survives disconnect;
+  it does not establish flood resistance, fairness or durable admission history.
 - Authorized client resume, commit and independently reopened resume after the
   attacks: one case.
 - A separately executed non-root service, authorized client and ungranted peer,

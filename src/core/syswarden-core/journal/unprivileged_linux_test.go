@@ -254,6 +254,7 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 		reopened := openAuthority(t, f.config)
 		authorityAnchor(t, authorityReply(t, reopened, f.peer, authorityRequest{Operation: "resume"}), f.files.next)
 	})
+	t.Run("endpoint-uid-rate", func(t *testing.T) { testAuthorityRateBoundary(t, canary, work) })
 	testAuthorityProcessBoundary(t)
 }
 
@@ -405,6 +406,10 @@ func TestLocalUnprivilegedChild(t *testing.T) {
 	switch attack {
 	case "quota-hold", "quota-denied":
 		quotaAdversary(t, target, attack)
+		println("cross-UID attacker completed")
+		return
+	case "rate-repeat":
+		rateAdversary(t, target)
 		println("cross-UID attacker completed")
 		return
 	case "fake-service":

@@ -23,17 +23,21 @@ var (
 
 // AuthorityTransportLimits is trusted startup input, never a request field.
 // MaxPeersPerUID must be explicit, from 1 through MaxPeers. Choose a smaller
-// value than MaxPeers to leave concurrency for another UID. This is a live-peer
+// value than MaxPeers to leave concurrency for another UID. This field is a live-peer
 // ceiling, not a request-rate limit, operation grant or availability guarantee.
 // Both timeouts are absolute per I/O phase and are not extended by partial reads.
 // They do not interrupt the authority's trusted callback or durable disk work.
+// RequestsPerUID, RateWindow and MaxRateUIDs explicitly bound admission frequency
+// and the historical UID registry. They never grant an authority operation.
 type AuthorityTransportLimits struct {
-	MaxPeers, MaxPeersPerUID  int
-	ReadTimeout, WriteTimeout time.Duration
+	MaxPeers, MaxPeersPerUID    int
+	ReadTimeout, WriteTimeout   time.Duration
+	RequestsPerUID, MaxRateUIDs int
+	RateWindow                  time.Duration
 }
 
-// authorityPeerSlot retains only live kernel-observed identities. There is no
-// historical UID table, client-supplied identity or per-UID allocation.
+// authorityPeerSlot retains only live kernel-observed identities. Admission
+// history is bounded separately; neither registry uses client-supplied identity.
 type authorityPeerSlot struct {
 	phase authorityPeerPhase
 	uid   uint32
@@ -57,17 +61,20 @@ type LocalAuthorityTransport struct {
 	peers     map[*net.UnixConn]authorityPeerSlot
 	authority *LocalAuthority
 	limits    AuthorityTransportLimits
+	rate      []authorityRateWindow
+	rateNow   func() time.Time
+	rateLast  time.Time
 }
 
 func OpenLocalAuthorityTransport(c LocalAuthorityConfig, limits AuthorityTransportLimits) (*LocalAuthorityTransport, error) {
-	if limits.MaxPeers < 1 || limits.MaxPeers > MaxAuthorityPeers || limits.MaxPeersPerUID < 1 || limits.MaxPeersPerUID > limits.MaxPeers || limits.ReadTimeout <= 0 || limits.ReadTimeout > MaxAuthorityIOTimeout || limits.WriteTimeout <= 0 || limits.WriteTimeout > MaxAuthorityIOTimeout {
+	if limits.MaxPeers < 1 || limits.MaxPeers > MaxAuthorityPeers || limits.MaxPeersPerUID < 1 || limits.MaxPeersPerUID > limits.MaxPeers || limits.ReadTimeout <= 0 || limits.ReadTimeout > MaxAuthorityIOTimeout || limits.WriteTimeout <= 0 || limits.WriteTimeout > MaxAuthorityIOTimeout || !validAuthorityRateLimits(limits) {
 		return nil, ErrInvalidOptions
 	}
 	authority, err := OpenLocalAuthority(c)
 	if err != nil {
 		return nil, err
 	}
-	return &LocalAuthorityTransport{authority: authority, limits: limits, peers: make(map[*net.UnixConn]authorityPeerSlot, limits.MaxPeers)}, nil
+	return &LocalAuthorityTransport{authority: authority, limits: limits, peers: make(map[*net.UnixConn]authorityPeerSlot, limits.MaxPeers), rate: make([]authorityRateWindow, limits.MaxRateUIDs), rateNow: time.Now}, nil
 }
 
 // register distinguishes a duplicate object, whose ownership was already
@@ -104,6 +111,9 @@ func (t *LocalAuthorityTransport) register(peer *net.UnixConn) (bool, error) {
 	}
 	if count >= t.limits.MaxPeersPerUID {
 		return false, ErrAuthorityTransportBusy
+	}
+	if !t.admitRate(cred.Uid) {
+		return false, ErrAuthorityRateLimit
 	}
 	t.peers[peer] = authorityPeerSlot{phase: authorityPeerReading, uid: cred.Uid}
 	return false, nil

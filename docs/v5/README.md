@@ -121,6 +121,10 @@ state and rejects changes without creating a new recovery command. Its shutdown
 follow-up separates stopped admission from completed work: both lifecycle leases
 and all endpoint evidence remain held until workers and accepted operations drain,
 preventing premature offline recovery without cancelling approved writes.
+Admission-frequency limits now add explicit fixed windows per kernel UID before
+framing, with bounded historical storage and no quota refund on disconnect.
+A real separate-UID test verifies refusal after reconnection while another
+authorized account still resumes.
 Ambiguous or partial endpoint state and deployed recovery providers remain open.
 These components and tests supply no identity
 provider or installed OS-isolated service.
