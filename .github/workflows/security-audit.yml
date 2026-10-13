@@ -268,6 +268,7 @@ jobs:
           fuzz_target src/core/syswarden-core ./journal FuzzAnchorLedger
           fuzz_target src/core/syswarden-core ./journal FuzzAnchorRecoveryTail
           fuzz_target src/core/syswarden-core ./journal FuzzLocalCustodyLedger
+          fuzz_target src/core/syswarden-core ./journal FuzzCustodyAccessPolicy
 
       - name: Run golangci-lint
         shell: bash

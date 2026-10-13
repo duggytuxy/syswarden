@@ -48,6 +48,12 @@ of journal producers only when the OS boundary holds. No TPM monotonic counter,
 external witness, root-tamper resistance or global equivocation proof is claimed.
 Remote expiring leases and HA fencing are not implemented.
 
+A separate inactive [signed-policy admission component](CUSTODY_ADMISSION.md)
+verifies exact enrollment, current policy pins, validity and kernel peer grants.
+Its result is not a backend lease or recovery approval. Trusted provisioning,
+protected policy storage, lifetime enforcement and isolated service orchestration
+still must compose these components before activation.
+
 ## Complete transitions and bounded storage
 
 ```mermaid

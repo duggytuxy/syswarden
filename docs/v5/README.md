@@ -30,6 +30,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 17. [Reviewed recovery of a complete journal anchor](JOURNAL_RECOVERY.md).
 18. [Coordinating independent journal restart custody](JOURNAL_CUSTODY.md).
 19. [Bounded local restart-custody storage](LOCAL_CUSTODY_STORAGE.md).
+20. [Signed policy and local custody admission](CUSTODY_ADMISSION.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -74,7 +75,10 @@ anchor, after authenticating its actual publication. The custody follow-up
 coordinates a trusted independent backend through prepared intents, verified
 local commits, final state readback and separately authorized recovery, reviewed
 in PR #330. The local backend follow-up adds explicit enrollment, a bounded
-protected ledger, durable transitions and independently authorized audit bindings.
+protected ledger, durable transitions and independently authorized audit bindings,
+reviewed in PR #331. The admission follow-up verifies signed enrollment/access
+policy against an independent current pin and binds high-level operations to
+kernel-observed local peer identities. It supplies no listener or authority service.
 These components remain disconnected from production. Authenticated authority
 provisioning, OS isolation, incomplete backend/intent recovery, key lifecycle and
 retention remain future work.
