@@ -34,7 +34,7 @@ groups, zero effective/permitted/inheritable/ambient capabilities, and
 child can perform ordinary I/O, rather than accepting a globally broken process
 as proof of security.
 
-The 81 cases cover:
+The 99 mandatory cases cover:
 
 - Reading, opening for overwrite/append/truncation, unlinking, replacement by
   rename, hard-linking, chmod and chown against policy, custody, anchor, segment
@@ -60,6 +60,8 @@ The 81 cases cover:
   the fixture does not assert that an ordinary user can change root-owned files.
 - Authorized client resume, commit and independently reopened resume after the
   attacks: one case.
+- A separately executed non-root service, authorized client and ungranted peer,
+  including protected storage and restart behavior: 18 cases, detailed below.
 
 The test exposes its harness ancestors so their permissions cannot accidentally
 provide the protection attributed to product resource directories. Access probes
@@ -85,6 +87,78 @@ reachable dispatcher probe remains a harness-only socket. Neither test establish
 deployed package ownership, SELinux/AppArmor policy, feed pipeline, process
 isolation, boot behavior or distribution support. Production provisioning and
 identity/approval providers remain separate work.
+
+## Non-root service and requester processes
+
+The same mandatory gate adds 18 `process-*` cases against an actual
+`LocalAuthorityServer` child and `LocalAuthorityClient` children. It does not mock
+peer credentials, file access or wire denials. The privileged fixture parent only
+prepares synthetic signed policy/publication files, transfers ownership, starts
+children and verifies before/after results. It never handles client operations on
+behalf of the service. No system account, unit or host configuration is created.
+
+| Test identity | Provisioned access | Authority |
+| --- | --- | --- |
+| Service UID/GID 65533 | Private resource directories `0700`, files `0600`; one supplementary endpoint group 65534. | Opens and owns the actual bounded server and existing authority stores. |
+| Client UID/GID 65534 | Endpoint directory `0750` and socket `0660`; no supplementary groups or private resource descriptors. | Synthetic signed policy grants only resume and commit. |
+| Unrelated UID 65532, GID 65534 | Same endpoint reachability; no supplementary groups or private resource descriptors. | No operation grant. |
+
+The service's private storage group and endpoint access group deliberately differ.
+This exercises provisioning where the service can bind and set the endpoint group
+without root or active capabilities. The client independently checks the kernel
+service UID/GID and endpoint metadata before sending.
+
+Every child verifies real/effective IDs, its exact group list, zero effective,
+permitted, inheritable and ambient capabilities, inability to acquire UID 0 and
+ordinary read/write access to its own temporary canary. The locked probe/control
+thread sets and verifies `no_new_privs`. It is not asserted for all pre-existing Go
+runtime threads and does not establish a process sandbox. The
+[kernel documentation](https://docs.kernel.org/userspace-api/no_new_privs.html)
+describes its exec privilege boundary; it does not independently prevent every
+privileged syscall. These checks are harness prerequisites, not product-provided
+OS isolation.
+
+Children receive synthetic test configuration through a bounded stdin pipe.
+Only the service receives the two explicit readiness/stop pipes. Before opening
+resources, children check that no private storage descriptor was inherited. The
+paths and roots come from the test parent, not from a network request. This helper
+is compiled only into tests; it is not a production configuration loader, service
+launcher or identity/approval provider.
+
+The cases require:
+
+- Service startup, clean stop, a fresh service process over the same durable state
+  and final clean stop, with exact owned socket removal after each stop.
+- Authorized resume, commit and resume after service restart. A duplicate commit
+  must be denied with unchanged protected state and an uncertain wire outcome,
+  rather than automatically retried or described as a safe no-op.
+- Read and append opens of all five protected files denied with `EACCES` to both
+  the authorized client and unrelated account. API permission does not give direct
+  custody, policy, anchor, segment or checkpoint access.
+- All six operations denied to the reachable ungranted account. The authorized
+  operational client also cannot inspect or apply policy administration when no
+  independent administrator provider exists.
+- A signal-zero permission probe from the client to the live service denied with
+  `EPERM`, followed by successful authorized service work. As documented by
+  [kill(2)](https://man7.org/linux/man-pages/man2/kill.2.html), signal zero checks
+  permission without delivering a signal. This does not cover ptrace, every signal
+  or the special same-session `SIGCONT` rule; those remain separate probes.
+
+Private bytes, inode identity, mode, owner/group, link count, modification/change
+times and directory inventories must remain identical across refused operations,
+clean stops and restart reads. The approved commit must actually change protected
+state; the subsequent independent process must return that exact new anchor.
+Subprocess failures, absent assertion markers, startup/exit timeouts or missing
+named results fail the dedicated gate. Cleanup is scoped to the test processes
+and temporary fixtures. Race execution supplements the normal gate; existing CI
+resource and timeout limits remain in place.
+
+This establishes component behavior across non-root process identities and clean
+restart. It does not establish systemd/OpenRC provisioning, SELinux/AppArmor
+confinement, a complete capability-bounding policy, ptrace protection, authenticated
+human administration, abrupt-crash or power-loss recovery, native package removal,
+reboot acceptance or resistance to a compromised service UID. These remain explicit
+work items. BunkerWeb and installed v4 services are unchanged.
 
 ## Remaining mandatory coverage
 

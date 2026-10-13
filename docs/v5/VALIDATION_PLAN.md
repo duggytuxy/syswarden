@@ -128,14 +128,18 @@ not a financial allocation.
   checked before sending, one nonqueued call, bounded canonical request/reply and
   EOF, operation/result binding, private plan shape/digest validation, cancellation
   and explicit uncertain outcomes without automatic replay. See
-  [Local client](LOCAL_AUTHORITY_CLIENT.md). The mandatory 81-case cross-UID gate
+  [Local client](LOCAL_AUTHORITY_CLIENT.md). The mandatory 99-case cross-UID gate
   includes an impostor listener that receives zero bytes despite expected socket
   metadata. Service identity is not human authentication or independent approval;
   trusted discovery, deployed lifecycle and native evidence remain open.
 - Unprivileged local attackers: a mandatory separate-UID component gate tests
   protected journal resources and all authority routes, verifies unchanged state
   and exercises authorized commit/reopen afterwards. Missing or skipped cases
-  fail the dedicated gate. The [assurance plan](UNPRIVILEGED_ASSURANCE.md) tracks
+  fail the dedicated gate. A distinct non-root service process owns the actual
+  private stores while authorized and ungranted client processes exercise file
+  access, all six routes, administrative denial, signal-zero permission, commit
+  and clean restart/resume. These fixtures do not provide production provisioning
+  or OS sandboxing. The [assurance plan](UNPRIVILEGED_ASSURANCE.md) tracks
   additional product surfaces and pending native distribution evidence; this first
   gate does not accept the installed product or replace independent review.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),

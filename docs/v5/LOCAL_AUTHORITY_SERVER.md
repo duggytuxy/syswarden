@@ -134,7 +134,8 @@ actual listener: an unintended group member can connect but cannot mutate the
 endpoint or obtain any of the six authority results. An account outside the group
 cannot connect. The private-resource inventory remains unchanged, and authorized
 resume/commit/reopen still succeeds. The client follow-up adds a kernel-identity
-impostor case, bringing the named gate to 81 cases; incomplete or
+impostor case; the subsequent non-root process campaign brings the named gate to
+99 cases, including authorized commit and fresh-process resume. Incomplete or
 skipped dedicated evidence is a failure.
 
 This is component isolation evidence, not deployed-service or native distribution

@@ -20,7 +20,7 @@ def complete_report():
 
 class CrossUIDEvidenceTests(unittest.TestCase):
     def test_complete(self):
-        self.assertEqual(gate.verify(encode(complete_report())), 81)
+        self.assertEqual(gate.verify(encode(complete_report())), 99)
 
     def test_missing_each_case(self):
         for test in gate.required_tests():

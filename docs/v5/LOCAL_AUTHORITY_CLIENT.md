@@ -133,11 +133,13 @@ being retried. Response fuzzing supplements race and Linux 386 checks.
 
 The mandatory [separate-UID gate](UNPRIVILEGED_ASSURANCE.md) uses the actual client
 for six ungranted listener operations and authorized post-attack resume/commit.
-Its 81 cases also include a wrong-UID listener deposited by the privileged test
+Its 99 cases also include a wrong-UID listener deposited by the privileged test
 parent into an otherwise correctly provisioned endpoint. The ordinary child has
 no capabilities and receives zero request bytes. This synthetic misprovisioning
 fixture tests kernel service identity independently of file metadata; it does not
-claim that an ordinary user can change root-owned socket metadata.
+claim that an ordinary user can change root-owned socket metadata. A separate
+non-root service/client campaign verifies actual commit, private-storage refusal,
+ungranted operations and exact resume after a clean service process restart.
 
 Production provisioning, isolated service identities and sandboxing, actual
 identity/approval/audit providers, safe restart discovery, per-client quotas,
