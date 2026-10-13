@@ -112,6 +112,12 @@ not a financial allocation.
   concurrent/draining close. See [Local authority](LOCAL_AUTHORITY.md). Socket
   transport, isolated provisioning, identity/audit providers and native acceptance
   remain separate; no service is activated by these tests.
+- Bounded local authority transport: exact framing and client EOF, pre-allocation
+  length checks, absolute I/O deadlines, connection capacity, generic wire denials,
+  ancillary descriptor rejection without leaks, partial replies and draining
+  approved mutations. See [Local transport](LOCAL_AUTHORITY_TRANSPORT.md). Listener
+  isolation, accept/rate policy, durable denial auditing and native acceptance
+  remain separate; no production service is activated.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,
