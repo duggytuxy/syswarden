@@ -135,12 +135,61 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 			requireAdversarialSnapshot(t, before, dirs)
 		})
 	}
+	// Replace the test-only dispatcher with the actual bounded listener. Group
+	// membership permits connecting but does not grant any authority operation.
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	endpointPath := filepath.Join(work, "endpoint")
+	if err := os.Mkdir(endpointPath, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(endpointPath, 0, adversaryID); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := openFixtureDirectory(endpointPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = endpoint.Close() }()
+	server := testServer(t, AuthorityServerConfig{Authority: f.config, Transport: testTransportLimits(), Directory: endpoint, GroupID: adversaryID, AcceptInterval: MinAuthorityAcceptInterval})
+	done := runServer(server)
+	endpointName := filepath.Join(endpointPath, AuthoritySocketName)
+	var socketBefore unix.Stat_t
+	if err = unix.Lstat(endpointName, &socketBefore); err != nil {
+		t.Fatal(err)
+	}
+	for _, attack := range []string{"unlink", "rename", "hardlink", "chmod", "chown", "create", "symlink", "replace-directory"} {
+		t.Run("endpoint-"+attack, func(t *testing.T) {
+			target := endpointName
+			if attack == "create" || attack == "symlink" || attack == "replace-directory" {
+				target = endpointPath
+			}
+			runAdversary(t, canary, attack, target, nil)
+			var after unix.Stat_t
+			if err := unix.Lstat(endpointName, &after); err != nil || after != socketBefore {
+				t.Fatal("endpoint changed", err)
+			}
+			requireAdversarialSnapshot(t, before, dirs)
+		})
+	}
+	t.Run("endpoint-outside-group", func(t *testing.T) { runAdversary(t, canary, "outside-socket", endpointName, nil) })
+	for _, request := range requests {
+		t.Run("endpoint-ungranted-"+request.Operation, func(t *testing.T) {
+			runAdversary(t, canary, "framed-"+request.Operation, endpointName, nil)
+			requireAdversarialSnapshot(t, before, dirs)
+		})
+	}
+	serverWait(t, server, func(st AuthorityServerStatus) bool { return st.Failed == 6 && st.Active == 0 })
+	if server.Status().Accepted != 6 || server.Status().Completed != 0 {
+		t.Fatal("ungranted group member accepted", server.Status())
+	}
 	t.Run("authorized-operation-after-attacks", func(t *testing.T) {
-		authorityAnchor(t, authorityReply(t, a, f.peer, authorityRequest{Operation: "resume"}), f.files.expected)
-		authorityAnchor(t, authorityReply(t, a, f.peer, authorityRequest{Operation: "commit", Segment: testName}), f.files.next)
-		if err := a.Close(); err != nil {
-			t.Fatal(err)
-		}
+		// The same listener must still serve an authorized real peer after every
+		// refused attack, rather than merely returning denials to all callers.
+		authorityAnchor(t, serverRequest(t, endpointName, authorityRequest{Operation: "resume"}), f.files.expected)
+		authorityAnchor(t, serverRequest(t, endpointName, authorityRequest{Operation: "commit", Segment: testName}), f.files.next)
+		stopServer(t, server, done)
 		reopened := openAuthority(t, f.config)
 		authorityAnchor(t, authorityReply(t, reopened, f.peer, authorityRequest{Operation: "resume"}), f.files.next)
 	})
@@ -192,7 +241,11 @@ func runAdversary(t *testing.T, canary, attack, target string, serve func(*exec.
 	cmd := exec.Command("/proc/self/exe", "-test.run=^TestLocalUnprivilegedChild$", "-test.timeout=10s")
 	cmd.Dir = "/"
 	cmd.Env = []string{"SYSWARDEN_CROSS_UID_CHILD=" + attack, "SYSWARDEN_CROSS_UID_TARGET=" + target, "SYSWARDEN_CROSS_UID_CANARY=" + canary}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: adversaryID, Gid: adversaryID, Groups: []uint32{}}}
+	gid := uint32(adversaryID)
+	if attack == "outside-socket" {
+		gid--
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: adversaryID, Gid: gid, Groups: []uint32{}}}
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Start(); err != nil {
@@ -219,7 +272,11 @@ func TestLocalUnprivilegedChild(t *testing.T) {
 	// thread instead of relying on Go scheduler placement.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	if os.Getuid() != adversaryID || os.Geteuid() != adversaryID || os.Getgid() != adversaryID || os.Getegid() != adversaryID {
+	gid := adversaryID
+	if attack == "outside-socket" {
+		gid--
+	}
+	if os.Getuid() != adversaryID || os.Geteuid() != adversaryID || os.Getgid() != gid || os.Getegid() != gid {
 		t.Fatal("attacker identity not dropped")
 	}
 	groups, err := os.Getgroups()
@@ -253,11 +310,37 @@ func TestLocalUnprivilegedChild(t *testing.T) {
 	defer func() { _ = canary.Remove("probe") }()
 	target := os.Getenv("SYSWARDEN_CROSS_UID_TARGET")
 	switch attack {
-	case "private-socket", "request":
+	case "private-socket", "outside-socket", "request", "framed-resume", "framed-commit", "framed-inspect-recovery", "framed-apply-recovery", "framed-inspect-policy", "framed-apply-policy":
 		var conn *net.UnixConn
 		conn, err = net.DialUnix("unix", nil, &net.UnixAddr{Net: "unix", Name: target})
 		if err == nil {
 			defer func() { _ = conn.Close() }()
+		}
+		if strings.HasPrefix(attack, "framed-") {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			r := authorityRequest{Operation: strings.TrimPrefix(attack, "framed-")}
+			switch r.Operation {
+			case "commit":
+				r.Segment = testName
+			case "apply-recovery":
+				r.PlanSHA256 = strings.Repeat("0", 64)
+			case "inspect-policy":
+				r.Change = &authorityChange{Operation: "disable"}
+			case "apply-policy":
+				r.Change = &authorityChange{Operation: "disable"}
+				r.PlanSHA256 = strings.Repeat("0", 64)
+			}
+			transportSend(t, conn, transportFrame(authorityMessage(t, r)))
+			if body := transportRead(t, conn); len(body) != 0 {
+				t.Fatal("ungranted peer received authority result")
+			}
+			println("cross-UID attacker completed")
+			return
 		}
 		if attack == "request" {
 			if err != nil {

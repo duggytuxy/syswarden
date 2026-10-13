@@ -115,9 +115,15 @@ not a financial allocation.
 - Bounded local authority transport: exact framing and client EOF, pre-allocation
   length checks, absolute I/O deadlines, connection capacity, generic wire denials,
   ancillary descriptor rejection without leaks, partial replies and draining
-  approved mutations. See [Local transport](LOCAL_AUTHORITY_TRANSPORT.md). Listener
-  isolation, accept/rate policy, durable denial auditing and native acceptance
+  approved mutations. See [Local transport](LOCAL_AUTHORITY_TRANSPORT.md). Deployed
+  service isolation, per-client quotas, durable denial auditing and native acceptance
   remain separate; no production service is activated.
+- Bounded listener/supervisor: provisioned endpoint ownership, socket and directory
+  ACL refusal, preserved changed artifacts, descriptor-relative cleanup, fixed
+  workers, paced admission, timeouts and approved-operation drain. See
+  [Local server](LOCAL_AUTHORITY_SERVER.md). The cross-UID gate also verifies group
+  reachability without authorization and refusal outside the selected group.
+  Client authentication, deployed service isolation and native evidence remain open.
 - Unprivileged local attackers: a mandatory separate-UID component gate tests
   protected journal resources and all authority routes, verifies unchanged state
   and exercises authorized commit/reopen afterwards. Missing or skipped cases

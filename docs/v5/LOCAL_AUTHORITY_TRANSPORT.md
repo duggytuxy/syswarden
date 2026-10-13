@@ -10,9 +10,9 @@ release remains v4.10.4. Refs #225 and #224, both partial.
 Trusted startup supplies the existing authority configuration and explicit
 `AuthorityTransportLimits`. Construction owns one newly opened fixed-resource
 local authority. It creates no socket pathname, accepts no network connection,
-starts no goroutine and performs no implicit bootstrap. The supervisor remains
-responsible for isolated provisioning, the listening socket and its permissions,
-accept limits, caller concurrency and independently trusted identity/audit providers.
+starts no goroutine and performs no implicit bootstrap. The optional [listener component](LOCAL_AUTHORITY_SERVER.md) supplies a bounded
+endpoint and worker set. Trusted integration remains responsible for isolated
+provisioning and independently trusted identity/audit providers.
 
 | Resource | Enforced boundary |
 | --- | --- |
@@ -136,10 +136,12 @@ Race, Linux 386, static analysis and the complete core regression supplement the
 component checks. Existing payload fuzzing remains in CI; this framing layer does
 not add another JSON parser or change a signed schema.
 
-An isolated listener/supervisor, real authentication and audit providers, denial
-rate policy, issuer/key lifecycle, incomplete-state recovery, retention and shared
-consumer integration remain unfinished. These tests do not establish cross-UID
-isolation, physical power-loss safety, native IVV or v5 acceptance. No production
+The [listener follow-up](LOCAL_AUTHORITY_SERVER.md) adds endpoint ownership,
+paced workers and separate cross-UID evidence. OS-isolated service provisioning,
+real authentication and audit providers, per-client rate policy, issuer/key
+lifecycle, incomplete-state recovery, retention and shared consumer integration
+remain unfinished. Transport-only tests do not establish cross-UID isolation,
+physical power-loss safety, native IVV or v5 acceptance. No production
 caller activates this transport. BunkerWeb retains its independent authenticated
 API, source-owned temporary bans, durations and retry/HA contract, without a new
 dashboard, identity-provider or journal dependency.
