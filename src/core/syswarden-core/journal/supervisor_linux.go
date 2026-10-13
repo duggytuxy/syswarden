@@ -181,6 +181,7 @@ func (s *LocalAuthorityServer) Serve() error {
 // Close stops admission and invokes the existing transport drain. A running
 // Serve returns ErrAuthorityServerBusy here until workers finish. It does not
 // cancel approved durable writes or delete an endpoint whose inode was replaced.
+// Endpoint/pin evidence and locks remain held until every worker has returned.
 func (s *LocalAuthorityServer) Close() error {
 	if s == nil {
 		return nil
@@ -195,11 +196,12 @@ func (s *LocalAuthorityServer) Close() error {
 	busy := s.status.Running
 	tr, socket := s.transport, s.socket
 	s.mu.Unlock()
-	// Close transport admission before removing the listening socket. Peers
-	// accepted concurrently are either drained or refused by the closed transport.
-	err := errors.Join(tr.Close(), socket.Close())
-	if busy {
-		err = errors.Join(err, ErrAuthorityServerBusy)
+	// Stop new transport admission and kernel accepts, retaining endpoint custody
+	// while an approved callback/write or accepted peer is still draining. A
+	// stopped listener and ECONNREFUSED must not permit early offline recovery.
+	err := errors.Join(tr.Close(), socket.stopListening())
+	if busy || errors.Is(err, ErrAuthorityTransportBusy) || errors.Is(err, ErrAuthorityBusy) {
+		return errors.Join(err, ErrAuthorityServerBusy)
 	}
-	return err
+	return errors.Join(err, socket.Close())
 }
