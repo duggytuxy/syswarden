@@ -94,6 +94,12 @@ not a financial allocation.
   operation grants and recovery-approval separation. See [Custody admission](CUSTODY_ADMISSION.md).
   Same-UID socket fixtures do not establish cross-UID service isolation, current
   policy persistence or production lease/lifetime enforcement.
+- Policy storage and custody leases: signed history, serialized administrative
+  compare-and-install, reserved disable capacity, process locks, expiry during
+  durable transitions, zero results on errors, retained pending/completed state,
+  independent recovery approval and no automatic retry. See
+  [Policy storage](CUSTODY_POLICY_STORAGE.md). These component tests do not establish
+  authenticated administration, service isolation, clock integrity or native IVV.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,

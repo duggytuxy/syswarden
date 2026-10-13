@@ -77,6 +77,13 @@ renaming their fields or requiring a simultaneous partner upgrade.
   viewer. `syswarden alerts`: standalone real-time supported L2-L7 events.
 - Dashboard: optional, internal, self-hosted, official SysWarden logo/fonts/
   themes. Same-origin browser sessions, explicit enrollment and scoped roles.
+- Fleet navigation: `External` groups exposed servers and hosts the 2D world
+  map. `Internal` groups internal-only servers, including on-premise and private
+  cloud deployments, by approved site and network segment. Exposure and hosting
+  are separate explicit attributes:
+  an exposed on-premise server belongs in External with its hosting label.
+  Unknown classifications stay visible for review. Tabs, filters, rate
+  denominators, exports and the BunkerWeb view preserve the same authorized scope.
 - Dashboard indicators: rates, principally percentages. Missing/zero
   denominators yield `Not available`. No raw-count KPI cards or misleading
   averages of percentages over unequal populations.

@@ -24,7 +24,9 @@ and a different document reusing the current revision fail against this pin.
 Disabled trust denies every admission. A different journal, node, epoch or initial
 root is ineligible even when the issuer signature is valid.
 
-This component does not persist or update that trust configuration. Loading an
+The verifier itself does not persist that trust configuration. The separate
+[protected policy store](CUSTODY_POLICY_STORAGE.md) now retains serialized
+transitions and supplies per-operation policy leases. Loading an
 old pin together with an old signed document can restore old authority; preventing
 that is the protected registry and deployment boundary, not a property of hashing.
 Neither a file discovered in the journal nor a client-supplied pin is independent
@@ -113,9 +115,10 @@ flowchart TD
     R --> F
 ```
 
-The diagram describes the intended service composition. Only verification,
-admission and the prior storage/coordinator components exist; the connection
-handler, policy registry and orchestration are not wired together yet.
+The inactive [policy coordinator](CUSTODY_POLICY_STORAGE.md) now composes
+protected current-policy storage, kernel admission and custody operations under
+one policy lease. A connection handler, authenticated administrative orchestration
+and isolated service deployment are not implemented.
 
 Before activation, a dedicated authority must own custody storage under an
 isolated OS identity. Producers must not write that storage or its ancestors.
@@ -155,6 +158,7 @@ both malformed signatures and issuer-signed malformed documents. Race, Linux 386
 full-core and static checks supplement these component tests. They do not establish
 cross-UID deployment isolation, physical persistence or native acceptance.
 
-Provisioning orchestration, protected current-policy storage, lease/lifetime
-integration, OS isolation, key lifecycle, incomplete recovery, retention, loss,
+The policy-storage follow-up provides bounded persistence and component lifetime
+checks, including preserved uncertain completion. Provisioning orchestration,
+OS isolation, key lifecycle, incomplete recovery, retention, loss,
 redaction and shared consumers remain open in #225 and #224.

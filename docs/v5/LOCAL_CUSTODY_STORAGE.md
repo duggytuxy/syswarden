@@ -50,9 +50,11 @@ Remote expiring leases and HA fencing are not implemented.
 
 A separate inactive [signed-policy admission component](CUSTODY_ADMISSION.md)
 verifies exact enrollment, current policy pins, validity and kernel peer grants.
-Its result is not a backend lease or recovery approval. Trusted provisioning,
-protected policy storage, lifetime enforcement and isolated service orchestration
-still must compose these components before activation.
+Its result is not a backend lease or recovery approval. The
+[protected policy coordinator](CUSTODY_POLICY_STORAGE.md) now supplies serialized
+current-policy persistence and lifetime checks around coordinator operations.
+Trusted provisioning and isolated service orchestration remain required before
+activation.
 
 ## Complete transitions and bounded storage
 
