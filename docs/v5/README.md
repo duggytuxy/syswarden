@@ -35,6 +35,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 22. [Reviewed custody policy administration](REVIEWED_POLICY_ADMINISTRATION.md).
 23. [Fixed-resource local authority composition](LOCAL_AUTHORITY.md).
 24. [Bounded local authority transport](LOCAL_AUTHORITY_TRANSPORT.md).
+25. [Unprivileged local attack assurance](UNPRIVILEGED_ASSURANCE.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the

@@ -480,6 +480,26 @@ github:
         self.assertNotIn("actions/checkout", gate)
         self.assertEqual(self.package.count("  build-and-package:\n"), 1)
 
+    def test_cross_uid_gate_runs_without_optional_or_success_fallback(self) -> None:
+        hygiene = job_block(self.security, "hygiene")
+        step = hygiene.split(
+            "      - name: Verify unprivileged local tampering boundaries\n", 1
+        )[1].split("      - name:", 1)[0]
+        for required in (
+            "set -euo pipefail",
+            "go test -mod=readonly -p=2 -c",
+            "go tool test2json -t -p syswarden-core/journal",
+            "sudo -n env SYSWARDEN_REQUIRE_CROSS_UID=1 GOMAXPROCS=2",
+            "-test.run='^TestLocalUnprivilegedBoundary$'",
+            "-test.count=1 -test.v=test2json -test.timeout=2m",
+            'python3 scripts/ci/unprivileged_controls.py --report "${report}"',
+        ):
+            self.assertIn(required, step)
+        for forbidden in (
+            "continue-on-error", "if:", "|| true", "--privileged", "sysctl", "setenforce"
+        ):
+            self.assertNotIn(forbidden, step)
+
     def test_security_terminal_check_covers_every_required_control(self) -> None:
         gate = job_block(self.security, "security-audit")
         self.assertIn("    name: Security Audit\n", gate)

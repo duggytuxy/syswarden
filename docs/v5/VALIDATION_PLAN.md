@@ -118,6 +118,12 @@ not a financial allocation.
   approved mutations. See [Local transport](LOCAL_AUTHORITY_TRANSPORT.md). Listener
   isolation, accept/rate policy, durable denial auditing and native acceptance
   remain separate; no production service is activated.
+- Unprivileged local attackers: a mandatory separate-UID component gate tests
+  protected journal resources and all authority routes, verifies unchanged state
+  and exercises authorized commit/reopen afterwards. Missing or skipped cases
+  fail the dedicated gate. The [assurance plan](UNPRIVILEGED_ASSURANCE.md) tracks
+  additional product surfaces and pending native distribution evidence; this first
+  gate does not accept the installed product or replace independent review.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,
