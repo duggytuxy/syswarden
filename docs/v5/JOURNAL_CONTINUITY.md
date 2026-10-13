@@ -50,7 +50,8 @@ ordinary resume path remains unchanged. A separate
 complete extra record after full publication authentication and independent
 approval of the exact plan. An inactive [custody coordinator](JOURNAL_CUSTODY.md)
 now orders independent prepared intents, local commits and final custody state.
-Its durable backend and production authority remain outstanding. A complete record is still rejected by ordinary
+An inactive [local backend](LOCAL_CUSTODY_STORAGE.md) now supplies the protected
+ledger; production authority provisioning and native IVV remain outstanding. A complete record is still rejected by ordinary
 resume against the old expected head, even if its checksum is valid. Absence of
 a record likewise does not authorize resetting the bootstrap.
 
@@ -145,8 +146,8 @@ a fixed-budget fuzz target, including 32-bit length handling checks.
 
 These checks do not establish physical power-loss durability, native reboot IVV,
 full-disk acceptance, authority service isolation or complete WP03 recovery.
-Independent restart-state custody, partial/corrupt-tail recovery, production
-key lifecycle, rotation/retention, visible acquisition loss, redacted exports and
-deployment IVV remain open in #225. Shared consumer integration remains open in
+Production custody provisioning, partial/corrupt-tail recovery, key lifecycle,
+rotation/retention, visible acquisition loss, redacted exports and deployment IVV
+remain open in #225. Shared consumer integration remains open in
 #224. BunkerWeb synchronization, source-owned TTL, retries, HA and independence
 from dashboard identity remain unchanged.

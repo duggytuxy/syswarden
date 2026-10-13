@@ -2,9 +2,10 @@
 
 Status: inactive WP03 component for v5.00.0. Stable remains v4.10.4. This slice
 implements a coordinator and an explicit trusted-backend contract. It does not
-ship a durable custody backend, provision an authority, enroll a key, expose an
-operator endpoint or connect the journal to production. The only backend double
-is test-only, in memory, and cannot establish restart durability.
+provision an authority, expose an operator endpoint or connect the journal to
+production. An inactive [local filesystem backend](LOCAL_CUSTODY_STORAGE.md) now
+implements the contract with explicit enrollment and a bounded protected ledger.
+The original in-memory backend double remains test-only.
 
 The [local continuity store](JOURNAL_CONTINUITY.md) requires independent initial
 and current anchors. Its [reviewed recovery](JOURNAL_RECOVERY.md) can resynchronize
@@ -63,8 +64,8 @@ A `CustodyIntent` binds the exact before/after anchors, segment basename, whole
 segment and checkpoint-bundle SHA-256 values, byte/frame budgets, key ID,
 public-key digest and authorized sequence range. It contains no private key or
 raw event payload. It is private coordination state, not a new public wire
-schema. A backend must retain every field exactly; no persistent codec is fixed
-by this slice.
+schema. A backend must retain every field exactly. The local backend specifies
+its private persistent codec separately.
 
 ```mermaid
 sequenceDiagram
@@ -162,8 +163,8 @@ failures, changed publications, mismatched intents, authorization denial,
 revocation, stale plans and zero-result error behavior. Full-core regression
 continues to cover existing BunkerWeb behavior.
 
-These checks validate coordination behavior, not the persistence of an absent
-backend or physical power-loss safety. A production backend, authority isolation,
+These checks validate coordination behavior, not physical power-loss safety or
+production activation. The local backend has separate component tests. Authority isolation,
 bootstrap, key lifecycle, recovery for prepared-but-unwritten and partial/corrupt
 tails, retention, visible acquisition loss, redacted exports and native IVV remain
 open in #225. Shared consumer integration remains open in #224. This component
