@@ -29,6 +29,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 16. [Protected local journal continuity](JOURNAL_CONTINUITY.md).
 17. [Reviewed recovery of a complete journal anchor](JOURNAL_RECOVERY.md).
 18. [Coordinating independent journal restart custody](JOURNAL_CUSTODY.md).
+19. [Bounded local restart-custody storage](LOCAL_CUSTODY_STORAGE.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -71,10 +72,12 @@ restart state were reviewed in PR #328. PR #329 adds read-only
 inspection and exact-plan authorized resynchronization of one complete extra
 anchor, after authenticating its actual publication. The custody follow-up
 coordinates a trusted independent backend through prepared intents, verified
-local commits, final state readback and separately authorized recovery. It ships
-no production backend. These components remain disconnected from production.
-Authority provisioning, durable backend implementation, incomplete-intent and
-partial/corrupt-tail recovery, key lifecycle and retention remain future work.
+local commits, final state readback and separately authorized recovery, reviewed
+in PR #330. The local backend follow-up adds explicit enrollment, a bounded
+protected ledger, durable transitions and independently authorized audit bindings.
+These components remain disconnected from production. Authenticated authority
+provisioning, OS isolation, incomplete backend/intent recovery, key lifecycle and
+retention remain future work.
 The remaining schemas and shared consumer integration still follow the agreed
 authority contract. No record alone grants response authority.
 
