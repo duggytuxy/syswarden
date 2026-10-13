@@ -38,6 +38,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 25. [Unprivileged local attack assurance](UNPRIVILEGED_ASSURANCE.md).
 26. [Bounded local authority listener and supervisor](LOCAL_AUTHORITY_SERVER.md).
 27. [Authenticated local authority client](LOCAL_AUTHORITY_CLIENT.md).
+28. [Reviewed stale endpoint recovery](ENDPOINT_RECOVERY.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -109,8 +110,11 @@ shutdown drain and verifies service to another UID during incomplete input,
 reviewed in PR #342. The endpoint-lifecycle follow-up persists a bounded private
 ownership receipt before listening, preserves interrupted or changed evidence and
 removes only the exact live creator's socket and receipt during clean shutdown.
-A real process-kill test verifies preservation and refusal on the next startup;
-reviewed stale-endpoint recovery remains unfinished.
+This ownership evidence was reviewed in PR #343. A real process-kill test verifies
+preservation and refusal on the next startup. The recovery follow-up adds
+independently pinned, separately approved retirement of a complete stale endpoint
+pair and verifies non-root restart/resume without changing journal resources.
+Ambiguous or partial endpoint state and deployed recovery providers remain open.
 These components and tests supply no identity
 provider or installed OS-isolated service.
 These components remain disconnected from production. Authenticated authority

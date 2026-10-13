@@ -28,12 +28,13 @@ const processStrangerID = 65532
 // This is synthetic parent-controlled test provisioning, not a deployable
 // configuration loader or an authentication/approval provider.
 type processFixtureConfig struct {
-	Paths               []string
-	Endpoint            string
-	Root                CustodyPolicyTrust
-	Expected            contracts.JournalCheckpointAnchor
-	ServicePID          int
-	ExpectStaleEndpoint bool
+	Paths                 []string
+	Endpoint              string
+	Root                  CustodyPolicyTrust
+	Expected              contracts.JournalCheckpointAnchor
+	ServicePID            int
+	ExpectStaleEndpoint   bool
+	RecoverEndpointSHA256 string
 }
 
 type authorityTestProcess struct {
@@ -255,7 +256,18 @@ func testAuthorityProcessBoundary(t *testing.T) {
 		}
 	})
 	t.Run("process-endpoint-crash-preservation", func(t *testing.T) {
-		testEndpointProcessCrash(t, c)
+		c.RecoverEndpointSHA256 = testEndpointProcessCrash(t, c)
+		requireAdversarialSnapshot(t, after, c.Paths)
+	})
+	t.Run("process-endpoint-recovery-denied", func(t *testing.T) {
+		runProcessClient(t, "endpoint-recovery-denied", c, processClientID)
+		requireAdversarialSnapshot(t, after, c.Paths)
+	})
+	t.Run("process-endpoint-reviewed-restart", func(t *testing.T) {
+		p := startProcessService(t, t, c)
+		c.ServicePID = p.cmd.Process.Pid
+		runProcessClient(t, "resume", c, processClientID)
+		stopProcessService(t, p)
 		requireAdversarialSnapshot(t, after, c.Paths)
 	})
 }
@@ -361,6 +373,18 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 		dirs = append(dirs, dir)
 	}
 	config := LocalAuthorityConfig{PolicyDirectory: dirs[0], CustodyDirectory: dirs[1], AnchorDirectory: dirs[2], JournalDirectory: dirs[3], PolicyRoot: c.Root, Enrollment: testEnrollment(), Limits: testLimits(), Now: func() time.Time { return policyNow(testCustodyPolicy()) }}
+	if c.RecoverEndpointSHA256 != "" && !c.ExpectStaleEndpoint {
+		// Parent retained this pin before SIGKILL and waited for service exit.
+		// The synthetic callback models supervisor approval, not human MFA.
+		peer, _ := custodySocketPair(t, unix.SOCK_STREAM)
+		recovery := EndpointRecoveryConfig{Directory: dirs[4], GroupID: processClientID, ExpectedRecordSHA256: c.RecoverEndpointSHA256, Peer: peer, Now: config.Now,
+			Authorizer: endpointTestAuthorizer(func(r EndpointRecoveryRequest) (EndpointRecoveryDecision, error) { return endpointTestDecision(r), nil }),
+		}
+		plan := endpointPlan(t, recovery)
+		if result, err := ApplyEndpointRecovery(recovery, plan.SHA256); err != nil || result.PlanSHA256 != plan.SHA256 {
+			t.Fatal("reviewed non-root recovery failed", err)
+		}
+	}
 	server, err := OpenLocalAuthorityServer(AuthorityServerConfig{Authority: config, Transport: testTransportLimits(), Directory: dirs[4], GroupID: processClientID, AcceptInterval: MinAuthorityAcceptInterval})
 	if c.ExpectStaleEndpoint {
 		if server != nil || !errors.Is(err, ErrAuthorityEndpoint) {
@@ -418,6 +442,24 @@ func processClientChild(t *testing.T, c processFixtureConfig, mode string) {
 		t.Fatal(err)
 	}
 	defer func() { _ = dir.Close() }()
+
+	if mode == "endpoint-recovery-denied" {
+		peer, _ := custodySocketPair(t, unix.SOCK_STREAM)
+		recovery := EndpointRecoveryConfig{Directory: dir, GroupID: processClientID, ExpectedRecordSHA256: c.RecoverEndpointSHA256, Peer: peer,
+			Now: func() time.Time { return policyNow(testCustodyPolicy()) },
+			Authorizer: endpointTestAuthorizer(func(EndpointRecoveryRequest) (EndpointRecoveryDecision, error) {
+				t.Fatal("ordinary user reached trusted approval")
+				return EndpointRecoveryDecision{}, ErrEndpointRecoveryApproval
+			}),
+		}
+		if _, err := PlanEndpointRecovery(recovery); !errors.Is(err, ErrAuthorityEndpoint) {
+			t.Fatal("ordinary user obtained recovery plan", err)
+		}
+		if _, err := ApplyEndpointRecovery(recovery, strings.Repeat("0", 64)); !errors.Is(err, ErrAuthorityEndpoint) {
+			t.Fatal("ordinary user applied recovery", err)
+		}
+		return
+	}
 	client, err := OpenLocalAuthorityClient(AuthorityClientConfig{Directory: dir, ServiceUID: processServiceID, ServiceGID: processServiceID, SocketGID: processClientID, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)

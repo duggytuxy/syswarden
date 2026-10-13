@@ -129,14 +129,17 @@ not a financial allocation.
   The endpoint receipt adds exclusive private creation, synchronized write/readback
   before listen, preservation of uncertain or changed evidence, exact ordered
   socket/receipt removal, and startup refusal after a real process kill.
-  Ordinary-user receipt reads and mutations are separately denied. No new recovery
-  mutation or stale-entry adoption is implemented. Trusted provisioning, deployed
-  service isolation and native evidence remain open.
+  Ordinary-user receipt reads and mutations are separately denied. The separate
+  [endpoint recovery](ENDPOINT_RECOVERY.md) component tests independent receipt
+  pins, exact inspect/apply approval, quiescence/audit provider boundaries, refused
+  live/changed state, partial unlink/sync outcomes and non-root crash/recovery/resume.
+  Startup never adopts stale entries. Trusted provisioning, deployed recovery
+  providers, service isolation and native evidence remain open.
 - Authenticated local client: pinned protected endpoint, kernel service UID/GID
   checked before sending, one nonqueued call, bounded canonical request/reply and
   EOF, operation/result binding, private plan shape/digest validation, cancellation
   and explicit uncertain outcomes without automatic replay. See
-  [Local client](LOCAL_AUTHORITY_CLIENT.md). The mandatory 110-case cross-UID gate
+  [Local client](LOCAL_AUTHORITY_CLIENT.md). The mandatory 112-case cross-UID gate
   includes an impostor listener that receives zero bytes despite expected socket
   metadata. Service identity is not human authentication or independent approval;
   trusted discovery, deployed lifecycle and native evidence remain open.
