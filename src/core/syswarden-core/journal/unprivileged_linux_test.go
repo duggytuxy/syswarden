@@ -238,6 +238,7 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 		reopened := openAuthority(t, f.config)
 		authorityAnchor(t, authorityReply(t, reopened, f.peer, authorityRequest{Operation: "resume"}), f.files.next)
 	})
+	testAuthorityProcessBoundary(t)
 }
 
 type adversarialFileState struct {

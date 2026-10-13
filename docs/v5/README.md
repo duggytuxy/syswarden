@@ -100,8 +100,11 @@ PR #338. The listener follow-up adds an explicitly provisioned pathname endpoint
 fixed paced workers, exact cleanup and further separate-UID checks, reviewed in
 PR #339. The client follow-up pins the provisioned endpoint, verifies the kernel
 service identity before sending and validates bounded request-bound replies, with
-no automatic retry after an uncertain outcome. Neither component supplies an
-identity provider or installed OS-isolated service.
+no automatic retry after an uncertain outcome, reviewed in PR #340. The process
+follow-up exercises the actual service under a non-root identity with separate
+authorized and ungranted clients, protected-file refusals and fresh-process
+resume after a durable commit. These components and tests supply no identity
+provider or installed OS-isolated service.
 These components remain disconnected from production. Authenticated authority
 provisioning, OS isolation, incomplete backend/intent recovery, key lifecycle and
 retention remain future work.
