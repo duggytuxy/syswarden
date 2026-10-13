@@ -28,6 +28,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 15. [Frozen journal checkpoints and durable publication](JOURNAL_PUBLICATION.md).
 16. [Protected local journal continuity](JOURNAL_CONTINUITY.md).
 17. [Reviewed recovery of a complete journal anchor](JOURNAL_RECOVERY.md).
+18. [Coordinating independent journal restart custody](JOURNAL_CUSTODY.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -66,12 +67,14 @@ anchors were reviewed in PR #325. Bounded Linux segment storage,
 cooperating-process locking, synchronized append and authenticated read-only
 reopen were reviewed in PR #326. Frozen checkpoint publication and historical
 reopen were reviewed in PR #327. Bounded local continuity and exact expected
-restart state were reviewed in PR #328. The recovery follow-up adds read-only
+restart state were reviewed in PR #328. PR #329 adds read-only
 inspection and exact-plan authorized resynchronization of one complete extra
-anchor, after authenticating its actual publication. These components remain
-disconnected from production. Authority provisioning, independent restart-state
-custody, partial/corrupt-tail recovery, key lifecycle and retention remain future
-work.
+anchor, after authenticating its actual publication. The custody follow-up
+coordinates a trusted independent backend through prepared intents, verified
+local commits, final state readback and separately authorized recovery. It ships
+no production backend. These components remain disconnected from production.
+Authority provisioning, durable backend implementation, incomplete-intent and
+partial/corrupt-tail recovery, key lifecycle and retention remain future work.
 The remaining schemas and shared consumer integration still follow the agreed
 authority contract. No record alone grants response authority.
 

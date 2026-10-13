@@ -111,7 +111,9 @@ an inspection or application.
 
 The returned value establishes successful local resynchronization under the
 filesystem contract. Persisting it in independent protected restart-head custody
-requires a separately designed atomic protocol. Neither a digest supplied by an
+is coordinated by the inactive [restart custody protocol](JOURNAL_CUSTODY.md).
+It requires a separately implemented and verified durable backend; it does not
+make the two storage operations atomic. Neither a digest supplied by an
 untrusted caller nor a human-looking approval string supplies that authority.
 The future service must authenticate the principal, enforce scope and approval
 policy, bind review to the exact displayed document and record the decision.

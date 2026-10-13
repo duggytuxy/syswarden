@@ -48,8 +48,9 @@ passing it back as `expected` would bypass the intended trust boundary. The
 ordinary resume path remains unchanged. A separate
 [reviewed recovery operation](JOURNAL_RECOVERY.md) can resynchronize exactly one
 complete extra record after full publication authentication and independent
-approval of the exact plan. Independent restart-head custody and its atomic
-integration remain outstanding. A complete record is still rejected by ordinary
+approval of the exact plan. An inactive [custody coordinator](JOURNAL_CUSTODY.md)
+now orders independent prepared intents, local commits and final custody state.
+Its durable backend and production authority remain outstanding. A complete record is still rejected by ordinary
 resume against the old expected head, even if its checksum is valid. Absence of
 a record likewise does not authorize resetting the bootstrap.
 
