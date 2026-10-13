@@ -103,7 +103,10 @@ service identity before sending and validates bounded request-bound replies, wit
 no automatic retry after an uncertain outcome, reviewed in PR #340. The process
 follow-up exercises the actual service under a non-root identity with separate
 authorized and ungranted clients, protected-file refusals and fresh-process
-resume after a durable commit. These components and tests supply no identity
+resume after a durable commit, reviewed in PR #341. The peer-quota follow-up adds explicit simultaneous
+connection ceilings per kernel UID before framing, preserves charged slots through
+shutdown drain and verifies service to another UID during incomplete input.
+These components and tests supply no identity
 provider or installed OS-isolated service.
 These components remain disconnected from production. Authenticated authority
 provisioning, OS isolation, incomplete backend/intent recovery, key lifecycle and

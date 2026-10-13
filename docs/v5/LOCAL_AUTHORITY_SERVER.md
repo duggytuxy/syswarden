@@ -68,6 +68,7 @@ internal request retry.
 | Resource | Enforced boundary |
 | --- | --- |
 | Fixed workers and active accepted peers | Existing `MaxPeers`, 1 through 8. |
+| Simultaneous peers per UID | Explicit `MaxPeersPerUID`, 1 through `MaxPeers`; enforced before framing, using kernel credentials. |
 | Listen backlog | Explicitly requested as `MaxPeers`; actual queue behavior belongs to the Linux kernel, not an exact portable connection-count guarantee. |
 | Accept interval | Explicit 10 milliseconds through 1 second, shared by all workers. |
 | Outstanding pacing reservations | At most one per fixed worker. |
@@ -80,10 +81,14 @@ A worker that has already earned a permit may be idle in `AcceptUnix`. After an
 idle period, accumulated acceptors and the next permit can therefore form a burst
 of up to `MaxPeers + 1`; later permits are spaced by the configured interval.
 Scheduler delays can also bunch already permitted workers. These limits bound
-component concurrency and pacing reservations, not a strict per-UID quota or
-fair access guarantee. A reachable malicious group member can consume every
-slot. Process RSS/CPU limits, client quotas, systemd/OpenRC isolation and fleet
-capacity measurements remain separate acceptance work.
+component concurrency and pacing reservations. The transport additionally limits
+live peers per kernel-observed UID across read, execution and write phases.
+Choosing a ceiling below `MaxPeers` prevents that UID from holding all transport
+slots at once. Workers can still briefly accept and refuse its excess sockets,
+which count as failed exchanges. There is no reserved worker or fair scheduling
+guarantee: the kernel backlog, repeated attempts and colluding UIDs remain denial
+of service concerns. Process RSS/CPU limits, request-rate limits, systemd/OpenRC
+isolation and fleet capacity measurements remain separate acceptance work.
 
 Malformed, unauthorized, busy or timed-out peers receive the transport's generic
 bounded denial or connection failure. The worker records a failed exchange and
@@ -134,9 +139,10 @@ actual listener: an unintended group member can connect but cannot mutate the
 endpoint or obtain any of the six authority results. An account outside the group
 cannot connect. The private-resource inventory remains unchanged, and authorized
 resume/commit/reopen still succeeds. The client follow-up adds a kernel-identity
-impostor case; the subsequent non-root process campaign brings the named gate to
-99 cases, including authorized commit and fresh-process resume. Incomplete or
-skipped dedicated evidence is a failure.
+impostor case. The non-root process and peer-quota follow-ups bring the named gate
+to 100 cases, including authorized commit, fresh-process resume and a second UID
+being served while an ungranted account holds an incomplete connection. Incomplete
+or skipped dedicated evidence is a failure.
 
 This is component isolation evidence, not deployed-service or native distribution
 acceptance. Production provisioning, deployed clients, separate service

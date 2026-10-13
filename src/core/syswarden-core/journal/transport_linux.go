@@ -22,11 +22,21 @@ var (
 )
 
 // AuthorityTransportLimits is trusted startup input, never a request field.
+// MaxPeersPerUID must be explicit, from 1 through MaxPeers. Choose a smaller
+// value than MaxPeers to leave concurrency for another UID. This is a live-peer
+// ceiling, not a request-rate limit, operation grant or availability guarantee.
 // Both timeouts are absolute per I/O phase and are not extended by partial reads.
 // They do not interrupt the authority's trusted callback or durable disk work.
 type AuthorityTransportLimits struct {
-	MaxPeers                  int
+	MaxPeers, MaxPeersPerUID  int
 	ReadTimeout, WriteTimeout time.Duration
+}
+
+// authorityPeerSlot retains only live kernel-observed identities. There is no
+// historical UID table, client-supplied identity or per-UID allocation.
+type authorityPeerSlot struct {
+	phase authorityPeerPhase
+	uid   uint32
 }
 
 type authorityPeerPhase uint8
@@ -44,20 +54,20 @@ const (
 type LocalAuthorityTransport struct {
 	mu        sync.Mutex
 	closing   bool
-	peers     map[*net.UnixConn]authorityPeerPhase
+	peers     map[*net.UnixConn]authorityPeerSlot
 	authority *LocalAuthority
 	limits    AuthorityTransportLimits
 }
 
 func OpenLocalAuthorityTransport(c LocalAuthorityConfig, limits AuthorityTransportLimits) (*LocalAuthorityTransport, error) {
-	if limits.MaxPeers < 1 || limits.MaxPeers > MaxAuthorityPeers || limits.ReadTimeout <= 0 || limits.ReadTimeout > MaxAuthorityIOTimeout || limits.WriteTimeout <= 0 || limits.WriteTimeout > MaxAuthorityIOTimeout {
+	if limits.MaxPeers < 1 || limits.MaxPeers > MaxAuthorityPeers || limits.MaxPeersPerUID < 1 || limits.MaxPeersPerUID > limits.MaxPeers || limits.ReadTimeout <= 0 || limits.ReadTimeout > MaxAuthorityIOTimeout || limits.WriteTimeout <= 0 || limits.WriteTimeout > MaxAuthorityIOTimeout {
 		return nil, ErrInvalidOptions
 	}
 	authority, err := OpenLocalAuthority(c)
 	if err != nil {
 		return nil, err
 	}
-	return &LocalAuthorityTransport{authority: authority, limits: limits, peers: make(map[*net.UnixConn]authorityPeerPhase, limits.MaxPeers)}, nil
+	return &LocalAuthorityTransport{authority: authority, limits: limits, peers: make(map[*net.UnixConn]authorityPeerSlot, limits.MaxPeers)}, nil
 }
 
 // register distinguishes a duplicate object, whose ownership was already
@@ -80,7 +90,22 @@ func (t *LocalAuthorityTransport) register(peer *net.UnixConn) (bool, error) {
 	if len(t.peers) >= t.limits.MaxPeers {
 		return false, ErrAuthorityTransportBusy
 	}
-	t.peers[peer] = authorityPeerReading
+	// SO_PEERCRED is read before any frame read or body allocation. Registration and
+	// counting share the lock, so concurrent sockets cannot race past a UID cap.
+	cred, err := custodyPeer(peer)
+	if err != nil {
+		return false, err
+	}
+	count := 0
+	for _, slot := range t.peers {
+		if slot.uid == cred.Uid {
+			count++
+		}
+	}
+	if count >= t.limits.MaxPeersPerUID {
+		return false, ErrAuthorityTransportBusy
+	}
+	t.peers[peer] = authorityPeerSlot{phase: authorityPeerReading, uid: cred.Uid}
 	return false, nil
 }
 func (t *LocalAuthorityTransport) phase(peer *net.UnixConn, next authorityPeerPhase) error {
@@ -89,10 +114,12 @@ func (t *LocalAuthorityTransport) phase(peer *net.UnixConn, next authorityPeerPh
 	if t.closing {
 		return ErrClosed
 	}
-	if _, exists := t.peers[peer]; !exists {
+	slot, exists := t.peers[peer]
+	if !exists {
 		return ErrClosed
 	}
-	t.peers[peer] = next
+	slot.phase = next
+	t.peers[peer] = slot
 	return nil
 }
 func closeAuthorityPeer(peer *net.UnixConn) error {
@@ -126,8 +153,8 @@ func (t *LocalAuthorityTransport) Close() error {
 	t.closing = true
 	peers := make([]*net.UnixConn, 0, len(t.peers))
 	active := len(t.peers) > 0
-	for peer, phase := range t.peers {
-		if phase != authorityPeerExecuting {
+	for peer, slot := range t.peers {
+		if slot.phase != authorityPeerExecuting {
 			peers = append(peers, peer)
 		}
 	}
@@ -167,9 +194,6 @@ func (t *LocalAuthorityTransport) ServePeer(peer *net.UnixConn) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, t.release(peer)) }()
-	if _, err = custodyPeer(peer); err != nil {
-		return err
-	}
 	if err = peer.SetReadDeadline(time.Now().Add(t.limits.ReadTimeout)); err != nil {
 		return err
 	}

@@ -152,7 +152,10 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = endpoint.Close() }()
-	server := testServer(t, AuthorityServerConfig{Authority: f.config, Transport: testTransportLimits(), Directory: endpoint, GroupID: adversaryID, AcceptInterval: MinAuthorityAcceptInterval})
+	limits := testTransportLimits()
+	limits.MaxPeersPerUID = 1
+	limits.ReadTimeout = MaxAuthorityIOTimeout
+	server := testServer(t, AuthorityServerConfig{Authority: f.config, Transport: limits, Directory: endpoint, GroupID: adversaryID, AcceptInterval: MinAuthorityAcceptInterval})
 	done := runServer(server)
 	endpointName := filepath.Join(endpointPath, AuthoritySocketName)
 	var socketBefore unix.Stat_t
@@ -184,6 +187,10 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 	if server.Status().Accepted != 6 || server.Status().Completed != 0 {
 		t.Fatal("ungranted group member accepted", server.Status())
 	}
+	t.Run("endpoint-uid-quota", func(t *testing.T) {
+		testAuthorityPeerQuotaBoundary(t, canary, endpointName, server, f)
+		requireAdversarialSnapshot(t, before, dirs)
+	})
 	t.Run("client-rejects-impostor", func(t *testing.T) {
 		fakeDir := filepath.Join(work, "impostor-endpoint")
 		if err := os.Mkdir(fakeDir, 0750); err != nil {
@@ -282,10 +289,11 @@ func requireAdversarialSnapshot(t *testing.T, before map[string]adversarialFileS
 	}
 }
 
-func runAdversary(t *testing.T, canary, attack, target string, serve func(*exec.Cmd)) {
+func runAdversary(t *testing.T, canary, attack, target string, serve func(*exec.Cmd), extraFiles ...*os.File) {
 	t.Helper()
 	cmd := exec.Command("/proc/self/exe", "-test.run=^TestLocalUnprivilegedChild$", "-test.timeout=10s")
 	cmd.Dir = "/"
+	cmd.ExtraFiles = extraFiles
 	cmd.Env = []string{"SYSWARDEN_CROSS_UID_CHILD=" + attack, "SYSWARDEN_CROSS_UID_TARGET=" + target, "SYSWARDEN_CROSS_UID_CANARY=" + canary}
 	gid := uint32(adversaryID)
 	if attack == "outside-socket" {
@@ -386,6 +394,10 @@ func TestLocalUnprivilegedChild(t *testing.T) {
 		return
 	}
 	switch attack {
+	case "quota-hold", "quota-denied":
+		quotaAdversary(t, target, attack)
+		println("cross-UID attacker completed")
+		return
 	case "fake-service":
 		listener, err := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: target})
 		if err != nil {

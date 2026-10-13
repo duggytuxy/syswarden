@@ -115,9 +115,12 @@ not a financial allocation.
 - Bounded local authority transport: exact framing and client EOF, pre-allocation
   length checks, absolute I/O deadlines, connection capacity, generic wire denials,
   ancillary descriptor rejection without leaks, partial replies and draining
-  approved mutations. See [Local transport](LOCAL_AUTHORITY_TRANSPORT.md). Deployed
-  service isolation, per-client quotas, durable denial auditing and native acceptance
-  remain separate; no production service is activated.
+  approved mutations. Explicit live-peer ceilings per kernel UID are tested before
+  framing, under simultaneous registration and throughout operation drain, with
+  reuse after completion and a real second UID served during incomplete input.
+  No historical UID allocation or automatic request retry is introduced.
+  See [Local transport](LOCAL_AUTHORITY_TRANSPORT.md). Deployed service isolation,
+  request-rate controls, durable denial auditing and native acceptance remain separate; no production service is activated.
 - Bounded listener/supervisor: provisioned endpoint ownership, socket and directory
   ACL refusal, preserved changed artifacts, descriptor-relative cleanup, fixed
   workers, paced admission, timeouts and approved-operation drain. See
@@ -128,7 +131,7 @@ not a financial allocation.
   checked before sending, one nonqueued call, bounded canonical request/reply and
   EOF, operation/result binding, private plan shape/digest validation, cancellation
   and explicit uncertain outcomes without automatic replay. See
-  [Local client](LOCAL_AUTHORITY_CLIENT.md). The mandatory 99-case cross-UID gate
+  [Local client](LOCAL_AUTHORITY_CLIENT.md). The mandatory 100-case cross-UID gate
   includes an impostor listener that receives zero bytes despite expected socket
   metadata. Service identity is not human authentication or independent approval;
   trusted discovery, deployed lifecycle and native evidence remain open.

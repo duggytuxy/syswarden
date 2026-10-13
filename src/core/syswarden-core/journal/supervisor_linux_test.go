@@ -144,7 +144,7 @@ func TestAuthorityServerCapacityAndCloseWaiters(t *testing.T) {
 }
 func TestAuthorityServerTimeoutContinuesAndIdleClose(t *testing.T) {
 	f, c, path := serverFixture(t)
-	c.Transport.MaxPeers = 1
+	c.Transport.MaxPeers, c.Transport.MaxPeersPerUID = 1, 1
 	c.Transport.ReadTimeout = 30 * time.Millisecond
 	s := testServer(t, c)
 	done := runServer(s)
@@ -228,7 +228,7 @@ func TestAuthorityServerDrainsApprovedMutation(t *testing.T) {
 }
 func TestAuthorityServerPacingAndCancellation(t *testing.T) {
 	_, c, path := serverFixture(t)
-	c.Transport.MaxPeers = 1
+	c.Transport.MaxPeers, c.Transport.MaxPeersPerUID = 1, 1
 	c.AcceptInterval = 100 * time.Millisecond
 	s := testServer(t, c)
 	done := runServer(s)

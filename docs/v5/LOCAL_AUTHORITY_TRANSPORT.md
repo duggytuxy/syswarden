@@ -16,6 +16,7 @@ provisioning and independently trusted identity/audit providers.
 
 | Resource | Enforced boundary |
 | --- | --- |
+| Simultaneous peers per kernel UID | Explicit `MaxPeersPerUID`, from 1 through `MaxPeers`, across all phases. |
 | Registered peers | Explicit `MaxPeers`, from 1 through 8 per transport. |
 | Read phase | Positive explicit duration, at most 5 seconds, including header, body and final EOF. |
 | Write phase | Positive explicit duration, at most 5 seconds, including header and body. |
@@ -26,9 +27,29 @@ provisioning and independently trusted identity/audit providers.
 
 Read/write deadlines use the process's monotonic-capable `time.Now` clock, separate
 from the trusted wall-clock policy/approval verifier. Partial I/O never extends the
-phase deadline. These limits bound transport work; they do not establish fairness,
-a requests-per-second policy, total process RSS or a fleet capacity benchmark.
-Callback and disk operations retain their existing non-cancellable limits.
+phase deadline. The per-UID ceiling is checked before any frame read or body
+allocation. Registration observes `SO_PEERCRED` directly and atomically counts
+active peers under the transport lock. A request ID, claimed username, PID or GID
+does not select a quota bucket. Several processes sharing one UID share the same
+ceiling. The existing creation-time credential/delegation caveat still applies.
+
+Both peer ceilings must be supplied explicitly; zero, negative or inconsistent
+limits are rejected before the authority is opened. Choose `MaxPeersPerUID` below
+`MaxPeers` when different UIDs must retain concurrency. Equal limits deliberately
+provide only the global ceiling, including the single-peer configuration. The
+small fixed registry holds at most eight live UID observations, without a separate
+historical UID map or queue. A slot remains charged during reading, authority
+execution, reply writing and shutdown drain, until the peer is closed and released.
+Malformed input, timeout, disconnect and success all release it after completion.
+Quota refusal closes the excess socket without reading input or returning a UID,
+quota value or private denial reason. It does not evict an admitted operation.
+
+This is a concurrency ceiling, not a requests-per-second limit, signed operation
+grant, reserved administrative lane or scheduler. A group member can still fill
+the kernel backlog, race for newly available capacity or combine several accounts.
+Clients under one service UID also share its ceiling. Trusted callbacks and storage
+retain their existing non-cancellable blocking limits. Total process RSS and fleet
+capacity also need separate measurements.
 
 `ServePeer` takes exclusive ownership of one already connected Unix stream socket.
 The caller must not read, write, close, duplicate or submit another wrapper around
@@ -128,8 +149,15 @@ Real Unix-socket/private-file tests cover resume and commit across fresh
 connections, every truncated byte position of a sample frame, fragmented input,
 zero/oversized/max-integer lengths, trailing and pipelined messages, unsafe peers,
 canonical/admission denial, withheld EOF, slow trickles, capacity rejection,
-duplicate objects and busy authority operations. Ancillary tests pass multiple
-file descriptors at the header, body and tail and verify no references remain.
+duplicate objects and busy authority operations. Quota tests add simultaneous
+same-UID registrations, rejection before any request bytes, slot reuse after
+success/failure/timeout/disconnect, and quota retention through approved-operation
+drain. The mandatory cross-UID gate holds an incomplete peer from an ungranted
+account, refuses a second process with the same UID before framing and successfully
+resumes from a different authorized UID while the slow connection remains active.
+Protected storage is unchanged, and disconnect releases the slot.
+
+Ancillary tests pass multiple file descriptors at the header, body and tail and verify no references remain.
 A bounded kernel send buffer verifies write timeout and an incomplete reply.
 
 Shutdown tests cover blocked readers and an approved policy mutation that completes
@@ -140,7 +168,7 @@ not add another JSON parser or change a signed schema.
 
 The [listener follow-up](LOCAL_AUTHORITY_SERVER.md) adds endpoint ownership,
 paced workers and separate cross-UID evidence. OS-isolated service provisioning,
-real authentication and audit providers, per-client rate policy, issuer/key
+real authentication and audit providers, per-client request-rate policy, issuer/key
 lifecycle, incomplete-state recovery, retention and shared consumer integration
 remain unfinished. Transport-only tests do not establish cross-UID isolation,
 physical power-loss safety, native IVV or v5 acceptance. No production
