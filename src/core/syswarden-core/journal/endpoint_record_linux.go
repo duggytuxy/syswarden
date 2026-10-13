@@ -43,15 +43,7 @@ func (s *authoritySocket) openEndpointRecord() error {
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return err
 	}
-	dir, socket := s.dirStamp, s.entry
-	data, err := json.Marshal(endpointOwnershipRecord{
-		Schema: "syswarden.authority-endpoint-owner.v1", Nonce: hex.EncodeToString(nonce[:]),
-		DirectoryDev: strconv.FormatUint(uint64(dir.Dev), 10), DirectoryIno: strconv.FormatUint(dir.Ino, 10),
-		DirectoryUID: strconv.FormatUint(uint64(dir.Uid), 10), DirectoryGID: strconv.FormatUint(uint64(dir.Gid), 10),
-		SocketDev: strconv.FormatUint(uint64(socket.Dev), 10), SocketIno: strconv.FormatUint(socket.Ino, 10),
-		SocketUID: strconv.FormatUint(uint64(socket.Uid), 10), SocketGID: strconv.FormatUint(uint64(socket.Gid), 10),
-		ChangedSec: strconv.FormatInt(int64(socket.Ctim.Sec), 10), ChangedNSec: strconv.FormatInt(int64(socket.Ctim.Nsec), 10),
-	})
+	data, err := encodeEndpointRecord(s.dirStamp, s.entry, hex.EncodeToString(nonce[:]))
 	if err != nil || len(data) == 0 || len(data) > maxEndpointRecordBytes {
 		return errors.Join(ErrAuthorityEndpoint, err)
 	}
@@ -67,6 +59,17 @@ func (s *authoritySocket) openEndpointRecord() error {
 	}
 	s.recordStamp = st
 	return nil
+}
+
+func encodeEndpointRecord(dir, socket unix.Stat_t, nonce string) ([]byte, error) {
+	return json.Marshal(endpointOwnershipRecord{
+		Schema: "syswarden.authority-endpoint-owner.v1", Nonce: nonce,
+		DirectoryDev: strconv.FormatUint(uint64(dir.Dev), 10), DirectoryIno: strconv.FormatUint(dir.Ino, 10),
+		DirectoryUID: strconv.FormatUint(uint64(dir.Uid), 10), DirectoryGID: strconv.FormatUint(uint64(dir.Gid), 10),
+		SocketDev: strconv.FormatUint(uint64(socket.Dev), 10), SocketIno: strconv.FormatUint(socket.Ino, 10),
+		SocketUID: strconv.FormatUint(uint64(socket.Uid), 10), SocketGID: strconv.FormatUint(uint64(socket.Gid), 10),
+		ChangedSec: strconv.FormatInt(int64(socket.Ctim.Sec), 10), ChangedNSec: strconv.FormatInt(int64(socket.Ctim.Nsec), 10),
+	})
 }
 
 func (s *authoritySocket) createEndpointRecord() error {

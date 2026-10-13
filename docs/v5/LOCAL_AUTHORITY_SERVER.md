@@ -93,8 +93,10 @@ This receipt derives its trust from independently protected service provisioning
 and the live creator's pinned metadata and bytes. It does not resist a compromised
 service UID, root or kernel, authenticate an arbitrary discovered file, or authorize
 future deletion by itself. There is no new recovery command or wire operation.
-Offline recovery validation, independent approval and safe lifecycle integration
-remain separate work. Preserve ambiguous state for that procedure.
+The separate [reviewed endpoint recovery](ENDPOINT_RECOVERY.md) component admits
+only a complete pair against an independently retained live receipt pin, with
+explicit quiescence and authorization/audit providers. Startup never invokes it.
+Ambiguous or partial state and deployed recovery integration remain separate work.
 
 ## Concurrency, pacing and diagnostics
 
@@ -187,19 +189,22 @@ endpoint or obtain any of the six authority results. An account outside the grou
 cannot connect. The private-resource inventory remains unchanged, and authorized
 resume/commit/reopen still succeeds. The client follow-up adds a kernel-identity
 impostor case. The non-root process, peer-quota and endpoint-lifecycle follow-ups
-bring the named gate to 110 cases, including authorized commit, fresh-process
+bring the named gate to 112 cases, including authorized commit, fresh-process
 resume and a second UID
 being served while an ungranted account holds an incomplete connection. Nine
 further probes deny ordinary-user reads and changes to the private receipt. A
 real service process is also deliberately killed after readiness; the exact
 receipt survives, and a fresh service refuses to adopt or delete either entry.
+Two recovery cases then deny a different ordinary UID and exercise independently
+reviewed recovery, fresh-process restart and verified resume with unchanged
+journal resources.
 Storage-fault tests separately retain zero, partial and complete uncertain bytes,
 reject unsafe receipts and exercise clean removal and partial cleanup. Incomplete
 or skipped dedicated evidence is a failure.
 
 This is component isolation evidence, not deployed-service or native distribution
 acceptance. Production provisioning, deployed clients, separate service
-identity and sandbox, approval/audit providers, key lifecycle, stale-socket
+identity and sandbox, approval/audit providers, key lifecycle, deployed endpoint
 recovery and package lifecycle remain unfinished. The incomplete custody/intent
 recovery and retention work also remains open. No native server test is implied.
 

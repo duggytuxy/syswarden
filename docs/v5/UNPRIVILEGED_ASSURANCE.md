@@ -34,7 +34,7 @@ groups, zero effective/permitted/inheritable/ambient capabilities, and
 child can perform ordinary I/O, rather than accepting a globally broken process
 as proof of security.
 
-The 110 mandatory cases cover:
+The 112 mandatory cases cover:
 
 - Reading, opening for overwrite/append/truncation, unlinking, replacement by
   rename, hard-linking, chmod and chown against policy, custody, anchor, segment
@@ -75,6 +75,13 @@ The 110 mandatory cases cover:
   exact private endpoint receipt remains, and a fresh service process refuses
   startup without modifying it or deleting the stale socket. This is preservation
   and refusal evidence, not automatic crash recovery or physical power-loss IVV.
+- Reviewed endpoint recovery after that crash: two cases. Another ordinary UID
+  cannot inspect or apply recovery. A separately provisioned non-root service
+  uses the independently retained pre-crash receipt pin and a synthetic review
+  provider, retires only the stale pair, starts a new endpoint, serves verified
+  resume and stops cleanly. Journal resources stay unchanged. See
+  [Endpoint recovery](ENDPOINT_RECOVERY.md) for missing production providers and
+  deliberately refused partial states.
 
 The test exposes its harness ancestors so their permissions cannot accidentally
 provide the protection attributed to product resource directories. Access probes
