@@ -50,6 +50,10 @@ def required_tests() -> set[str]:
     for target in ("state", "endpoint"):
         for mutation in ("symlink", "fifo", "file", "missing"):
             cases.add(f"{ROOT_TEST}/runtime-inputs/{target}-{mutation}")
+    cases.add(f"{ROOT_TEST}/launch-bundle")
+    cases.add(f"{ROOT_TEST}/prepared-bundle")
+    for name in ("valid-held", "nil-inputs", "nil-state", "nil-endpoint", "closed-inputs", "closed-state", "closed-endpoint", "wrong-launch-digest", "wrong-image-digest", "invalid-image", "state-owner", "endpoint-owner", "state-missing", "endpoint-missing", "swapped-parents", "repeated-runtime-refusal"):
+        cases.add(f"{ROOT_TEST}/launch-bundle/{name}")
     return cases
 
 
