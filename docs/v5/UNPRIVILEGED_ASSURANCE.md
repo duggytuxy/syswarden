@@ -271,7 +271,7 @@ with no additional child processes or timeout change. Standalone executable
 installation and native service-manager signal handling remain outside this proof.
 
 The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
-separate mandatory 212-case campaign against the actual built authority binary,
+separate mandatory 231-case campaign against the actual built authority binary,
 with exact-byte binding, kernel identity observations, separate client operations,
 direct signal shutdown, crash preservation and stale restart refusal. The existing
 132-case gate remains unchanged. This is component evidence, not installed-service
@@ -291,7 +291,7 @@ image after replacing the source pathname. Native launch policy remains open.
 The [non-root exec bootstrap](AUTHORITY_EXEC_BOOTSTRAP.md) now performs the actual
 sealed-image transition, fixes the target environment and cwd, and isolates the
 complete descriptor table before passing only the four startup handles. The
-212-case executable campaign checks all three real programs and post-exec inheritance.
+231-case executable campaign checks all three real programs and post-exec inheritance.
 Privileged provisioning, loader/MAC policy, supervision and native acceptance
 remain separate work. No native package is activated.
 
@@ -302,7 +302,7 @@ observed service threads. Provisioning, native MAC/loader policy and installed
 service-manager integration remain open. No package is activated.
 
 The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
-actual authenticated image before either exec transition. Its 212-case mandatory
+actual authenticated image before either exec transition. Its 231-case mandatory
 campaign includes correctly hashed malformed images, with no readiness or private
 state changes after refusal. Loader and dependency trust remain separate from
 format admission; no installed service or stable release behavior is changed.
@@ -310,7 +310,7 @@ format admission; no installed service or stable release behavior is changed.
 The [immutable launch snapshot](AUTHORITY_LAUNCH_SNAPSHOT.md) now freezes the exact
 approved record before descriptor handoff. Both real startup paths reject missing
 seals with a correct digest; the normal lifecycle survives removal of the source
-inode. The 212-case executable gate includes 21 snapshot cases and four actual
+inode. The 231-case executable gate includes 21 snapshot cases and four actual
 startup refusals. All 132 independent cross-UID cases remain mandatory. Kernel
 support and native deployment policy still require distribution-level IVV.
 
@@ -327,3 +327,9 @@ production supervisor-side pipe and one-shot receiver used by actual lifecycle
 tests. Its 30-second ceiling, cancellation, malformed/closed/full channel refusal
 and explicit ownership are verified normally and under race. It does not launch
 or kill processes or establish ongoing health. Installed supervision remains open.
+
+The [pinned child supervisor](AUTHORITY_CHILD_SUPERVISION.md) now composes protected
+input handoff, atomic pidfd creation, readiness observation, SIGTERM and bounded
+exit/reap observation. Cancellation retains the child; cleanup cannot claim a
+successful exit or erase retained evidence. It remains inactive and leaves native
+service-manager integration and full v5 acceptance open.

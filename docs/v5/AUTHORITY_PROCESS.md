@@ -77,7 +77,9 @@ caller retains all input descriptors; owned internal leases survive until drain.
 
 The supervisor-side [bounded readiness monitor](AUTHORITY_READINESS_MONITOR.md)
 now creates the channel and observes one startup notification with cancellation
-and a fixed deadline. Native process creation and exit supervision remain separate.
+and a fixed deadline. The separate [child supervisor](AUTHORITY_CHILD_SUPERVISION.md)
+now supplies inactive process creation and exit observation; installed supervision
+remains open.
 
 ## Readiness and exit
 
