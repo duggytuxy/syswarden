@@ -205,3 +205,10 @@ and do not turn a skipped loopback/native test into a pass.
 Runtime schemas, a new dashboard service and native server campaigns remain
 subsequent work. Link this foundation PR with `Refs #223` and the dependent
 work packages; leave their acceptance boxes open until their deliverables pass.
+
+The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
+separate mandatory 21-case campaign against the actual built authority binary,
+with exact-byte binding, kernel identity observations, separate client operations,
+direct signal shutdown, crash preservation and stale restart refusal. The existing
+132-case gate remains unchanged. This is component evidence, not installed-service
+isolation or native acceptance. Stable remains v4.10.4 and BunkerWeb is independent.

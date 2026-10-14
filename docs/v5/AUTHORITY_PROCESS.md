@@ -97,8 +97,10 @@ runner for actual non-root commit, restart, crash preservation and reviewed rest
 Its existing readiness and stop fixture supplies synthetic provisioning and clock;
 it is not the standalone executable's installed systemd path. No child process,
 assertion relaxation, skipped mandatory case or timeout extension is introduced.
-Command parsing and builds are checked separately. Tests do not establish deployed
-signal forwarding, native reboot, every supported MAC profile or human MFA.
+Command parsing and builds are checked separately. The separate [executable campaign](AUTHORITY_EXECUTABLE_ASSURANCE.md) now checks
+the actual binary, direct SIGTERM/SIGINT, SIGKILL preservation and stale restart
+refusal. Tests do not establish service-manager signal forwarding, native reboot,
+every supported MAC profile or human MFA.
 
 Next work must integrate reviewed privileged provisioning, real process launch and
 signal supervision, account and descriptor lifecycle, installed OS isolation and

@@ -42,10 +42,9 @@ def required_tests() -> set[str]:
     return cases
 
 
-def verify(data: bytes) -> int:
+def verify_tests(data: bytes, required: set[str]) -> int:
     if not data or len(data) > MAX_REPORT_BYTES:
         raise ValueError("empty or oversized cross-UID report")
-    required = required_tests()
     started: set[str] = set()
     passed: set[str] = set()
     package_started = False
@@ -77,6 +76,10 @@ def verify(data: bytes) -> int:
     if not package_passed or started != required or passed != required:
         raise ValueError("missing mandatory cross-UID evidence")
     return len(required) - 1
+
+
+def verify(data: bytes) -> int:
+    return verify_tests(data, required_tests())
 
 
 def main() -> None:

@@ -143,6 +143,30 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/unprivileged_controls.py --report "${report}"
           rm -- "${test_binary}"
 
+      - name: Verify standalone authority executable boundaries
+        shell: bash
+        env:
+          GOMAXPROCS: '2'
+        run: |
+          set -euo pipefail
+          test_binary="${RUNNER_TEMP}/syswarden-authority-executable.test"
+          authority_binary="${RUNNER_TEMP}/syswarden-authority"
+          report="${RUNNER_TEMP}/syswarden-authority-executable.jsonl"
+          go test -mod=readonly -p=2 -c -o "${test_binary}" ./src/core/syswarden-core/journal
+          CGO_ENABLED=0 go build -mod=readonly -p=2 -trimpath -o "${authority_binary}" ./src/core/syswarden-core/cmd/syswarden-authority
+          authority_sha256="$(sha256sum "${authority_binary}" | cut -d ' ' -f1)"
+          (
+            cd src/core/syswarden-core/journal
+            go tool test2json -t -p syswarden-core/journal \
+              sudo -n env SYSWARDEN_REQUIRE_AUTHORITY_EXECUTABLE=1 GOMAXPROCS=2 \
+              SYSWARDEN_AUTHORITY_EXECUTABLE="${authority_binary}" \
+              SYSWARDEN_AUTHORITY_EXECUTABLE_SHA256="${authority_sha256}" \
+              "${test_binary}" -test.run='^TestAuthorityExecutableBoundary$' \
+              -test.count=1 -test.v=test2json -test.timeout=2m
+          ) | tee "${report}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/authority_executable_controls.py --report "${report}"
+          rm -- "${test_binary}" "${authority_binary}"
+
       - name: Verify formatting
         shell: bash
         run: |

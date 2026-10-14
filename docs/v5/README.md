@@ -152,3 +152,10 @@ authority contract. No record alone grants response authority.
 Detailed operator guidance belongs at https://syswarden.io/docs/ when the
 corresponding feature exists. Keep the product README focused on the stable
 release and canonical guidance. Public diagrams and fixtures must be synthetic.
+
+The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
+separate mandatory 21-case campaign against the actual built authority binary,
+with exact-byte binding, kernel identity observations, separate client operations,
+direct signal shutdown, crash preservation and stale restart refusal. The existing
+132-case gate remains unchanged. This is component evidence, not installed-service
+isolation or native acceptance. Stable remains v4.10.4 and BunkerWeb is independent.

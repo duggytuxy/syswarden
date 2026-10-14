@@ -500,6 +500,27 @@ github:
         ):
             self.assertNotIn(forbidden, step)
 
+    def test_executable_gate_requires_built_bytes_and_complete_evidence(self) -> None:
+        hygiene = job_block(self.security, "hygiene")
+        step = hygiene.split(
+            "      - name: Verify standalone authority executable boundaries\n", 1
+        )[1].split("      - name:", 1)[0]
+        for required in (
+            "set -euo pipefail", "go test -mod=readonly -p=2 -c",
+            'CGO_ENABLED=0 go build -mod=readonly -p=2 -trimpath -o "${authority_binary}" ./src/core/syswarden-core/cmd/syswarden-authority',
+            'sha256sum "${authority_binary}"',
+            "go tool test2json -t -p syswarden-core/journal",
+            "sudo -n env SYSWARDEN_REQUIRE_AUTHORITY_EXECUTABLE=1 GOMAXPROCS=2",
+            'SYSWARDEN_AUTHORITY_EXECUTABLE="${authority_binary}"',
+            'SYSWARDEN_AUTHORITY_EXECUTABLE_SHA256="${authority_sha256}"',
+            "-test.run='^TestAuthorityExecutableBoundary$'",
+            "-test.count=1 -test.v=test2json -test.timeout=2m",
+            'python3 scripts/ci/authority_executable_controls.py --report "${report}"',
+        ):
+            self.assertIn(required, step)
+        for forbidden in ("continue-on-error", "if:", "|| true", "--privileged", "sysctl", "setenforce"):
+            self.assertNotIn(forbidden, step)
+
     def test_security_terminal_check_covers_every_required_control(self) -> None:
         gate = job_block(self.security, "security-audit")
         self.assertIn("    name: Security Audit\n", gate)
