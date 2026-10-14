@@ -154,7 +154,7 @@ corresponding feature exists. Keep the product README focused on the stable
 release and canonical guidance. Public diagrams and fixtures must be synthetic.
 
 The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
-separate mandatory 25-case campaign against the actual built authority binary,
+separate mandatory 47-case campaign against the actual built authority binary,
 with exact-byte binding, kernel identity observations, separate client operations,
 direct signal shutdown, crash preservation and stale restart refusal. The existing
 132-case gate remains unchanged. This is component evidence, not installed-service
@@ -166,3 +166,7 @@ private startup. It disables dumps, seals the four startup descriptors and sets
 a restrictive umask. See the [startup contract](AUTHORITY_PROCESS.md). Four added
 real-binary negative cases require unchanged private stores and no readiness.
 A production launcher, complete OS confinement and native acceptance remain open.
+
+The [sealed executable image](AUTHORITY_EXECUTABLE_IMAGE.md) now binds future launch
+to an immutable copy of the approved bytes. The real-binary campaign executes that
+image after replacing the source pathname. Native launch policy remains open.

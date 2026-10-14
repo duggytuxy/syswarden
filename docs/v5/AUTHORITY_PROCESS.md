@@ -9,6 +9,8 @@ start a service. The existing v4 core and BunkerWeb integration do not call it.
 `cmd/syswarden-authority` is a separately buildable executable. A trusted launcher
 must provision and validate the existing [launch record](AUTHORITY_LAUNCH.md),
 [private layout](PROVISIONED_AUTHORITY.md), service identity and endpoint first.
+The [executable image primitive](AUTHORITY_EXECUTABLE_IMAGE.md) prepares a sealed,
+byte-bound program for that future launcher; it does not start the service itself.
 The process accepts exactly `--launch-sha256` followed by one lowercase SHA-256.
 There is no environment fallback, configuration discovery, executable path in the
 record, test clock switch, automatic enrollment or default approval.

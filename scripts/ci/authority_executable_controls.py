@@ -11,7 +11,7 @@ ROOT_TEST = "TestAuthorityExecutableBoundary"
 
 
 def required_tests() -> set[str]:
-    return {ROOT_TEST} | {f"{ROOT_TEST}/{name}" for name in (
+    cases = {ROOT_TEST} | {f"{ROOT_TEST}/{name}" for name in (
         "verified-binary", "missing-descriptors", "wrong-digest", "wrong-identity",
         "swapped-directories", "read-only-readiness", "missing-no-new-privileges",
         "real-root-identity", "unexpected-group", "ambient-capability",
@@ -22,6 +22,13 @@ def required_tests() -> set[str]:
         "client-resume-after-restart", "sigint-clean-drain",
         "sigkill-preserves-evidence", "stale-restart-refused",
     )}
+    cases.add(f"{ROOT_TEST}/executable-snapshot")
+    for name in ("valid-sealed", "source-replaced", "source-modified", "nil", "closed",
+                 "writable-fd", "path-fd", "wrong-owner", "wrong-group", "mode", "special-mode",
+                 "hardlink", "acl", "file-capability", "directory", "fifo", "empty",
+                 "oversized", "wrong-digest", "uppercase-digest", "malformed-digest"):
+        cases.add(f"{ROOT_TEST}/executable-snapshot/{name}")
+    return cases
 
 
 def verify(data: bytes) -> int:

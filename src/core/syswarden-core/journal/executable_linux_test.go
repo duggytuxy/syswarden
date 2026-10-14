@@ -29,12 +29,13 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Fatal("executable gate requires a root identity inside its test environment")
 	}
-	var binary string
+	var binary *os.File
 	if !t.Run("verified-binary", func(child *testing.T) { binary = authorityExecutableFixture(child, t) }) {
 		return
 	}
 	policy := testCustodyPolicy()
 	policy.NotBefore, policy.NotAfter = time.Now().Add(-time.Minute).Unix(), time.Now().Add(time.Hour).Unix()
+	t.Run("executable-snapshot", testAuthorityExecutableSnapshot)
 	c, next := provisionProcessFixture(t, policy)
 	before := adversarialSnapshot(t, c.Paths)
 	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability"} {
@@ -135,7 +136,7 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	})
 }
 
-func authorityExecutableFixture(t, owner *testing.T) string {
+func authorityExecutableFixture(t, owner *testing.T) *os.File {
 	t.Helper()
 	path, expected := os.Getenv("SYSWARDEN_AUTHORITY_EXECUTABLE"), os.Getenv("SYSWARDEN_AUTHORITY_EXECUTABLE_SHA256")
 	if !filepath.IsAbs(path) || !validRecoveryApproval(expected) {
@@ -180,7 +181,24 @@ func authorityExecutableFixture(t, owner *testing.T) string {
 	if err := target.Chmod("syswarden-authority", 0555); err != nil {
 		t.Fatal(err)
 	}
-	return dir
+	sourceImage, err := target.Open("syswarden-authority")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sourceImage.Close() }()
+	image, err := SnapshotAuthorityExecutable(sourceImage, expected)
+	if err != nil {
+		t.Fatal("failed to seal actual executable", err)
+	}
+	owner.Cleanup(func() { _ = image.Close() })
+	// The actual exec must no longer depend on the checked pathname.
+	if err := target.Rename("syswarden-authority", "retired-image"); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.WriteFile("syswarden-authority", []byte("not the verified program"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return image
 }
 
 type executableProcess struct {
@@ -191,7 +209,7 @@ type executableProcess struct {
 	finished       bool
 }
 
-func executableCommand(t *testing.T, binary string, c processFixtureConfig, kind string) *executableProcess {
+func executableCommand(t *testing.T, binary *os.File, c processFixtureConfig, kind string) *executableProcess {
 	t.Helper()
 	digest := c.LaunchDigest
 	if kind == "wrong-digest" {
@@ -204,7 +222,7 @@ func executableCommand(t *testing.T, binary string, c processFixtureConfig, kind
 	// replacing itself with the verified product. No launcher hook is compiled
 	// into the product, and exec preserves the PID used by lifecycle checks.
 	p := &executableProcess{cmd: exec.Command("/proc/self/exe", "-test.run=^TestAuthorityExecLauncherChild$"), done: make(chan error, 1)}
-	p.cmd.Dir, p.cmd.Env = binary, []string{"GOMAXPROCS=2", "SYSWARDEN_EXEC_LAUNCH_CHILD=1", "SYSWARDEN_EXEC_LAUNCH_DIGEST=" + digest, "SYSWARDEN_EXEC_LAUNCH_MODE=" + kind}
+	p.cmd.Env = []string{"GOMAXPROCS=2", "SYSWARDEN_EXEC_LAUNCH_CHILD=1", "SYSWARDEN_EXEC_LAUNCH_DIGEST=" + digest, "SYSWARDEN_EXEC_LAUNCH_MODE=" + kind}
 	p.cmd.Stdout, p.cmd.Stderr = &p.output, &p.output
 	uid := uint32(processServiceID)
 	if kind == "wrong-identity" {
@@ -233,10 +251,10 @@ func executableCommand(t *testing.T, binary string, c processFixtureConfig, kind
 		p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, file)
 	}
 	p.reader, p.writer = readinessPipe(t)
-	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, p.writer)
+	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, p.writer, binary)
 	switch kind {
 	case "missing-descriptors":
-		p.cmd.ExtraFiles = nil
+		p.cmd.ExtraFiles = []*os.File{nil, nil, nil, nil, binary}
 	case "swapped-directories":
 		p.cmd.ExtraFiles[1], p.cmd.ExtraFiles[2] = p.cmd.ExtraFiles[2], p.cmd.ExtraFiles[1]
 	case "read-only-readiness":
@@ -359,7 +377,7 @@ func executableEvidencePaths(c processFixtureConfig) []string {
 }
 
 // This helper is linked into the test binary only. The fixed verified relative
-// executable and validated digest cannot select a shell, program or option.
+// sealed executable descriptor and validated digest cannot select a shell or option.
 func TestAuthorityExecLauncherChild(t *testing.T) {
 	if os.Getenv("SYSWARDEN_EXEC_LAUNCH_CHILD") != "1" {
 		return
@@ -397,7 +415,16 @@ func TestAuthorityExecLauncherChild(t *testing.T) {
 			t.Fatal("ambient capability negative control was not established", err)
 		}
 	}
-	if err := unix.Exec("./syswarden-authority", []string{"syswarden-authority", "--launch-sha256", digest}, []string{"GOMAXPROCS=2"}); err != nil {
+	seals, err := unix.FcntlInt(7, unix.F_GET_SEALS, 0)
+	if err != nil || seals&authorityImageSeals != authorityImageSeals {
+		t.Fatal("unsealed executable descriptor", err)
+	}
+	if _, err := unix.FcntlInt(7, unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
+		t.Fatal(err)
+	}
+	// The kernel resolves this fixed inherited descriptor before closing it
+	// on exec. The service receives only its four original startup handles.
+	if err := unix.Exec("/proc/self/fd/7", []string{"syswarden-authority", "--launch-sha256", digest}, []string{"GOMAXPROCS=2"}); err != nil {
 		t.Fatal(err)
 	}
 }
