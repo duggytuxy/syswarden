@@ -1,8 +1,10 @@
 # Go Release Toolchain Security
 
-Applies to: the v4.10.4 candidate. Publication and native IVV remain pending.
+Applies to: published v4.10.4 after signed native testing, protected Patch IVV
+and independent public asset verification. The
+[publication record](../releases/v4.10.4/README.md) defines the accepted scope.
 
-The candidate requires exactly Go 1.26.9 for production builds, package
+v4.10.4 requires exactly Go 1.26.9 for production builds, package
 provenance checks and active release workflows. Go published this security
 update on October 8, 2026. The merged-main vulnerability scan rejected the
 previous Go 1.26.6 build before native package signing.

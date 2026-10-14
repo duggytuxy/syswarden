@@ -1,0 +1,1 @@
+Inert fixture definition: replace detail with a redaction marker.

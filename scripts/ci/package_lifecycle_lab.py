@@ -475,7 +475,7 @@ ALPINE_CGROUP_MOUNTINFO_AWK = (
 )
 NAMESPACE_ATTESTATION_HELPERS = f"""set -eu
 syswarden_namespace_hex_prefix() {{
-    LC_ALL=C dd bs={NAMESPACE_DIAGNOSTIC_PREFIX_BYTES} count=1 2>/dev/null | \\
+    LC_ALL=C dd bs=1 count={NAMESPACE_DIAGNOSTIC_PREFIX_BYTES} 2>/dev/null | \\
         od -An -v -tx1 | tr -d ' \\n'
 }}
 syswarden_namespace_fail() {{

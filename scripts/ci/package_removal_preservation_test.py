@@ -70,6 +70,50 @@ class PackageRemovalPreservationTests(unittest.TestCase):
                         self.assertEqual(entry.read_bytes(), b"private administrator sentinel\n")
                     self.assertEqual(external.read_bytes(), b"private administrator sentinel\n")
 
+    def test_native_erase_finalizes_empty_binary_skeleton_without_adopting_entries(self) -> None:
+        for source_name, source in self.scripts.items():
+            start = source.index("syswarden_remove_dedicated_root /opt/syswarden/bin || exit 1")
+            end = source.index("syswarden_finalize_retained_operator_configuration", start)
+            calls = source[start:end]
+            for kind in ("empty", "absent", "custom-file", "custom-directory", "symlink"):
+                with self.subTest(source=source_name, kind=kind), tempfile.TemporaryDirectory(prefix="sw-native-skeleton-", dir="/tmp") as temporary:
+                    root = Path(temporary) / "product"
+                    root.mkdir(mode=0o750)
+                    binary_directory = root / "bin"
+                    external = Path(temporary) / "administrator"
+                    external.mkdir(mode=0o750)
+                    if kind == "symlink":
+                        binary_directory.symlink_to(external, target_is_directory=True)
+                    elif kind != "absent":
+                        binary_directory.mkdir(mode=0o750)
+                    if kind == "custom-file":
+                        (binary_directory / "custom").write_bytes(b"administrator executable\n")
+                    elif kind == "custom-directory":
+                        (binary_directory / "custom").mkdir(mode=0o700)
+                    prefix = """syswarden_path_absent() { [ ! -e "$1" ] && [ ! -L "$1" ]; }
+                    syswarden_refuse_mounted_path_tree() { return 0; }
+                    """
+                    script = prefix + shell_function(source, "syswarden_attest_dedicated_root") + "\n"
+                    script += shell_function(source, "syswarden_remove_dedicated_root") + "\n"
+                    script += calls.replace("/opt/syswarden", shlex.quote(str(root)))
+                    script = script.replace("0:0:", f"{os.getuid()}:{os.getgid()}:")
+                    result = subprocess.run(("/bin/sh", "-eu", "-c", script), capture_output=True, timeout=5, check=False)
+                    if kind in ("empty", "absent"):
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertFalse(root.exists())
+                        retry = subprocess.run(("/bin/sh", "-eu", "-c", script), capture_output=True, timeout=5, check=False)
+                        self.assertEqual(retry.returncode, 0, retry.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertTrue(root.is_dir())
+                        if kind == "custom-file":
+                            self.assertEqual((binary_directory / "custom").read_bytes(), b"administrator executable\n")
+                        elif kind == "custom-directory":
+                            self.assertTrue((binary_directory / "custom").is_dir())
+                        else:
+                            self.assertTrue(binary_directory.is_symlink())
+                    self.assertTrue(external.is_dir())
+
     def test_operator_configuration_survives_native_finalization_and_retry(self) -> None:
         for source_name, source in self.scripts.items():
             for kind in ("operator", "empty", "unknown", "list", "symlink", "hardlink", "mode"):

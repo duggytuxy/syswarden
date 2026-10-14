@@ -91,10 +91,10 @@ exact_owned_payload_file() {
 exact_recovery_helper() {
     path="$1"
     [ -f "$path" ] && [ ! -L "$path" ] || fail "Refusing unsafe post-uninstall recovery helper: $path"
-    [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$path")" = '0:0:700:1:9923' ] || \
+    [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$path")" = '0:0:700:1:20541' ] || \
         fail "Refusing modified post-uninstall recovery helper metadata: $path"
     [ "$(/usr/bin/sha256sum -- "$path" | /usr/bin/awk '{print $1}')" = \
-        5e692aca3702e9fba749e91a1d35f30f69955ef7570c5e4f7e74bf01689f5676 ] || \
+        b4773497827abdaa6d9ab0ea23e5a05a71c316d590380b55b6cd0a7044887bb8 ] || \
         fail "Refusing modified post-uninstall recovery helper content: $path"
 }
 
@@ -111,7 +111,7 @@ remove_recoverable_recovery_helper_prefix() {
     case "$size" in
         ''|*[!0-9]*) fail "Refusing malformed partial post-uninstall recovery helper size: $path" ;;
     esac
-    [ "$size" -lt 9923 ] || fail "Refusing non-partial post-uninstall recovery helper: $path"
+    [ "$size" -lt 20541 ] || fail "Refusing non-partial post-uninstall recovery helper: $path"
     actual_digest="$(/usr/bin/sha256sum -- "$path" | /usr/bin/awk '{print $1}')"
     expected_digest="$(/usr/bin/head -c "$size" -- "$source" | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')"
     [ "$actual_digest" = "$expected_digest" ] || \
@@ -128,7 +128,7 @@ publish_recovery_helper() {
     temporary="${destination}.new"
     if [ -e "$temporary" ] || [ -L "$temporary" ]; then
         temporary_metadata="$(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$temporary")"
-        if [ "$temporary_metadata" != '0:0:700:1:9923' ]; then
+        if [ "$temporary_metadata" != '0:0:700:1:20541' ]; then
             remove_recoverable_recovery_helper_prefix "$temporary" "$source"
         fi
     fi
@@ -350,7 +350,7 @@ if [ "$1" -eq 0 ]; then
         [ "$entry" = /usr/libexec/syswarden/rhelpo-postun-recovery-v1 ] || \
             fail "Refusing unexpected RHEL package-owned helper payload: $entry"
         exact_owned_payload_file "$entry" 755 \
-            5e692aca3702e9fba749e91a1d35f30f69955ef7570c5e4f7e74bf01689f5676
+            b4773497827abdaa6d9ab0ea23e5a05a71c316d590380b55b6cd0a7044887bb8
         recovery_children=$((recovery_children + 1))
     done
     [ "$recovery_children" -eq 1 ] || fail 'RPM-owned recovery helper inventory is incomplete.'
@@ -385,7 +385,6 @@ if [ "$1" -eq 0 ]; then
     done
     [ "$product_children" -eq 2 ] || fail 'RPM-owned product inventory is incomplete.'
 
-    exact_empty_directory /etc/syswarden/config/modules
     exact_empty_directory /etc/syswarden/lists
     exact_empty_directory /etc/syswarden/tls
     exact_empty_directory /var/lib/syswarden/ui
@@ -395,13 +394,8 @@ if [ "$1" -eq 0 ]; then
         [ "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$path")" = '0:0:750' ] || \
             fail "Refusing modified RHEL package-owned directory metadata: $path"
     done
-    config_children=0
-    for entry in /etc/syswarden/config/.[!.]* /etc/syswarden/config/..?* /etc/syswarden/config/*; do
-        [ ! -e "$entry" ] && [ ! -L "$entry" ] && continue
-        [ "$entry" = /etc/syswarden/config/modules ] || fail 'Refusing RPM erase while configuration state remains.'
-        config_children=$((config_children + 1))
-    done
-    [ "$config_children" -eq 1 ] || fail 'RHEL package-owned modules directory is absent.'
+    /bin/sh /usr/libexec/syswarden/rhelpo-postun-recovery-v1 inspect-configuration-v1 || \
+        fail 'Refusing RPM erase while unreviewed configuration remains.'
     product_children=0
     for entry in /etc/syswarden/.[!.]* /etc/syswarden/..?* /etc/syswarden/*; do
         [ ! -e "$entry" ] && [ ! -L "$entry" ] && continue
@@ -444,6 +438,8 @@ if [ "$1" -eq 0 ]; then
         done
     fi
 
+    /bin/sh /usr/libexec/syswarden/rhelpo-postun-recovery-v1 inspect-configuration-v1 || \
+        fail 'Configuration changed before RPM erase preparation.'
     publish_recovery_helper
 
 fi

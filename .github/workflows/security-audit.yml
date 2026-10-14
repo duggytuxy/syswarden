@@ -124,6 +124,59 @@ jobs:
           sudo env SYSWARDEN_REQUIRE_IPV6_KERNEL=1 "${test_context}/kernel.test" \
             -test.run='^TestIPv6ControlPlaneKernel$' -test.count=1 -test.v
 
+      - name: Verify unprivileged local tampering boundaries
+        shell: bash
+        env:
+          GOMAXPROCS: '2'
+        run: |
+          set -euo pipefail
+          test_binary="${RUNNER_TEMP}/syswarden-cross-uid.test"
+          report="${RUNNER_TEMP}/syswarden-cross-uid.jsonl"
+          go test -mod=readonly -p=2 -c -o "${test_binary}" ./src/core/syswarden-core/journal
+          (
+            cd src/core/syswarden-core/journal
+            go tool test2json -t -p syswarden-core/journal \
+              sudo -n env SYSWARDEN_REQUIRE_CROSS_UID=1 GOMAXPROCS=2 \
+              "${test_binary}" -test.run='^TestLocalUnprivilegedBoundary$' \
+              -test.count=1 -test.v=test2json -test.timeout=2m
+          ) | tee "${report}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/unprivileged_controls.py --report "${report}"
+          rm -- "${test_binary}"
+
+      - name: Verify standalone authority executable boundaries
+        shell: bash
+        env:
+          GOMAXPROCS: '2'
+        run: |
+          set -euo pipefail
+          test_binary="${RUNNER_TEMP}/syswarden-authority-executable.test"
+          authority_binary="${RUNNER_TEMP}/syswarden-authority"
+          bootstrap_binary="${RUNNER_TEMP}/syswarden-authority-exec"
+          launcher_binary="${RUNNER_TEMP}/syswarden-authority-launch"
+          report="${RUNNER_TEMP}/syswarden-authority-executable.jsonl"
+          go test -mod=readonly -p=2 -c -o "${test_binary}" ./src/core/syswarden-core/journal
+          CGO_ENABLED=0 go build -mod=readonly -p=2 -trimpath -o "${authority_binary}" ./src/core/syswarden-core/cmd/syswarden-authority
+          CGO_ENABLED=0 go build -mod=readonly -p=2 -trimpath -o "${bootstrap_binary}" ./src/core/syswarden-core/cmd/syswarden-authority-exec
+          CGO_ENABLED=0 go build -mod=readonly -p=2 -trimpath -o "${launcher_binary}" ./src/core/syswarden-core/cmd/syswarden-authority-launch
+          launcher_sha256="$(sha256sum "${launcher_binary}" | cut -d ' ' -f1)"
+          bootstrap_sha256="$(sha256sum "${bootstrap_binary}" | cut -d ' ' -f1)"
+          authority_sha256="$(sha256sum "${authority_binary}" | cut -d ' ' -f1)"
+          (
+            cd src/core/syswarden-core/journal
+            go tool test2json -t -p syswarden-core/journal \
+              sudo -n env SYSWARDEN_REQUIRE_AUTHORITY_EXECUTABLE=1 GOMAXPROCS=2 \
+              SYSWARDEN_AUTHORITY_EXECUTABLE="${authority_binary}" \
+              SYSWARDEN_AUTHORITY_EXECUTABLE_SHA256="${authority_sha256}" \
+              SYSWARDEN_AUTHORITY_BOOTSTRAP="${bootstrap_binary}" \
+              SYSWARDEN_AUTHORITY_BOOTSTRAP_SHA256="${bootstrap_sha256}" \
+              SYSWARDEN_AUTHORITY_LAUNCHER="${launcher_binary}" \
+              SYSWARDEN_AUTHORITY_LAUNCHER_SHA256="${launcher_sha256}" \
+              "${test_binary}" -test.run='^TestAuthorityExecutableBoundary$' \
+              -test.count=1 -test.v=test2json -test.timeout=2m
+          ) | tee "${report}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/authority_executable_controls.py --report "${report}"
+          rm -- "${test_binary}" "${authority_binary}" "${bootstrap_binary}" "${launcher_binary}"
+
       - name: Verify formatting
         shell: bash
         run: |
@@ -205,16 +258,25 @@ jobs:
             echo "Testing ${module}"
             (
               cd "${module}"
-              go test -timeout=20m -mod=readonly ./...
-              go test -timeout=20m -race -mod=readonly ./...
-              go vet -mod=readonly ./...
+              # Fresh results avoid expensive cache input logs for file-heavy tests.
+              # The shared Go compilation cache remains enabled.
+              echo "Running fresh functional tests for ${module}"
+              time go test -count=1 -timeout=20m -mod=readonly ./...
+              echo "Running fresh race tests for ${module}"
+              time go test -count=1 -timeout=20m -race -mod=readonly ./...
+              echo "Running vet for ${module}"
+              time go vet -mod=readonly ./...
             )
           done
           (
             cd scripts/versionctl
-            GOWORK=off go test -mod=readonly ./...
-            GOWORK=off go test -race -mod=readonly ./...
-            GOWORK=off go vet -mod=readonly ./...
+            export GOWORK=off
+            echo "Running fresh functional tests for scripts/versionctl"
+            time go test -count=1 -mod=readonly ./...
+            echo "Running fresh race tests for scripts/versionctl"
+            time go test -count=1 -race -mod=readonly ./...
+            echo "Running vet for scripts/versionctl"
+            time go vet -mod=readonly ./...
           )
 
       - name: Run bounded parser and network fuzz campaigns
@@ -239,6 +301,31 @@ jobs:
           fuzz_target src/core/syswarden-cli ./pkg/firewall FuzzIsValidIP
           fuzz_target src/core/syswarden-cli ./pkg/network FuzzHASyncPayloadJSON
           fuzz_target src/core/syswarden-core ./engine FuzzEngineNetworkAndURLInput
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzEventRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzLegacyProjection
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzNodeSnapshotRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzPolicyDecisionRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzActionOutcomeRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzControlSnapshotRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzEvidenceDescriptorRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzEvidencePayloadBinding
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzIncidentRelationRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzIncidentRecordReference
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzRateSnapshotRoundTrip
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzRateArithmetic
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzEventJournalScan
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzEventJournalEncoding
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzJournalCheckpointVerification
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzJournalCheckpointSignedStatements
+          fuzz_target src/core/syswarden-core ./journal FuzzCheckpointPublicationBundle
+          fuzz_target src/core/syswarden-core ./journal FuzzAnchorLedger
+          fuzz_target src/core/syswarden-core ./journal FuzzAnchorRecoveryTail
+          fuzz_target src/core/syswarden-core ./journal FuzzLocalCustodyLedger
+          fuzz_target src/core/syswarden-core ./journal FuzzCustodyAccessPolicy
+          fuzz_target src/core/syswarden-core ./journal FuzzCustodyPolicyLedger
+          fuzz_target src/core/syswarden-core ./journal FuzzAuthorityRequest
+          fuzz_target src/core/syswarden-core ./journal FuzzAuthorityResponse
+          fuzz_target src/core/syswarden-core ./journal FuzzAuthorityLaunchDecode
 
       - name: Run golangci-lint
         shell: bash

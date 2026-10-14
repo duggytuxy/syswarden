@@ -13,13 +13,21 @@ import (
 // the native package database still records the package. Native package hooks
 // use prepare-package-removal, which retains their separate verified lifecycle.
 func PreflightStandaloneUninstall() error {
-	return preflightStandaloneUninstallWith(hostFirewallExecutor(), func(path string) (bool, error) {
-		_, err := os.Lstat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return err == nil, err
-	})
+	return preflightStandaloneUninstallWith(hostFirewallExecutor(), uninstallAuthorityPathExists)
+}
+
+// PreflightUninstall also permits the fully attested opt-in RPM profile's
+// runtime-only first phase. Its payload remains under RPM erase authority.
+func PreflightUninstall() error {
+	return preflightUninstallWithProfile(hostFirewallExecutor(), uninstallAuthorityPathExists, attestInstalledRHELPackageOwnedProfileForRemoval)
+}
+
+func uninstallAuthorityPathExists(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 type standaloneUninstallAuthority struct {
@@ -32,6 +40,10 @@ type standaloneUninstallAuthority struct {
 }
 
 func preflightStandaloneUninstallWith(executor firewallManagerExecutor, exists func(string) (bool, error)) error {
+	return preflightUninstallWithProfile(executor, exists, nil)
+}
+
+func preflightUninstallWithProfile(executor firewallManagerExecutor, exists func(string) (bool, error), attestProfile func() (bool, error)) error {
 	if exists == nil {
 		return fmt.Errorf("native package database inspection is unavailable")
 	}
@@ -48,7 +60,7 @@ func preflightStandaloneUninstallWith(executor firewallManagerExecutor, exists f
 			arguments: []string{"info", "--quiet", "--exists", "syswarden"}, absentOutput: "", presentOutput: "",
 			recovery: "use 'sudo apk del syswarden' through the native package manager"},
 	}
-	var claims []string
+	var claims []standaloneUninstallAuthority
 	for _, authority := range authorities {
 		path, present, err := resolveOptionalFirewallRemovalExecutable(executor, authority.executable)
 		if err != nil {
@@ -89,13 +101,22 @@ func preflightStandaloneUninstallWith(executor firewallManagerExecutor, exists f
 		} else if string(output) != authority.presentOutput {
 			return fmt.Errorf("ambiguous %s SysWarden package registration; no direct removal is allowed", authority.executable)
 		}
-		claims = append(claims, authority.recovery)
+		claims = append(claims, authority)
 	}
 	if len(claims) > 1 {
 		return fmt.Errorf("multiple native package managers register SysWarden; resolve ownership before removal")
 	}
 	if len(claims) == 1 {
-		return fmt.Errorf("SysWarden is registered with a native package manager; direct uninstall would leave package state inconsistent; %s; this command has not removed product state", claims[0])
+		if claims[0].executable == "rpm" && attestProfile != nil {
+			present, err := attestProfile()
+			if err != nil {
+				return fmt.Errorf("attest optional RPM runtime removal authority: %w", err)
+			}
+			if present {
+				return nil
+			}
+		}
+		return fmt.Errorf("SysWarden is registered with a native package manager; direct uninstall would leave package state inconsistent; %s; this command has not removed product state", claims[0].recovery)
 	}
 	return nil
 }

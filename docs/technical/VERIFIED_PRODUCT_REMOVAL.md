@@ -1,7 +1,7 @@
 # Verified product removal
 
-Status: published in v4.10.3 after protected Patch IVV and independent public
-asset verification. The [publication record](../releases/v4.10.3/README.md)
+Status: published in v4.10.4 after protected Patch IVV and independent public
+asset verification. The [publication record](../releases/v4.10.4/README.md)
 defines the accepted scope. This reference describes code boundaries; use the
 [canonical recovery guide](https://syswarden.io/docs/historical-recovery/)
 for operator steps.
@@ -38,6 +38,52 @@ flush a shared ruleset or edit a package database to force completion.
 | Administrator configuration | `pkg/system/removal_operator_retention_*`, `cmd/recover_operator_configuration.go` | An explicit retention decision preserves reviewed TOML files at their original paths, including later administrator edits. |
 | Native finalization | `scripts/ci/package_removal_state.sh`, package scriptlets | No unretired product state is left behind; the documented administrator override and explicitly reviewed configuration survive. |
 
+v4.10.4 also recognizes the standard RHEL-family nftables loader
+whose reload command contains a literal `flush ruleset; include` sequence.
+Inspection records its exact absolute include path without executing the
+command. It accepts `/sbin/nft` through a root-owned, stable `/sbin` link to
+`/usr/sbin` and binds the link identity and resolved executable. Other link
+targets, injected commands and changed evidence are refused. The shared
+persistence reader still rejects symlinks, and retirement never stops or
+reloads the shared nftables service.
+
+v4.10.4 also creates a missing `/var/backups` parent through an attested
+`/var` directory descriptor when applying retirement. Existing shared backup
+storage keeps its owner, mode and contents. Read-only inspection creates nothing;
+unsafe metadata, links and concurrent replacement remain errors. The parent is
+synchronized before publishing recovery journals or moving original files.
+
+Nftables retirement synchronizes its exact kernel intent before opening
+the short-lived generation fence. It then repeats full live ownership inspection
+and checks that its source and inputs match that intent. The final guard rechecks
+producer quiescence, the original synchronized intent inode and bytes, and the
+boot and network namespace. Concurrent kernel changes still invalidate the
+single-use transaction. No timeout is extended and no ownership check is skipped.
+
+After successful firewall cleanup and runtime-history retirement, v4.10.4
+also removes the empty current compatibility-wrapper receipt. Its exact header,
+private mode and single-link inode are checked through the existing quarantined
+file-removal path. A receipt with owned or pending permissions, older syntax or
+modified bytes remains a blocking recovery artifact. An empty receipt is not a
+reason to modify shared firewalld or UFW configuration files or backend backups.
+
+Native post-removal finalization checks and removes an empty `/opt/syswarden/bin`
+before its parent. Package managers may leave this directory after erasing the
+binaries. Both directories use nonrecursive `rmdir` after metadata and mount
+checks. An extra file, child directory, link or mounted path still stops
+finalization and keeps the removal barrier for recovery.
+
+v4.10.4 can also resume orphaned WireGuard retirement after a
+native manager removes `wireguard-tools` despite a refused product erase.
+This fallback applies only after the removal path has prepared product services
+and independently established that no WireGuard ownership artifact remains.
+It requires two complete, successful systemd inspections of the exact missing
+unit, with no active process, queued job, unit fragment or drop-in, and two
+independent kernel interface inventories without `wg-syswarden`. A missing
+command is never itself evidence of absence. OpenRC, manifest-owned state and
+the exact tokenized nftables ownership boundary keep their existing checks.
+Active, partial, changing or unreadable evidence preserves the removal barrier.
+
 ## Historical recovery boundaries
 
 `recover-removal` separates inspection from an application authorized by the
@@ -59,6 +105,31 @@ them. Neither their names nor their pair hashes establish product ownership.
 Recovery retains their exact bytes and inodes, including incomplete cache
 generations, without interpreting them as firewall input. Changed inputs,
 unexpected creation markers and unrelated directory entries cause refusal.
+
+In v4.10.4, the feed writer marks newly created threat
+feed compatibility files, provenance commits and immutable snapshots with their
+exact name, inode, creation time and content hash. Automatic refresh preserves
+that origin only when replacing an already proven file. It never adopts an
+existing unmarked file. Removal can privately archive these proven feed artifacts
+together with the generated local lists. A modified or copied origin, unexpected
+entry, unsafe metadata or changed content prevents automatic retirement.
+
+Existing unmarked IPv4 and IPv6 threat feed artifacts have a bounded
+`--retain-legacy-lists` route. This includes at most eight digest-named snapshots
+per family, plus each compatibility file and provenance commit. The snapshot name
+and the feed-validation provenance do not independently establish file ownership.
+The operator must review the exact plan and confirm that every selected artifact
+is legacy product data with no other producer before applying its SHA-256 digest.
+Recovery keeps original bytes and inodes in a private backup; it does not delete
+them or assign new ownership markers. Invalid present creation markers cannot be
+bypassed through this route. Re-run the original removal command afterwards.
+The feed reader uses the same 32 MiB per-file bound as the publisher, while
+ordinary local lists retain their existing smaller read limit.
+
+Snapshot pruning also retains old unmarked generations. Only a generation with
+an exact writer-origin marker can be pruned automatically. The publisher's
+bounded inventory remains enforced, so an unexpected accumulation requires
+explicit recovery rather than unbounded scanning or deletion by filename.
 
 Fail2ban recovery binds the original configuration inventory separately from
 the runtime or persistence plan. Persistent entries in a shared nftables source
@@ -255,6 +326,43 @@ be distinguished from an active product installation; they do not load rules or
 start services. Flat legacy configuration and arbitrary directory contents are
 outside this modular retention route.
 
+## Inactive legacy configuration backups
+
+This route is available in v4.10.4 and passed signed-package testing and
+protected Patch IVV. It is not available in the older v4.10.3 CLI.
+
+A migrated flat configuration can leave a private `.bak` or `.migrated` file
+under `/opt/syswarden`. A familiar name does not establish product ownership.
+Removal preserves such a file and the recovery CLI until its retention is
+reviewed. For a removal already in progress, inspect:
+
+```sh
+sudo syswarden recover-removal --retain-legacy-config
+```
+
+This bounded route selects one inactive backup at a time from
+`syswarden-auto.conf.bak`, `syswarden-auto.conf.migrated` and
+`syswarden-auto.conf.migration_backup.migrated`. It excludes the active flat
+configuration and unfinished migration sources. Pending modular migration,
+active product services, links, shared inodes, unsafe permissions and files
+larger than 1 MiB prevent archival. Inspection prints metadata and an exact
+plan digest without exposing configuration values.
+
+Confirm independently that the selected file is an inactive legacy backup with
+no other consumer or producer. Apply with the same flag, `--apply` and the exact
+`--plan-sha256` from that dry run. The original inode and bytes move to a private
+`legacy-config-<digest>` directory under `/var/backups/syswarden-retired-v1`.
+The canonical plan is synchronized before the move. Recovery never overwrites
+an existing backup or copies across filesystems. A repeated application verifies
+the retained original; changed evidence or a recreated source stops recovery.
+
+Retry the original uninstall, remove or purge command. Another backup needs its
+own review. Active administrator configuration remains outside this archival
+operation, and customized TOML still uses `--retain-operator-config` to remain
+at its original path. The private archive is inactive recovery material, not a
+remaining product installation. Preserve its confidentiality and do not restore
+it automatically during a later installation.
+
 ## Independent administrator policy preservation
 
 Typed administrator ingress accepts in `modules/99-user.toml` can have active
@@ -381,3 +489,30 @@ independent installation and record all of the following:
 An isolated container restart is useful integration evidence. It does not
 replace the final hardened-host reboot. Component tests, native rehearsal and
 protected Patch IVV must each retain their actual scope and candidate identity.
+
+## Optional RPM runtime preparation and retry
+
+The explicit package-owned RHEL profile uses two phases: `syswarden uninstall`
+retires runtime state, then the native package manager erases its payload.
+The runtime entry point first verifies the exact installed profile, RPM
+ownership, immutable payload and service state. It leaves the package-owned
+binaries, launchers and completion file for RPM. Standard native packages
+continue to require their package manager for removal.
+
+Archival preserves the original list, log and UI directory inodes in private
+recovery storage. During removal only, the verifier can recognize the absence
+of those three exact RPM-owned directories under a valid removal barrier.
+It can also recover an empty root-owned `0700` skeleton after an interrupted
+creation. It rejects every other RPM verification deviation. Before authorizing
+erase it restores empty `0750` directories through pinned parent descriptors,
+independently of a restrictive caller umask. Activation still requires the
+complete installed directory tree.
+
+The documented operator module and explicitly retained TOML files remain at
+their original paths. Runtime preparation and the RPM PREUN and POSTUN helpers
+validate the same bounded retention authority. Later administrator edits do
+not authorize deletion. Unknown entries, unsafe metadata and altered retention
+records prevent finalization and preserve the recovery boundary. Empty product
+directories are removed after payload erase; directories needed by retained
+administrator configuration remain. The package helpers never execute a
+SysWarden product binary.

@@ -14,7 +14,7 @@ The evaluation does not qualify Go 1.27.1 for a release. Adoption remains
 blocked until separately bound native package, lifecycle, and performance
 evidence is green.
 
-The v4.10.4 candidate uses Go 1.26.9 for the security fixes published on
+The published v4.10.4 release uses Go 1.26.9 for the security fixes published on
 October 8, 2026. See the [release toolchain security policy](GO_RELEASE_TOOLCHAIN.md).
 The historical metadata, measurements and rollback target below remain fixed
 to their original versions. They do not authorize a current release build or

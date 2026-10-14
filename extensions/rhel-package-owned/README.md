@@ -197,10 +197,27 @@ image while preserving refusal of incomplete state after initialization.
 On a configured host, do not erase this variant directly. Run
 `syswarden uninstall` first and require its package-owned erase-ready result,
 then erase the exact `syswarden` RPM with the native package manager. The final
-scriptlet accepts only that protected boundary and an empty mutable-state
-inventory. It removes the boundary and the exact empty vendor drop-in directory
-after RPM payload removal. Any substituted unit, residual runtime state or
+scriptlet accepts only that protected boundary, retired runtime state and
+verified operator configuration retention. Approved TOML files remain in place,
+including later administrator edits. Unknown configuration entries still block
+erase. It removes the boundary and exact empty product directories after RPM
+payload removal, preserving directories needed by retained operator files. Any substituted unit, residual runtime state or
 unexpected directory content fails closed for operator review.
+
+In the v4.10.4 candidate, runtime archival can be resumed even after it moved
+an entire RPM-owned list, log or UI directory to private recovery storage.
+Only these exact directories can be restored as empty `0750` skeletons under
+the verified removal barrier and complete RPM payload attestation. An empty
+`0700` skeleton from an interrupted creation is handled explicitly; links,
+unknown contents and other payload deviations remain refusals. Ordinary
+activation retains its complete-directory requirement.
+
+PREUN uses a digest-bound, read-only configuration inspection mode in the
+package-owned recovery helper. It shares the standard native package parser
+for explicit retention decisions and never calls the product CLI. POSTUN uses
+the same decisions to preserve operator files while removing only empty
+product directories. These candidate changes still require fresh native IVV
+and protected acceptance before publication.
 
 The package-executed `%postun` wrapper invokes the digest-bound durable helper
 with the exact private `rpm-postun-v1` mode. It deliberately does not query the
@@ -219,9 +236,9 @@ then verify the helper before executing it:
 ```bash
 sudo stat -Lc '%u:%g:%a:%h:%s' -- \
   /var/lib/.syswarden-rhelpo-postun-recovery-v1
-# Expected: 0:0:700:1:9923
+# Expected: 0:0:700:1:20541
 sudo sha256sum -- /var/lib/.syswarden-rhelpo-postun-recovery-v1
-# Expected SHA-256: 5e692aca3702e9fba749e91a1d35f30f69955ef7570c5e4f7e74bf01689f5676
+# Expected SHA-256: b4773497827abdaa6d9ab0ea23e5a05a71c316d590380b55b6cd0a7044887bb8
 sudo /bin/sh /var/lib/.syswarden-rhelpo-postun-recovery-v1
 ```
 

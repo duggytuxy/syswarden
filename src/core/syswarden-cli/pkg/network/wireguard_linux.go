@@ -1553,8 +1553,30 @@ func cleanupAttestedOrphanedWireGuardNFTTableWithRunner(
 
 func attestInactiveWireGuardRuntimeForOrphanRemoval() error {
 	alpine := wireGuardIsAlpine()
-	state, err := inspectDisabledWireGuardServiceState(wireguardstate.Manifest{}, alpine)
+	return attestInactiveWireGuardOrphanRuntime(alpine, func() (wireGuardServiceState, error) {
+		return inspectDisabledWireGuardServiceState(wireguardstate.Manifest{}, alpine)
+	}, func() error {
+		return attestAbsentSystemdWireGuardRuntimeForOrphanRemoval(runWireGuardServiceOutput, net.Interfaces)
+	})
+}
+
+func attestInactiveWireGuardOrphanRuntime(
+	alpine bool,
+	inspect func() (wireGuardServiceState, error),
+	attestAbsentSystemd func() error,
+) error {
+	if inspect == nil || attestAbsentSystemd == nil {
+		return fmt.Errorf("orphaned WireGuard runtime inspection is incomplete")
+	}
+	state, err := inspect()
 	if err != nil {
+		if !alpine {
+			if absentErr := attestAbsentSystemd(); absentErr == nil {
+				return nil
+			} else {
+				err = errors.Join(err, absentErr)
+			}
+		}
 		return fmt.Errorf("inspect WireGuard runtime before orphaned nftables cleanup: %w", err)
 	}
 	if state.Alpine != alpine {

@@ -65,17 +65,19 @@ func TestNativeReloadPreservesRuntimeExpiryThroughValidationAndRollback(t *testi
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	runner := &runtimePreservationNativeRunner{}
-	const policy = `table inet syswarden {
+	policy := `table inet syswarden {
  set fixture_set { type ipv4_addr; }
  set banned_ips { type ipv4_addr; flags interval,timeout; }
  set banned_ips6 { type ipv6_addr; flags interval,timeout; }
  chain operator-policy { return; }
- chain input { type filter hook input priority 0; policy accept; jump operator-policy; ip saddr @banned_ips drop; ip6 saddr @banned_ips6 drop; }
+` + ipv6ControlPlaneSource("inet") + `
+ chain input { type filter hook input priority 0; policy accept; jump ipv6-control-plane; jump operator-policy; ip saddr @banned_ips drop; ip6 saddr @banned_ips6 drop; }
 }
 table netdev syswarden_hw_drop {
  set banned_ips { type ipv4_addr; flags interval,timeout; }
  set banned_ips6 { type ipv6_addr; flags interval,timeout; }
- chain runtime_probe { ip saddr @banned_ips drop; ip6 saddr @banned_ips6 drop; }
+` + ipv6ControlPlaneSource("netdev") + `
+ chain runtime_probe { jump ipv6-control-plane; ip saddr @banned_ips drop; ip6 saddr @banned_ips6 drop; }
 }
 `
 	setup := policy + "table inet operator_keep {\n set sample { type ipv4_addr; elements = { 203.0.113.44 }; }\n}\n"

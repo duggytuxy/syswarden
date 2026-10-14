@@ -58,12 +58,12 @@ systemd-analyze --version >/dev/null
 unshare --version >/dev/null
 
 RPM_ROOT_MODE=user-namespace
-RPM_ROOT_COMMAND=(unshare -Ur rpm)
+RPM_ROOT_COMMAND=(unshare -Ur -m)
 if ! unshare -Ur true >/dev/null 2>&1; then
     command -v sudo >/dev/null
     sudo -n true
     RPM_ROOT_MODE=sudo
-    RPM_ROOT_COMMAND=(sudo -n rpm)
+    RPM_ROOT_COMMAND=(sudo -n unshare -m)
 fi
 
 chroot_admin() {
@@ -346,6 +346,7 @@ initialize_rpm_chroot() {
         "${root}/dev" \
         "${root}/etc/rpm" \
         "${root}/run" \
+        "${root}/proc" \
         "${root}/tmp" \
         "${root}/usr/bin" \
         "${root}/usr/lib/sysimage/rpm" \
@@ -367,6 +368,7 @@ initialize_rpm_chroot() {
         /usr/bin/sha256sum \
         /usr/bin/stat \
         /usr/bin/sync \
+        /usr/bin/tail \
         /usr/bin/timeout; do
         install_chroot_executable "${root}" "${executable}"
     done
@@ -471,18 +473,27 @@ initialize_rpm_chroot "${CHROOT_ROOT}"
 rpm_at_root() {
     local root="$1"
     shift
-    "${RPM_ROOT_COMMAND[@]}" --root "${root}" --dbpath /usr/lib/sysimage/rpm \
-        --noplugins "$@"
+    # A private mount namespace supplies real /proc evidence to the
+    # retention parser. The mount disappears with this bounded invocation.
+    # shellcheck disable=SC2016
+    "${RPM_ROOT_COMMAND[@]}" bash -eu -c '
+        root="$1"; shift
+        mount --make-rprivate /
+        mount --rbind /proc "$root/proc"
+        exec rpm --root "$root" --dbpath /usr/lib/sysimage/rpm --noplugins "$@"
+    ' rhel-rpm-fixture "${root}" "$@"
 }
 
 run_in_chroot() {
     local root="$1"
     shift
-    if [ "${RPM_ROOT_MODE}" = sudo ]; then
-        sudo -n chroot "${root}" "$@"
-        return
-    fi
-    unshare -Ur chroot "${root}" "$@"
+    # shellcheck disable=SC2016
+    "${RPM_ROOT_COMMAND[@]}" bash -eu -c '
+        root="$1"; shift
+        mount --make-rprivate /
+        mount --rbind /proc "$root/proc"
+        exec chroot "$root" "$@"
+    ' rhel-chroot-fixture "${root}" "$@"
 }
 
 chroot_path_is_regular() {
@@ -568,8 +579,8 @@ assert_exact_removal_tombstone() {
 assert_exact_postun_recovery_helper() {
     assert_exact_chroot_regular_file "$1" \
         /var/lib/.syswarden-rhelpo-postun-recovery-v1 \
-        700 9923 \
-        5e692aca3702e9fba749e91a1d35f30f69955ef7570c5e4f7e74bf01689f5676 \
+        700 20541 \
+        b4773497827abdaa6d9ab0ea23e5a05a71c316d590380b55b6cd0a7044887bb8 \
         'RHEL package-owned post-uninstall recovery helper'
 }
 
@@ -743,6 +754,7 @@ nevra=syswarden-4.10.4-1.rhelpo.x86_64
 
 assert_final_absence() {
     local root="$1"
+    local retained_config="${2:-absent}"
     if rpm_at_root "${root}" --query syswarden >/dev/null 2>&1; then
         printf '%s\n' 'Offline RPM removal retained the package database record.' >&2
         exit 1
@@ -777,6 +789,9 @@ assert_final_absence() {
         var/lib/.syswarden-rhelpo-postun-recovery-v1 \
         var/lib/.syswarden-rhelpo-postun-recovery-v1.new \
         var/log/syswarden; do
+        if [ "${removed_path}" = etc/syswarden ] && [ "${retained_config}" = retained ]; then
+            continue
+        fi
         assert_chroot_path_absent "${root}" "/${removed_path}" || {
             printf 'Offline RPM removal retained package-owned state: /%s\n' \
                 "${removed_path}" >&2
@@ -1525,6 +1540,58 @@ for identity_version in 4.10.0 4.10.1 4.10.2 4.10.3 4.10.5; do
         rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
     fi
 done
+
+
+# Exercise explicit operator retention through real PREUN, RPM payload erase,
+# a failed POSTUN and later replay. These are private synthetic decision bytes,
+# not a substitute for the runtime recovery-plan tests or signed native IVV.
+rpm_at_root "${CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
+    "${PACKAGE_PATH}"
+prepare_exact_erase_state "${CHROOT_ROOT}"
+printf '%s\n' '[core]' 'log_level = "info"' > "${TEST_WORKSPACE}/retained-operator.toml"
+retained_path=/etc/syswarden/config/modules/75-custom.toml
+chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/retained-operator.toml" "${CHROOT_ROOT}${retained_path}"
+retained_original_digest="$(sha256sum "${TEST_WORKSPACE}/retained-operator.toml" | awk '{print $1}')"
+{
+    printf '%s\n' SYSWARDEN_OPERATOR_CONFIGURATION_RETENTION_V1 explicit-operator-retention-at-original-paths
+    printf 'file\t%s\t1\t2\t33152\t0\t0\t34\t1\t0\t1\t0\t%s\n' "${retained_path}" "${retained_original_digest}"
+} > "${TEST_WORKSPACE}/retention-record"
+retention_digest="$(sha256sum "${TEST_WORKSPACE}/retention-record" | awk '{print $1}')"
+chroot_admin install -d -m 0755 -- "${CHROOT_ROOT}/var/backups"
+chroot_admin install -d -m 0700 -- \
+    "${CHROOT_ROOT}/var/backups/syswarden-retired-v1" \
+    "${CHROOT_ROOT}/var/backups/syswarden-retired-v1/operator-configuration"
+chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/retention-record" \
+    "${CHROOT_ROOT}/var/backups/syswarden-retired-v1/operator-configuration/${retention_digest}.retention"
+chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/retained-operator.toml" \
+    "${CHROOT_ROOT}/etc/syswarden/config/modules/76-unreviewed.toml"
+if rpm_at_root "${CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1; then
+    printf '%s\n' 'RPM erase accepted an unreviewed operator configuration.' >&2
+    exit 1
+fi
+assert_package_identity "${CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
+chroot_admin rm -- "${CHROOT_ROOT}/etc/syswarden/config/modules/76-unreviewed.toml"
+retained_identity="$(run_in_chroot "${CHROOT_ROOT}" /usr/bin/stat -c '%d:%i:%u:%g:%a:%h' "${retained_path}")"
+printf '%s\n' fail > "${TEST_WORKSPACE}/fail-rmdir-retention"
+chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/fail-rmdir-retention" \
+    "${CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/fail-rmdir-once"
+rpm_at_root "${CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1 || :
+if rpm_at_root "${CHROOT_ROOT}" --query syswarden >/dev/null 2>&1; then
+    printf '%s\n' 'Retained configuration prevented the expected payload erase.' >&2
+    exit 1
+fi
+assert_exact_postun_recovery_helper "${CHROOT_ROOT}"
+chroot_path_is_regular "${CHROOT_ROOT}" /var/lib/.syswarden-rhelpo-erase-ready-v1
+# A later administrator edit changes bytes while preserving the same inode.
+printf '%s\n' '[core]' 'log_level = "warn"' > "${TEST_WORKSPACE}/retained-operator-edited.toml"
+chroot_admin tee "${CHROOT_ROOT}${retained_path}" < "${TEST_WORKSPACE}/retained-operator-edited.toml" >/dev/null
+run_exact_postun_recovery "${CHROOT_ROOT}"
+assert_final_absence "${CHROOT_ROOT}" retained
+[[ "$(run_in_chroot "${CHROOT_ROOT}" /usr/bin/stat -c '%d:%i:%u:%g:%a:%h' "${retained_path}")" == "${retained_identity}" ]]
+chroot_admin cmp -- "${TEST_WORKSPACE}/retained-operator-edited.toml" "${CHROOT_ROOT}${retained_path}"
+assert_chroot_path_absent "${CHROOT_ROOT}" /etc/syswarden/lists
+assert_chroot_path_absent "${CHROOT_ROOT}" /etc/syswarden/tls
+printf '%s\n' 'RPM retained operator configuration and later edits through failed POSTUN and verified replay.'
 
 for root in "${CLEAN_CHROOT_ROOT}" "${CHROOT_ROOT}"; do
     [[ "$(run_in_chroot "${root}" /usr/bin/stat -Lc '%u:%g:%a' -- /usr/lib)" == 0:0:555 ]]

@@ -837,6 +837,23 @@ class ActFixtureTests(unittest.TestCase):
             "FuzzIsValidIP",
             "FuzzHASyncPayloadJSON",
             "FuzzEngineNetworkAndURLInput",
+            "FuzzEventRoundTrip",
+            "FuzzLegacyProjection",
+            "FuzzNodeSnapshotRoundTrip",
+            "FuzzPolicyDecisionRoundTrip",
+            "FuzzActionOutcomeRoundTrip",
+            "FuzzControlSnapshotRoundTrip",
+            "FuzzEvidenceDescriptorRoundTrip",
+            "FuzzEvidencePayloadBinding",
+            "FuzzIncidentRelationRoundTrip",
+            "FuzzIncidentRecordReference",
+            "FuzzRateSnapshotRoundTrip",
+            "FuzzRateArithmetic",
+            "FuzzEventJournalScan",
+            "FuzzEventJournalEncoding",
+            "FuzzJournalCheckpointVerification",
+            "FuzzJournalCheckpointSignedStatements",
+            "FuzzAuthorityResponse",
         ):
             self.assertEqual(workflow.count(target), 1)
 

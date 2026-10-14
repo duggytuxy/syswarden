@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"reflect"
 	"slices"
 	"sort"
 	"syswarden-cli/pkg/cronstate"
@@ -27,6 +28,10 @@ type nftRemovalProducerInspection struct {
 func nftRemovalLoaderDigest(inspection *nftPersistenceLoaderInspection, entries, absent []string) (string, error) {
 	if inspection == nil || len(inspection.files) < 3 || len(inspection.status.entries) == 0 {
 		return "", fmt.Errorf("removal producer inspection lacks its loader evidence")
+	}
+	binary, alias, err := resolveNFTPersistenceLoaderBinary(inspection.host, inspection.status.binary)
+	if err != nil || binary != inspection.resolvedBinary || !reflect.DeepEqual(alias, inspection.alias) {
+		return "", fmt.Errorf("removal loader executable alias changed before binding")
 	}
 	paths := make([]string, 0, len(inspection.files))
 	for path := range inspection.files {
@@ -52,7 +57,8 @@ func nftRemovalLoaderDigest(inspection *nftPersistenceLoaderInspection, entries,
 		Entries       []string                          `json:"all_entries"`
 		Absent        []string                          `json:"absent_entries"`
 		Files         []nftPersistenceGraphSourceRecord `json:"loader_files"`
-	}{"syswarden-removal-producers-v1", inspection.status.binary, inspection.status.entries, entries, absent, files})
+		Alias         *nftPersistenceLoaderAlias        `json:"executable_alias,omitempty"`
+	}{"syswarden-removal-producers-v1", inspection.status.binary, inspection.status.entries, entries, absent, files, inspection.alias})
 	if err != nil {
 		return "", err
 	}

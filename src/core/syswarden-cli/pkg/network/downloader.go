@@ -34,7 +34,7 @@ const approvedFeedDirectory = "/etc/syswarden/lists"
 
 const (
 	maximumCIDRFeedBytes        = 16 << 20
-	maximumPublishedBytes       = 32 << 20
+	maximumPublishedBytes       = system.MaximumGeneratedFeedBytes
 	maximumWHOISBytes           = 8 << 20
 	maximumJSONFeedBytes        = 8 << 20
 	maximumCanonicalFeedEntries = 250000
@@ -472,6 +472,19 @@ func writeFeedFileInDirectoryExpected(directory *os.Root, target feedFileTarget,
 	if expectedIdentity != nil && (!existed || !sameFeedFileState(*expectedIdentity, identity.info, identity.digest)) {
 		return fmt.Errorf("feed target changed after it was read: %s", target.name)
 	}
+	generated := system.IsGeneratedFeedArtifactName(target.name) && !existed
+	if system.IsGeneratedFeedArtifactName(target.name) && existed {
+		source, err := directory.OpenFile(target.name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return err
+		}
+		opened, statErr := source.Stat()
+		generated, err = system.HasGeneratedFeedArtifactOrigin(source, target.name, identity.digest)
+		closeErr := source.Close()
+		if statErr != nil || err != nil || closeErr != nil || !sameFeedFileState(identity, opened, identity.digest) {
+			return errors.Join(fmt.Errorf("feed origin changed before publication"), statErr, err, closeErr)
+		}
+	}
 	file, stagingName, err := createFeedStagingFile(directory, target)
 	if err != nil {
 		return err
@@ -496,6 +509,11 @@ func writeFeedFileInDirectoryExpected(directory *os.Root, target feedFileTarget,
 		return fmt.Errorf("write feed staging file for %s: %w", target.name, err)
 	} else if written != len(content) {
 		return fmt.Errorf("write feed staging file for %s: %w", target.name, io.ErrShortWrite)
+	}
+	if generated {
+		if err := system.MarkCreatedFeedArtifact(file, target.name, content); err != nil {
+			return fmt.Errorf("record feed writer origin: %w", err)
+		}
 	}
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync feed staging file for %s: %w", target.name, err)

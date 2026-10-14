@@ -1,0 +1,1 @@
+Synthetic policy: minimum eligible 1; freshness 5 minutes; deduplicate exact identities; retain unknown and stale members; exclude only explicitly out-of-scope inventory.

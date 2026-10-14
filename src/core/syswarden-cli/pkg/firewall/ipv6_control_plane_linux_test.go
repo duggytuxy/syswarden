@@ -280,6 +280,7 @@ func runIPv6ControlPlaneKernel(t *testing.T) {
 		if baselineErr == nil && retirementErr != nil || baselineErr != nil && (retirementErr == nil || retirementErr.Error() != baselineErr.Error()) {
 			t.Fatalf("case %d retirement behavior changed: baseline=%v, candidate=%v", index, baselineErr, retirementErr)
 		}
+		runIPv6ControlPlaneReloads(t, fixture, source)
 		// A modified live extension must fail exact retirement, even if its
 		// private persistent bytes and ownership inputs are still intact.
 		nft("", "add", "rule", "inet", "syswarden", ipv6ControlPlaneChain, "accept")
@@ -298,6 +299,44 @@ func runIPv6ControlPlaneKernel(t *testing.T) {
 	}
 	runIPv6ControlPlanePackets(t, nft)
 	fmt.Println("IPv6 control-plane kernel ownership regression passed")
+}
+
+type ipv6KernelCommandRunner struct{}
+
+func (ipv6KernelCommandRunner) Run(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "nft", args...) // #nosec G204 -- fixed nft test executable inside the attested isolated user and network namespaces
+	command.Stdin = bytes.NewReader(input)
+	return command.CombinedOutput()
+}
+
+// Reapply the complete generated policy through the real transaction engine.
+// Compiling its first installation alone cannot detect a reload-time rejection.
+func runIPv6ControlPlaneReloads(t *testing.T, fixture nftCurrentFileFixture, source string) {
+	t.Helper()
+	operator, err := compileOperatorPolicy(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var populations []nftSetPopulation
+	for _, population := range fixture.Populations {
+		kind := nftAddressPopulation
+		if strings.Contains(population.Name, "_ports") {
+			kind = nftAddressPortPopulation
+		}
+		populations = append(populations, nftSetPopulation{population.Name, population.Entries, kind, strings.Contains(population.Name, "_ssh_bypass")})
+	}
+	plan := buildNftVerificationPlan(populations, fixture.ARP, operator.verificationPlan())
+	plan.generation = fixtureNFTPolicyGeneration(t, fixture)
+	plan.generation.IPv6ControlPlane = ipv6ControlPlaneVersion
+	base, _, _ := strings.Cut(source, "add element ")
+	directory := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for cycle := 0; cycle < 2; cycle++ {
+		if _, err := applyNftablesTransactionLocked(ctx, ipv6KernelCommandRunner{}, directory, base, populations, plan, fmt.Sprintf("%016x", cycle+1), nil); err != nil {
+			t.Fatalf("generated IPv6 policy reload %d: %v", cycle, err)
+		}
+	}
 }
 
 // Compare every observed field and expression except kernel-assigned handles.

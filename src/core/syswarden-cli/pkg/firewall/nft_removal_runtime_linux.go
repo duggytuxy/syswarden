@@ -165,79 +165,83 @@ func currentNFTRetiredSource(host nftPersistenceFilesystem, plan nftHistoricalPe
 	return host.read(path)
 }
 
-func bindNFTRemovalKernelIntent(host nftPersistenceFilesystem, plan string, intent nftRemovalKernelIntent, guard func() error, ops legacyRetirementFileOps) error {
+func bindNFTRemovalKernelIntent(host nftPersistenceFilesystem, plan string, intent nftRemovalKernelIntent, guard func() error, ops legacyRetirementFileOps) (nftPersistenceRead, error) {
+	var empty nftPersistenceRead
 	if intent.Schema != "syswarden-nft-kernel-retirement-v1" || intent.Plan != plan || !validLegacyRetirementDigest(plan) || !validLegacyRetirementDigest(intent.Source) || !validLegacyRetirementDigest(intent.Inputs) || len(intent.Targets) < 2 || len(intent.Targets) > 3 || !validLegacyRetirementOperations(guard, ops) {
-		return fmt.Errorf("incomplete nftables kernel retirement intent")
+		return empty, fmt.Errorf("incomplete nftables kernel retirement intent")
 	}
 	if intent.History != "" && !validLegacyRetirementDigest(intent.History) {
-		return fmt.Errorf("invalid native runtime history binding")
+		return empty, fmt.Errorf("invalid native runtime history binding")
 	}
 	content, err := json.Marshal(intent)
 	if err != nil {
-		return err
+		return empty, err
 	}
 	path := legacyFail2banPlanPath(plan) + "/kernel-retirement.json"
 	if err := guard(); err != nil {
-		return err
+		return empty, err
 	}
 	before, err := host.snapshot(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		directory, err := openLegacyFail2banPlanDirectory(host, plan)
 		if err != nil {
-			return err
+			return empty, err
 		}
 		defer func() { _ = directory.Close() }()
 		fd, err := directory.Open(".")
 		if err != nil {
-			return err
+			return empty, err
 		}
 		defer func() { _ = fd.Close() }()
 		if err := guard(); err != nil {
-			return err
+			return empty, err
 		}
 		if err := publishLegacyRetirementJSON(directory, fd, "kernel-retirement", content, ops); err != nil {
-			return err
+			return empty, err
 		}
 	} else if err != nil || before.identity.Mode().Perm() != 0600 || !bytes.Equal(before.content, content) {
-		return fmt.Errorf("nftables kernel retirement intent differs from the reviewed source or current boot and namespace")
+		return empty, fmt.Errorf("nftables kernel retirement intent differs from the reviewed source or current boot and namespace")
 	}
 	// Repeat both fsync operations even when a previous invocation published
 	// the record and failed before durability could be confirmed.
 	before, err = host.snapshot(path)
 	if err != nil || before.identity.Mode().Perm() != 0600 || !bytes.Equal(before.content, content) {
-		return fmt.Errorf("nftables kernel retirement intent is unavailable or changed")
+		return empty, fmt.Errorf("nftables kernel retirement intent is unavailable or changed")
 	}
 	directory, err := openLegacyFail2banPlanDirectory(host, plan)
 	if err != nil {
-		return err
+		return empty, err
 	}
 	defer func() { _ = directory.Close() }()
 	file, err := directory.OpenFile("kernel-retirement.json", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return err
+		return empty, err
 	}
 	info, statErr := file.Stat()
 	if statErr != nil || !sameNFTPersistenceIdentity(before.identity, info) {
 		_ = file.Close()
-		return fmt.Errorf("kernel retirement journal changed before synchronization")
+		return empty, fmt.Errorf("kernel retirement journal changed before synchronization")
 	}
 	fileErr := errors.Join(ops.sync(file), file.Close())
 	fd, err := directory.Open(".")
 	if err != nil {
-		return errors.Join(fileErr, err)
+		return empty, errors.Join(fileErr, err)
 	}
 	identity, statErr := fd.Stat()
 	if err := errors.Join(fileErr, statErr, ops.sync(fd), fd.Close()); err != nil {
-		return err
+		return empty, err
 	}
 	after, err := host.snapshot(path)
 	if err != nil || !sameLegacyFail2banSource(before, after) {
-		return fmt.Errorf("kernel retirement journal changed during synchronization")
+		return empty, fmt.Errorf("kernel retirement journal changed during synchronization")
 	}
 	if err := attestLegacyRetirementDirectory(host, legacyFail2banPlanPath(plan), identity); err != nil {
-		return err
+		return empty, err
 	}
-	return guard()
+	if err := guard(); err != nil {
+		return empty, err
+	}
+	return after, nil
 }
 
 func retireNFTCurrentRuntime(ctx context.Context, host nftPersistenceFilesystem, plan nftHistoricalPersistencePlan, reviewed string, guard func(string, string) error, runner nftCommandRunner, ops legacyRetirementFileOps, history *nftRuntimeHistoryLease) error {
@@ -305,7 +309,24 @@ func retireNFTCurrentRuntimeUsing(ctx context.Context, host nftPersistenceFilesy
 	if err != nil {
 		return err
 	}
-	var evidence nftCurrentPersistenceEvidence
+	inputs, err := json.Marshal(plan.binding.Current)
+	if err != nil {
+		return err
+	}
+	intent := nftRemovalKernelIntent{Schema: "syswarden-nft-kernel-retirement-v1", Plan: reviewed, Source: plan.binding.Source.Artifact.SHA256, Inputs: nftSHA256Hex(inputs), Epoch: epoch, History: history.digest()}
+	for _, target := range targets {
+		intent.Targets = append(intent.Targets, target.family+" "+target.name)
+	}
+	// Finish durable intent and its complete guards before opening the short
+	// kernel fence. The intent authorizes no mutation by itself: the following
+	// live inspection must still prove these exact source and input bindings.
+	durable, err := bindNFTRemovalKernelIntent(host, reviewed, intent, check, ops)
+	if err != nil {
+		return err
+	}
+	if err := ops.checkpoint("kernel-retirement-intent-durable"); err != nil {
+		return err
+	}
 	fence, err := newFence(ctx, func(ctx context.Context) ([]nftTableTarget, error) {
 		if err := check(); err != nil {
 			return nil, err
@@ -332,9 +353,12 @@ func retireNFTCurrentRuntimeUsing(ctx context.Context, host nftPersistenceFilesy
 		if err != nil {
 			return nil, err
 		}
-		evidence, err = inspectNFTCurrentRuntimeWithClaims(source, observations[0], observations[1], arp, input, claims)
+		evidence, err := inspectNFTCurrentRuntimeWithClaims(source, observations[0], observations[1], arp, input, claims)
 		if err != nil {
 			return nil, err
+		}
+		if evidence.sourceSHA256 != intent.Source || evidence.inputSHA256 != intent.Inputs {
+			return nil, fmt.Errorf("live retirement inspection differs from its durable intent")
 		}
 		if err := check(); err != nil {
 			return nil, err
@@ -348,14 +372,7 @@ func retireNFTCurrentRuntimeUsing(ctx context.Context, host nftPersistenceFilesy
 		return fmt.Errorf("kernel retirement fence is unavailable")
 	}
 	defer fence.close()
-	intent := nftRemovalKernelIntent{Schema: "syswarden-nft-kernel-retirement-v1", Plan: reviewed, Source: evidence.sourceSHA256, Inputs: evidence.inputSHA256, Epoch: epoch, History: history.digest()}
-	for _, target := range targets {
-		intent.Targets = append(intent.Targets, target.family+" "+target.name)
-	}
-	if err := bindNFTRemovalKernelIntent(host, reviewed, intent, check, ops); err != nil {
-		return err
-	}
-	if err := ops.checkpoint("kernel-retirement-intent-durable"); err != nil {
+	if err := ops.checkpoint("kernel-retirement-inspected"); err != nil {
 		return err
 	}
 	final := func() error {
@@ -366,7 +383,13 @@ func retireNFTCurrentRuntimeUsing(ctx context.Context, host nftPersistenceFilesy
 		if err != nil || current != epoch {
 			return fmt.Errorf("kernel retirement boot or network namespace changed")
 		}
-		return bindNFTRemovalKernelIntent(host, reviewed, intent, check, ops)
+		// Reattest the exact inode and bytes that were synchronized. A replaced
+		// journal, even with identical text, is not the durable original.
+		currentIntent, err := host.snapshot(legacyFail2banPlanPath(reviewed) + "/kernel-retirement.json")
+		if err != nil || !sameLegacyFail2banSource(durable, currentIntent) {
+			return fmt.Errorf("durable kernel retirement intent changed before mutation")
+		}
+		return nil
 	}
 	if err := fence.apply(ctx, final); err != nil {
 		return err

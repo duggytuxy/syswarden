@@ -6,6 +6,12 @@ also defines an optional hardware-dependent local prequalification rehearsal.
 Neither phase replaces the required checks on the merged `main` SHA or the
 protected remote qualification.
 
+The current stable release is v4.10.4. Its
+[publication record](../releases/v4.10.4/README.md) records completed protected
+Patch IVV and independent public asset verification. The sealed candidate
+corrections below describe historical preparation boundaries. They do not
+authorize changing the published tag, signed artifacts or original evidence.
+
 ## Authority boundary
 
 The preflight and rehearsal phases are read-only with respect to GitHub and
@@ -21,6 +27,13 @@ different tool is supplemental evidence, not a mirrored gate. GitHub service
 controls and host-bound controls that the local runner cannot provide must be
 listed explicitly as remote-only. They must never be reported as locally
 passed.
+
+Functional and race tests use `-count=1` to execute fresh results. Preserve the
+shared Go compilation cache: the disabled cache is only the test-result cache.
+File-heavy fixtures can generate large result-cache input logs, followed by
+expensive filesystem validation after the test process has already exited.
+Record the command wall time separately from the package duration printed by
+Go. Keep all tests, race checks, vet and the existing job timeout in place.
 
 ## Entry conditions
 
@@ -84,6 +97,40 @@ probe. Existing-tag refusal, version preservation, review and all release
 gates still apply. Any further change requires a separately reviewed policy;
 this does not grant general permission to edit candidate history.
 
+### Sealed native-removal follow-up
+
+A separate v4.10.4 policy permits only the immediate child of
+`6ed6a52d021fc399bc18a4b913ae037c728a8ed1` with subject
+`Fix : complete v4.10.4 native removal corrections`, optionally followed by
+GitHub's numeric squash suffix. Its exact before and after changelog hashes
+record the RHEL loader, durable retirement, generated feed and empty receipt
+corrections. The entire historical suffix is unchanged. This narrowly bound
+policy does not replace either earlier policy or permit replay on another
+parent. Existing-tag refusal, unchanged version, review and fresh release
+checks remain mandatory.
+
+## Sealed v4.10.4 inactive configuration correction
+
+The unpublished change record may be completed after reviewed commit
+`9e82ceb01bd334795046c0c4c18b749d1447625e` with the exact subject
+`Fix : retain inactive v4.10.4 configuration backups`, optionally followed by
+GitHub's numeric squash suffix. Its separate policy binds that parent, unchanged
+version, complete before and after digests, and unchanged historical suffix.
+Earlier correction policies and published release records remain immutable.
+This correction requires fresh reviewed signatures and native IVV.
+
+## Sealed v4.10.4 removal retry correction
+
+The unpublished record may be completed only after reviewed commit
+`063848c5b0cfdd0e85ad980e4eb2dd07c0464565`, using the exact subject
+`Fix : complete v4.10.4 removal retry boundaries`, optionally followed by
+GitHub's numeric squash suffix. The policy binds this parent, the unchanged
+version, both complete changelog hashes and the unchanged historical suffix.
+It records dependency-absent removal retry, optional RPM runtime preparation,
+operator configuration retention and the upstream `x/net` security update.
+Existing policies remain unchanged.
+Fresh reviewed merge, protected signatures and native IVV are still required.
+
 ## Workflow coverage ledger
 
 Every workflow must be classified before a release PR is pushed. A local PASS
@@ -103,7 +150,7 @@ remains mandatory on the exact GitHub candidate or merged SHA.
 | `scorecard.yml` | Workflow and policy contract tests | GitHub repository posture, Scorecard service result and SARIF publication |
 | `compliance.yml` | Workflow and policy contract tests | Plumber service execution, GitHub OIDC result and remote score publication |
 | `release-qualification.yml` | Optional native lifecycle, kernel and evidence-schema rehearsal when matching hardware and inputs exist | Protected environment review, ephemeral runner identity, authoritative run and artifact IDs, hosted sealing and exact reuse of the protected candidate updater material |
-| `release-ivv.yml`, `release-ivv-v4101.yml`, `release-ivv-v4102.yml`, `release-ivv-v4103.yml` | Pinned private-proof integrity, selective continuity review, native publishing signatures, original binary bundle/SBOM, current updater and rejection tests | Exact owner-approved main producer, private ephemeral runner, GitHub attestation, unique immutable result and independent IVV consumers at all three publication boundaries |
+| `release-ivv.yml`, `release-ivv-v4101.yml`, `release-ivv-v4102.yml`, `release-ivv-v4103.yml`, `release-ivv-v4104.yml` | Pinned private-proof integrity, selective continuity review, native publishing signatures, original binary bundle/SBOM, current updater and rejection tests | Exact owner-approved main producer, private ephemeral runner, GitHub attestation, unique immutable result and independent IVV consumers at all three publication boundaries |
 | `release-manager.yml` | Static release gates, version and signature checks, asset inventory and non-mutating negative tests | Ruleset revalidation, protected dispatch, tag creation, production approval and public Release publication |
 
 ## Candidate-bound Act event

@@ -111,6 +111,9 @@ func attestRuntimeRetirementTreeWithRetention(tree *pinnedSharedRemovalTree, pat
 		name := entry.Name()
 		candidate := filepath.Join(path, name)
 		if !slices.Contains(directories, name) && !slices.Contains(payload, name) && !isRetainedOperatorConfiguration(candidate, retained) {
+			if inactiveLegacyConfigPath(candidate) {
+				return fmt.Errorf("unretired artifact remains at %q; review private archival of this inactive backup with 'sudo syswarden recover-removal --retain-legacy-config' before retrying removal", candidate)
+			}
 			if operatorRetentionPath(candidate) {
 				return fmt.Errorf("unretired artifact remains at %q; review administrator configuration retention with 'sudo syswarden recover-removal --retain-operator-config' before retrying removal", candidate)
 			}

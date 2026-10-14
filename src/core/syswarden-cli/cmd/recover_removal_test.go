@@ -235,3 +235,51 @@ func TestRecoverRemovalFail2banPersistenceRequiresSeparateBoundedReview(t *testi
 		t.Fatal("failed preparation was not propagated at the exact boundary", err, order)
 	}
 }
+
+func TestRecoverRemovalLegacyConfigRequiresExplicitReview(t *testing.T) {
+	oldInspect, oldApply := inspectLegacyConfigRetention, applyLegacyConfigRetention
+	t.Cleanup(func() { inspectLegacyConfigRetention, applyLegacyConfigRetention = oldInspect, oldApply })
+	plan := system.LegacyLogRetentionPlan{Schema: "syswarden-inactive-legacy-config-retention-v1", Directory: "/opt/syswarden"}
+	digest, err := system.LegacyLogRetentionPlanSHA256(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspections, applications := 0, 0
+	inspectLegacyConfigRetention = func() (system.LegacyLogRetentionPlan, error) { inspections++; return plan, nil }
+	applyLegacyConfigRetention = func(expected string) (system.LegacyLogRetentionPlan, string, error) {
+		applications++
+		if expected != digest {
+			return plan, "", errors.New("changed digest")
+		}
+		return plan, "/var/backups/syswarden-retired-v1/legacy-config-fixture", nil
+	}
+	run := func(args ...string) (string, error) {
+		output := &bytes.Buffer{}
+		command := newRecoverRemovalCommand()
+		command.SetArgs(args)
+		command.SetOut(output)
+		command.SetErr(output)
+		err := command.Execute()
+		return output.String(), err
+	}
+	for _, args := range [][]string{{"--retain-legacy-config", "--retain-operator-config"}, {"--retain-legacy-config", "--apply"}, {"--retain-legacy-config", "--plan-sha256", digest}, {"--retain-legacy-config", "--file-plan-sha256", digest}} {
+		if _, err := run(args...); err == nil {
+			t.Fatal("incomplete or ambiguous review accepted", args)
+		}
+	}
+	if inspections != 0 || applications != 0 {
+		t.Fatal("invalid request reached host operations")
+	}
+	output, err := run("--retain-legacy-config")
+	if err != nil || inspections != 1 || applications != 0 {
+		t.Fatal("dry run mutated host", err)
+	}
+	for _, expected := range []string{digest, "inactive legacy configuration backup", "no other consumer or producer", "without deleting its bytes", "Active configuration remains untouched"} {
+		if !strings.Contains(output, expected) {
+			t.Fatal("review omitted a material effect", expected)
+		}
+	}
+	if _, err := run("--retain-legacy-config", "--apply", "--plan-sha256", digest); err != nil || applications != 1 {
+		t.Fatal("exact reviewed plan not delegated once", err)
+	}
+}

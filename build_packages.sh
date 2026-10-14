@@ -932,6 +932,7 @@ if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1"
             syswarden_refuse_mounted_path_tree "${syswarden_purge_root}" || exit 1
         done
         syswarden_attest_removal_marker "${syswarden_active_barrier}" || exit 1
+        syswarden_remove_dedicated_root /opt/syswarden/bin || exit 1
         syswarden_remove_dedicated_root /opt/syswarden || exit 1
         syswarden_finalize_retained_operator_configuration || exit 1
         syswarden_remove_dedicated_root /var/log/syswarden || exit 1

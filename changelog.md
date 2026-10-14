@@ -5,10 +5,51 @@
 
 ### FIXED
 
+- **Removal after dependency cleanup:** Resume orphaned WireGuard retirement
+  when a refused native erase has already removed `wireguard-tools`. Require
+  independent, repeated proof that the systemd unit and kernel interface are
+  absent. Preserve all ownership checks and refuse active, ambiguous or changed
+  state without relying on a missing command as evidence of absence.
+- **Optional RPM runtime removal:** Permit the documented runtime-only
+  `uninstall` phase only for a fully attested package-owned profile. Preserve
+  the installed binaries and completion file for the native manager. Resume
+  exact runtime directory archival under the durable removal barrier, restore
+  the empty RPM directory skeleton independently of the caller's umask, and
+  reject changed payloads, linked paths or unexpected directory contents.
+- **Optional RPM administrator configuration:** Carry explicit configuration
+  retention through runtime preparation, native erase and interrupted POSTUN
+  recovery. Preserve approved TOML files and subsequent administrator edits.
+  Share the standard package retention parser, keep scriptlets free of product
+  binary execution, and retain recovery evidence on any unreviewed residue.
+- **Inactive legacy configuration retention:** Add exact, operator-reviewed
+  private archival of migration backups that otherwise block native erase.
+  Preserve original bytes and inodes, keep active administrator configuration
+  untouched, resume verified interrupted moves and reject changed evidence.
+  Maintain the final removal barrier until every remaining artifact has a
+  separate verified outcome.
+- **Native removal on RHEL-family hosts:** Recognize the standard nftables
+  loader's exact reload form and pinned executable path. Create a missing
+  recovery-backup parent through its trusted parent descriptor without
+  changing existing shared storage. Retire only the exact empty compatibility
+  receipt after its permissions have been reconciled. Finalize an empty binary
+  directory left by the native manager before removing its product parent;
+  preserve unexpected entries and the removal barrier on refusal.
+- **Bounded firewall retirement:** Synchronize the kernel removal intent before
+  opening the short-lived generation fence. Recheck live ownership, producer
+  state and the exact durable intent without extending the timeout or weakening
+  protection against concurrent changes.
+- **Generated feed retirement:** Bind newly published feed artifacts to their
+  inode, creation time and content. Preserve that authority only across proven
+  writer replacements. Retain old unmarked generations until the operator
+  approves their exact private backup; never infer ownership from a filename.
+  Keep publication and retirement size and generation limits consistent.
 - **Release toolchain security:** Require Go 1.26.9 for production builds and
   package provenance, including its October 2026 standard-library security
   fixes. Preserve historical compiler evidence and reject older or unreviewed
   compiler versions for new packages.
+- **Network dependency security:** Update the core's indirect `golang.org/x/net`
+  dependency to v0.60.0 for the upstream HTTP/2 security fixes, including
+  CVE-2026-78669. Include its required `x/sync` and `x/text` dependency updates.
 - **Feed availability reporting:** Remove the unused provider-homepage latency
   probe from installation. A redirect from a hosting homepage no longer prints
   a misleading feed failure. Actual HTTPS feed downloads, independent-source

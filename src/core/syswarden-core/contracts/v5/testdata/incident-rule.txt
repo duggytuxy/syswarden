@@ -1,0 +1,1 @@
+Inert fixture definition: retain an explicit association; do not infer causality.
