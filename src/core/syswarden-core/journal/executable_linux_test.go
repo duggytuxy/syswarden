@@ -2,6 +2,7 @@ package journal
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	elfbinary "encoding/binary"
 	"encoding/hex"
@@ -50,6 +51,7 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	policy := testCustodyPolicy()
 	policy.NotBefore, policy.NotAfter = time.Now().Add(-time.Minute).Unix(), time.Now().Add(time.Hour).Unix()
 	t.Run("executable-snapshot", testAuthorityExecutableSnapshot)
+	t.Run("readiness-monitor", testAuthorityReadinessMonitor)
 	t.Run("elf-actual-profiles", func(t *testing.T) { testActualAuthorityELF(t, binary) })
 	c, next := provisionProcessFixture(t, policy)
 	t.Run("launch-bundle", func(t *testing.T) { testAuthorityLaunchBundle(t, readFile(t, c.LaunchPath)) })
@@ -72,6 +74,50 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 			p.start(t)
 			p.exit(t, 1)
 			p.noReadiness(t)
+			requireAdversarialSnapshot(t, before, c.Paths)
+			requireExecutableCleanup(t, c)
+		})
+	}
+	for _, kind := range []string{"supervisor-disconnected", "supervisor-full"} {
+		t.Run(kind, func(t *testing.T) {
+			p := executableCommand(t, binary, c, "")
+			queued := 0
+			if kind == "supervisor-disconnected" {
+				if err := p.reader.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				raw, err := p.writer.SyscallConn()
+				if err != nil {
+					t.Fatal(err)
+				}
+				full := false
+				if err := raw.Control(func(fd uintptr) {
+					var buffer [4096]byte
+					for range 1024 {
+						n, err := unix.Write(int(fd), buffer[:])
+						if errors.Is(err, unix.EAGAIN) {
+							full = true
+							break
+						}
+						if err != nil || n != len(buffer) {
+							t.Error("cannot fill test pipe", err)
+							break
+						}
+						queued += n
+					}
+				}); err != nil || !full {
+					t.Fatal("bounded pipe fill failed", err)
+				}
+			}
+			p.start(t)
+			p.exit(t, 1)
+			if kind == "supervisor-full" {
+				data, err := io.ReadAll(io.LimitReader(p.reader, int64(queued)+1))
+				if err != nil || len(data) != queued || bytes.Count(data, []byte{0}) != queued {
+					t.Fatal("failed startup emitted readiness", err)
+				}
+			}
 			requireAdversarialSnapshot(t, before, c.Paths)
 			requireExecutableCleanup(t, c)
 		})
@@ -257,6 +303,7 @@ type executableProcess struct {
 	output         bytes.Buffer
 	done           chan error
 	reader, writer *os.File
+	readiness      *AuthorityReadinessChannel
 	finished       bool
 }
 
@@ -311,8 +358,13 @@ func executableCommand(t *testing.T, binary executableImages, c processFixtureCo
 	}
 	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, binary.launch)
 	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, binary.state, binary.endpoint)
-	p.reader, p.writer = readinessPipe(t)
 	var err error
+	p.readiness, err = NewAuthorityReadinessChannel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.readiness.Close() })
+	p.reader, p.writer = p.readiness.reader, p.readiness.Writer()
 	p.canary, err = os.CreateTemp(t.TempDir(), "inherited-canary")
 	if err != nil {
 		t.Fatal(err)
@@ -402,15 +454,15 @@ func (p *executableProcess) start(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { p.done <- p.cmd.Wait() }()
-	_ = p.writer.Close()
+	if err := p.readiness.CloseWriter(); err != nil {
+		t.Fatal(err)
+	}
 }
 func (p *executableProcess) ready(t *testing.T) {
 	t.Helper()
-	if err := p.reader.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	var data [1]byte
-	if _, err := io.ReadFull(p.reader, data[:]); err != nil || data[0] != 'R' {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.readiness.Wait(ctx); err != nil {
 		t.Fatal("executable readiness missing", err)
 	}
 }

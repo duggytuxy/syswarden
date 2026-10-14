@@ -55,7 +55,7 @@ including silent non-application, inconsistent results and kernel denials. Refus
 must stop immediately; no weaker limit, retry, restoration or fallback is permitted.
 Already exact or larger budgets succeed; insufficient budgets trigger no writes.
 
-The mandatory actual-program campaign now requires 189 cases. Three negative cases
+The mandatory actual-program campaign now requires 212 cases. Three negative cases
 start the real root launcher, non-root bootstrap and direct authority with a verified
 128-descriptor hard ceiling. Each must refuse with no readiness or private-state
 change. A live-process assertion reads exact soft/hard limits from procfs. Normal

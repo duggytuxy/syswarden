@@ -13,7 +13,7 @@ ROOT_TEST = "TestAuthorityExecutableBoundary"
 def required_tests() -> set[str]:
     cases = {ROOT_TEST} | {f"{ROOT_TEST}/{name}" for name in (
         "elf-actual-profiles", "launcher-elf-script", "launcher-elf-machine", "launcher-elf-writable-code", "launcher-elf-stack", "launcher-elf-table", "launcher-elf-entry", "launcher-elf-interpreter", "bootstrap-elf-script",
-        "resource-limits", "launcher-low-descriptor-limit", "bootstrap-low-descriptor-limit", "direct-low-descriptor-limit",
+        "supervisor-disconnected", "supervisor-full", "resource-limits", "launcher-low-descriptor-limit", "bootstrap-low-descriptor-limit", "direct-low-descriptor-limit",
         "bootstrap-lifecycle", "launcher-bounding-set", "verified-launcher", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image",
         "verified-bootstrap", "bootstrap-inheritance", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root",
         "verified-binary", "missing-descriptors", "wrong-digest", "wrong-identity",
@@ -55,6 +55,9 @@ def required_tests() -> set[str]:
     cases.add(f"{ROOT_TEST}/prepared-bundle")
     for name in ("valid-held", "nil-inputs", "nil-state", "nil-endpoint", "closed-inputs", "closed-state", "closed-endpoint", "wrong-launch-digest", "wrong-image-digest", "invalid-image", "state-owner", "endpoint-owner", "state-missing", "endpoint-missing", "swapped-parents", "repeated-runtime-refusal"):
         cases.add(f"{ROOT_TEST}/launch-bundle/{name}")
+    cases.add(f"{ROOT_TEST}/readiness-monitor")
+    for name in ("ready", "ready-then-eof", "eof", "wrong-byte", "extra-byte", "canceled", "deadline", "nil-context", "nil-channel", "zero-channel", "closed-channel", "closed-reader", "blocking-reader", "writer-as-reader", "regular-reader", "unsealed-reader", "second-wait", "close-failure", "earlier-close-failure", "cancel-during-wait"):
+        cases.add(f"{ROOT_TEST}/readiness-monitor/{name}")
     return cases
 
 

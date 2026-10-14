@@ -63,7 +63,7 @@ provide human MFA, install MAC/seccomp policy or supply service-manager supervis
 
 ## Verification
 
-The mandatory real-program campaign contains 189 cases. Twenty-six input cases
+The mandatory real-program campaign contains 212 cases. Twenty-six input cases
 exercise held handles, malformed or missing records, metadata/ACL failures,
 symlinks, hardlinks, FIFOs, wrong digests, malformed ELF and changed names.
 The fixture prepares the real image and launch record with this API, replaces
