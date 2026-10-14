@@ -5,6 +5,10 @@ existing [local server](LOCAL_AUTHORITY_SERVER.md) from a fixed private storage
 layout and a separate client-reachable endpoint directory. No package or command
 activates it. Stable remains v4.10.4. Refs #224, #225 and #337, all partial.
 
+The [protected launch record](AUTHORITY_LAUNCH.md) supplies these explicit trust and
+limit values from an independently pinned root-owned descriptor, with a matching
+effective service identity. It retains the directory contract below.
+
 ## Explicit trusted inputs
 
 A trusted service launcher supplies one open state-directory descriptor and the
@@ -94,7 +98,7 @@ children, root/child ACLs, conflicting configuration, wrong independent trust an
 pre-existing lifecycle evidence. A replaced child is refused before serving, and a
 deterministically blocked approved operation retains the root lease through drain.
 
-The mandatory 113-case [ordinary-user gate](UNPRIVILEGED_ASSURANCE.md) now uses this
+The mandatory 132-case [ordinary-user gate](UNPRIVILEGED_ASSURANCE.md) now uses this
 entry point for its existing non-root service process. The fixture supplies the
 literal fixed layout, independent synthetic trust and a separate endpoint. Both
 client identities are denied root-directory listing and permission changes; private

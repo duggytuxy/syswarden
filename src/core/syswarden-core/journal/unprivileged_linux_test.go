@@ -30,6 +30,7 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Fatal("cross-UID gate requires a root identity inside its test environment")
 	}
+	t.Run("launch-configuration", testAuthorityLaunchProtectedFile)
 	f := authorityFixture(t)
 	f.config.PolicyAdministrator = nil
 	a := openAuthority(t, f.config)

@@ -40,6 +40,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 27. [Authenticated local authority client](LOCAL_AUTHORITY_CLIENT.md).
 28. [Reviewed stale endpoint recovery](ENDPOINT_RECOVERY.md).
 29. [Startup from protected authority directories](PROVISIONED_AUTHORITY.md).
+30. [Protected local authority launch configuration](AUTHORITY_LAUNCH.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -130,6 +131,10 @@ Protected-layout startup now connects the actual server to five fixed private
 directories, retains their root lease through drain and rejects replaced children.
 The existing non-root service-process tests use this entry point through commit,
 restart and reviewed endpoint recovery.
+A bounded root-owned launch record now carries the independently pinned trust,
+enrollment, service identity and explicit limits into the actual server. The
+non-root process fixture uses its read-only descriptor; the mandatory gate includes
+132 cases with protected-file and identity refusals.
 Ambiguous or partial endpoint state and deployed recovery providers remain open.
 These components and tests supply no identity
 provider or installed OS-isolated service.
