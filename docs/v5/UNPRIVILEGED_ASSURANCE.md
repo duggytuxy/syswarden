@@ -269,3 +269,10 @@ The [process entry point](AUTHORITY_PROCESS.md) shares its startup/readiness/dra
 runner with the existing non-root service fixture. The gate stays at 132 cases
 with no additional child processes or timeout change. Standalone executable
 installation and native service-manager signal handling remain outside this proof.
+
+The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
+separate mandatory 21-case campaign against the actual built authority binary,
+with exact-byte binding, kernel identity observations, separate client operations,
+direct signal shutdown, crash preservation and stale restart refusal. The existing
+132-case gate remains unchanged. This is component evidence, not installed-service
+isolation or native acceptance. Stable remains v4.10.4 and BunkerWeb is independent.

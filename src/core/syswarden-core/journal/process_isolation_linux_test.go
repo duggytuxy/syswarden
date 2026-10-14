@@ -161,9 +161,8 @@ func runProcessClient(t *testing.T, mode string, c processFixtureConfig, uid uin
 	p.wait(t)
 }
 
-func testAuthorityProcessBoundary(t *testing.T) {
+func provisionProcessFixture(t *testing.T, policy CustodyAccessPolicy) (processFixtureConfig, contracts.JournalCheckpointAnchor) {
 	t.Helper()
-	policy := testCustodyPolicy()
 	policy.Grants = []CustodyLocalGrant{{UID: processClientID, Operations: []CustodyOperation{CustodyCommit, CustodyResume}}}
 	policies, _, policyPath, root := policyFixture(t, policy)
 	custody, _, custodyPath := localCustodyFixture(t, nil)
@@ -244,6 +243,12 @@ func testAuthorityProcessBoundary(t *testing.T) {
 	}
 	protectedLaunch := endpointRecoverySnapshot(t, []string{launchPath, c.LaunchPath})
 	t.Cleanup(func() { requireEndpointRecoverySnapshot(t, protectedLaunch, []string{launchPath, c.LaunchPath}) })
+	return c, f.next
+}
+
+func testAuthorityProcessBoundary(t *testing.T) {
+	c, next := provisionProcessFixture(t, testCustodyPolicy())
+	endpoint := c.Endpoint
 	before := adversarialSnapshot(t, c.Paths)
 	protectedRoot := endpointRecoverySnapshot(t, []string{c.StateDirectory})
 	var server *authorityTestProcess
@@ -275,7 +280,7 @@ func testAuthorityProcessBoundary(t *testing.T) {
 			requireAdversarialSnapshot(t, before, c.Paths)
 		})
 	}
-	c.Expected = f.next
+	c.Expected = next
 	t.Run("process-client-commit", func(t *testing.T) { runProcessClient(t, "commit", c, processClientID) })
 	after := adversarialSnapshot(t, c.Paths)
 	if reflect.DeepEqual(before, after) {
