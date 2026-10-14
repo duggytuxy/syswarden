@@ -40,6 +40,16 @@ def required_tests() -> set[str]:
         cases.add(f"{ROOT_TEST}/launch-snapshot/{name}")
     for name in ("launcher-unsealed-launch", "launcher-executable-launch", "bootstrap-unsealed-launch", "bootstrap-executable-launch"):
         cases.add(f"{ROOT_TEST}/{name}")
+    cases.add(f"{ROOT_TEST}/runtime-inputs")
+    cases.add(f"{ROOT_TEST}/prepared-runtime")
+    for name in ("valid-held", "entry-replacement", "nil-state-parent", "nil-endpoint-parent", "closed-state-parent", "closed-endpoint-parent", "path-state-parent", "path-endpoint-parent", "swapped-parents", "same-parents", "nil-launch", "closed-launch", "wrong-launch-digest"):
+        cases.add(f"{ROOT_TEST}/runtime-inputs/{name}")
+    for target in ("state-parent", "endpoint-parent", "state", "endpoint"):
+        for mutation in ("owner", "group", "mode", "acl", "default-acl"):
+            cases.add(f"{ROOT_TEST}/runtime-inputs/{target}-{mutation}")
+    for target in ("state", "endpoint"):
+        for mutation in ("symlink", "fifo", "file", "missing"):
+            cases.add(f"{ROOT_TEST}/runtime-inputs/{target}-{mutation}")
     return cases
 
 

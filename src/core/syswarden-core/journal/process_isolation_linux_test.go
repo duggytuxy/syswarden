@@ -38,6 +38,7 @@ type processFixtureConfig struct {
 	RecoverEndpoint          bool
 	PinDirectory             string
 	StateDirectory           string
+	PrivateStateParent       bool
 }
 
 type authorityTestProcess struct {
@@ -503,7 +504,11 @@ func processClientChild(t *testing.T, c processFixtureConfig, mode string) {
 		if _, err := os.ReadDir(c.StateDirectory); !errors.Is(err, unix.EACCES) {
 			t.Fatal("ordinary user listed the provisioning root", err)
 		}
-		if err := unix.Chmod(c.StateDirectory, 0777); !errors.Is(err, unix.EPERM) {
+		wantChmodDenial := unix.EPERM
+		if c.PrivateStateParent {
+			wantChmodDenial = unix.EACCES
+		}
+		if err := unix.Chmod(c.StateDirectory, 0777); !errors.Is(err, wantChmodDenial) {
 			t.Fatal("ordinary user changed the provisioning root", err)
 		}
 		_, checkpoint := checkpointNames(testName)

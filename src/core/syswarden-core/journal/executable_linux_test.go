@@ -52,9 +52,13 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	t.Run("executable-snapshot", testAuthorityExecutableSnapshot)
 	t.Run("elf-actual-profiles", func(t *testing.T) { testActualAuthorityELF(t, binary) })
 	c, next := provisionProcessFixture(t, policy)
+	t.Run("runtime-inputs", func(t *testing.T) { testAuthorityRuntimeInputs(t, readFile(t, c.LaunchPath)) })
 	t.Run("launch-snapshot", func(t *testing.T) { testAuthorityLaunchSnapshot(t, readFile(t, c.LaunchPath)) })
 	t.Run("launch-inputs", func(t *testing.T) { testAuthorityLaunchInputs(t, readFile(t, c.LaunchPath)) })
 	if !t.Run("prepared-inputs", func(child *testing.T) { prepareActualAuthorityInputs(child, t, &binary, c) }) {
+		return
+	}
+	if !t.Run("prepared-runtime", func(child *testing.T) { prepareActualAuthorityRuntimeInputs(child, t, &binary, &c) }) {
 		return
 	}
 	before := adversarialSnapshot(t, c.Paths)
@@ -238,6 +242,7 @@ func authorityExecutableFixture(t, owner *testing.T, prefix string) *os.File {
 
 type executableImages struct {
 	authority, bootstrap, launcher, launch *os.File
+	state, endpoint                        *os.File
 	digest                                 string
 }
 
@@ -300,18 +305,7 @@ func executableCommand(t *testing.T, binary executableImages, c processFixtureCo
 		p.cmd.SysProcAttr.AmbientCaps = []uintptr{unix.CAP_NET_BIND_SERVICE}
 	}
 	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, binary.launch)
-	for _, path := range []string{c.StateDirectory, c.Endpoint} {
-		root, err := os.OpenRoot(filepath.Dir(path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		file, err := root.Open(filepath.Base(path))
-		if err := errors.Join(err, root.Close()); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = file.Close() })
-		p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, file)
-	}
+	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, binary.state, binary.endpoint)
 	p.reader, p.writer = readinessPipe(t)
 	var err error
 	p.canary, err = os.CreateTemp(t.TempDir(), "inherited-canary")
