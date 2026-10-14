@@ -7,6 +7,11 @@ it. The current stable release remains v4.10.4. Refs #225 and #224, both partial
 
 ## Startup ownership
 
+The [protected-layout server entry point](PROVISIONED_AUTHORITY.md) now supplies
+these descriptors from five fixed private children, including endpoint-pin storage.
+It still requires independent trust and enrollment from the launcher. Direct
+authority construction follows the explicit descriptor contract below.
+
 A trusted supervisor supplies four distinct, already provisioned private directory
 descriptors: policy, restart custody, continuity anchor and published journal.
 It also supplies an independent signed-policy root, explicit journal enrollment,

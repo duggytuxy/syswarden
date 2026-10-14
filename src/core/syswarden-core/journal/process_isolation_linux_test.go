@@ -36,6 +36,7 @@ type processFixtureConfig struct {
 	ExpectStaleEndpoint bool
 	RecoverEndpoint     bool
 	PinDirectory        string
+	StateDirectory      string
 }
 
 type authorityTestProcess struct {
@@ -204,7 +205,30 @@ func testAuthorityProcessBoundary(t *testing.T) {
 	if err := os.Chown(c.PinDirectory, processServiceID, processServiceID); err != nil {
 		t.Fatal(err)
 	}
+	_, c.StateDirectory = testDirectory(t)
+	if err := chmodFixture(filepath.Dir(c.StateDirectory), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(c.StateDirectory, processServiceID, processServiceID); err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range []string{"policy", "custody", "anchors", "journal", "endpoint-pin"} {
+		old := c.PinDirectory
+		if i < len(c.Paths) {
+			old = c.Paths[i]
+		}
+		path := filepath.Join(c.StateDirectory, name)
+		if err := os.Rename(old, path); err != nil {
+			t.Fatal(err)
+		}
+		if i < len(c.Paths) {
+			c.Paths[i] = path
+		} else {
+			c.PinDirectory = path
+		}
+	}
 	before := adversarialSnapshot(t, c.Paths)
+	protectedRoot := endpointRecoverySnapshot(t, []string{c.StateDirectory})
 	var server *authorityTestProcess
 	if !t.Run("process-service-start", func(child *testing.T) { server = startProcessService(child, t, c) }) {
 		return
@@ -223,6 +247,7 @@ func testAuthorityProcessBoundary(t *testing.T) {
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			runProcessClient(t, item.mode, c, item.uid)
+			requireEndpointRecoverySnapshot(t, protectedRoot, []string{c.StateDirectory})
 			requireAdversarialSnapshot(t, protectedPin, []string{c.PinDirectory})
 			requireAdversarialSnapshot(t, before, c.Paths)
 		})
@@ -359,7 +384,7 @@ func TestAuthorityProcessChild(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, path := range c.Paths {
+		for _, path := range append(append([]string{}, c.Paths...), c.StateDirectory, c.PinDirectory) {
 			if target == path || strings.HasPrefix(target, path+"/") {
 				t.Fatal("inherited private storage descriptor")
 			}
@@ -374,8 +399,8 @@ func TestAuthorityProcessChild(t *testing.T) {
 }
 func processServiceChild(t *testing.T, c processFixtureConfig) {
 	t.Helper()
-	dirs := make([]*os.File, 0, 6)
-	for _, path := range append(append([]string{}, c.Paths...), c.Endpoint, c.PinDirectory) {
+	dirs := make([]*os.File, 0, 2)
+	for _, path := range []string{c.StateDirectory, c.Endpoint} {
 		dir, err := openFixtureDirectory(path)
 		if err != nil {
 			t.Fatal(err)
@@ -383,12 +408,17 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 		defer func() { _ = dir.Close() }()
 		dirs = append(dirs, dir)
 	}
-	config := LocalAuthorityConfig{PolicyDirectory: dirs[0], CustodyDirectory: dirs[1], AnchorDirectory: dirs[2], JournalDirectory: dirs[3], PolicyRoot: c.Root, Enrollment: testEnrollment(), Limits: testLimits(), Now: func() time.Time { return policyNow(testCustodyPolicy()) }}
+	config := LocalAuthorityConfig{PolicyRoot: c.Root, Enrollment: testEnrollment(), Limits: testLimits(), Now: func() time.Time { return policyNow(testCustodyPolicy()) }}
 	if c.RecoverEndpoint && !c.ExpectStaleEndpoint {
 		// The new process reads the creator's durable private pin after exit.
 		// The synthetic callback models supervisor approval, not human MFA.
 		peer, _ := custodySocketPair(t, unix.SOCK_STREAM)
-		recovery := EndpointRecoveryConfig{Directory: dirs[4], GroupID: processClientID, PinDirectory: dirs[5], Peer: peer, Now: config.Now,
+		pin, err := openFixtureDirectory(c.PinDirectory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = pin.Close() }()
+		recovery := EndpointRecoveryConfig{Directory: dirs[1], GroupID: processClientID, PinDirectory: pin, Peer: peer, Now: config.Now,
 			Authorizer: endpointTestAuthorizer(func(r EndpointRecoveryRequest) (EndpointRecoveryDecision, error) { return endpointTestDecision(r), nil }),
 		}
 		plan := endpointPlan(t, recovery)
@@ -396,7 +426,7 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 			t.Fatal("reviewed non-root recovery failed", err)
 		}
 	}
-	server, err := OpenLocalAuthorityServer(AuthorityServerConfig{Authority: config, Transport: testTransportLimits(), Directory: dirs[4], PinDirectory: dirs[5], GroupID: processClientID, AcceptInterval: MinAuthorityAcceptInterval})
+	server, err := OpenProvisionedAuthorityServer(dirs[0], AuthorityServerConfig{Authority: config, Transport: testTransportLimits(), Directory: dirs[1], GroupID: processClientID, AcceptInterval: MinAuthorityAcceptInterval})
 	if c.ExpectStaleEndpoint {
 		if server != nil || !errors.Is(err, ErrAuthorityEndpoint) {
 			t.Fatal("fresh service did not preserve stale endpoint", err)
@@ -422,6 +452,12 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 func processClientChild(t *testing.T, c processFixtureConfig, mode string) {
 	t.Helper()
 	if mode == "private-storage" {
+		if _, err := os.ReadDir(c.StateDirectory); !errors.Is(err, unix.EACCES) {
+			t.Fatal("ordinary user listed the provisioning root", err)
+		}
+		if err := unix.Chmod(c.StateDirectory, 0777); !errors.Is(err, unix.EPERM) {
+			t.Fatal("ordinary user changed the provisioning root", err)
+		}
 		_, checkpoint := checkpointNames(testName)
 		paths := []string{filepath.Join(c.Paths[0], policyFileName), filepath.Join(c.Paths[1], custodyFileName), filepath.Join(c.Paths[2], anchorName), filepath.Join(c.Paths[3], testName), filepath.Join(c.Paths[3], checkpoint), filepath.Join(c.PinDirectory, AuthorityEndpointPinName)}
 		for _, path := range paths {
