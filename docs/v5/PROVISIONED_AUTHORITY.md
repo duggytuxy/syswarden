@@ -8,7 +8,9 @@ layout. Stable remains v4.10.4. Refs #224, #225 and #337, all partial.
 
 The [protected launch record](AUTHORITY_LAUNCH.md) supplies these explicit trust and
 limit values from an independently pinned root-owned descriptor, with a matching
-effective service identity. It retains the directory contract below.
+effective service identity. It retains the directory contract below. A privileged
+caller may obtain the two descriptors through [protected runtime acquisition](AUTHORITY_RUNTIME_INPUTS.md)
+before the credential transition. That helper does not create this layout.
 
 ## Explicit trusted inputs
 
