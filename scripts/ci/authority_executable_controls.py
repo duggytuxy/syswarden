@@ -58,6 +58,9 @@ def required_tests() -> set[str]:
     cases.add(f"{ROOT_TEST}/readiness-monitor")
     for name in ("ready", "ready-then-eof", "eof", "wrong-byte", "extra-byte", "canceled", "deadline", "nil-context", "nil-channel", "zero-channel", "closed-channel", "closed-reader", "blocking-reader", "writer-as-reader", "regular-reader", "unsealed-reader", "second-wait", "close-failure", "earlier-close-failure", "cancel-during-wait"):
         cases.add(f"{ROOT_TEST}/readiness-monitor/{name}")
+    cases.add(f"{ROOT_TEST}/child-supervision")
+    for name in ("nil-bundle", "missing-launch", "closed-launcher", "wrong-launch-digest", "wrong-image-digest", "wrong-launcher-digest", "uppercase-launcher-digest", "swapped-directories", "same-directories", "read-only-null", "regular-null", "named-launch", "creation-failure", "post-creation-failure", "lifecycle", "independent-handoff", "concurrent-observation", "startup-failure"):
+        cases.add(f"{ROOT_TEST}/child-supervision/{name}")
     return cases
 
 
