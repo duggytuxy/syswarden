@@ -7,7 +7,8 @@ open. No installed service, native package or current v4 integration calls this 
 
 `StartAuthorityChild` consumes a borrowed `AuthorityLaunchBundle`, a separately
 approved sealed launcher image and three independently approved SHA-256 digests.
-The caller also holds a read/write Linux null-device descriptor for standard input,
+The [complete supervisor acquisition API](AUTHORITY_SUPERVISOR_BUNDLE.md) can
+supply the bundle and launcher together. The caller also holds a read/write Linux null-device descriptor for standard input,
 output and error. It must serialize handoff against input modification or closure.
 The API discovers no trusted path, account, dependency, signer or human approval.
 
@@ -57,7 +58,7 @@ shutdown policy and endpoint recovery authorization remain separate work.
 
 ## Verification and remaining scope
 
-The mandatory actual-program campaign requires 231 cases, normally and with race
+The mandatory actual-program campaign requires 258 cases, normally and with race
 instrumentation. New cases cover invalid input admission, repeated failed creation
 without descriptor leaks, retained ownership after a post-creation failure,
 actual launch/readiness/client access/SIGTERM/reap,

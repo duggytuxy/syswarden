@@ -15,25 +15,27 @@ import (
 )
 
 func TestAuthorityInputResolution(t *testing.T) {
-	for _, denial := range []error{nil, unix.ENOSYS, unix.EINVAL, unix.EPERM, unix.EXDEV, unix.ELOOP, unix.EAGAIN} {
-		calls := 0
-		fd, err := openAuthorityInputFD(42, "launch.json", func(dir int, name string, how *unix.OpenHow) (int, error) {
-			calls++
-			if dir != 42 || name != "launch.json" || how.Mode != 0 ||
-				how.Flags != unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY ||
-				how.Resolve != unix.RESOLVE_BENEATH|unix.RESOLVE_NO_SYMLINKS|unix.RESOLVE_NO_MAGICLINKS|unix.RESOLVE_NO_XDEV {
-				t.Fatal("weakened input resolution")
+	for _, approved := range []string{"launch.json", "syswarden-authority", authorityLauncherInputName} {
+		for _, denial := range []error{nil, unix.ENOSYS, unix.EINVAL, unix.EPERM, unix.EXDEV, unix.ELOOP, unix.EAGAIN} {
+			calls := 0
+			fd, err := openAuthorityInputFD(42, approved, func(dir int, name string, how *unix.OpenHow) (int, error) {
+				calls++
+				if dir != 42 || name != approved || how.Mode != 0 ||
+					how.Flags != unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY ||
+					how.Resolve != unix.RESOLVE_BENEATH|unix.RESOLVE_NO_SYMLINKS|unix.RESOLVE_NO_MAGICLINKS|unix.RESOLVE_NO_XDEV {
+					t.Fatal("weakened input resolution")
+				}
+				if denial != nil {
+					return -1, denial
+				}
+				return 43, nil
+			})
+			if calls != 1 || !errors.Is(err, denial) || (denial == nil && fd != 43) || (denial != nil && fd != -1) {
+				t.Fatal("unexpected retry or fallback", fd, err)
 			}
-			if denial != nil {
-				return -1, denial
-			}
-			return 43, nil
-		})
-		if calls != 1 || !errors.Is(err, denial) || (denial == nil && fd != 43) || (denial != nil && fd != -1) {
-			t.Fatal("unexpected retry or fallback", fd, err)
 		}
 	}
-	for _, name := range []string{"", ".", "..", "../launch.json", "/launch.json", "sub/launch.json", "other"} {
+	for _, name := range []string{"", ".", "..", "../launch.json", "/launch.json", "sub/launch.json", "other", "../syswarden-authority-launch", "/syswarden-authority-launch", "syswarden-authority-launch.old"} {
 		if _, err := openAuthorityInputFD(42, name, func(int, string, *unix.OpenHow) (int, error) {
 			t.Fatal("unapproved name opened")
 			return -1, nil

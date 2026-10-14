@@ -41,7 +41,7 @@ not enforcement against future changes or a complete OS sandbox policy.
 
 ## Required cases
 
-The separate verifier requires all 231 named cases and the enclosing successful
+The separate verifier requires all 258 named cases and the enclosing successful
 suite. It rejects missing, duplicate, skipped, failed, truncated, oversized or
 unexpected results. A successful executable exit alone is insufficient.
 
@@ -118,7 +118,7 @@ to an immutable copy of the approved bytes. The real-binary campaign executes th
 image after replacing the source pathname. Native launch policy remains open.
 
 The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
-actual authenticated image before either exec transition. Its 231-case mandatory
+actual authenticated image before either exec transition. Its 258-case mandatory
 campaign includes correctly hashed malformed images, with no readiness or private
 state changes after refusal. Loader and dependency trust remain separate from
 format admission; no installed service or stable release behavior is changed.
@@ -134,3 +134,12 @@ input handoff, atomic pidfd creation, readiness observation, SIGTERM and bounded
 exit/reap observation. Cancellation retains the child; cleanup cannot claim a
 successful exit or erase retained evidence. It remains inactive and leaves native
 service-manager integration and full v5 acceptance open.
+
+[Complete supervisor input acquisition](AUTHORITY_SUPERVISOR_BUNDLE.md) adds the
+independently approved launcher to the four-resource launch bundle. The five held
+resources remain valid after caller-parent closure and source replacement; late
+or partial acquisition failure releases all acquired handles. Its 25 acquisition
+cases and actual handoff are mandatory within the 258-case executable campaign,
+normally and under race. The independent 132-case cross-UID gate remains required.
+This inactive component neither provisions nor starts an installed service and
+preserves BunkerWeb's independent API and HA behavior.

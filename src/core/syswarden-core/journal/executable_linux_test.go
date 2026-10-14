@@ -54,6 +54,7 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	t.Run("readiness-monitor", testAuthorityReadinessMonitor)
 	t.Run("elf-actual-profiles", func(t *testing.T) { testActualAuthorityELF(t, binary) })
 	c, next := provisionProcessFixture(t, policy)
+	t.Run("supervisor-bundle", func(t *testing.T) { testAuthoritySupervisorBundle(t, readFile(t, c.LaunchPath)) })
 	t.Run("launch-bundle", func(t *testing.T) { testAuthorityLaunchBundle(t, readFile(t, c.LaunchPath)) })
 	t.Run("runtime-inputs", func(t *testing.T) { testAuthorityRuntimeInputs(t, readFile(t, c.LaunchPath)) })
 	t.Run("launch-snapshot", func(t *testing.T) { testAuthorityLaunchSnapshot(t, readFile(t, c.LaunchPath)) })
@@ -65,6 +66,9 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 		return
 	}
 	if !t.Run("prepared-bundle", func(child *testing.T) { prepareActualAuthorityBundle(child, t, &binary, c) }) {
+		return
+	}
+	if !t.Run("prepared-supervisor", func(child *testing.T) { prepareActualAuthoritySupervisorBundle(child, t, &binary, c) }) {
 		return
 	}
 	if !t.Run("child-supervision", func(t *testing.T) { testAuthorityChildSupervision(t, binary, c) }) {

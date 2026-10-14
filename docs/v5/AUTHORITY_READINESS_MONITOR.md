@@ -58,7 +58,7 @@ signals, crash preservation and restart assertions remain. Two new child-process
 cases prove that a disconnected or full supervisor channel fails startup, preserves
 private state and removes only exact startup-owned endpoint artifacts.
 
-The mandatory actual-program campaign requires 231 named cases normally and with
+The mandatory actual-program campaign requires 258 named cases normally and with
 the race detector. Its new monitor cases exercise valid data and EOF, malformed
 bytes, cancellation, deadlines, unavailable or unsafe descriptors, repeated use and
 sticky close failures. Unit fault injection checks syscall failure without fallback,
