@@ -837,31 +837,31 @@ jobs:
           done
 
       - name: Upload gosec SARIF (linux-cli)
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: security-evidence/gosec-linux-cli.sarif
           category: gosec-linux-cli
 
       - name: Upload gosec SARIF (linux-core)
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: security-evidence/gosec-linux-core.sarif
           category: gosec-linux-core
 
       - name: Upload gosec SARIF (linux-tui)
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: security-evidence/gosec-linux-tui.sarif
           category: gosec-linux-tui
 
       - name: Upload gosec SARIF (linux-versionctl)
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: security-evidence/gosec-linux-versionctl.sarif
           category: gosec-linux-versionctl
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: trivy-evidence/trivy-results.sarif
           category: trivy
