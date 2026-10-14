@@ -12,6 +12,7 @@ ROOT_TEST = "TestAuthorityExecutableBoundary"
 
 def required_tests() -> set[str]:
     cases = {ROOT_TEST} | {f"{ROOT_TEST}/{name}" for name in (
+        "elf-actual-profiles", "launcher-elf-script", "launcher-elf-machine", "launcher-elf-writable-code", "launcher-elf-stack", "launcher-elf-table", "launcher-elf-entry", "launcher-elf-interpreter", "bootstrap-elf-script",
         "bootstrap-lifecycle", "launcher-bounding-set", "verified-launcher", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image",
         "verified-bootstrap", "bootstrap-inheritance", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root",
         "verified-binary", "missing-descriptors", "wrong-digest", "wrong-identity",

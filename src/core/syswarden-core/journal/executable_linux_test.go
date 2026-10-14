@@ -3,6 +3,7 @@ package journal
 import (
 	"bytes"
 	"crypto/sha256"
+	elfbinary "encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -49,9 +50,10 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	policy := testCustodyPolicy()
 	policy.NotBefore, policy.NotAfter = time.Now().Add(-time.Minute).Unix(), time.Now().Add(time.Hour).Unix()
 	t.Run("executable-snapshot", testAuthorityExecutableSnapshot)
+	t.Run("elf-actual-profiles", func(t *testing.T) { testActualAuthorityELF(t, binary) })
 	c, next := provisionProcessFixture(t, policy)
 	before := adversarialSnapshot(t, c.Paths)
-	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image"} {
+	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image", "launcher-elf-script", "launcher-elf-machine", "launcher-elf-writable-code", "launcher-elf-stack", "launcher-elf-table", "launcher-elf-entry", "launcher-elf-interpreter", "bootstrap-elf-script"} {
 		t.Run(kind, func(t *testing.T) {
 			p := executableCommand(t, binary, c, kind)
 			p.start(t)
@@ -312,6 +314,40 @@ func executableCommand(t *testing.T, binary executableImages, c processFixtureCo
 	}
 	t.Cleanup(func() { _ = p.canary.Close() })
 	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, p.writer, binary.authority, binary.bootstrap, p.canary, binary.launcher)
+	if strings.Contains(kind, "-elf-") {
+		data := testAuthorityELF(runtime.GOARCH, true)
+		header, record, flagOffset := 64, 56, 4
+		if runtime.GOARCH == "386" {
+			header, record, flagOffset = 52, 32, 24
+		}
+		switch {
+		case strings.HasSuffix(kind, "-script"):
+			copy(data, "#!/bin/sh\n")
+		case strings.HasSuffix(kind, "-machine"):
+			elfbinary.LittleEndian.PutUint16(data[18:], 0)
+		case strings.HasSuffix(kind, "-writable-code"):
+			elfbinary.LittleEndian.PutUint32(data[header+record+flagOffset:], 7)
+		case strings.HasSuffix(kind, "-stack"):
+			elfbinary.LittleEndian.PutUint32(data[header+3*record+flagOffset:], 7)
+		case strings.HasSuffix(kind, "-table"):
+			if runtime.GOARCH == "386" {
+				elfbinary.LittleEndian.PutUint32(data[28:], ^uint32(0))
+			} else {
+				elfbinary.LittleEndian.PutUint64(data[32:], ^uint64(0))
+			}
+		case strings.HasSuffix(kind, "-entry"):
+			if runtime.GOARCH == "386" {
+				elfbinary.LittleEndian.PutUint32(data[24:], 0)
+			} else {
+				elfbinary.LittleEndian.PutUint64(data[24:], 0)
+			}
+		case strings.HasSuffix(kind, "-interpreter"):
+			data[384] = 'x'
+		}
+		p.cmd.ExtraFiles[4] = testAuthorityELFImage(t, data)
+		p.cmd.Args[len(p.cmd.Args)-1] = recoveryDigest(data)
+	}
+
 	switch kind {
 	case "missing-descriptors":
 		p.cmd.ExtraFiles = []*os.File{nil, nil, nil, nil, binary.authority, binary.bootstrap, p.canary, binary.launcher}
