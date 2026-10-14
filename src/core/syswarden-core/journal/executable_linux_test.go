@@ -52,6 +52,10 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	t.Run("executable-snapshot", testAuthorityExecutableSnapshot)
 	t.Run("elf-actual-profiles", func(t *testing.T) { testActualAuthorityELF(t, binary) })
 	c, next := provisionProcessFixture(t, policy)
+	t.Run("launch-inputs", func(t *testing.T) { testAuthorityLaunchInputs(t, readFile(t, c.LaunchPath)) })
+	if !t.Run("prepared-inputs", func(child *testing.T) { prepareActualAuthorityInputs(child, t, &binary, c) }) {
+		return
+	}
 	before := adversarialSnapshot(t, c.Paths)
 	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image", "launcher-elf-script", "launcher-elf-machine", "launcher-elf-writable-code", "launcher-elf-stack", "launcher-elf-table", "launcher-elf-entry", "launcher-elf-interpreter", "bootstrap-elf-script"} {
 		t.Run(kind, func(t *testing.T) {
@@ -232,8 +236,8 @@ func authorityExecutableFixture(t, owner *testing.T, prefix string) *os.File {
 }
 
 type executableImages struct {
-	authority, bootstrap, launcher *os.File
-	digest                         string
+	authority, bootstrap, launcher, launch *os.File
+	digest                                 string
 }
 
 type executableProcess struct {
@@ -294,7 +298,8 @@ func executableCommand(t *testing.T, binary executableImages, c processFixtureCo
 		p.cmd.SysProcAttr.Credential = &syscall.Credential{Uid: 0, Gid: 0, Groups: []uint32{0, processStrangerID}}
 		p.cmd.SysProcAttr.AmbientCaps = []uintptr{unix.CAP_NET_BIND_SERVICE}
 	}
-	for _, path := range []string{c.LaunchPath, c.StateDirectory, c.Endpoint} {
+	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, binary.launch)
+	for _, path := range []string{c.StateDirectory, c.Endpoint} {
 		root, err := os.OpenRoot(filepath.Dir(path))
 		if err != nil {
 			t.Fatal(err)
