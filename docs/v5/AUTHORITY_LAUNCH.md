@@ -1,7 +1,8 @@
 # Protected local authority launch configuration
 
 Status: inactive Linux v5 component, linked to #224, #225 and #337. Stable remains
-v4.10.4. No package, command or installed unit activates this interface.
+v4.10.4. Native packages and installed units do not activate this interface.
+The separate opt-in [process entry point](AUTHORITY_PROCESS.md) consumes it.
 
 ## Independent provisioning
 
@@ -103,7 +104,7 @@ unchanged bytes and metadata. Commit, restart, crash preservation and independen
 reviewed endpoint recovery use the actual startup loader without adding child
 processes or weakening the existing timeout.
 
-This remains component integration. A deployed launcher, trusted provisioning
+This remains component integration. A trusted privileged launcher, provisioning
 workflow, installed OS isolation, real human authentication/MFA, durable approval
 and denial audit, partial-state recovery, key lifecycle and native acceptance still
 require implementation and review. BunkerWeb retains its independent authenticated

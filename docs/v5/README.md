@@ -41,6 +41,7 @@ server campaign, paid resource or public v5 release is authorized by this text.
 28. [Reviewed stale endpoint recovery](ENDPOINT_RECOVERY.md).
 29. [Startup from protected authority directories](PROVISIONED_AUTHORITY.md).
 30. [Protected local authority launch configuration](AUTHORITY_LAUNCH.md).
+31. [Explicit local authority process and draining exit](AUTHORITY_PROCESS.md).
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -135,6 +136,10 @@ A bounded root-owned launch record now carries the independently pinned trust,
 enrollment, service identity and explicit limits into the actual server. The
 non-root process fixture uses its read-only descriptor; the mandatory gate includes
 132 cases with protected-file and identity refusals.
+An opt-in executable now consumes explicitly inherited startup descriptors and a
+pinned launch digest. Its shared process runner provides nonblocking readiness and
+context-driven draining exit, exercised by the existing non-root service fixture.
+It is not installed or activated by packages and supplies no administrative approval.
 Ambiguous or partial endpoint state and deployed recovery providers remain open.
 These components and tests supply no identity
 provider or installed OS-isolated service.

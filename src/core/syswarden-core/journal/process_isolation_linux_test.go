@@ -2,6 +2,7 @@ package journal
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,10 +115,7 @@ func (p *authorityTestProcess) wait(t *testing.T) {
 func startProcessService(t, owner *testing.T, c processFixtureConfig) *authorityTestProcess {
 	t.Helper()
 	p := processCommand(t, owner, "service", c, processServiceID, processServiceID, []uint32{processClientID})
-	readyR, readyW, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+	readyR, readyW := readinessPipe(t)
 	defer func() { _ = readyR.Close(); _ = readyW.Close() }()
 	stopR, stopW, err := os.Pipe()
 	if err != nil {
@@ -456,28 +454,33 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 			t.Fatal("reviewed non-root recovery failed", err)
 		}
 	}
-	server, err := OpenAuthorityFromLaunch(launch, c.LaunchDigest, dirs[0], dirs[1], now, nil, nil)
 	if c.ExpectStaleEndpoint {
+		server, err := OpenAuthorityFromLaunch(launch, c.LaunchDigest, dirs[0], dirs[1], now, nil, nil)
 		if server != nil || !errors.Is(err, ErrAuthorityEndpoint) {
 			t.Fatal("fresh service did not preserve stale endpoint", err)
 		}
 		return
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = server.Close() }()
-	done := runServer(server)
 	ready, stop := os.NewFile(4, "test-readiness"), os.NewFile(5, "test-stop")
 	defer func() { _ = ready.Close(); _ = stop.Close() }()
-	if _, err := ready.Write([]byte{'R'}); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() {
+		var signal [1]byte
+		_, err := io.ReadFull(stop, signal[:])
+		if err == nil && signal[0] != 'S' {
+			err = errors.New("invalid supervisor stop")
+		}
+		stopped <- err
+		cancel()
+	}()
+	if err := RunAuthorityProcess(ctx, AuthorityProcessConfig{Launch: launch, State: dirs[0], Endpoint: dirs[1], Readiness: ready, LaunchSHA256: c.LaunchDigest, Now: now}); err != nil {
 		t.Fatal(err)
 	}
-	var signal [1]byte
-	if _, err := io.ReadFull(stop, signal[:]); err != nil || signal[0] != 'S' {
-		t.Fatal("invalid supervisor stop", err)
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
 	}
-	stopServer(t, server, done)
 }
 func processClientChild(t *testing.T, c processFixtureConfig, mode string) {
 	t.Helper()

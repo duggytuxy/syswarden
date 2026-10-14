@@ -155,6 +155,12 @@ not a financial allocation.
   private-root attacks, commit, restart and reviewed stale-endpoint recovery.
   See [Protected authority layout](PROVISIONED_AUTHORITY.md). Trusted path discovery,
   account creation, installed OS isolation and native acceptance remain open.
+- Explicit authority process: exact startup arguments and descriptor contract,
+  nonblocking readiness, cancelled startup, worker and notification failures,
+  joined shutdown errors and approved writes surviving cancellation. The existing
+  separate-UID fixture uses the shared runner without extra child processes.
+  Installed service and native signal/reboot evidence remain outstanding. See
+  [Authority process](AUTHORITY_PROCESS.md).
 - Protected launch configuration: canonical bounded public trust/enrollment,
   exact service identity and unchanged resource bounds, loaded from an independently
   pinned root-owned read-only descriptor. Mandatory metadata/type/digest and identity

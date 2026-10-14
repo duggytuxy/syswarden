@@ -264,3 +264,8 @@ This work complements the [validation plan](VALIDATION_PLAN.md), the file-integr
 work packages and the [BunkerWeb compatibility contract](BUNKERWEB_COMPATIBILITY.md).
 Keep implementation, CI success, native acceptance and residual risk explicit.
 An open coverage item stays open until the matching behavior and evidence exist.
+
+The [process entry point](AUTHORITY_PROCESS.md) shares its startup/readiness/drain
+runner with the existing non-root service fixture. The gate stays at 132 cases
+with no additional child processes or timeout change. Standalone executable
+installation and native service-manager signal handling remain outside this proof.
