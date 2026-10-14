@@ -64,7 +64,7 @@ without a disk, shell or policy-bypass fallback.
 
 ## Evidence and remaining trust boundary
 
-The required actual-executable campaign now contains 258 cases. It inspects all
+The required actual-executable campaign now contains 276 cases. It inspects all
 three independently authenticated product images, observes whether their layouts
 are static or dynamic, and verifies unchanged offsets. Eight additional startup
 refusals inject correctly hashed sealed scripts or malformed architecture, load,

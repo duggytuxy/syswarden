@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import array
+import fcntl
 import base64
 import hashlib
 import ipaddress
@@ -15,6 +17,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import termios
+import time
 import textwrap
 import unittest
 from dataclasses import replace
@@ -2170,6 +2174,50 @@ class PackageLifecycleLabTests(unittest.TestCase):
                     "RUN systemctl mask ",
                     package_lifecycle_lab.build_containerfile(spec),
                 )
+
+    def test_namespace_hex_prefix_fills_across_fragmented_pipe_reads(self) -> None:
+        first = b"operator\n"
+        second = b"x" * 256
+        probe = (
+            package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
+            + "syswarden_namespace_hex_prefix\n"
+        )
+        read_fd, write_fd = os.pipe()
+        process = None
+        try:
+            process = subprocess.Popen(
+                ["/bin/sh", "-eu", "-c", probe],
+                stdin=read_fd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(os.write(write_fd, first), len(first))
+            deadline = time.monotonic() + 5
+            while True:
+                pending = array.array("i", [0])
+                fcntl.ioctl(read_fd, termios.FIONREAD, pending, True)
+                if pending[0] == 0:
+                    break
+                self.assertLess(time.monotonic(), deadline, "reader did not consume the first fragment")
+                time.sleep(0.001)
+            # The first fragment has been consumed before the second is written.
+            # A single-block dd exits after that short read; byte-counted dd waits.
+            self.assertEqual(os.write(write_fd, second), len(second))
+            os.close(write_fd)
+            write_fd = None
+            output, diagnostic = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0, diagnostic)
+            self.assertEqual(diagnostic, b"")
+            self.assertEqual(output, (first + second)[:256].hex().encode())
+            self.assertEqual(len(output), 512)
+        finally:
+            if write_fd is not None:
+                os.close(write_fd)
+            os.close(read_fd)
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=5)
 
     def test_namespace_failure_record_is_numbered_hex_and_injection_safe(
         self,

@@ -58,7 +58,7 @@ shutdown policy and endpoint recovery authorization remain separate work.
 
 ## Verification and remaining scope
 
-The mandatory actual-program campaign requires 258 cases, normally and with race
+The mandatory actual-program campaign requires 276 cases, normally and with race
 instrumentation. New cases cover invalid input admission, repeated failed creation
 without descriptor leaks, retained ownership after a post-creation failure,
 actual launch/readiness/client access/SIGTERM/reap,
@@ -81,3 +81,6 @@ expiry, retries and HA contract acquire no dependency on this component or dashb
 - [Linux pidfd signaling](https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html).
 - [Bounded readiness monitor](AUTHORITY_READINESS_MONITOR.md).
 - [Protected complete launch inputs](AUTHORITY_LAUNCH_BUNDLE.md).
+
+[Protected startup composition](AUTHORITY_CHILD_STARTUP.md) connects acquisition
+and process creation while preserving borrowed inputs and post-start failure evidence.
