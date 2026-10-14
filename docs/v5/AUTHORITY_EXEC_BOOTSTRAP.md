@@ -87,7 +87,7 @@ reads the live process environment and cwd and checks that neither executable
 image nor an unrelated canary descriptor survived. Existing checks still inspect
 all enumerated service threads, perform authorized commits, reject strangers,
 and verify SIGTERM/SIGINT drain, SIGKILL retention and stale restart denial.
-All 167 executable cases are mandatory; the 132-case cross-UID gate is unchanged.
+All 185 executable cases are mandatory; the 132-case cross-UID gate is unchanged.
 Fault-injection units reject every descriptor-isolation/flag failure and prohibit
 partial continuation. Normal and race evidence are recorded separately.
 
@@ -110,7 +110,7 @@ the non-root command. The mandatory campaign retains a successful non-root start
 and drain independently of the root launcher's lifecycle.
 
 The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
-actual authenticated image before either exec transition. Its 167-case mandatory
+actual authenticated image before either exec transition. Its 185-case mandatory
 campaign includes correctly hashed malformed images, with no readiness or private
 state changes after refusal. Loader and dependency trust remain separate from
 format admission; no installed service or stable release behavior is changed.

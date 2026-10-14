@@ -64,7 +64,7 @@ validation in the final installed layout.
 
 ## Verification and integration
 
-The separate mandatory real-program gate now contains 167 cases. Forty-one new
+The separate mandatory real-program gate now contains 185 cases. Forty-one new
 acquisition scenarios cover both valid lifetime and entry replacement, missing,
 closed and O_PATH parents, swapped/aliased parents, invalid launch input, wrong
 owner/group/mode, access/default ACLs, symlinks, FIFOs, regular files and missing
@@ -84,3 +84,7 @@ loader/dependency policy, native MAC/seccomp, installed supervision, human MFA/a
 and full v5 acceptance remain open. BunkerWeb retains its independent authenticated
 API, source-owned temporary bans, expiry, retries and HA without a dashboard,
 journal, launcher or identity-provider dependency.
+
+The [complete acquisition helper](AUTHORITY_LAUNCH_BUNDLE.md) combines these runtime
+handles with the immutable launch record and image. A late runtime failure releases
+the earlier snapshots and returns no partial bundle.

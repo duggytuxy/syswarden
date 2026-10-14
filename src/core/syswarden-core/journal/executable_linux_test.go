@@ -52,6 +52,7 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	t.Run("executable-snapshot", testAuthorityExecutableSnapshot)
 	t.Run("elf-actual-profiles", func(t *testing.T) { testActualAuthorityELF(t, binary) })
 	c, next := provisionProcessFixture(t, policy)
+	t.Run("launch-bundle", func(t *testing.T) { testAuthorityLaunchBundle(t, readFile(t, c.LaunchPath)) })
 	t.Run("runtime-inputs", func(t *testing.T) { testAuthorityRuntimeInputs(t, readFile(t, c.LaunchPath)) })
 	t.Run("launch-snapshot", func(t *testing.T) { testAuthorityLaunchSnapshot(t, readFile(t, c.LaunchPath)) })
 	t.Run("launch-inputs", func(t *testing.T) { testAuthorityLaunchInputs(t, readFile(t, c.LaunchPath)) })
@@ -59,6 +60,9 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 		return
 	}
 	if !t.Run("prepared-runtime", func(child *testing.T) { prepareActualAuthorityRuntimeInputs(child, t, &binary, &c) }) {
+		return
+	}
+	if !t.Run("prepared-bundle", func(child *testing.T) { prepareActualAuthorityBundle(child, t, &binary, c) }) {
 		return
 	}
 	before := adversarialSnapshot(t, c.Paths)
