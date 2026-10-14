@@ -74,6 +74,9 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	if !t.Run("child-supervision", func(t *testing.T) { testAuthorityChildSupervision(t, binary, c) }) {
 		return
 	}
+	if !t.Run("child-startup", func(t *testing.T) { testAuthorityChildStartup(t, binary, c) }) {
+		return
+	}
 	before := adversarialSnapshot(t, c.Paths)
 	for _, kind := range []string{"launcher-low-descriptor-limit", "bootstrap-low-descriptor-limit", "direct-low-descriptor-limit", "launcher-unsealed-launch", "launcher-executable-launch", "bootstrap-unsealed-launch", "bootstrap-executable-launch", "missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image", "launcher-elf-script", "launcher-elf-machine", "launcher-elf-writable-code", "launcher-elf-stack", "launcher-elf-table", "launcher-elf-entry", "launcher-elf-interpreter", "bootstrap-elf-script"} {
 		t.Run(kind, func(t *testing.T) {

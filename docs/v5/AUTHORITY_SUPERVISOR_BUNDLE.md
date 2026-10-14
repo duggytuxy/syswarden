@@ -68,7 +68,7 @@ runtime evidence. The child supervisor has its own lifecycle and close contract.
 
 ## Verification and remaining scope
 
-The mandatory real-program campaign requires 258 named cases, normally and with
+The mandatory real-program campaign requires 276 named cases, normally and with
 race instrumentation. This slice adds 25 acquisition cases plus the enclosing
 composition and actual-program handoff cases. Tests cover independent approvals,
 unsafe source metadata and types, late and partial acquisition failure, repeated
@@ -90,3 +90,6 @@ contract acquire no dependency on this acquisition component or the dashboard.
 - [Protected launch input resolution](AUTHORITY_LAUNCH_INPUTS.md).
 - [Pinned child creation and supervision](AUTHORITY_CHILD_SUPERVISION.md).
 - [Actual executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md).
+
+[Protected startup composition](AUTHORITY_CHILD_STARTUP.md) connects acquisition
+and process creation while preserving borrowed inputs and post-start failure evidence.
