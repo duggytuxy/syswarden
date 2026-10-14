@@ -75,6 +75,10 @@ non-root process fixture. It accepts explicit Go clock and approval providers fo
 trusted embedding. These are not selectable by a client request or CLI flag. The
 caller retains all input descriptors; owned internal leases survive until drain.
 
+The supervisor-side [bounded readiness monitor](AUTHORITY_READINESS_MONITOR.md)
+now creates the channel and observes one startup notification with cancellation
+and a fixed deadline. Native process creation and exit supervision remain separate.
+
 ## Readiness and exit
 
 Readiness metadata is checked before protected startup and again before writing.
