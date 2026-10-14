@@ -10,10 +10,11 @@ The dedicated CI step builds `cmd/syswarden-authority` from the checked-out sour
 with `CGO_ENABLED=0`. It passes the absolute executable path and its SHA-256 to a
 separately compiled journal test harness. The harness bounds its read to 64 MiB,
 verifies the exact bytes and copies only those bytes into a root-controlled,
-read-only executable fixture before launching it. Reads and writes use opened
-directory roots; execution uses the fixed `./syswarden-authority` name from that
-protected fixture directory, with no PATH lookup. A missing prerequisite fails the
-mandatory gate. This digest binds the build under test; it is not release signing
+read-only executable fixture. The production [image primitive](AUTHORITY_EXECUTABLE_IMAGE.md)
+then snapshots it into sealed anonymous storage. The original pathname is replaced
+before launch; execution uses the fixed inherited `/proc/self/fd/7`, with no PATH
+lookup. Reads and writes of the source fixture use opened directory roots. A
+missing prerequisite fails the mandatory gate. This digest binds the build under test; it is not release signing
 or an independent source attestation.
 
 The service is the actual program, not a test function selected through an
@@ -25,8 +26,9 @@ the current system time. The service has no test clock or approval bypass.
 The parent fixture drops real, effective and saved service identity through the
 OS process-launch API. A separate helper, linked only into the test binary, sets
 no_new_privs on its locked exec thread, then replaces itself with the verified
-product. It preserves the PID and the four descriptors; the product has no helper
-flag or test-only startup exception. Startup checks inspect each enumerated live thread through
+product through the sealed image descriptor, which closes during exec. The PID
+and four startup descriptors remain unchanged; the product has no helper flag or
+test-only startup exception. Startup checks inspect each enumerated live thread through
 procfs: all four UID/GID fields must identify the separate service account,
 supplementary groups must contain only the fixture's client group, and effective,
 permitted, inheritable and ambient capabilities must be zero. Each observed
@@ -36,13 +38,14 @@ not enforcement against future changes or a complete OS sandbox policy.
 
 ## Required cases
 
-The separate verifier requires all 25 named cases and the enclosing successful
+The separate verifier requires all 47 named cases and the enclosing successful
 suite. It rejects missing, duplicate, skipped, failed, truncated, oversized or
 unexpected results. A successful executable exit alone is insufficient.
 
 | Boundary | Required observation |
 | --- | --- |
-| Build identity | Explicit exact executable bytes verified and used. |
+| Build identity | Explicit exact executable bytes verified, copied to kernel-sealed storage and used after replacement of the original pathname. |
+| Image preparation | All 21 snapshot cases must pass: exact protected source, immutable output, original-file replacement and modification, rejected unsafe metadata, descriptors, types, size and digests. |
 | Startup rejection | Missing descriptors, wrong digest, wrong service identity, swapped directory handles and a read-only readiness handle fail with exit 1, no readiness, one fixed diagnostic and unchanged protected stores. |
 | Privilege rejection | A launcher without no_new_privs, retained real UID 0, an unexpected supplementary group and an inherited ambient capability each fail before readiness with unchanged stores. The fixture verifies that the negative no_new_privs, root-identity and ambient-capability conditions actually exist. |
 | Live service | Exact readiness, observed kernel identities, no_new_privs, restrictive umask and zero active capabilities across enumerated threads. |
@@ -63,8 +66,8 @@ job requires it and rejects any skip.
 
 ```mermaid
 flowchart LR
-    B[Build real authority executable] --> H[Verify exact bytes in test fixture]
-    H --> P[Drop fixture service identity and pass four descriptors]
+    B[Build real authority executable] --> H[Verify and seal exact bytes in memory]
+    H --> P[Drop service identity and pass image plus four startup handles]
     P --> N[Set no_new_privs on the exec thread]
     N --> E[Exec product and enforce startup privilege guard]
     E --> R[Readiness and kernel identity assertions]
@@ -101,3 +104,7 @@ key lifecycle remain open. No complete WP19 or v5 acceptance is claimed.
 The [BunkerWeb contract](BUNKERWEB_COMPATIBILITY.md) remains independent of the
 journal, dashboard and identity provider. Its source-owned bans, expiry, retries
 and HA behavior are unchanged. Existing regression tests continue to apply.
+
+The [sealed executable image](AUTHORITY_EXECUTABLE_IMAGE.md) now binds future launch
+to an immutable copy of the approved bytes. The real-binary campaign executes that
+image after replacing the source pathname. Native launch policy remains open.
