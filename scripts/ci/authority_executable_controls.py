@@ -13,7 +13,9 @@ ROOT_TEST = "TestAuthorityExecutableBoundary"
 def required_tests() -> set[str]:
     return {ROOT_TEST} | {f"{ROOT_TEST}/{name}" for name in (
         "verified-binary", "missing-descriptors", "wrong-digest", "wrong-identity",
-        "swapped-directories", "read-only-readiness", "start", "kernel-identity",
+        "swapped-directories", "read-only-readiness", "missing-no-new-privileges",
+        "real-root-identity", "unexpected-group", "ambient-capability",
+        "start", "kernel-identity",
         "client-resume", "client-private-storage", "client-process-interference",
         "client-no-administration", "stranger-resume-denied", "client-commit",
         "client-replay-denied", "sigterm-clean-drain", "restart",

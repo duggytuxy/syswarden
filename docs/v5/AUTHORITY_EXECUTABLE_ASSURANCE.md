@@ -23,16 +23,20 @@ I/O and the fixture's bounded Go worker setting. Policy validity is signed aroun
 the current system time. The service has no test clock or approval bypass.
 
 The parent fixture drops real, effective and saved service identity through the
-OS process-launch API. Startup checks inspect each enumerated live thread through
+OS process-launch API. A separate helper, linked only into the test binary, sets
+no_new_privs on its locked exec thread, then replaces itself with the verified
+product. It preserves the PID and the four descriptors; the product has no helper
+flag or test-only startup exception. Startup checks inspect each enumerated live thread through
 procfs: all four UID/GID fields must identify the separate service account,
 supplementary groups must contain only the fixture's client group, and effective,
-permitted, inheritable and ambient capabilities must be zero. A disappearing or
+permitted, inheritable and ambient capabilities must be zero. Each observed
+thread must also have no_new_privs set and umask `0077`. A disappearing or
 unreadable thread fails this assertion. This is an observed identity snapshot,
 not enforcement against future changes or a complete OS sandbox policy.
 
 ## Required cases
 
-The separate verifier requires all 21 named cases and the enclosing successful
+The separate verifier requires all 25 named cases and the enclosing successful
 suite. It rejects missing, duplicate, skipped, failed, truncated, oversized or
 unexpected results. A successful executable exit alone is insufficient.
 
@@ -40,7 +44,8 @@ unexpected results. A successful executable exit alone is insufficient.
 | --- | --- |
 | Build identity | Explicit exact executable bytes verified and used. |
 | Startup rejection | Missing descriptors, wrong digest, wrong service identity, swapped directory handles and a read-only readiness handle fail with exit 1, no readiness, one fixed diagnostic and unchanged protected stores. |
-| Live service | Exact readiness, observed kernel identities and zero active capabilities across enumerated threads. |
+| Privilege rejection | A launcher without no_new_privs, retained real UID 0, an unexpected supplementary group and an inherited ambient capability each fail before readiness with unchanged stores. The fixture verifies that the negative no_new_privs, root-identity and ambient-capability conditions actually exist. |
+| Live service | Exact readiness, observed kernel identities, no_new_privs, restrictive umask and zero active capabilities across enumerated threads. |
 | Authorized operation | A separate signed-grant client resumes and commits the actual durable state. The commit changes protected bytes; duplicate commit is denied without further mutation. |
 | Client separation | Direct private-file access and signal-zero interference fail for the expected permission reason; ordinary operation grants do not grant policy administration. A reachable ungranted UID cannot resume. |
 | SIGTERM | The actual program receives the signal, exits 0 after cleanup and closes readiness. Protected committed bytes remain unchanged. |
@@ -60,7 +65,9 @@ job requires it and rejects any skip.
 flowchart LR
     B[Build real authority executable] --> H[Verify exact bytes in test fixture]
     H --> P[Drop fixture service identity and pass four descriptors]
-    P --> R[Readiness and kernel identity assertions]
+    P --> N[Set no_new_privs on the exec thread]
+    N --> E[Exec product and enforce startup privilege guard]
+    E --> R[Readiness and kernel identity assertions]
     R --> C[Separate client resume and durable commit]
     C --> T[SIGTERM and exact cleanup]
     T --> I[Fresh process resume then SIGINT]
@@ -74,10 +81,15 @@ flowchart LR
 The test launcher is synthetic and privileged inside its test environment. Local
 runs use a rootless mapped namespace; hosted CI uses a disposable runner. Neither
 changes a real service account or deployed server. The fixture is not the product's
-privileged launcher and does not supply `no_new_privs`, capability bounding,
-namespace isolation, seccomp or a native SELinux/AppArmor policy. Descriptor and
+privileged launcher. It supplies no_new_privs and tests the command guard, but
+does not supply a complete capability bounding, namespace isolation, seccomp or
+native SELinux/AppArmor policy. Descriptor and
 parent-ancestry trust remain provisioning responsibilities. These controls require
-implementation and matching acceptance evidence before deployment.
+implementation and matching acceptance evidence before deployment. The new
+negative cases do not weaken or replace the existing identity, lifecycle or
+independent-client checks. Saved-root identities are covered by the command
+predicate tests: normal exec copies effective IDs to saved IDs, so retaining a
+saved root ID across that exec would not be a valid integration fixture.
 
 The direct signal cases establish program handling, not systemd/OpenRC signal
 forwarding, native reboot or forced-power-loss semantics. In-flight approved-write
