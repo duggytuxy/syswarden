@@ -65,7 +65,7 @@ must preserve all source/runtime metadata and bytes and leave the exact descript
 inventory unchanged, including anonymous snapshots. Closure tests require all other
 handles to close when one is already closed, and repeated closure to be harmless.
 
-The complete real-program campaign now requires 185 cases, including this composition
+The complete real-program campaign now requires 189 cases, including this composition
 and actual handoff. Existing client commit/resume, ordinary-user refusals, thread
 credentials, clean drain, restart and crash preservation remain mandatory. All 132
 independent cross-UID cases remain separate. Both campaigns run normally and with the

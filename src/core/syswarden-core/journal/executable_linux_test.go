@@ -66,7 +66,7 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 		return
 	}
 	before := adversarialSnapshot(t, c.Paths)
-	for _, kind := range []string{"launcher-unsealed-launch", "launcher-executable-launch", "bootstrap-unsealed-launch", "bootstrap-executable-launch", "missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image", "launcher-elf-script", "launcher-elf-machine", "launcher-elf-writable-code", "launcher-elf-stack", "launcher-elf-table", "launcher-elf-entry", "launcher-elf-interpreter", "bootstrap-elf-script"} {
+	for _, kind := range []string{"launcher-low-descriptor-limit", "bootstrap-low-descriptor-limit", "direct-low-descriptor-limit", "launcher-unsealed-launch", "launcher-executable-launch", "bootstrap-unsealed-launch", "bootstrap-executable-launch", "missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image", "launcher-elf-script", "launcher-elf-machine", "launcher-elf-writable-code", "launcher-elf-stack", "launcher-elf-table", "launcher-elf-entry", "launcher-elf-interpreter", "bootstrap-elf-script"} {
 		t.Run(kind, func(t *testing.T) {
 			p := executableCommand(t, binary, c, kind)
 			p.start(t)
@@ -93,6 +93,7 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	}
 	c.ServicePID = p.cmd.Process.Pid
 	t.Run("kernel-identity", func(t *testing.T) { requireExecutableIdentity(t, c.ServicePID) })
+	t.Run("resource-limits", func(t *testing.T) { requireExecutableResourceLimits(t, c.ServicePID) })
 	t.Run("bootstrap-inheritance", func(t *testing.T) { requireBootstrapInheritance(t, p, binary) })
 	t.Run("launcher-bounding-set", func(t *testing.T) {
 		requireExecutableThreadFields(t, c.ServicePID, map[string]string{"CapBnd": "0000000000000000"})
@@ -283,9 +284,9 @@ func executableCommand(t *testing.T, binary executableImages, c processFixtureCo
 	p.cmd.Args = append(p.cmd.Args, "--launch-sha256", digest, "--image-sha256", imageDigest)
 	p.cmd.Env = []string{"GOMAXPROCS=2", "SYSWARDEN_INHERITANCE_CANARY=must-not-survive", "LANG=C"}
 	switch kind {
-	case "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability":
+	case "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "launcher-low-descriptor-limit", "bootstrap-low-descriptor-limit", "direct-low-descriptor-limit":
 		p.cmd = exec.Command("/proc/self/exe", "-test.run=^TestAuthorityExecLauncherChild$")
-		p.cmd.Env = []string{"GOMAXPROCS=2", "SYSWARDEN_EXEC_LAUNCH_CHILD=1", "SYSWARDEN_EXEC_LAUNCH_DIGEST=" + digest, "SYSWARDEN_EXEC_LAUNCH_MODE=" + kind}
+		p.cmd.Env = []string{"GOMAXPROCS=2", "SYSWARDEN_EXEC_LAUNCH_CHILD=1", "SYSWARDEN_EXEC_LAUNCH_DIGEST=" + digest, "SYSWARDEN_EXEC_LAUNCH_MODE=" + kind, "SYSWARDEN_EXEC_IMAGE_DIGEST=" + binary.digest}
 	}
 	p.cmd.Stdout, p.cmd.Stderr = &p.output, &p.output
 	uid := uint32(processServiceID)
@@ -466,6 +467,7 @@ func requireExecutableCleanup(t *testing.T, c processFixtureConfig) {
 }
 func requireExecutableIdentity(t *testing.T, pid int) {
 	t.Helper()
+	requireExecutableResourceLimits(t, pid)
 	requireExecutableThreadFields(t, pid, map[string]string{
 		"Uid": "65533 65533 65533 65533", "Gid": "65533 65533 65533 65533", "Groups": "65534",
 		"NoNewPrivs": "1", "Umask": "0077",
@@ -543,6 +545,32 @@ func TestAuthorityExecLauncherChild(t *testing.T) {
 			t.Fatal("ambient capability negative control was not established", err)
 		}
 	}
+	if strings.HasSuffix(mode, "-low-descriptor-limit") {
+		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &syscall.Rlimit{Cur: 128, Max: 128}); err != nil {
+			t.Fatal(err)
+		}
+		var limit syscall.Rlimit
+		if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &limit); err != nil || limit != (syscall.Rlimit{Cur: 128, Max: 128}) {
+			t.Fatal("low-budget fixture not established", err)
+		}
+		path := "/proc/self/fd/7"
+		args := []string{"syswarden-authority", "--launch-sha256", digest}
+		if mode != "direct-low-descriptor-limit" {
+			imageDigest := os.Getenv("SYSWARDEN_EXEC_IMAGE_DIGEST")
+			if !validRecoveryApproval(imageDigest) {
+				t.Fatal("invalid fixture image digest")
+			}
+			path = "/proc/self/fd/8"
+			if mode == "launcher-low-descriptor-limit" {
+				path = "/proc/self/fd/10"
+			}
+			args = append(args, "--image-sha256", imageDigest)
+		}
+		if err := unix.Exec(path, args, []string{"GOMAXPROCS=2"}); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("unexpected returned exec")
+	}
 	seals, err := unix.FcntlInt(7, unix.F_GET_SEALS, 0)
 	if err != nil || seals&authorityImageSeals != authorityImageSeals {
 		t.Fatal("unsealed executable descriptor", err)
@@ -593,6 +621,26 @@ func requireBootstrapInheritance(t *testing.T, p *executableProcess, images exec
 			if os.SameFile(info, bad) {
 				t.Fatal("unrelated inherited descriptor survived exec")
 			}
+		}
+	}
+}
+
+func requireExecutableResourceLimits(t *testing.T, pid int) {
+	t.Helper()
+	text := string(readFile(t, filepath.Join("/proc", strconv.Itoa(pid), "limits")))
+	required := map[string]string{"Max open files": "256 256 files", "Max core file size": "0 0 bytes"}
+	for name, want := range required {
+		matches := 0
+		for _, line := range strings.Split(text, "\n") {
+			if value, ok := strings.CutPrefix(line, name); ok {
+				matches++
+				if strings.Join(strings.Fields(value), " ") != want {
+					t.Fatal("unexpected authority resource limit", name)
+				}
+			}
+		}
+		if matches != 1 {
+			t.Fatal("missing or duplicate kernel resource limit", name)
 		}
 	}
 }

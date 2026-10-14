@@ -59,6 +59,9 @@ func confineStartup(files [4]*os.File, launch journal.AuthorityLaunch) error {
 	if dumpable != 0 {
 		return errors.New("authority process remains dumpable")
 	}
+	if err := confineAuthorityResources(); err != nil {
+		return err
+	}
 	for _, file := range files {
 		if err := sealStartupDescriptor(file); err != nil {
 			return err

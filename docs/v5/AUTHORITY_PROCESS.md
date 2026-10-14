@@ -40,7 +40,8 @@ new runtime threads inherit this irreversible restriction. Setting it does not
 remove existing credentials or capabilities, which are checked separately.
 
 After these checks, the command disables dumpability and verifies the kernel
-result, seals the four inherited descriptors with `FD_CLOEXEC`, and sets umask
+result, applies the verified [kernel resource ceilings](AUTHORITY_RESOURCE_LIMITS.md),
+seals the four inherited descriptors with `FD_CLOEXEC`, and sets umask
 `0077`. Descriptor control retains Go's descriptor lifetime protection and never
 changes readiness blocking flags. These operations complete before the private
 stores are opened or readiness can be sent. Failure produces the same fixed
@@ -108,7 +109,7 @@ sentinels. There is no automatic retry, repair, stale takeover or uncertain repl
 flowchart TD
     L[Trusted external provisioning and privilege drop] --> F[Four inherited descriptors and pinned digest]
     F --> G[Exact non-root credentials and inherited no_new_privs]
-    G --> H[Disable dumps and seal startup descriptors]
+    G --> H[Disable dumps, bound resources and seal descriptors]
     H --> V[Readiness channel and protected launch validation]
     V --> S[Existing local authority and private leases]
     S --> R[One nonblocking readiness byte]
