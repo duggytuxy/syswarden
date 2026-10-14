@@ -469,7 +469,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Download Exact Candidate Package Artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.candidate.outputs.artifact_id }}
           path: ${{ steps.workspace.outputs.unsigned_packages_dir }}
@@ -541,7 +541,7 @@ jobs:
             "${run_id}" "${artifact_id}" "${artifact_name}" "${artifact_digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Download Exact Go 1.27 Evaluation by Artifact ID
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.go127.outputs.artifact_id }}
           path: ${{ steps.workspace.outputs.artifact_root }}/go127-evidence
@@ -623,7 +623,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Download Exact Native Signing Bundle by Artifact ID
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.native_candidate.outputs.artifact_id }}
           path: ${{ steps.workspace.outputs.native_signing_dir }}
@@ -823,7 +823,7 @@ jobs:
             "${run_id}" "${artifact_id}" "${artifact_name}" "${artifact_digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Download Exact Candidate Update Bundle by Artifact ID
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.candidate_update.outputs.artifact_id }}
           path: ${{ steps.workspace.outputs.candidate_update_source_dir }}
@@ -1022,7 +1022,7 @@ jobs:
             "${run_id}" "${artifact_id}" "${artifact_name}" "${artifact_digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Download Exact Native Release Evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.native_evidence.outputs.artifact_id }}
           path: ${{ steps.workspace.outputs.native_release_evidence_dir }}
@@ -2761,7 +2761,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Download Exact Unsigned Qualification Evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.unsigned_artifact.outputs.artifact_id }}
           path: ${{ steps.signing_workspace.outputs.unsigned_root }}
@@ -2862,7 +2862,7 @@ jobs:
             >> "${GITHUB_OUTPUT}"
 
       - name: Download Independently Resolved Native Evidence for Hosted Seal
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.hosted_native_evidence.outputs.artifact_id }}
           path: ${{ steps.signing_workspace.outputs.native_evidence_source_dir }}
@@ -3071,7 +3071,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Download Exact Package Main Bytes for Hosted Signing
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.hosted_candidate.outputs.artifact_id }}
           path: ${{ steps.signing_workspace.outputs.package_source_dir }}
