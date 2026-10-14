@@ -155,6 +155,12 @@ not a financial allocation.
   private-root attacks, commit, restart and reviewed stale-endpoint recovery.
   See [Protected authority layout](PROVISIONED_AUTHORITY.md). Trusted path discovery,
   account creation, installed OS isolation and native acceptance remain open.
+- Protected launch configuration: canonical bounded public trust/enrollment,
+  exact service identity and unchanged resource bounds, loaded from an independently
+  pinned root-owned read-only descriptor. Mandatory metadata/type/digest and identity
+  refusal cases supplement actual non-root startup, commit and restart. No automatic
+  trust discovery or approval provider is introduced. See
+  [Authority launch configuration](AUTHORITY_LAUNCH.md).
 - Authenticated local client: pinned protected endpoint, kernel service UID/GID
   checked before sending, one nonqueued call, bounded canonical request/reply and
   EOF, operation/result binding, private plan shape/digest validation, cancellation

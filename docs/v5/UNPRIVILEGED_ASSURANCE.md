@@ -34,8 +34,12 @@ groups, zero effective/permitted/inheritable/ambient capabilities, and
 child can perform ordinary I/O, rather than accepting a globally broken process
 as proof of security.
 
-The 113 mandatory cases cover:
+The 132 mandatory cases cover:
 
+- Protected launch configuration: 19 named cases (one group and 18 subcases)
+  exercise valid root-owned input, unsafe descriptor/metadata/ACL/type/size, altered
+  bytes, incorrect digests and service identity. These privileged fixture mutations
+  test rejection; they do not assert that ordinary users can modify root-owned data.
 - Reading, opening for overwrite/append/truncation, unlinking, replacement by
   rename, hard-linking, chmod and chown against policy, custody, anchor, segment
   and checkpoint files: 45 cases.
@@ -131,8 +135,11 @@ storage cases also refuse listing or changing permissions on the state root and
 verify its unchanged metadata. That root supplies an additional traversal boundary;
 these process cases do not independently prove leaf permissions through an
 accessible parent. The earlier direct storage probes still expose their ancestors
-to test leaf protection separately. The named gate stays at 113 cases, with no new
-child process, skipped evidence or timeout change.
+to test leaf protection separately. The [launch-record follow-up](AUTHORITY_LAUNCH.md) adds 19 in-process cases for a
+132-case gate, with no new child process or timeout change. The service now receives
+a root-owned read-only launch descriptor and independently supplied digest; clients
+inherit neither it nor protected storage descriptors. Both client identities are
+denied access to its private path and its complete inventory remains unchanged.
 
 | Test identity | Provisioned access | Authority |
 | --- | --- | --- |

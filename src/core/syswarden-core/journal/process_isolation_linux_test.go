@@ -28,15 +28,15 @@ const processStrangerID = 65532
 // This is synthetic parent-controlled test provisioning, not a deployable
 // configuration loader or an authentication/approval provider.
 type processFixtureConfig struct {
-	Paths               []string
-	Endpoint            string
-	Root                CustodyPolicyTrust
-	Expected            contracts.JournalCheckpointAnchor
-	ServicePID          int
-	ExpectStaleEndpoint bool
-	RecoverEndpoint     bool
-	PinDirectory        string
-	StateDirectory      string
+	Paths                    []string
+	Endpoint                 string
+	LaunchPath, LaunchDigest string
+	Expected                 contracts.JournalCheckpointAnchor
+	ServicePID               int
+	ExpectStaleEndpoint      bool
+	RecoverEndpoint          bool
+	PinDirectory             string
+	StateDirectory           string
 }
 
 type authorityTestProcess struct {
@@ -65,6 +65,14 @@ func processCommand(t, owner *testing.T, mode string, c processFixtureConfig, ui
 	p.cmd.Stdin = bytes.NewReader(data)
 	p.cmd.Stdout, p.cmd.Stderr = &p.output, &p.output
 	p.cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: gid, Groups: groups}}
+	if mode == "service" {
+		launch, err := os.Open(c.LaunchPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		owner.Cleanup(func() { _ = launch.Close() })
+		p.cmd.ExtraFiles = []*os.File{launch}
+	}
 	owner.Cleanup(func() {
 		if p.cmd.Process != nil && !p.finished {
 			_ = p.cmd.Process.Kill()
@@ -117,7 +125,7 @@ func startProcessService(t, owner *testing.T, c processFixtureConfig) *authority
 	}
 	defer func() { _ = stopR.Close() }()
 	p.stop = stopW
-	p.cmd.ExtraFiles = []*os.File{readyW, stopR}
+	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, readyW, stopR)
 	p.start(t)
 	_ = readyW.Close()
 	_ = stopR.Close()
@@ -165,7 +173,7 @@ func testAuthorityProcessBoundary(t *testing.T) {
 	if err := errors.Join(policies.Close(), custody.Close()); err != nil {
 		t.Fatal(err)
 	}
-	c := processFixtureConfig{Paths: []string{policyPath, custodyPath, f.anchorPath, f.journalPath}, Root: root.Trust, Expected: f.expected}
+	c := processFixtureConfig{Paths: []string{policyPath, custodyPath, f.anchorPath, f.journalPath}, Expected: f.expected}
 	for _, dir := range c.Paths {
 		if err := chmodFixture(filepath.Dir(dir), 0755); err != nil {
 			t.Fatal(err)
@@ -227,6 +235,17 @@ func testAuthorityProcessBoundary(t *testing.T) {
 			c.PinDirectory = path
 		}
 	}
+	launchData, err := EncodeAuthorityLaunch(AuthorityLaunch{ServiceUID: processServiceID, ServiceGID: processServiceID, EndpointGID: processClientID, PolicyRoot: root.Trust, Enrollment: testEnrollment(), Limits: testLimits(), Transport: testTransportLimits(), AcceptInterval: MinAuthorityAcceptInterval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, launchPath := testDirectory(t)
+	c.LaunchPath, c.LaunchDigest = filepath.Join(launchPath, "launch.json"), recoveryDigest(launchData)
+	if err := os.WriteFile(c.LaunchPath, launchData, 0400); err != nil {
+		t.Fatal(err)
+	}
+	protectedLaunch := endpointRecoverySnapshot(t, []string{launchPath, c.LaunchPath})
+	t.Cleanup(func() { requireEndpointRecoverySnapshot(t, protectedLaunch, []string{launchPath, c.LaunchPath}) })
 	before := adversarialSnapshot(t, c.Paths)
 	protectedRoot := endpointRecoverySnapshot(t, []string{c.StateDirectory})
 	var server *authorityTestProcess
@@ -370,7 +389,7 @@ func TestAuthorityProcessChild(t *testing.T) {
 	if err := json.Unmarshal(data, &c); err != nil || len(c.Paths) != 4 {
 		t.Fatal("invalid test configuration", err)
 	}
-	// Only the service receives the two explicit lifecycle pipes. No child receives
+	// Only the service receives the root-owned launch descriptor and lifecycle pipes. No child receives
 	// a protected storage descriptor that could bypass its pathname permissions.
 	entries, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
@@ -383,6 +402,9 @@ func TestAuthorityProcessChild(t *testing.T) {
 		}
 		if err != nil {
 			t.Fatal(err)
+		}
+		if mode != "service" && target == c.LaunchPath {
+			t.Fatal("client inherited launch configuration")
 		}
 		for _, path := range append(append([]string{}, c.Paths...), c.StateDirectory, c.PinDirectory) {
 			if target == path || strings.HasPrefix(target, path+"/") {
@@ -408,7 +430,15 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 		defer func() { _ = dir.Close() }()
 		dirs = append(dirs, dir)
 	}
-	config := LocalAuthorityConfig{PolicyRoot: c.Root, Enrollment: testEnrollment(), Limits: testLimits(), Now: func() time.Time { return policyNow(testCustodyPolicy()) }}
+	now := func() time.Time { return policyNow(testCustodyPolicy()) }
+	launch := os.NewFile(3, "protected-launch")
+	defer func() { _ = launch.Close() }()
+	if _, err := launch.Write([]byte("tamper")); !errors.Is(err, unix.EBADF) {
+		t.Fatal("service launch descriptor was writable", err)
+	}
+	if server, err := OpenAuthorityFromLaunch(launch, strings.Repeat("0", 64), dirs[0], dirs[1], now, nil, nil); server != nil || !errors.Is(err, ErrAuthorityLaunch) {
+		t.Fatal("untrusted launch digest admitted", err)
+	}
 	if c.RecoverEndpoint && !c.ExpectStaleEndpoint {
 		// The new process reads the creator's durable private pin after exit.
 		// The synthetic callback models supervisor approval, not human MFA.
@@ -418,7 +448,7 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 			t.Fatal(err)
 		}
 		defer func() { _ = pin.Close() }()
-		recovery := EndpointRecoveryConfig{Directory: dirs[1], GroupID: processClientID, PinDirectory: pin, Peer: peer, Now: config.Now,
+		recovery := EndpointRecoveryConfig{Directory: dirs[1], GroupID: processClientID, PinDirectory: pin, Peer: peer, Now: now,
 			Authorizer: endpointTestAuthorizer(func(r EndpointRecoveryRequest) (EndpointRecoveryDecision, error) { return endpointTestDecision(r), nil }),
 		}
 		plan := endpointPlan(t, recovery)
@@ -426,7 +456,7 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 			t.Fatal("reviewed non-root recovery failed", err)
 		}
 	}
-	server, err := OpenProvisionedAuthorityServer(dirs[0], AuthorityServerConfig{Authority: config, Transport: testTransportLimits(), Directory: dirs[1], GroupID: processClientID, AcceptInterval: MinAuthorityAcceptInterval})
+	server, err := OpenAuthorityFromLaunch(launch, c.LaunchDigest, dirs[0], dirs[1], now, nil, nil)
 	if c.ExpectStaleEndpoint {
 		if server != nil || !errors.Is(err, ErrAuthorityEndpoint) {
 			t.Fatal("fresh service did not preserve stale endpoint", err)
@@ -438,7 +468,7 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 	}
 	defer func() { _ = server.Close() }()
 	done := runServer(server)
-	ready, stop := os.NewFile(3, "test-readiness"), os.NewFile(4, "test-stop")
+	ready, stop := os.NewFile(4, "test-readiness"), os.NewFile(5, "test-stop")
 	defer func() { _ = ready.Close(); _ = stop.Close() }()
 	if _, err := ready.Write([]byte{'R'}); err != nil {
 		t.Fatal(err)
@@ -452,6 +482,16 @@ func processServiceChild(t *testing.T, c processFixtureConfig) {
 func processClientChild(t *testing.T, c processFixtureConfig, mode string) {
 	t.Helper()
 	if mode == "private-storage" {
+		for _, flags := range []int{unix.O_RDONLY, unix.O_WRONLY} {
+			fd, err := unix.Open(c.LaunchPath, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+			if err == nil {
+				_ = unix.Close(fd)
+				t.Fatal("client opened launch configuration")
+			}
+			if !errors.Is(err, unix.EACCES) {
+				t.Fatal("unexpected launch access refusal", err)
+			}
+		}
 		if _, err := os.ReadDir(c.StateDirectory); !errors.Is(err, unix.EACCES) {
 			t.Fatal("ordinary user listed the provisioning root", err)
 		}

@@ -66,8 +66,12 @@ type LocalAuthorityTransport struct {
 	rateLast  time.Time
 }
 
+func validAuthorityTransportLimits(limits AuthorityTransportLimits) bool {
+	return limits.MaxPeers >= 1 && limits.MaxPeers <= MaxAuthorityPeers && limits.MaxPeersPerUID >= 1 && limits.MaxPeersPerUID <= limits.MaxPeers && limits.ReadTimeout > 0 && limits.ReadTimeout <= MaxAuthorityIOTimeout && limits.WriteTimeout > 0 && limits.WriteTimeout <= MaxAuthorityIOTimeout && validAuthorityRateLimits(limits)
+}
+
 func OpenLocalAuthorityTransport(c LocalAuthorityConfig, limits AuthorityTransportLimits) (*LocalAuthorityTransport, error) {
-	if limits.MaxPeers < 1 || limits.MaxPeers > MaxAuthorityPeers || limits.MaxPeersPerUID < 1 || limits.MaxPeersPerUID > limits.MaxPeers || limits.ReadTimeout <= 0 || limits.ReadTimeout > MaxAuthorityIOTimeout || limits.WriteTimeout <= 0 || limits.WriteTimeout > MaxAuthorityIOTimeout || !validAuthorityRateLimits(limits) {
+	if !validAuthorityTransportLimits(limits) {
 		return nil, ErrInvalidOptions
 	}
 	authority, err := OpenLocalAuthority(c)
