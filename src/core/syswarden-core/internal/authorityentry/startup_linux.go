@@ -1,4 +1,4 @@
-package main
+package authorityentry
 
 import (
 	"errors"
@@ -19,13 +19,18 @@ type startupIdentity struct {
 // This executable accepts an already confined launch. It never repairs or
 // drops an unexpected identity. In particular, no_new_privs must precede exec:
 // setting it on one Go thread would not constrain the other runtime threads.
-func prepareAuthorityProcess(files [4]*os.File, digest string) error {
+func Prepare(files [4]*os.File, digest string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	launch, err := journal.LoadAuthorityLaunch(files[0], digest)
 	if err != nil {
 		return err
 	}
+	return confineStartup(files, launch)
+}
+
+func confineStartup(files [4]*os.File, launch journal.AuthorityLaunch) error {
+	var err error
 	var id startupIdentity
 	id.uids[0], id.uids[1], id.uids[2] = unix.Getresuid()
 	id.gids[0], id.gids[1], id.gids[2] = unix.Getresgid()

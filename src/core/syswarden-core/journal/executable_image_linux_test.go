@@ -197,6 +197,15 @@ func testAuthorityExecutableSnapshot(t *testing.T) {
 				if err != nil || image == nil {
 					t.Fatal("protected executable rejected", err)
 				}
+				if err := VerifyAuthorityExecutableImage(image, digest); err != nil {
+					t.Fatal("valid inherited image rejected", err)
+				}
+				if err := VerifyAuthorityExecutableImage(image, strings.Repeat("0", 64)); err == nil {
+					t.Fatal("wrong inherited image digest accepted")
+				}
+				if err := VerifyAuthorityExecutableImage(f, digest); err == nil {
+					t.Fatal("ordinary source accepted as sealed inherited image")
+				}
 				defer func() { _ = image.Close() }()
 				if position, err := f.Seek(0, io.SeekCurrent); err != nil || position != 7 {
 					t.Fatal("source offset changed", err)
@@ -331,6 +340,28 @@ func TestAuthorityImageMountPolicy(t *testing.T) {
 		})
 		if calls != 1 || allowed != (kind == "executable") {
 			t.Fatal("source mount policy ignored", kind)
+		}
+	}
+}
+
+func TestInheritedAuthorityImageInvalidHandles(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	if VerifyAuthorityExecutableImage(nil, digest) == nil {
+		t.Fatal("nil image admitted")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "closed-image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if VerifyAuthorityExecutableImage(f, digest) == nil {
+		t.Fatal("closed image admitted")
+	}
+	for _, bad := range []string{"", strings.Repeat("A", 64), strings.Repeat("g", 64)} {
+		if VerifyAuthorityExecutableImage(f, bad) == nil {
+			t.Fatal("malformed digest admitted")
 		}
 	}
 }

@@ -29,16 +29,24 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Fatal("executable gate requires a root identity inside its test environment")
 	}
-	var binary *os.File
-	if !t.Run("verified-binary", func(child *testing.T) { binary = authorityExecutableFixture(child, t) }) {
+	var binary executableImages
+	if !t.Run("verified-binary", func(child *testing.T) {
+		binary.authority = authorityExecutableFixture(child, t, "SYSWARDEN_AUTHORITY_EXECUTABLE")
+	}) {
 		return
 	}
+	if !t.Run("verified-bootstrap", func(child *testing.T) {
+		binary.bootstrap = authorityExecutableFixture(child, t, "SYSWARDEN_AUTHORITY_BOOTSTRAP")
+	}) {
+		return
+	}
+	binary.digest = os.Getenv("SYSWARDEN_AUTHORITY_EXECUTABLE_SHA256")
 	policy := testCustodyPolicy()
 	policy.NotBefore, policy.NotAfter = time.Now().Add(-time.Minute).Unix(), time.Now().Add(time.Hour).Unix()
 	t.Run("executable-snapshot", testAuthorityExecutableSnapshot)
 	c, next := provisionProcessFixture(t, policy)
 	before := adversarialSnapshot(t, c.Paths)
-	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability"} {
+	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root"} {
 		t.Run(kind, func(t *testing.T) {
 			p := executableCommand(t, binary, c, kind)
 			p.start(t)
@@ -54,6 +62,7 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	}
 	c.ServicePID = p.cmd.Process.Pid
 	t.Run("kernel-identity", func(t *testing.T) { requireExecutableIdentity(t, c.ServicePID) })
+	t.Run("bootstrap-inheritance", func(t *testing.T) { requireBootstrapInheritance(t, p, binary) })
 	for _, check := range []struct {
 		name, mode string
 		uid        uint32
@@ -136,9 +145,9 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	})
 }
 
-func authorityExecutableFixture(t, owner *testing.T) *os.File {
+func authorityExecutableFixture(t, owner *testing.T, prefix string) *os.File {
 	t.Helper()
-	path, expected := os.Getenv("SYSWARDEN_AUTHORITY_EXECUTABLE"), os.Getenv("SYSWARDEN_AUTHORITY_EXECUTABLE_SHA256")
+	path, expected := os.Getenv(prefix), os.Getenv(prefix+"_SHA256")
 	if !filepath.IsAbs(path) || !validRecoveryApproval(expected) {
 		t.Fatal("explicit executable path and lowercase digest required")
 	}
@@ -201,7 +210,13 @@ func authorityExecutableFixture(t, owner *testing.T) *os.File {
 	return image
 }
 
+type executableImages struct {
+	authority, bootstrap *os.File
+	digest               string
+}
+
 type executableProcess struct {
+	canary         *os.File
 	cmd            *exec.Cmd
 	output         bytes.Buffer
 	done           chan error
@@ -209,7 +224,7 @@ type executableProcess struct {
 	finished       bool
 }
 
-func executableCommand(t *testing.T, binary *os.File, c processFixtureConfig, kind string) *executableProcess {
+func executableCommand(t *testing.T, binary executableImages, c processFixtureConfig, kind string) *executableProcess {
 	t.Helper()
 	digest := c.LaunchDigest
 	if kind == "wrong-digest" {
@@ -218,17 +233,26 @@ func executableCommand(t *testing.T, binary *os.File, c processFixtureConfig, ki
 	if !validRecoveryApproval(digest) {
 		t.Fatal("invalid fixture launch digest")
 	}
-	// This test-only launcher seals no_new_privs on the exec thread before
-	// replacing itself with the verified product. No launcher hook is compiled
-	// into the product, and exec preserves the PID used by lifecycle checks.
-	p := &executableProcess{cmd: exec.Command("/proc/self/exe", "-test.run=^TestAuthorityExecLauncherChild$"), done: make(chan error, 1)}
-	p.cmd.Env = []string{"GOMAXPROCS=2", "SYSWARDEN_EXEC_LAUNCH_CHILD=1", "SYSWARDEN_EXEC_LAUNCH_DIGEST=" + digest, "SYSWARDEN_EXEC_LAUNCH_MODE=" + kind}
+	// Normal lifecycle and bootstrap failures use the actual product bootstrap.
+	// A separate test-only helper retains the four direct executable guard probes.
+	p := &executableProcess{cmd: exec.Command("/proc/self/fd/8"), done: make(chan error, 1)}
+	imageDigest := binary.digest
+	if kind == "wrong-image-digest" {
+		imageDigest = strings.Repeat("0", 64)
+	}
+	p.cmd.Args = append(p.cmd.Args, "--launch-sha256", digest, "--image-sha256", imageDigest)
+	p.cmd.Env = []string{"GOMAXPROCS=2", "SYSWARDEN_INHERITANCE_CANARY=must-not-survive", "LANG=C"}
+	switch kind {
+	case "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability":
+		p.cmd = exec.Command("/proc/self/exe", "-test.run=^TestAuthorityExecLauncherChild$")
+		p.cmd.Env = []string{"GOMAXPROCS=2", "SYSWARDEN_EXEC_LAUNCH_CHILD=1", "SYSWARDEN_EXEC_LAUNCH_DIGEST=" + digest, "SYSWARDEN_EXEC_LAUNCH_MODE=" + kind}
+	}
 	p.cmd.Stdout, p.cmd.Stderr = &p.output, &p.output
 	uid := uint32(processServiceID)
 	if kind == "wrong-identity" {
 		uid = processClientID
 	}
-	if kind == "real-root-identity" {
+	if kind == "real-root-identity" || kind == "bootstrap-root" {
 		uid = 0
 	}
 	p.cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: processServiceID, Groups: []uint32{processClientID}}}
@@ -251,14 +275,36 @@ func executableCommand(t *testing.T, binary *os.File, c processFixtureConfig, ki
 		p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, file)
 	}
 	p.reader, p.writer = readinessPipe(t)
-	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, p.writer, binary)
+	var err error
+	p.canary, err = os.CreateTemp(t.TempDir(), "inherited-canary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.canary.Close() })
+	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, p.writer, binary.authority, binary.bootstrap, p.canary)
 	switch kind {
 	case "missing-descriptors":
-		p.cmd.ExtraFiles = []*os.File{nil, nil, nil, nil, binary}
+		p.cmd.ExtraFiles = []*os.File{nil, nil, nil, nil, binary.authority, binary.bootstrap, p.canary}
 	case "swapped-directories":
 		p.cmd.ExtraFiles[1], p.cmd.ExtraFiles[2] = p.cmd.ExtraFiles[2], p.cmd.ExtraFiles[1]
 	case "read-only-readiness":
 		p.cmd.ExtraFiles[3] = p.reader
+	case "missing-image":
+		p.cmd.ExtraFiles[4] = nil
+	case "unsealed-image":
+		fd, err := unix.MemfdCreate("unsealed-negative", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := os.NewFile(uintptr(fd), "unsealed-negative")
+		t.Cleanup(func() { _ = f.Close() })
+		if _, err := f.Write([]byte("unsealed image")); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Chmod(0555); err != nil {
+			t.Fatal(err)
+		}
+		p.cmd.ExtraFiles[4] = f
 	}
 	t.Cleanup(func() {
 		if p.cmd.Process != nil && !p.finished {
@@ -426,5 +472,45 @@ func TestAuthorityExecLauncherChild(t *testing.T) {
 	// on exec. The service receives only its four original startup handles.
 	if err := unix.Exec("/proc/self/fd/7", []string{"syswarden-authority", "--launch-sha256", digest}, []string{"GOMAXPROCS=2"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Inspect the actual post-exec process, not a simulation of descriptor flags.
+func requireBootstrapInheritance(t *testing.T, p *executableProcess, images executableImages) {
+	t.Helper()
+	root := filepath.Join("/proc", strconv.Itoa(p.cmd.Process.Pid))
+	env := readFile(t, filepath.Join(root, "environ"))
+	if string(env) != "GOMAXPROCS=2\x00" {
+		t.Fatal("unexpected inherited environment")
+	}
+	cwd, err := os.Readlink(filepath.Join(root, "cwd"))
+	if err != nil || cwd != "/" {
+		t.Fatal("unexpected authority working directory", err)
+	}
+	var forbidden []os.FileInfo
+	for _, f := range []*os.File{p.canary, images.authority, images.bootstrap} {
+		info, err := f.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		forbidden = append(forbidden, info)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "fd"))
+	if err != nil || len(entries) == 0 {
+		t.Fatal("cannot inspect authority descriptors", err)
+	}
+	for _, entry := range entries {
+		info, err := os.Stat(filepath.Join(root, "fd", entry.Name()))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		} // Runtime fds can close after listing.
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range forbidden {
+			if os.SameFile(info, bad) {
+				t.Fatal("unrelated inherited descriptor survived exec")
+			}
+		}
 	}
 }

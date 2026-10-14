@@ -152,3 +152,35 @@ func authorityImageMountAllowsExec(fd int, inspect func(int, *unix.Statfs_t) err
 	var st unix.Statfs_t
 	return inspect(fd, &st) == nil && st.Flags&statfsNoExec == 0
 }
+
+// VerifyAuthorityExecutableImage authenticates an inherited sealed snapshot.
+// It never grants execution approval, changes descriptor flags or reads a path.
+// The independently protected digest and trusted provisioning remain required.
+func VerifyAuthorityExecutableImage(image *os.File, digest string) error {
+	if image == nil || !validRecoveryApproval(digest) {
+		return ErrAuthorityExecutable
+	}
+	raw, err := image.SyscallConn()
+	if err != nil {
+		return ErrAuthorityExecutable
+	}
+	operation := ErrAuthorityExecutable
+	err = raw.Control(func(fd uintptr) {
+		var st unix.Stat_t
+		if unix.Fstat(int(fd), &st) != nil || st.Mode&(unix.S_IFMT|07777) != unix.S_IFREG|0555 || st.Uid != 0 || st.Gid != 0 || st.Nlink != 0 || st.Size <= 0 || st.Size > MaxAuthorityExecutableBytes {
+			return
+		}
+		seals, e := unix.FcntlInt(fd, unix.F_GET_SEALS, 0)
+		if e != nil || seals&authorityImageSeals != authorityImageSeals {
+			return
+		}
+		got, e := streamAuthorityImage(st.Size, func(b []byte, offset int64) (int, error) { return unix.Pread(int(fd), b, offset) }, nil)
+		if e == nil && got == digest {
+			operation = nil
+		}
+	})
+	if err != nil || operation != nil {
+		return ErrAuthorityExecutable
+	}
+	return nil
+}
