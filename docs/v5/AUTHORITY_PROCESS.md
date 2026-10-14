@@ -22,12 +22,44 @@ The launcher supplies these descriptors in the new process:
 | 5 | Endpoint directory | Existing separate service-owned `0750` directory with the reviewed client group. |
 | 6 | Readiness | Write-only nonblocking pipe/FIFO delivered only to the service and its trusted supervisor. |
 
-No pathname or identity lookup occurs in this executable. The numeric identity in
-the record must match the effective process UID/GID. The launcher remains responsible
-for trusted ancestry, mount/user namespace provenance, independently protected
-digest delivery, account lifecycle, complete privilege drop and descriptor hygiene.
-Do not retain root real/saved identities, capabilities or unrelated descriptors.
-This code does not implement that privileged launcher or an installed sandbox.
+No pathname or account-name lookup occurs in this executable. Before opening
+private storage, the command verifies the protected public launch record and
+checks real, effective and saved UID/GID against its explicit non-root service
+identity. Supplementary groups must contain exactly the endpoint group; an empty
+list is also accepted when the primary service group equals that endpoint group.
+Unexpected groups, retained identities, or any effective, permitted or inheritable
+capability cause startup refusal. On Linux, empty permitted and inheritable sets
+also exclude ambient capabilities.
+
+`no_new_privs` must already be set by the launcher on the thread that executes the
+program. The command checks it rather than trying to apply it to one thread after
+the Go runtime has created others. Exec replaces the other launcher threads, and
+new runtime threads inherit this irreversible restriction. Setting it does not
+remove existing credentials or capabilities, which are checked separately.
+
+After these checks, the command disables dumpability and verifies the kernel
+result, seals the four inherited descriptors with `FD_CLOEXEC`, and sets umask
+`0077`. Descriptor control retains Go's descriptor lifetime protection and never
+changes readiness blocking flags. These operations complete before the private
+stores are opened or readiness can be sent. Failure produces the same fixed
+startup diagnostic, without deleting evidence or attempting privilege repair.
+The command performs no later identity transition that could reset dumpability.
+
+This guard belongs to the standalone command. The reusable `RunAuthorityProcess`
+library does not change its embedding process's dumpability, umask or credentials.
+The trusted launcher remains responsible for ancestry, user/mount namespace
+provenance, independently protected digest delivery, account lifecycle, uniform
+pre-exec credentials, capability bounding, MAC policy and unrelated descriptor
+closure. Checking the initial calling thread is not a runtime monitor of arbitrary
+future thread changes. Root or service-identity compromise is outside the
+ordinary-user boundary. The guard is not a privileged launcher or installed sandbox.
+
+The kernel documents [no_new_privs inheritance](https://docs.kernel.org/userspace-api/no_new_privs.html),
+[capability sets](https://man7.org/linux/man-pages/man7/capabilities.7.html),
+[dumpability](https://man7.org/linux/man-pages/man2/PR_SET_DUMPABLE.2const.html) and
+[exec identity transitions](https://man7.org/linux/man-pages/man2/execve.2.html).
+Native acceptance must also verify MAC transitions with no_new_privs on each
+supported platform; this process guard does not prove those transitions.
 
 The command uses the system clock and supplies no recovery or administrative
 approval provider. Their independent authorization continues to deny those
@@ -73,7 +105,9 @@ sentinels. There is no automatic retry, repair, stale takeover or uncertain repl
 ```mermaid
 flowchart TD
     L[Trusted external provisioning and privilege drop] --> F[Four inherited descriptors and pinned digest]
-    F --> V[Readiness channel and protected launch validation]
+    F --> G[Exact non-root credentials and inherited no_new_privs]
+    G --> H[Disable dumps and seal startup descriptors]
+    H --> V[Readiness channel and protected launch validation]
     V --> S[Existing local authority and private leases]
     S --> R[One nonblocking readiness byte]
     S --> W[Fixed paced workers and signed peer grants]
@@ -86,7 +120,9 @@ flowchart TD
 
 ## Verification and remaining deployment work
 
-Unit tests cover exact command arguments, missing/closed/unsafe readiness handles,
+Unit tests cover real/effective/saved identity rejection, exact group membership,
+both capability words, no_new_privs, invalid numeric identities, descriptor
+sealing and closed handles. They also cover exact command arguments, missing/closed/unsafe readiness handles,
 full and disconnected pipes, startup failure without readiness, cancellation,
 deadlines, readiness failure, concurrent cancellation, worker failure, retained
 changed evidence and approved policy completion through drain. They preserve

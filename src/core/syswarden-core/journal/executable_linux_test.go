@@ -10,11 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // This separate opt-in gate runs the real product executable built by CI. Test
@@ -34,7 +37,7 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	policy.NotBefore, policy.NotAfter = time.Now().Add(-time.Minute).Unix(), time.Now().Add(time.Hour).Unix()
 	c, next := provisionProcessFixture(t, policy)
 	before := adversarialSnapshot(t, c.Paths)
-	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness"} {
+	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability"} {
 		t.Run(kind, func(t *testing.T) {
 			p := executableCommand(t, binary, c, kind)
 			p.start(t)
@@ -197,17 +200,26 @@ func executableCommand(t *testing.T, binary string, c processFixtureConfig, kind
 	if !validRecoveryApproval(digest) {
 		t.Fatal("invalid fixture launch digest")
 	}
-	// The command and option are fixed. Only one validated lowercase 32-byte
-	// digest becomes an argument; it cannot select a program, option or shell.
-	p := &executableProcess{cmd: exec.Command("./syswarden-authority", "--launch-sha256"), done: make(chan error, 1)}
-	p.cmd.Args = append(p.cmd.Args, digest)
-	p.cmd.Dir, p.cmd.Env = binary, []string{"GOMAXPROCS=2"}
+	// This test-only launcher seals no_new_privs on the exec thread before
+	// replacing itself with the verified product. No launcher hook is compiled
+	// into the product, and exec preserves the PID used by lifecycle checks.
+	p := &executableProcess{cmd: exec.Command("/proc/self/exe", "-test.run=^TestAuthorityExecLauncherChild$"), done: make(chan error, 1)}
+	p.cmd.Dir, p.cmd.Env = binary, []string{"GOMAXPROCS=2", "SYSWARDEN_EXEC_LAUNCH_CHILD=1", "SYSWARDEN_EXEC_LAUNCH_DIGEST=" + digest, "SYSWARDEN_EXEC_LAUNCH_MODE=" + kind}
 	p.cmd.Stdout, p.cmd.Stderr = &p.output, &p.output
 	uid := uint32(processServiceID)
 	if kind == "wrong-identity" {
 		uid = processClientID
 	}
+	if kind == "real-root-identity" {
+		uid = 0
+	}
 	p.cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: processServiceID, Groups: []uint32{processClientID}}}
+	if kind == "unexpected-group" {
+		p.cmd.SysProcAttr.Credential.Groups = []uint32{processClientID, processStrangerID}
+	}
+	if kind == "ambient-capability" {
+		p.cmd.SysProcAttr.AmbientCaps = []uintptr{unix.CAP_NET_BIND_SERVICE}
+	}
 	for _, path := range []string{c.LaunchPath, c.StateDirectory, c.Endpoint} {
 		root, err := os.OpenRoot(filepath.Dir(path))
 		if err != nil {
@@ -330,6 +342,7 @@ func requireExecutableIdentity(t *testing.T, pid int) {
 		}
 		for key, want := range map[string]string{
 			"Uid": "65533 65533 65533 65533", "Gid": "65533 65533 65533 65533", "Groups": "65534",
+			"NoNewPrivs": "1", "Umask": "0077",
 			"CapInh": "0000000000000000", "CapPrm": "0000000000000000", "CapEff": "0000000000000000", "CapAmb": "0000000000000000",
 		} {
 			if fields[key] != want {
@@ -338,9 +351,53 @@ func requireExecutableIdentity(t *testing.T, pid int) {
 		}
 	}
 	// A status read is an observed startup assertion, not a service sandbox policy.
-	// The launcher must still provide no-new-privileges and a bounding/MAC policy.
+	// The launcher must still provide a capability bounding and MAC policy.
 }
 
 func executableEvidencePaths(c processFixtureConfig) []string {
 	return []string{c.Endpoint, c.PinDirectory, filepath.Join(c.Endpoint, AuthoritySocketName), filepath.Join(c.Endpoint, AuthorityEndpointRecordName), filepath.Join(c.PinDirectory, AuthorityEndpointPinName)}
+}
+
+// This helper is linked into the test binary only. The fixed verified relative
+// executable and validated digest cannot select a shell, program or option.
+func TestAuthorityExecLauncherChild(t *testing.T) {
+	if os.Getenv("SYSWARDEN_EXEC_LAUNCH_CHILD") != "1" {
+		return
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	digest := os.Getenv("SYSWARDEN_EXEC_LAUNCH_DIGEST")
+	if !validRecoveryApproval(digest) {
+		t.Fatal("invalid launch digest")
+	}
+	mode := os.Getenv("SYSWARDEN_EXEC_LAUNCH_MODE")
+	if mode == "missing-no-new-privileges" {
+		value, err := unix.PrctlRetInt(unix.PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0)
+		if err != nil || value != 0 {
+			t.Fatal("negative control requires an initially unsealed launcher", err)
+		}
+	} else if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if mode == "real-root-identity" {
+		if err := unix.Setresgid(processServiceID, processServiceID, processServiceID); err != nil {
+			t.Fatal(err)
+		}
+		if err := unix.Setresuid(0, processServiceID, processServiceID); err != nil {
+			t.Fatal(err)
+		}
+		r, e, s := unix.Getresuid()
+		if r != 0 || e != processServiceID || s != processServiceID {
+			t.Fatal("real-root negative control was not established")
+		}
+	}
+	if mode == "ambient-capability" {
+		value, err := unix.PrctlRetInt(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_IS_SET, unix.CAP_NET_BIND_SERVICE, 0, 0)
+		if err != nil || value != 1 {
+			t.Fatal("ambient capability negative control was not established", err)
+		}
+	}
+	if err := unix.Exec("./syswarden-authority", []string{"syswarden-authority", "--launch-sha256", digest}, []string{"GOMAXPROCS=2"}); err != nil {
+		t.Fatal(err)
+	}
 }

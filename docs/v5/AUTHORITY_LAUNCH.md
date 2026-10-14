@@ -75,6 +75,11 @@ signed policy and custody history are still verified by their existing stores;
 this record cannot bypass a missing or inconsistent enrolled resource. Disabled or
 expired policy retains the existing per-operation denial semantics.
 
+The standalone [process command](AUTHORITY_PROCESS.md) adds stricter checks for
+real/saved identities, groups, capabilities and inherited no_new_privs before
+calling this library. Embedded callers remain responsible for their own process
+policy; the loader does not change their credentials or process-wide settings.
+
 Clock and recovery/policy approval providers remain explicit trusted Go inputs.
 They cannot be selected or serialized by this document. Missing providers continue
 to deny their operations. The record grants no administration or recovery approval,

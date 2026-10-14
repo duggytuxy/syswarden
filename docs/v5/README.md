@@ -154,8 +154,15 @@ corresponding feature exists. Keep the product README focused on the stable
 release and canonical guidance. Public diagrams and fixtures must be synthetic.
 
 The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
-separate mandatory 21-case campaign against the actual built authority binary,
+separate mandatory 25-case campaign against the actual built authority binary,
 with exact-byte binding, kernel identity observations, separate client operations,
 direct signal shutdown, crash preservation and stale restart refusal. The existing
 132-case gate remains unchanged. This is component evidence, not installed-service
 isolation or native acceptance. Stable remains v4.10.4 and BunkerWeb is independent.
+
+The standalone command now rejects retained real/effective/saved privileges,
+unexpected groups or capabilities and missing inherited no_new_privs before
+private startup. It disables dumps, seals the four startup descriptors and sets
+a restrictive umask. See the [startup contract](AUTHORITY_PROCESS.md). Four added
+real-binary negative cases require unchanged private stores and no readiness.
+A production launcher, complete OS confinement and native acceptance remain open.
