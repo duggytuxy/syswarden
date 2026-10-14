@@ -16,7 +16,10 @@ file. A digest is neither an approval nor an anti-rollback registry.
 
 `LoadAuthorityLaunch` receives an already open file and that independent expected
 digest. It accepts only a root UID/GID 0 regular file, exactly `0400` with no special
-bits or POSIX ACL, one link, and a read-only descriptor. Its size must be positive
+bits or POSIX ACL and a read-only, non-O_PATH descriptor. Named sources require
+one link. Anonymous zero-link files require the complete immutable data and
+executable-mode seals described in the [snapshot contract](AUTHORITY_LAUNCH_SNAPSHOT.md).
+Unlinked ordinary files remain rejected. Its size must be positive
 and at most 8,192 bytes before allocation. One positional read uses a bounded
 size-plus-one buffer, requires the exact observed size, and rechecks inode, mode,
 owner/group, links, size and modification/change timestamps. The exact bytes must

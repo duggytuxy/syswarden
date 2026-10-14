@@ -79,8 +79,9 @@ in-place edits, write/truncate/grow/shared-map/seal rejection, unsafe ownership,
 permissions, links, ACLs, file capabilities, descriptors, types, size and hashes.
 The separate verifier requires the wrapper and every named case, bringing the
 image-stage campaign to 47 cases; the bootstrap and credential-launch follow-ups
-brought it to 61. The bounded ELF follow-up brought it to 70; protected launch-input acquisition
-now requires 98 executable cases.
+brought it to 61. The bounded ELF follow-up brought it to 70, and protected
+launch-input acquisition brought it to 98. Immutable launch configuration now
+requires 124 executable cases.
 The existing 132-case cross-UID gate is unchanged. Missing
 kernel or filesystem prerequisites fail the dedicated gate rather than skip it.
 Unit tests also exercise bounded streaming failures and precise feature fallback.

@@ -35,6 +35,11 @@ def required_tests() -> set[str]:
     cases.add(f"{ROOT_TEST}/launch-inputs")
     for name in ("valid-held", "nil", "closed", "path-fd", "parent-file", "parent-mode", "parent-owner", "parent-group", "parent-acl", "parent-default-acl", "launch-symlink", "image-symlink", "launch-hardlink", "image-hardlink", "launch-fifo", "image-fifo", "launch-missing", "image-missing", "launch-malformed", "launch-mode", "image-mode", "image-invalid-elf", "wrong-launch-digest", "wrong-image-digest", "malformed-digest", "entry-replacement"):
         cases.add(f"{ROOT_TEST}/launch-inputs/{name}")
+    cases.add(f"{ROOT_TEST}/launch-snapshot")
+    for name in ("valid-sealed", "source-replaced", "source-modified", "source-unlinked", "nil", "closed", "writable-fd", "path-fd", "wrong-digest", "malformed-digest", "malformed-record", "unsealed", "missing-write", "missing-grow", "missing-shrink", "missing-seal", "missing-exec", "anonymous-mode", "anonymous-owner", "anonymous-group", "anonymous-writable"):
+        cases.add(f"{ROOT_TEST}/launch-snapshot/{name}")
+    for name in ("launcher-unsealed-launch", "launcher-executable-launch", "bootstrap-unsealed-launch", "bootstrap-executable-launch"):
+        cases.add(f"{ROOT_TEST}/{name}")
     return cases
 
 

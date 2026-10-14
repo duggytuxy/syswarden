@@ -156,30 +156,41 @@ func DecodeAuthorityLaunch(data []byte) (AuthorityLaunch, error) {
 	return c, nil
 }
 
-// LoadAuthorityLaunch reads one explicitly supplied root-owned 0400 regular
-// file through its descriptor, using an independent expected lowercase digest.
-// It requires a read-only descriptor, one link and no ACL, bounds allocation
-// before reading, checks exact metadata again afterwards, and changes no offset.
-// Caller retains the file. It performs no pathname discovery or mutation. Root
-// provisioning, digest provenance and the host user namespace remain trusted.
+// LoadAuthorityLaunch accepts a protected one-link root-owned 0400 file or a
+// root-owned immutable, non-executable anonymous snapshot. Both require a
+// read-only descriptor, independent digest, canonical bytes and no ACL. It reads
+// at most 8193 bytes, rechecks metadata and preserves the caller's file offset.
+// Snapshot sealing does not approve a deployment or establish anti-rollback.
 func LoadAuthorityLaunch(file *os.File, expectedSHA256 string) (AuthorityLaunch, error) {
+	data, err := readAuthorityLaunchBytes(file, expectedSHA256)
+	if err != nil {
+		return AuthorityLaunch{}, err
+	}
+	return DecodeAuthorityLaunch(data)
+}
+
+func readAuthorityLaunchBytes(file *os.File, expectedSHA256 string) ([]byte, error) {
 	if file == nil || !validRecoveryApproval(expectedSHA256) {
-		return AuthorityLaunch{}, ErrAuthorityLaunch
+		return nil, ErrAuthorityLaunch
 	}
 	raw, err := file.SyscallConn()
 	if err != nil {
-		return AuthorityLaunch{}, ErrAuthorityLaunch
+		return nil, ErrAuthorityLaunch
 	}
 	var data []byte
 	var readErr error
 	err = raw.Control(func(fd uintptr) {
 		var before, after unix.Stat_t
 		flags, e := unix.FcntlInt(fd, unix.F_GETFL, 0)
-		if e != nil || flags&unix.O_ACCMODE != unix.O_RDONLY {
+		if e != nil || flags&unix.O_ACCMODE != unix.O_RDONLY || flags&unix.O_PATH != 0 {
 			readErr = ErrAuthorityLaunch
 			return
 		}
-		if e = unix.Fstat(int(fd), &before); e != nil || before.Mode&(unix.S_IFMT|07777) != unix.S_IFREG|0400 || before.Uid != 0 || before.Gid != 0 || before.Nlink != 1 || before.Size <= 0 || before.Size > MaxAuthorityLaunchBytes {
+		if e = unix.Fstat(int(fd), &before); e != nil || before.Mode&(unix.S_IFMT|07777) != unix.S_IFREG|0400 || before.Uid != 0 || before.Gid != 0 || before.Size <= 0 || before.Size > MaxAuthorityLaunchBytes {
+			readErr = ErrAuthorityLaunch
+			return
+		}
+		if !validAuthorityLaunchLinks(int(fd), uint64(before.Nlink)) {
 			readErr = ErrAuthorityLaunch
 			return
 		}
@@ -195,15 +206,15 @@ func LoadAuthorityLaunch(file *os.File, expectedSHA256 string) (AuthorityLaunch,
 			return
 		}
 		data = data[:n]
-		if e = unix.Fstat(int(fd), &after); e != nil || !sameStamp(before, after) {
+		if e = unix.Fstat(int(fd), &after); e != nil || !sameStamp(before, after) || !validAuthorityLaunchLinks(int(fd), uint64(after.Nlink)) {
 			readErr = ErrAuthorityLaunch
 			return
 		}
 	})
 	if err != nil || readErr != nil || recoveryDigest(data) != expectedSHA256 {
-		return AuthorityLaunch{}, ErrAuthorityLaunch
+		return nil, ErrAuthorityLaunch
 	}
-	return DecodeAuthorityLaunch(data)
+	return data, nil
 }
 
 // OpenAuthorityFromLaunch reads trusted startup data, binds the effective service
