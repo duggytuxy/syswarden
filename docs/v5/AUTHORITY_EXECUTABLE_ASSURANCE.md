@@ -41,7 +41,7 @@ not enforcement against future changes or a complete OS sandbox policy.
 
 ## Required cases
 
-The separate verifier requires all 61 named cases and the enclosing successful
+The separate verifier requires all 70 named cases and the enclosing successful
 suite. It rejects missing, duplicate, skipped, failed, truncated, oversized or
 unexpected results. A successful executable exit alone is insufficient.
 
@@ -115,3 +115,9 @@ and HA behavior are unchanged. Existing regression tests continue to apply.
 The [sealed executable image](AUTHORITY_EXECUTABLE_IMAGE.md) now binds future launch
 to an immutable copy of the approved bytes. The real-binary campaign executes that
 image after replacing the source pathname. Native launch policy remains open.
+
+The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
+actual authenticated image before either exec transition. Its 70-case mandatory
+campaign includes correctly hashed malformed images, with no readiness or private
+state changes after refusal. Loader and dependency trust remain separate from
+format admission; no installed service or stable release behavior is changed.

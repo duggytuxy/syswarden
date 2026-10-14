@@ -39,7 +39,7 @@ func execSealed(launchDigest, imageDigest string, dropRoot bool) error {
 	if err != nil {
 		return err
 	}
-	if err := journal.VerifyAuthorityExecutableImage(image, imageDigest); err != nil {
+	if _, err := journal.InspectAuthorityExecutableImage(image, imageDigest); err != nil {
 		return err
 	}
 	// Only the exec thread needs this transition: successful exec destroys the

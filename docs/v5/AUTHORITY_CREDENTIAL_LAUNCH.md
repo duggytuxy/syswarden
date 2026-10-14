@@ -102,14 +102,14 @@ reject a non-root caller, wrong launch/image digests and absent/unsealed images.
 Private state inventories and lack of readiness are checked after every rejected
 start. Existing real client operations, SIGTERM/SIGINT drain, crash retention and
 stale restart refusal now exercise the root-to-service path. The verifier requires
-all 61 executable cases. The separate 132-case cross-UID gate is unchanged.
+all 70 executable cases. The separate 132-case cross-UID gate is unchanged.
 Fault-injection units verify operation order, immediate failure at every credential
 stage and complete bounding-set readback, including policy denials and unknown
 capability ranges. Normal and race evidence remain distinct.
 
 This implements credential transition, not full provisioning or deployment.
 Account/directory creation, trusted digest distribution, release approval,
-ELF/dynamic-loader validation, native SELinux/AppArmor/IMA policy, seccomp,
+dynamic-loader dependency validation, native SELinux/AppArmor/IMA policy, seccomp,
 service-manager integration, installation/reboot and human MFA/audit remain open.
 The isolated fixture is not native distribution acceptance. No policy is disabled
 and there is no fallback around a kernel denial. Same-service identity, root and
@@ -118,3 +118,9 @@ kernel compromise remain outside the ordinary-user assurance claim.
 BunkerWeb keeps its independent authenticated API, source-owned temporary bans,
 expiry, retries and HA. It gains no dependency on the new launcher, local journal,
 dashboard or identity provider.
+
+The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
+actual authenticated image before either exec transition. Its 70-case mandatory
+campaign includes correctly hashed malformed images, with no readiness or private
+state changes after refusal. Loader and dependency trust remain separate from
+format admission; no installed service or stable release behavior is changed.

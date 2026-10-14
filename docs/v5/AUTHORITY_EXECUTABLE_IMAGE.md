@@ -78,16 +78,18 @@ checks still apply. Twenty-one added snapshot cases cover source replacement and
 in-place edits, write/truncate/grow/shared-map/seal rejection, unsafe ownership,
 permissions, links, ACLs, file capabilities, descriptors, types, size and hashes.
 The separate verifier requires the wrapper and every named case, bringing the
-image-stage campaign to 47 cases; six bootstrap cases brought it to 53; the credential-launch follow-up now requires
-61 executable cases.
+image-stage campaign to 47 cases; the bootstrap and credential-launch follow-ups
+brought it to 61. The bounded ELF follow-up now requires 70 executable cases.
 The existing 132-case cross-UID gate is unchanged. Missing
 kernel or filesystem prerequisites fail the dedicated gate rather than skip it.
 Unit tests also exercise bounded streaming failures and precise feature fallback.
 
 ## Remaining deployment work
 
-This API does not spawn or supervise a process, validate ELF architecture or trusted
-dynamic-loader dependencies, close unrelated inherited descriptors, provision an
+This snapshot API does not spawn or supervise a process. The separate
+[ELF inspector](AUTHORITY_EXECUTABLE_FORMAT.md) now checks native layout after
+image authentication. Trusted dynamic-loader dependencies remain outside that
+format check. The snapshot does not close unrelated descriptors, provision an
 account, choose native MAC policy or authenticate a human. A trusted launcher must
 combine its reviewed image with the [process startup contract](AUTHORITY_PROCESS.md),
 protected configuration/state handles, privilege drop and complete signal/drain

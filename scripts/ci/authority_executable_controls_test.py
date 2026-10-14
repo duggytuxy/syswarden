@@ -20,7 +20,7 @@ def complete_report():
 
 class ExecutableEvidenceTests(unittest.TestCase):
     def test_complete(self):
-        self.assertEqual(gate.verify(encode(complete_report())), 61)
+        self.assertEqual(gate.verify(encode(complete_report())), 70)
 
     def test_missing_each_case(self):
         for test in gate.required_tests():
