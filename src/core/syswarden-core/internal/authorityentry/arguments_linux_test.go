@@ -1,4 +1,4 @@
-package main
+package authorityentry
 
 import (
 	"strings"
@@ -8,7 +8,7 @@ import (
 func TestExecDigestsRequireExactInput(t *testing.T) {
 	digest := strings.Repeat("ab", 32)
 	good := []string{"--launch-sha256", digest, "--image-sha256", digest}
-	a, b, ok := execDigests(good)
+	a, b, ok := ExecDigests(good)
 	if !ok || a != digest || b != digest {
 		t.Fatal("valid explicit digests rejected")
 	}
@@ -21,7 +21,7 @@ func TestExecDigestsRequireExactInput(t *testing.T) {
 		}
 	}
 	for _, args := range cases {
-		a, b, ok := execDigests(args)
+		a, b, ok := ExecDigests(args)
 		if ok || a != "" || b != "" {
 			t.Fatal("unexpected input admitted", args)
 		}

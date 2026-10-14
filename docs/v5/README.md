@@ -154,7 +154,7 @@ corresponding feature exists. Keep the product README focused on the stable
 release and canonical guidance. Public diagrams and fixtures must be synthetic.
 
 The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
-separate mandatory 53-case campaign against the actual built authority binary,
+separate mandatory 61-case campaign against the actual built authority binary,
 with exact-byte binding, kernel identity observations, separate client operations,
 direct signal shutdown, crash preservation and stale restart refusal. The existing
 132-case gate remains unchanged. This is component evidence, not installed-service
@@ -165,7 +165,7 @@ unexpected groups or capabilities and missing inherited no_new_privs before
 private startup. It disables dumps, seals the four startup descriptors and sets
 a restrictive umask. See the [startup contract](AUTHORITY_PROCESS.md). Four added
 real-binary negative cases require unchanged private stores and no readiness.
-A production launcher, complete OS confinement and native acceptance remain open.
+Trusted privileged provisioning, complete OS confinement and native acceptance remain open.
 
 The [sealed executable image](AUTHORITY_EXECUTABLE_IMAGE.md) now binds future launch
 to an immutable copy of the approved bytes. The real-binary campaign executes that
@@ -174,6 +174,12 @@ image after replacing the source pathname. Native launch policy remains open.
 The [non-root exec bootstrap](AUTHORITY_EXEC_BOOTSTRAP.md) now performs the actual
 sealed-image transition, fixes the target environment and cwd, and isolates the
 complete descriptor table before passing only the four startup handles. The
-53-case executable campaign checks both real programs and post-exec inheritance.
+61-case executable campaign checks all three real programs and post-exec inheritance.
 Privileged provisioning, loader/MAC policy, supervision and native acceptance
 remain separate work. No native package is activated.
+
+The [root-to-service launcher](AUTHORITY_CREDENTIAL_LAUNCH.md) now performs the
+credential transition in the same PID and leaves no root supervisor resident.
+Its mandatory lifecycle verifies empty active and bounding capabilities across
+observed service threads. Provisioning, native MAC/loader policy and installed
+service-manager integration remain open. No package is activated.

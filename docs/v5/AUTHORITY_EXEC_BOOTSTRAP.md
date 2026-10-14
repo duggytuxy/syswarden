@@ -87,7 +87,7 @@ reads the live process environment and cwd and checks that neither executable
 image nor an unrelated canary descriptor survived. Existing checks still inspect
 all enumerated service threads, perform authorized commits, reject strangers,
 and verify SIGTERM/SIGINT drain, SIGKILL retention and stale restart denial.
-All 53 executable cases are mandatory; the 132-case cross-UID gate is unchanged.
+All 61 executable cases are mandatory; the 132-case cross-UID gate is unchanged.
 Fault-injection units reject every descriptor-isolation/flag failure and prohibit
 partial continuation. Normal and race evidence are recorded separately.
 
@@ -103,3 +103,8 @@ also remain open. No complete v5 or supported-distribution acceptance is claimed
 BunkerWeb preserves its independent authenticated API, source-owned temporary
 bans, expiry, retries and HA without depending on this bootstrap, journal,
 dashboard or new identity provider.
+
+The separate [root-to-service launcher](AUTHORITY_CREDENTIAL_LAUNCH.md) now shares
+this exec path after an explicit credential drop. It adds no root-drop flag to
+the non-root command. The mandatory campaign retains a successful non-root start
+and drain independently of the root launcher's lifecycle.

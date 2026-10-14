@@ -78,7 +78,8 @@ checks still apply. Twenty-one added snapshot cases cover source replacement and
 in-place edits, write/truncate/grow/shared-map/seal rejection, unsafe ownership,
 permissions, links, ACLs, file capabilities, descriptors, types, size and hashes.
 The separate verifier requires the wrapper and every named case, bringing the
-image-stage campaign to 47 cases; six bootstrap cases now bring it to 53.
+image-stage campaign to 47 cases; six bootstrap cases brought it to 53; the credential-launch follow-up now requires
+61 executable cases.
 The existing 132-case cross-UID gate is unchanged. Missing
 kernel or filesystem prerequisites fail the dedicated gate rather than skip it.
 Unit tests also exercise bounded streaming failures and precise feature fallback.

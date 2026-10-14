@@ -7,8 +7,8 @@ unit, deployment account or production integration is activated.
 ## Exact program under test
 
 The dedicated CI step builds `cmd/syswarden-authority` and
-`cmd/syswarden-authority-exec` from the checked-out source
-with `CGO_ENABLED=0`. It passes both absolute executable paths and their SHA-256 values to a
+`cmd/syswarden-authority-exec`, plus `cmd/syswarden-authority-launch`, from the checked-out source
+with `CGO_ENABLED=0`. It passes all three absolute executable paths and their SHA-256 values to a
 separately compiled journal test harness. The harness bounds its read to 64 MiB,
 verifies the exact bytes and copies only those bytes into a root-controlled,
 read-only executable fixture. The production [image primitive](AUTHORITY_EXECUTABLE_IMAGE.md)
@@ -24,12 +24,13 @@ the [process contract](AUTHORITY_PROCESS.md), its explicit launch digest, standa
 I/O and the fixture's bounded Go worker setting. Policy validity is signed around
 the current system time. The service has no test clock or approval bypass.
 
-The parent fixture drops real, effective and saved service identity through the
-OS process-launch API. The real [non-root bootstrap](AUTHORITY_EXEC_BOOTSTRAP.md)
-sets no_new_privs, verifies the sealed image, isolates descriptors and replaces
-itself with the authority. A separate helper linked only into the test harness
-retains the four direct startup-privilege negative controls. The PID and four
-startup descriptors remain unchanged; neither product has a test mode.
+The normal lifecycle starts the actual [root-to-service launcher](AUTHORITY_CREDENTIAL_LAUNCH.md).
+It receives unrelated inherited groups and an ambient/inheritable capability,
+then performs the real credential transition. No fixture credential drop supplies
+the normal service identity. A separate successful start/drain still exercises
+the non-root bootstrap after the fixture selects its service credentials. Four
+negative guard probes retain their test-only direct helper. All programs keep
+the same PID through exec and expose no test mode.
 Startup checks inspect each enumerated live thread through
 procfs: all four UID/GID fields must identify the separate service account,
 supplementary groups must contain only the fixture's client group, and effective,
@@ -40,19 +41,21 @@ not enforcement against future changes or a complete OS sandbox policy.
 
 ## Required cases
 
-The separate verifier requires all 53 named cases and the enclosing successful
+The separate verifier requires all 61 named cases and the enclosing successful
 suite. It rejects missing, duplicate, skipped, failed, truncated, oversized or
 unexpected results. A successful executable exit alone is insufficient.
 
 | Boundary | Required observation |
 | --- | --- |
-| Build identity | Both exact executable images verified, copied to kernel-sealed storage and used after replacement of the original pathname. |
+| Build identity | All three exact executable images verified, copied to kernel-sealed storage and used after replacement of the original pathname. |
 | Image preparation | All 21 snapshot cases must pass: exact protected source, immutable output, original-file replacement and modification, rejected unsafe metadata, descriptors, types, size and digests. |
 | Startup rejection | Missing descriptors, wrong digest, wrong service identity, swapped directory handles and a read-only readiness handle fail with exit 1, no readiness, one fixed diagnostic and unchanged protected stores. |
 | Privilege rejection | A launcher without no_new_privs, retained real UID 0, an unexpected supplementary group and an inherited ambient capability each fail before readiness with unchanged stores. The fixture verifies that the negative no_new_privs, root-identity and ambient-capability conditions actually exist. |
 | Bootstrap rejection | Wrong image digest, unsealed or missing image, and retained root identity fail without readiness or changed private stores. |
 | Inheritance | The actual service has only the fixed environment and root cwd; neither image nor the unrelated canary descriptor survives. |
-| Live service | Exact readiness, observed kernel identities, no_new_privs, restrictive umask and zero active capabilities across enumerated threads. |
+| Root launcher | Verified launcher bytes; wrong initial identity, digests and missing/unsealed image are rejected without readiness or changed private stores. |
+| Non-root bootstrap | Independent successful start, identity check and clean SIGTERM drain remain required. |
+| Live service | Exact readiness, observed kernel identities, no_new_privs, restrictive umask and zero active capabilities across enumerated threads; the root-launch path also requires an empty bounding set. |
 | Authorized operation | A separate signed-grant client resumes and commits the actual durable state. The commit changes protected bytes; duplicate commit is denied without further mutation. |
 | Client separation | Direct private-file access and signal-zero interference fail for the expected permission reason; ordinary operation grants do not grant policy administration. A reachable ungranted UID cannot resume. |
 | SIGTERM | The actual program receives the signal, exits 0 after cleanup and closes readiness. Protected committed bytes remain unchanged. |
@@ -85,13 +88,12 @@ flowchart LR
 
 ## Explicit limits and next work
 
-The test launcher is synthetic and privileged inside its test environment. Local
+The surrounding provisioner is synthetic and privileged inside its test environment. Local
 runs use a rootless mapped namespace; hosted CI uses a disposable runner. Neither
 changes a real service account or deployed server. The fixture is not the product's
-privileged provisioner. The product now supplies the non-root exec transition,
-but neither fixture nor bootstrap supplies complete capability bounding,
-namespace isolation, seccomp or
-native SELinux/AppArmor policy. Initial descriptor delivery and
+complete provisioner. The product supplies root-to-service and non-root exec
+transitions, including an empty exec-thread capability bounding set on the root path.
+Native namespace isolation, seccomp and SELinux/AppArmor policy remain separate work. Initial descriptor delivery and
 parent-ancestry trust remain provisioning responsibilities. These controls require
 implementation and matching acceptance evidence before deployment. The new
 negative cases do not weaken or replace the existing identity, lifecycle or
