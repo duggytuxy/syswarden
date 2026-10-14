@@ -102,7 +102,7 @@ reject a non-root caller, wrong launch/image digests and absent/unsealed images.
 Private state inventories and lack of readiness are checked after every rejected
 start. Existing real client operations, SIGTERM/SIGINT drain, crash retention and
 stale restart refusal now exercise the root-to-service path. The verifier requires
-all 185 executable cases. The separate 132-case cross-UID gate is unchanged.
+all 189 executable cases. The separate 132-case cross-UID gate is unchanged.
 Fault-injection units verify operation order, immediate failure at every credential
 stage and complete bounding-set readback, including policy denials and unknown
 capability ranges. Normal and race evidence remain distinct.
@@ -120,7 +120,7 @@ expiry, retries and HA. It gains no dependency on the new launcher, local journa
 dashboard or identity provider.
 
 The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
-actual authenticated image before either exec transition. Its 185-case mandatory
+actual authenticated image before either exec transition. Its 189-case mandatory
 campaign includes correctly hashed malformed images, with no readiness or private
 state changes after refusal. Loader and dependency trust remain separate from
 format admission; no installed service or stable release behavior is changed.
