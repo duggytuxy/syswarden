@@ -2,7 +2,9 @@
 
 Status: inactive Linux v5 component. `LocalAuthorityServer` connects the existing
 [transport](LOCAL_AUTHORITY_TRANSPORT.md) to an explicitly provisioned pathname
-socket and a fixed worker set. No package, command or installed service starts it.
+socket and a fixed worker set. Native packages and installed services do not start it.
+The separate [process entry point](AUTHORITY_PROCESS.md) adds explicit startup and
+context-driven drain.
 The published baseline remains v4.10.4. Refs #225, #224 and #337, all partial.
 
 ## Explicit provisioning and trust

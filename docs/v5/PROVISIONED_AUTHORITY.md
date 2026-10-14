@@ -2,8 +2,9 @@
 
 Status: inactive Linux v5 component. `OpenProvisionedAuthorityServer` starts the
 existing [local server](LOCAL_AUTHORITY_SERVER.md) from a fixed private storage
-layout and a separate client-reachable endpoint directory. No package or command
-activates it. Stable remains v4.10.4. Refs #224, #225 and #337, all partial.
+layout and a separate client-reachable endpoint directory. Native packages do not
+activate it. The opt-in [process entry point](AUTHORITY_PROCESS.md) consumes this
+layout. Stable remains v4.10.4. Refs #224, #225 and #337, all partial.
 
 The [protected launch record](AUTHORITY_LAUNCH.md) supplies these explicit trust and
 limit values from an independently pinned root-owned descriptor, with a matching

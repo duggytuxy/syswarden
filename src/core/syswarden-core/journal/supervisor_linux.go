@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"context"
 	"errors"
 	"math"
 	"os"
@@ -39,7 +40,7 @@ type AuthorityServerStatus struct {
 
 // LocalAuthorityServer owns its endpoint and transport. Serve starts a fixed
 // worker set; there is no goroutine-per-peer, retry loop or user-space accept queue.
-// The component remains opt-in and has no installed service or production caller.
+// The opt-in process is not installed or activated by native packages.
 type LocalAuthorityServer struct {
 	mu        sync.Mutex
 	config    AuthorityServerConfig
@@ -152,6 +153,18 @@ func (s *LocalAuthorityServer) worker() {
 // close. An external Close wakes pacing/accept/I/O waits. Trusted durable operations
 // retain the transport's non-cancellable semantics; no hard stop time is promised.
 func (s *LocalAuthorityServer) Serve() error {
+	return s.serveContext(context.Background(), nil)
+}
+
+// serveContext owns the cancellation watcher until all workers drain. The ready
+// callback is trusted, nonblocking startup I/O, never request-supplied code.
+func (s *LocalAuthorityServer) serveContext(ctx context.Context, ready func() error) error {
+	if ctx == nil {
+		return ErrInvalidOptions
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s == nil {
 		return ErrClosed
 	}
@@ -167,16 +180,28 @@ func (s *LocalAuthorityServer) Serve() error {
 	s.started, s.status.Running = true, true
 	workers := s.config.Transport.MaxPeers
 	s.mu.Unlock()
+	finishWatch := s.watchCancellation(ctx)
+	var startupErr error
+	if ready != nil {
+		startupErr = ctx.Err()
+		if startupErr == nil {
+			startupErr = ready()
+		}
+		if startupErr != nil {
+			_ = s.Close()
+		}
+	}
 	var group sync.WaitGroup
 	for range workers {
 		group.Go(s.worker)
 	}
 	group.Wait()
+	stopErr := finishWatch()
 	s.mu.Lock()
 	s.status.Running = false
 	failure := s.failure
 	s.mu.Unlock()
-	return errors.Join(failure, s.Close())
+	return errors.Join(startupErr, failure, stopErr, s.Close())
 }
 
 // Close stops admission and invokes the existing transport drain. A running
@@ -205,4 +230,38 @@ func (s *LocalAuthorityServer) Close() error {
 		return errors.Join(err, ErrAuthorityServerBusy)
 	}
 	return errors.Join(err, socket.Close(), s.layout.close())
+}
+
+// A cancelled context stops admission but cannot cancel an approved durable
+// operation. Join the watcher before final cleanup; do not leak it on failure.
+func (s *LocalAuthorityServer) watchCancellation(ctx context.Context) func() error {
+	if ctx.Done() == nil {
+		return func() error { return nil }
+	}
+	finished, stopped := make(chan struct{}), make(chan error, 1)
+	go func() {
+		select {
+		case <-ctx.Done():
+			stopped <- authorityStopError(s.Close())
+		case <-finished:
+			stopped <- nil
+		}
+	}()
+	return func() error { close(finished); return <-stopped }
+}
+
+// Busy is expected only while draining. Retain every other shutdown error,
+// including one joined with a busy result, for the process exit status.
+func authorityStopError(err error) error {
+	if err == ErrAuthorityServerBusy || err == ErrAuthorityTransportBusy || err == ErrAuthorityBusy {
+		return nil
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var out error
+		for _, item := range joined.Unwrap() {
+			out = errors.Join(out, authorityStopError(item))
+		}
+		return out
+	}
+	return err
 }
