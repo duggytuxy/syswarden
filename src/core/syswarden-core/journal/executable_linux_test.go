@@ -52,12 +52,13 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	t.Run("executable-snapshot", testAuthorityExecutableSnapshot)
 	t.Run("elf-actual-profiles", func(t *testing.T) { testActualAuthorityELF(t, binary) })
 	c, next := provisionProcessFixture(t, policy)
+	t.Run("launch-snapshot", func(t *testing.T) { testAuthorityLaunchSnapshot(t, readFile(t, c.LaunchPath)) })
 	t.Run("launch-inputs", func(t *testing.T) { testAuthorityLaunchInputs(t, readFile(t, c.LaunchPath)) })
 	if !t.Run("prepared-inputs", func(child *testing.T) { prepareActualAuthorityInputs(child, t, &binary, c) }) {
 		return
 	}
 	before := adversarialSnapshot(t, c.Paths)
-	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image", "launcher-elf-script", "launcher-elf-machine", "launcher-elf-writable-code", "launcher-elf-stack", "launcher-elf-table", "launcher-elf-entry", "launcher-elf-interpreter", "bootstrap-elf-script"} {
+	for _, kind := range []string{"launcher-unsealed-launch", "launcher-executable-launch", "bootstrap-unsealed-launch", "bootstrap-executable-launch", "missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image", "launcher-elf-script", "launcher-elf-machine", "launcher-elf-writable-code", "launcher-elf-stack", "launcher-elf-table", "launcher-elf-entry", "launcher-elf-interpreter", "bootstrap-elf-script"} {
 		t.Run(kind, func(t *testing.T) {
 			p := executableCommand(t, binary, c, kind)
 			p.start(t)
@@ -354,6 +355,12 @@ func executableCommand(t *testing.T, binary executableImages, c processFixtureCo
 	}
 
 	switch kind {
+	case "launcher-unsealed-launch", "bootstrap-unsealed-launch", "launcher-executable-launch", "bootstrap-executable-launch":
+		seals := 0
+		if strings.HasSuffix(kind, "executable-launch") {
+			seals = authorityImageSeals
+		}
+		p.cmd.ExtraFiles[0] = authorityLaunchMemfdFixture(t, readFile(t, c.LaunchPath), seals, false)
 	case "missing-descriptors":
 		p.cmd.ExtraFiles = []*os.File{nil, nil, nil, nil, binary.authority, binary.bootstrap, p.canary, binary.launcher}
 	case "swapped-directories":

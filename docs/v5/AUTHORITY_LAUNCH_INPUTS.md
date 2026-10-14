@@ -10,7 +10,7 @@ approved lowercase SHA-256 digests. It acquires exactly `launch.json` and
 `syswarden-authority`. There are no configurable filenames, directory scans,
 trust discovery, download, account selection or automatic repair. Its caller
 retains the directory and owns the two returned close-on-exec handles: the
-read-only launch record and an immutable executable image. Any error returns
+immutable read-only launch snapshot and an immutable executable image. Any error returns
 neither handle and closes every intermediate acquisition.
 
 The directory must be root UID/GID 0, exactly 0700, have no POSIX access or default
@@ -42,18 +42,19 @@ positional chunks, hash-checked, sealed and authenticated again. Its actual nati
 returned. Correct digests cannot turn a script into an admitted ELF image.
 
 After image acquisition, the helper rechecks directory metadata and exact
-name-to-inode bindings, then verifies the launch bytes again. These checks detect
+name-to-inode bindings, then authenticates and freezes the exact launch bytes in a sealed anonymous file. These checks detect
 observed incomplete or changed preparation. They do not establish an atomic
 cross-file deployment transaction, freshness or rollback protection. The caller
 must independently approve the pair of digests and serialize privileged updates.
 No state/endpoint directory, readiness channel, credentials or running service is
 created here. Existing resource and execution guards still apply at startup.
 
-A later source-path replacement cannot alter the sealed executable. A held launch
-descriptor continues to reference its original inode, but is not an immutable
-snapshot: the actual launch and authority must repeat its existing digest and
-metadata checks. Unlinking or modifying that inode can cause a safe startup
-refusal. Successful acquisition is not permission to skip subsequent checks.
+A later source replacement, edit or unlink cannot alter either snapshot. The
+[launch snapshot contract](AUTHORITY_LAUNCH_SNAPSHOT.md) preserves the exact
+approved bytes with immutable data and executable-mode seals. The original disk
+handles close after acquisition. Actual launch and authority startup still repeat
+the descriptor, ownership, mode, seals, digest and canonical-byte checks.
+Successful acquisition is not permission to skip subsequent checks.
 
 The returned layout may describe a dynamic image. This helper does not open or
 approve its interpreter, shared libraries or loader configuration. Those require
@@ -62,11 +63,11 @@ provide human MFA, install MAC/seccomp policy or supply service-manager supervis
 
 ## Verification
 
-The mandatory real-program campaign contains 98 cases. Twenty-six input cases
+The mandatory real-program campaign contains 124 cases. Twenty-six input cases
 exercise held handles, malformed or missing records, metadata/ACL failures,
 symlinks, hardlinks, FIFOs, wrong digests, malformed ELF and changed names.
 The fixture prepares the real image and launch record with this API, replaces
-both source names, then uses the returned handles in the actual root launcher
+both source names and unlinks the original launch inode, then uses the returned handles in the actual root launcher
 and independent non-root bootstrap through lifecycle, commit, drain and crash
 checks. Kernel client identities and existing admission checks remain unchanged.
 

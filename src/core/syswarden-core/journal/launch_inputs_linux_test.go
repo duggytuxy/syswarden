@@ -176,14 +176,21 @@ func testAuthorityLaunchInputs(t *testing.T, launchBytes []byte) {
 					t.Fatal("changed offset", err)
 				}
 			}
-			var stamp unix.Stat_t
-			if err := unix.Fstat(int(launch.Fd()), &stamp); err != nil {
+			// Keep an independent disk handle to test the entry binding itself.
+			source, _, err := openAuthorityInput(int(directory.Fd()), "launch.json", false)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if !authorityInputStillBound(int(directory.Fd()), "launch.json", launch, stamp) {
+			defer func() { _ = source.Close() }()
+			assertSealedAuthorityLaunch(t, launch, launchBytes)
+			var stamp unix.Stat_t
+			if err := unix.Fstat(int(source.Fd()), &stamp); err != nil {
+				t.Fatal(err)
+			}
+			if !authorityInputStillBound(int(directory.Fd()), "launch.json", source, stamp) {
 				t.Fatal("fresh input unbound")
 			}
-			// Preserve the original one-link launch inode, then replace both names.
+			// Replace both names and unlink the original launch inode.
 			if err := os.Rename(launchPath, launchPath+".retired"); err != nil {
 				t.Fatal(err)
 			}
@@ -193,8 +200,11 @@ func testAuthorityLaunchInputs(t *testing.T, launchBytes []byte) {
 			if err := os.WriteFile(imagePath, []byte("replacement"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if authorityInputStillBound(int(directory.Fd()), "launch.json", launch, stamp) {
+			if authorityInputStillBound(int(directory.Fd()), "launch.json", source, stamp) {
 				t.Fatal("replaced entry accepted")
+			}
+			if err := os.Remove(launchPath + ".retired"); err != nil {
+				t.Fatal(err)
 			}
 			if _, err := LoadAuthorityLaunch(launch, ld); err != nil {
 				t.Fatal("held launch changed", err)
@@ -274,6 +284,9 @@ func prepareActualAuthorityInputs(t, owner *testing.T, binary *executableImages,
 	binary.launch, binary.authority = launch, image
 	// The real launcher must use the returned descriptors, never reopen names.
 	if err := os.Rename(filepath.Join(directory, "launch.json"), filepath.Join(directory, "retired-launch")); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Remove("retired-launch"); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"launch.json", "syswarden-authority"} {

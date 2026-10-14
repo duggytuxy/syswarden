@@ -12,7 +12,8 @@ var ErrAuthorityLaunchInputs = errors.New("invalid protected authority launch in
 // OpenAuthorityLaunchInputs acquires the fixed launch.json and syswarden-authority
 // entries from an independently trusted root-owned 0700 directory. It validates
 // the launch record and seals and inspects the executable using separate pinned
-// digests. The caller retains directory and owns both returned CLOEXEC handles.
+// digests. Both returned CLOEXEC handles are immutable snapshots. The caller
+// retains directory and owns both returned handles.
 // Every failure returns two nil handles and closes all intermediate resources.
 // It never creates source files, starts a process or approves a dynamic loader.
 // The caller must protect directory ancestry, mount namespace and digest origin;
@@ -51,10 +52,10 @@ func openAuthorityLaunchInputs(directory int, launchDigest, imageDigest string) 
 	if err != nil {
 		return nil, nil, ErrAuthorityLaunchInputs
 	}
+	defer func() { _ = launch.Close() }()
 	var image *os.File
 	defer func() {
 		if result != nil {
-			_ = launch.Close()
 			if image != nil {
 				_ = image.Close()
 			}
@@ -83,10 +84,11 @@ func openAuthorityLaunchInputs(directory int, launchDigest, imageDigest string) 
 	}
 	// Recheck the launch bytes after image acquisition. This is a bounded
 	// coherence check, not an atomic deployment transaction or a root trust model.
-	if _, err := LoadAuthorityLaunch(launch, launchDigest); err != nil {
+	frozen, err := SnapshotAuthorityLaunch(launch, launchDigest)
+	if err != nil {
 		return nil, nil, ErrAuthorityLaunchInputs
 	}
-	return launch, image, nil
+	return frozen, image, nil
 }
 
 func attestAuthorityInputDirectory(fd int) (unix.Stat_t, error) {
