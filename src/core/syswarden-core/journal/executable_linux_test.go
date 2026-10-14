@@ -40,13 +40,18 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	}) {
 		return
 	}
+	if !t.Run("verified-launcher", func(child *testing.T) {
+		binary.launcher = authorityExecutableFixture(child, t, "SYSWARDEN_AUTHORITY_LAUNCHER")
+	}) {
+		return
+	}
 	binary.digest = os.Getenv("SYSWARDEN_AUTHORITY_EXECUTABLE_SHA256")
 	policy := testCustodyPolicy()
 	policy.NotBefore, policy.NotAfter = time.Now().Add(-time.Minute).Unix(), time.Now().Add(time.Hour).Unix()
 	t.Run("executable-snapshot", testAuthorityExecutableSnapshot)
 	c, next := provisionProcessFixture(t, policy)
 	before := adversarialSnapshot(t, c.Paths)
-	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root"} {
+	for _, kind := range []string{"missing-descriptors", "wrong-digest", "wrong-identity", "swapped-directories", "read-only-readiness", "missing-no-new-privileges", "real-root-identity", "unexpected-group", "ambient-capability", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root", "launcher-not-root", "launcher-wrong-launch-digest", "launcher-wrong-image-digest", "launcher-missing-image", "launcher-unsealed-image"} {
 		t.Run(kind, func(t *testing.T) {
 			p := executableCommand(t, binary, c, kind)
 			p.start(t)
@@ -56,6 +61,17 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 			requireExecutableCleanup(t, c)
 		})
 	}
+	t.Run("bootstrap-lifecycle", func(t *testing.T) {
+		p := executableCommand(t, binary, c, "bootstrap-only")
+		p.start(t)
+		p.ready(t)
+		requireExecutableIdentity(t, p.cmd.Process.Pid)
+		p.signal(t, syscall.SIGTERM)
+		p.exit(t, 0)
+		p.noReadiness(t)
+		requireExecutableCleanup(t, c)
+		requireAdversarialSnapshot(t, before, c.Paths)
+	})
 	var p *executableProcess
 	if !t.Run("start", func(child *testing.T) { p = executableCommand(t, binary, c, ""); p.start(child); p.ready(child) }) {
 		return
@@ -63,6 +79,9 @@ func TestAuthorityExecutableBoundary(t *testing.T) {
 	c.ServicePID = p.cmd.Process.Pid
 	t.Run("kernel-identity", func(t *testing.T) { requireExecutableIdentity(t, c.ServicePID) })
 	t.Run("bootstrap-inheritance", func(t *testing.T) { requireBootstrapInheritance(t, p, binary) })
+	t.Run("launcher-bounding-set", func(t *testing.T) {
+		requireExecutableThreadFields(t, c.ServicePID, map[string]string{"CapBnd": "0000000000000000"})
+	})
 	for _, check := range []struct {
 		name, mode string
 		uid        uint32
@@ -211,8 +230,8 @@ func authorityExecutableFixture(t, owner *testing.T, prefix string) *os.File {
 }
 
 type executableImages struct {
-	authority, bootstrap *os.File
-	digest               string
+	authority, bootstrap, launcher *os.File
+	digest                         string
 }
 
 type executableProcess struct {
@@ -227,18 +246,23 @@ type executableProcess struct {
 func executableCommand(t *testing.T, binary executableImages, c processFixtureConfig, kind string) *executableProcess {
 	t.Helper()
 	digest := c.LaunchDigest
-	if kind == "wrong-digest" {
+	if kind == "wrong-digest" || kind == "launcher-wrong-launch-digest" {
 		digest = strings.Repeat("0", 64)
 	}
 	if !validRecoveryApproval(digest) {
 		t.Fatal("invalid fixture launch digest")
 	}
-	// Normal lifecycle and bootstrap failures use the actual product bootstrap.
+	// Normal lifecycle uses the root-to-service product launcher. Bootstrap
+	// rejection cases independently retain the non-root product entry point.
 	// A separate test-only helper retains the four direct executable guard probes.
 	p := &executableProcess{cmd: exec.Command("/proc/self/fd/8"), done: make(chan error, 1)}
 	imageDigest := binary.digest
-	if kind == "wrong-image-digest" {
+	if kind == "wrong-image-digest" || kind == "launcher-wrong-image-digest" {
 		imageDigest = strings.Repeat("0", 64)
+	}
+	rootLaunch := kind == "" || strings.HasPrefix(kind, "launcher-")
+	if rootLaunch {
+		p.cmd = exec.Command("/proc/self/fd/10")
 	}
 	p.cmd.Args = append(p.cmd.Args, "--launch-sha256", digest, "--image-sha256", imageDigest)
 	p.cmd.Env = []string{"GOMAXPROCS=2", "SYSWARDEN_INHERITANCE_CANARY=must-not-survive", "LANG=C"}
@@ -262,6 +286,12 @@ func executableCommand(t *testing.T, binary executableImages, c processFixtureCo
 	if kind == "ambient-capability" {
 		p.cmd.SysProcAttr.AmbientCaps = []uintptr{unix.CAP_NET_BIND_SERVICE}
 	}
+	if rootLaunch && kind != "launcher-not-root" {
+		// Deliberately inherit unrelated groups and an ambient/inheritable
+		// capability. The real launcher must remove them before the service runs.
+		p.cmd.SysProcAttr.Credential = &syscall.Credential{Uid: 0, Gid: 0, Groups: []uint32{0, processStrangerID}}
+		p.cmd.SysProcAttr.AmbientCaps = []uintptr{unix.CAP_NET_BIND_SERVICE}
+	}
 	for _, path := range []string{c.LaunchPath, c.StateDirectory, c.Endpoint} {
 		root, err := os.OpenRoot(filepath.Dir(path))
 		if err != nil {
@@ -281,17 +311,17 @@ func executableCommand(t *testing.T, binary executableImages, c processFixtureCo
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.canary.Close() })
-	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, p.writer, binary.authority, binary.bootstrap, p.canary)
+	p.cmd.ExtraFiles = append(p.cmd.ExtraFiles, p.writer, binary.authority, binary.bootstrap, p.canary, binary.launcher)
 	switch kind {
 	case "missing-descriptors":
-		p.cmd.ExtraFiles = []*os.File{nil, nil, nil, nil, binary.authority, binary.bootstrap, p.canary}
+		p.cmd.ExtraFiles = []*os.File{nil, nil, nil, nil, binary.authority, binary.bootstrap, p.canary, binary.launcher}
 	case "swapped-directories":
 		p.cmd.ExtraFiles[1], p.cmd.ExtraFiles[2] = p.cmd.ExtraFiles[2], p.cmd.ExtraFiles[1]
 	case "read-only-readiness":
 		p.cmd.ExtraFiles[3] = p.reader
-	case "missing-image":
+	case "missing-image", "launcher-missing-image":
 		p.cmd.ExtraFiles[4] = nil
-	case "unsealed-image":
+	case "unsealed-image", "launcher-unsealed-image":
 		fd, err := unix.MemfdCreate("unsealed-negative", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
 		if err != nil {
 			t.Fatal(err)
@@ -390,6 +420,15 @@ func requireExecutableCleanup(t *testing.T, c processFixtureConfig) {
 }
 func requireExecutableIdentity(t *testing.T, pid int) {
 	t.Helper()
+	requireExecutableThreadFields(t, pid, map[string]string{
+		"Uid": "65533 65533 65533 65533", "Gid": "65533 65533 65533 65533", "Groups": "65534",
+		"NoNewPrivs": "1", "Umask": "0077",
+		"CapInh": "0000000000000000", "CapPrm": "0000000000000000", "CapEff": "0000000000000000", "CapAmb": "0000000000000000",
+	})
+}
+
+func requireExecutableThreadFields(t *testing.T, pid int, expected map[string]string) {
+	t.Helper()
 	tasks := filepath.Join("/proc", strconv.Itoa(pid), "task")
 	entries, err := os.ReadDir(tasks)
 	if err != nil || len(entries) == 0 {
@@ -404,18 +443,15 @@ func requireExecutableIdentity(t *testing.T, pid int) {
 				fields[key] = strings.Join(strings.Fields(value), " ")
 			}
 		}
-		for key, want := range map[string]string{
-			"Uid": "65533 65533 65533 65533", "Gid": "65533 65533 65533 65533", "Groups": "65534",
-			"NoNewPrivs": "1", "Umask": "0077",
-			"CapInh": "0000000000000000", "CapPrm": "0000000000000000", "CapEff": "0000000000000000", "CapAmb": "0000000000000000",
-		} {
+		for key, want := range expected {
 			if fields[key] != want {
 				t.Fatalf("executable thread %s has unexpected %s", entry.Name(), key)
 			}
 		}
 	}
 	// A status read is an observed startup assertion, not a service sandbox policy.
-	// The launcher must still provide a capability bounding and MAC policy.
+	// The root launcher establishes an empty bounding set across exec. Native
+	// MAC, seccomp and installed service policy still require separate evidence.
 }
 
 func executableEvidencePaths(c processFixtureConfig) []string {
@@ -488,7 +524,7 @@ func requireBootstrapInheritance(t *testing.T, p *executableProcess, images exec
 		t.Fatal("unexpected authority working directory", err)
 	}
 	var forbidden []os.FileInfo
-	for _, f := range []*os.File{p.canary, images.authority, images.bootstrap} {
+	for _, f := range []*os.File{p.canary, images.authority, images.bootstrap, images.launcher} {
 		info, err := f.Stat()
 		if err != nil {
 			t.Fatal(err)

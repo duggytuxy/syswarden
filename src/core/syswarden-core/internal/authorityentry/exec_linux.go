@@ -14,7 +14,25 @@ import (
 // thread/process state and retains the OS thread lock even on failure. The
 // caller must immediately exit if any error returns. It never forks or repairs.
 func ExecSealed(launchDigest, imageDigest string) error {
+	return execSealed(launchDigest, imageDigest, false)
+}
+
+// LaunchSealed permanently drops the dedicated root launch process to the exact
+// service identity before replacing it. It creates no child, account or files.
+// Like ExecSealed, any returned error requires immediate process exit.
+func LaunchSealed(launchDigest, imageDigest string) error {
+	return execSealed(launchDigest, imageDigest, true)
+}
+
+func execSealed(launchDigest, imageDigest string, dropRoot bool) error {
 	runtime.LockOSThread()
+	if dropRoot {
+		r, e, s := unix.Getresuid()
+		rg, eg, sg := unix.Getresgid()
+		if !exactRootIdentity([3]int{r, e, s}, [3]int{rg, eg, sg}) {
+			return errAuthorityCredentials
+		}
+	}
 	files := [4]*os.File{os.NewFile(3, "launch"), os.NewFile(4, "state"), os.NewFile(5, "endpoint"), os.NewFile(6, "readiness")}
 	image := os.NewFile(7, "image")
 	launch, err := journal.LoadAuthorityLaunch(files[0], launchDigest)
@@ -28,6 +46,11 @@ func ExecSealed(launchDigest, imageDigest string) error {
 	// other bootstrap threads, and every new authority thread inherits the flag.
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 		return err
+	}
+	if dropRoot {
+		if err := dropAuthorityCredentials(launch.ServiceUID, launch.ServiceGID, launch.EndpointGID); err != nil {
+			return err
+		}
 	}
 	if err := confineStartup(files, launch); err != nil {
 		return err

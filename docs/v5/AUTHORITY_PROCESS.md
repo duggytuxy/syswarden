@@ -151,3 +151,8 @@ non-root pre-exec transition and descriptor/environment isolation. Both commands
 share the startup guard in `internal/authorityentry`; the standalone authority
 still enforces its checks when launched directly. Trusted provisioning and native
 service-manager integration remain required.
+
+The [root-to-service launcher](AUTHORITY_CREDENTIAL_LAUNCH.md) now drops explicit
+credentials before the same-PID exec transition. It does not create or supervise
+a child. Direct signal and exit behavior remain those of the actual authority.
+Trusted resource provisioning and native service-manager integration remain open.
