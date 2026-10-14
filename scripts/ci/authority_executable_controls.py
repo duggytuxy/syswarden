@@ -12,6 +12,7 @@ ROOT_TEST = "TestAuthorityExecutableBoundary"
 
 def required_tests() -> set[str]:
     cases = {ROOT_TEST} | {f"{ROOT_TEST}/{name}" for name in (
+        "verified-bootstrap", "bootstrap-inheritance", "wrong-image-digest", "unsealed-image", "missing-image", "bootstrap-root",
         "verified-binary", "missing-descriptors", "wrong-digest", "wrong-identity",
         "swapped-directories", "read-only-readiness", "missing-no-new-privileges",
         "real-root-identity", "unexpected-group", "ambient-capability",

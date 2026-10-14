@@ -145,3 +145,9 @@ signal supervision, account and descriptor lifecycle, installed OS isolation and
 independent approval/audit providers. Package activation requires its own tests and
 native IVV. Keep BunkerWeb's authenticated API, source ownership, temporary-ban
 lifetime, retry and HA independent of this optional local process and dashboard.
+
+The separate [exec bootstrap](AUTHORITY_EXEC_BOOTSTRAP.md) now supplies the
+non-root pre-exec transition and descriptor/environment isolation. Both commands
+share the startup guard in `internal/authorityentry`; the standalone authority
+still enforces its checks when launched directly. Trusted provisioning and native
+service-manager integration remain required.

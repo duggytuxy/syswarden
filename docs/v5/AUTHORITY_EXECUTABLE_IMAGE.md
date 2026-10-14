@@ -65,19 +65,21 @@ support or installed sandbox acceptance is inferred from local component tests.
 
 The [mandatory executable campaign](AUTHORITY_EXECUTABLE_ASSURANCE.md) uses this
 production primitive on the exact built binary. It replaces the original pathname
-with unrelated bytes before launching any service. A test-only pre-exec helper
-receives the sealed image as descriptor 7, checks its seals, marks it close-on-exec
-and invokes the fixed `/proc/self/fd/7`. The kernel resolves the image before closing
-that descriptor; the product keeps its original four startup handles and receives
-no new configuration option or test bypass. Trusted procfs and the helper's ancestry
-are fixture assumptions, not a completed production launch policy.
+with unrelated bytes before launching any service. The real non-root
+[exec bootstrap](AUTHORITY_EXEC_BOOTSTRAP.md) receives the sealed image as descriptor
+7, authenticates its inherited metadata, complete seals and exact digest, isolates
+the descriptor table and executes the fixed `/proc/self/fd/7`. The kernel resolves
+the image before closing it. The product keeps its original four startup handles.
+Four direct guard-negative cases retain a test-only helper. Trusted procfs and
+provisioner ancestry remain assumptions, not a completed deployment policy.
 
 All existing real-binary identity, readiness, operation, signal, crash and restart
 checks still apply. Twenty-one added snapshot cases cover source replacement and
 in-place edits, write/truncate/grow/shared-map/seal rejection, unsafe ownership,
 permissions, links, ACLs, file capabilities, descriptors, types, size and hashes.
 The separate verifier requires the wrapper and every named case, bringing the
-campaign to 47 cases. The existing 132-case cross-UID gate is unchanged. Missing
+image-stage campaign to 47 cases; six bootstrap cases now bring it to 53.
+The existing 132-case cross-UID gate is unchanged. Missing
 kernel or filesystem prerequisites fail the dedicated gate rather than skip it.
 Unit tests also exercise bounded streaming failures and precise feature fallback.
 

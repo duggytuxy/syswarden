@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"syswarden-core/internal/authorityentry"
 	"syswarden-core/journal"
 )
 
@@ -45,7 +46,7 @@ func execute() int {
 	}()
 	// The executable offers no approval bypass or configurable test clock.
 	// Independent human approval providers are not installed in this slice.
-	err := prepareAuthorityProcess(files, digest)
+	err := authorityentry.Prepare(files, digest)
 	if err == nil {
 		err = journal.RunAuthorityProcess(ctx, journal.AuthorityProcessConfig{Launch: files[0], State: files[1], Endpoint: files[2], Readiness: files[3], LaunchSHA256: digest, Now: time.Now})
 	}
