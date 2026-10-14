@@ -65,6 +65,9 @@ def required_tests() -> set[str]:
     cases.add(f"{ROOT_TEST}/prepared-supervisor")
     for name in ("valid-held", "nil-inputs", "nil-state", "nil-endpoint", "closed-inputs", "wrong-launch-digest", "wrong-image-digest", "wrong-launcher-digest", "malformed-launcher-digest", "parent-mode", "launcher-missing", "launcher-symlink", "launcher-hardlink", "launcher-fifo", "launcher-owner", "launcher-group", "launcher-mode", "launcher-acl", "launcher-file-capability", "launcher-invalid-elf", "repeated-runtime-refusal", "replacement-during-acquisition", "modification-during-acquisition", "parent-change-during-acquisition", "partial-acquisition-failure"):
         cases.add(f"{ROOT_TEST}/supervisor-bundle/{name}")
+    cases.add(f"{ROOT_TEST}/child-startup")
+    for name in ("lifecycle", "independent-handoff", "wrong-launch-digest", "wrong-image-digest", "wrong-launcher-digest", "closed-inputs", "nil-null", "read-only-null", "closed-null", "regular-null", "runtime-refusal", "creation-refusal", "partial-acquisition-failure", "nil-start-result", "post-start-close-failure", "post-start-error", "startup-failure"):
+        cases.add(f"{ROOT_TEST}/child-startup/{name}")
     return cases
 
 
