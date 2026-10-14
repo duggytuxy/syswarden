@@ -207,7 +207,7 @@ subsequent work. Link this foundation PR with `Refs #223` and the dependent
 work packages; leave their acceptance boxes open until their deliverables pass.
 
 The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
-separate mandatory 231-case campaign against the actual built authority binary,
+separate mandatory 258-case campaign against the actual built authority binary,
 with exact-byte binding, kernel identity observations, separate client operations,
 direct signal shutdown, crash preservation and stale restart refusal. The existing
 132-case gate remains unchanged. This is component evidence, not installed-service
@@ -227,7 +227,7 @@ image after replacing the source pathname. Native launch policy remains open.
 The [non-root exec bootstrap](AUTHORITY_EXEC_BOOTSTRAP.md) now performs the actual
 sealed-image transition, fixes the target environment and cwd, and isolates the
 complete descriptor table before passing only the four startup handles. The
-231-case executable campaign checks all three real programs and post-exec inheritance.
+258-case executable campaign checks all three real programs and post-exec inheritance.
 Privileged provisioning, loader/MAC policy, supervision and native acceptance
 remain separate work. No native package is activated.
 
@@ -238,7 +238,7 @@ observed service threads. Provisioning, native MAC/loader policy and installed
 service-manager integration remain open. No package is activated.
 
 The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
-actual authenticated image before either exec transition. Its 231-case mandatory
+actual authenticated image before either exec transition. Its 258-case mandatory
 campaign includes correctly hashed malformed images, with no readiness or private
 state changes after refusal. Loader and dependency trust remain separate from
 format admission; no installed service or stable release behavior is changed.
@@ -251,7 +251,7 @@ These component checks do not establish trusted deployment or native MAC policy.
 The [immutable launch snapshot](AUTHORITY_LAUNCH_SNAPSHOT.md) now freezes the exact
 approved record before descriptor handoff. Both real startup paths reject missing
 seals with a correct digest; the normal lifecycle survives removal of the source
-inode. The 231-case executable gate includes 21 snapshot cases and four actual
+inode. The 258-case executable gate includes 21 snapshot cases and four actual
 startup refusals. All 132 independent cross-UID cases remain mandatory. Kernel
 support and native deployment policy still require distribution-level IVV.
 
@@ -267,7 +267,7 @@ The [authority resource ceilings](AUTHORITY_RESOURCE_LIMITS.md) now require exac
 soft/hard limits of 256 descriptors and zero ordinary core-file bytes in all three
 real startup paths. Insufficient observed budgets or uncertain kernel transitions
 fail before private startup. Live procfs checks and three refusal cases are mandatory
-in the 231-case executable campaign, normally and under race. The separate 132-case
+in the 258-case executable campaign, normally and under race. The separate 132-case
 cross-UID gate remains unchanged. Native capacity and isolation acceptance remain open.
 
 The [bounded readiness monitor](AUTHORITY_READINESS_MONITOR.md) now supplies the
@@ -281,3 +281,12 @@ input handoff, atomic pidfd creation, readiness observation, SIGTERM and bounded
 exit/reap observation. Cancellation retains the child; cleanup cannot claim a
 successful exit or erase retained evidence. It remains inactive and leaves native
 service-manager integration and full v5 acceptance open.
+
+[Complete supervisor input acquisition](AUTHORITY_SUPERVISOR_BUNDLE.md) adds the
+independently approved launcher to the four-resource launch bundle. The five held
+resources remain valid after caller-parent closure and source replacement; late
+or partial acquisition failure releases all acquired handles. Its 25 acquisition
+cases and actual handoff are mandatory within the 258-case executable campaign,
+normally and under race. The independent 132-case cross-UID gate remains required.
+This inactive component neither provisions nor starts an installed service and
+preserves BunkerWeb's independent API and HA behavior.

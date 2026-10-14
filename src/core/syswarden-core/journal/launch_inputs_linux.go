@@ -135,7 +135,7 @@ func openAuthorityInput(directory int, name string, executable bool) (*os.File, 
 // These restrictions are mandatory. Unsupported kernels, mount crossings,
 // policy denials and uncertain resolution fail without a weaker fallback.
 func openAuthorityInputFD(directory int, name string, open func(int, string, *unix.OpenHow) (int, error)) (int, error) {
-	if directory < 0 || (name != "launch.json" && name != "syswarden-authority") || open == nil {
+	if directory < 0 || (name != "launch.json" && name != "syswarden-authority" && name != authorityLauncherInputName) || open == nil {
 		return -1, ErrAuthorityLaunchInputs
 	}
 	return open(directory, name, &unix.OpenHow{
