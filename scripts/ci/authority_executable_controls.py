@@ -31,6 +31,10 @@ def required_tests() -> set[str]:
                  "hardlink", "acl", "file-capability", "directory", "fifo", "empty",
                  "oversized", "wrong-digest", "uppercase-digest", "malformed-digest"):
         cases.add(f"{ROOT_TEST}/executable-snapshot/{name}")
+    cases.add(f"{ROOT_TEST}/prepared-inputs")
+    cases.add(f"{ROOT_TEST}/launch-inputs")
+    for name in ("valid-held", "nil", "closed", "path-fd", "parent-file", "parent-mode", "parent-owner", "parent-group", "parent-acl", "parent-default-acl", "launch-symlink", "image-symlink", "launch-hardlink", "image-hardlink", "launch-fifo", "image-fifo", "launch-missing", "image-missing", "launch-malformed", "launch-mode", "image-mode", "image-invalid-elf", "wrong-launch-digest", "wrong-image-digest", "malformed-digest", "entry-replacement"):
+        cases.add(f"{ROOT_TEST}/launch-inputs/{name}")
     return cases
 
 

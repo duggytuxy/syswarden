@@ -41,7 +41,7 @@ not enforcement against future changes or a complete OS sandbox policy.
 
 ## Required cases
 
-The separate verifier requires all 70 named cases and the enclosing successful
+The separate verifier requires all 98 named cases and the enclosing successful
 suite. It rejects missing, duplicate, skipped, failed, truncated, oversized or
 unexpected results. A successful executable exit alone is insufficient.
 
@@ -49,6 +49,7 @@ unexpected results. A successful executable exit alone is insufficient.
 | --- | --- |
 | Build identity | All three exact executable images verified, copied to kernel-sealed storage and used after replacement of the original pathname. |
 | Image preparation | All 21 snapshot cases must pass: exact protected source, immutable output, original-file replacement and modification, rejected unsafe metadata, descriptors, types, size and digests. |
+| Launch-input acquisition | The fixed protected pair is acquired through restricted resolution, covers 26 input cases, and drives the real lifecycle after source replacement. |
 | Startup rejection | Missing descriptors, wrong digest, wrong service identity, swapped directory handles and a read-only readiness handle fail with exit 1, no readiness, one fixed diagnostic and unchanged protected stores. |
 | Privilege rejection | A launcher without no_new_privs, retained real UID 0, an unexpected supplementary group and an inherited ambient capability each fail before readiness with unchanged stores. The fixture verifies that the negative no_new_privs, root-identity and ambient-capability conditions actually exist. |
 | Bootstrap rejection | Wrong image digest, unsealed or missing image, and retained root identity fail without readiness or changed private stores. |
@@ -117,7 +118,7 @@ to an immutable copy of the approved bytes. The real-binary campaign executes th
 image after replacing the source pathname. Native launch policy remains open.
 
 The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
-actual authenticated image before either exec transition. Its 70-case mandatory
+actual authenticated image before either exec transition. Its 98-case mandatory
 campaign includes correctly hashed malformed images, with no readiness or private
 state changes after refusal. Loader and dependency trust remain separate from
 format admission; no installed service or stable release behavior is changed.

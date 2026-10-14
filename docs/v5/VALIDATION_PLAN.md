@@ -207,7 +207,7 @@ subsequent work. Link this foundation PR with `Refs #223` and the dependent
 work packages; leave their acceptance boxes open until their deliverables pass.
 
 The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
-separate mandatory 70-case campaign against the actual built authority binary,
+separate mandatory 98-case campaign against the actual built authority binary,
 with exact-byte binding, kernel identity observations, separate client operations,
 direct signal shutdown, crash preservation and stale restart refusal. The existing
 132-case gate remains unchanged. This is component evidence, not installed-service
@@ -227,7 +227,7 @@ image after replacing the source pathname. Native launch policy remains open.
 The [non-root exec bootstrap](AUTHORITY_EXEC_BOOTSTRAP.md) now performs the actual
 sealed-image transition, fixes the target environment and cwd, and isolates the
 complete descriptor table before passing only the four startup handles. The
-70-case executable campaign checks all three real programs and post-exec inheritance.
+98-case executable campaign checks all three real programs and post-exec inheritance.
 Privileged provisioning, loader/MAC policy, supervision and native acceptance
 remain separate work. No native package is activated.
 
@@ -238,7 +238,12 @@ observed service threads. Provisioning, native MAC/loader policy and installed
 service-manager integration remain open. No package is activated.
 
 The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
-actual authenticated image before either exec transition. Its 70-case mandatory
+actual authenticated image before either exec transition. Its 98-case mandatory
 campaign includes correctly hashed malformed images, with no readiness or private
 state changes after refusal. Loader and dependency trust remain separate from
 format admission; no installed service or stable release behavior is changed.
+
+Protected launch-input acquisition adds mandatory file-resolution and metadata
+refusals plus actual lifecycle coverage using the returned descriptors after
+source replacement. Exact openat2 restrictions cannot fall back to weaker opens.
+These component checks do not establish trusted deployment or native MAC policy.
