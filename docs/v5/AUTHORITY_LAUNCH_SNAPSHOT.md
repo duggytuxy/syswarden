@@ -62,7 +62,7 @@ remain separate work.
 
 ## Mandatory verification
 
-The executable gate now requires 276 cases, normally and under the race detector.
+The executable gate now requires 296 cases, normally and under the race detector.
 Its 21 snapshot cases cover exact output and offsets, source replacement/edit/unlink,
 invalid handles and digests, malformed canonical records, every missing seal,
 unsafe anonymous metadata and writable descriptors. The positive assertion probes

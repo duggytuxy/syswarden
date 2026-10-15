@@ -68,7 +68,7 @@ runtime evidence. The child supervisor has its own lifecycle and close contract.
 
 ## Verification and remaining scope
 
-The mandatory real-program campaign requires 276 named cases, normally and with
+The mandatory real-program campaign requires 296 named cases, normally and with
 race instrumentation. This slice adds 25 acquisition cases plus the enclosing
 composition and actual-program handoff cases. Tests cover independent approvals,
 unsafe source metadata and types, late and partial acquisition failure, repeated

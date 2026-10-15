@@ -64,7 +64,7 @@ validation in the final installed layout.
 
 ## Verification and integration
 
-The separate mandatory real-program gate now contains 276 cases. Forty-one new
+The separate mandatory real-program gate now contains 296 cases. Forty-one new
 acquisition scenarios cover both valid lifetime and entry replacement, missing,
 closed and O_PATH parents, swapped/aliased parents, invalid launch input, wrong
 owner/group/mode, access/default ACLs, symlinks, FIFOs, regular files and missing

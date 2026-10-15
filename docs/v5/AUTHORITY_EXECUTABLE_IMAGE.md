@@ -81,7 +81,7 @@ The separate verifier requires the wrapper and every named case, bringing the
 image-stage campaign to 47 cases; the bootstrap and credential-launch follow-ups
 brought it to 61. The bounded ELF follow-up brought it to 70, and protected
 launch-input acquisition brought it to 98 and immutable launch configuration to
-124. Protected runtime-directory acquisition raised this to 167; complete launch acquisition now requires 276 executable cases.
+124. Protected runtime-directory acquisition raised this to 167; complete launch acquisition now requires 296 executable cases.
 The existing 132-case cross-UID gate is unchanged. Missing
 kernel or filesystem prerequisites fail the dedicated gate rather than skip it.
 Unit tests also exercise bounded streaming failures and precise feature fallback.
