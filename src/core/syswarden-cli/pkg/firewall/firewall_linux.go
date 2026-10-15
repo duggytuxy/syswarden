@@ -2213,6 +2213,8 @@ type linuxWrapperReconciliationPlan struct {
 	stateMigrationRequired  bool
 	firewalldPortZone       string
 	firewalldPortInterfaces []string
+	absentPending           map[string]linuxWrapperRule
+	expectedState           map[string]linuxWrapperRule
 }
 
 func sameLinuxWrapperPaths(left, right map[string]string) bool {
@@ -2259,7 +2261,7 @@ func reattestLinuxWrapperPlan(plan *linuxWrapperReconciliationPlan) error {
 			}
 		}
 	}
-	return nil
+	return reattestAbsentPendingFirewalldPorts(plan)
 }
 
 func prepareLinuxFirewallWrapperReconciliation(trustedSubnets, ports []string) (*linuxWrapperReconciliationPlan, error) {
@@ -2313,12 +2315,24 @@ func prepareLinuxFirewallWrapperReconciliationForInterfaces(backend string, trus
 		stateMigrationRequired:  stateMigrationRequired,
 		firewalldPortZone:       firewalldPortZone,
 		firewalldPortInterfaces: append([]string(nil), portInterfaces...),
+		absentPending:           make(map[string]linuxWrapperRule),
+		expectedState:           previous,
 	}
 
 	var preflightErrs []error
 	for key, rule := range previous {
 		if rule.pending {
 			if _, stillDesired := desired[key]; !stillDesired {
+				// A pending record is not deletion authority. Only an active
+				// firewalld port proven absent in both scopes may be forgotten.
+				if rule.backend == "firewalld" && rule.kind == "port" && paths["firewalld"] != "" {
+					if err := requireAbsentPendingFirewalldPort(paths["firewalld"], rule); err != nil {
+						preflightErrs = append(preflightErrs, err)
+					} else {
+						plan.absentPending[key] = rule
+					}
+					continue
+				}
 				preflightErrs = append(preflightErrs, fmt.Errorf(
 					"pending wrapper ownership %s is not part of the active plan; verified cleanup or attribution is required before the nftables commit",
 					key,
@@ -2454,11 +2468,17 @@ func reconcileLinuxFirewallWrapperPlan(plan *linuxWrapperReconciliationPlan) err
 		if err := writeLinuxWrapperState(linuxWrapperStateFile, pendingOwned); err != nil {
 			return err
 		}
+		plan.expectedState = pendingOwned
 	}
 
 	var errs []error
 	for key, rule := range previous {
 		if _, deferred := deferredOwned[key]; deferred {
+			continue
+		}
+		if _, absentPending := plan.absentPending[key]; absentPending {
+			// Never turn an absence observation into authority to remove a
+			// permission created by an administrator after the observation.
 			continue
 		}
 		if _, stillDesired := desired[key]; stillDesired {

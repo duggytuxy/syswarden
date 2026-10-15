@@ -222,6 +222,57 @@ func TestConfigValidateCobraLifecycleDoesNotNormalizeHistoricalModularFiles_SW_C
 	}
 }
 
+func TestConfigGetCobraLifecycleIsReadOnlyAndSelfValidated_SW_CFG_002(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		t.Run(fmt.Sprintf("invalid=%t", invalid), func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "config")
+			if err := config.InitializeDefaults(root); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "modules", "40-integrations.toml"), readV4028CommandFixture(t, "40-integrations.toml"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			user := "[network]\ninterfaces = \"eth9\"\n"
+			if invalid {
+				user = "schema_version = 999999\n" + user
+			}
+			if err := os.WriteFile(filepath.Join(root, "modules", "99-user.toml"), []byte(user), 0600); err != nil {
+				t.Fatal(err)
+			}
+			previousRoot, previousRecovery := configGetRoot, recoverPendingFirewallTransactionHook
+			configGetRoot = root
+			configGetCmd.SetOut(nil)
+			configGetCmd.SetErr(nil)
+			t.Cleanup(func() {
+				configGetRoot, recoverPendingFirewallTransactionHook = previousRoot, previousRecovery
+			})
+			recoverPendingFirewallTransactionHook = func() error { t.Fatal("config-get attempted firewall recovery"); return nil }
+			valid := filepath.Join(t.TempDir(), "valid.conf")
+			if err := os.WriteFile(valid, []byte("SYSWARDEN_HA_ENABLED=n\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = config.ParseConfig(valid) })
+			if err := config.ParseConfig(filepath.Join(t.TempDir(), "missing.conf")); err == nil {
+				t.Fatal("missing runtime configuration accepted")
+			}
+			before := snapshotRegularFiles(t, root)
+			output, err := executeRootCobraLifecycle(t, []string{"config-get", "network.interfaces"}, func() {
+				t.Fatal("config-get ran mutating runtime configuration normalization")
+			})
+			if invalid {
+				if err == nil || !strings.Contains(err.Error(), "read validated configuration") {
+					t.Fatalf("invalid modular configuration was not rejected independently: %v", err)
+				}
+			} else if err != nil || strings.TrimSpace(output) != "eth9" {
+				t.Fatalf("independent configuration read failed: %q, %v", output, err)
+			}
+			if after := snapshotRegularFiles(t, root); !reflect.DeepEqual(before, after) {
+				t.Fatal("configuration inspection changed source files")
+			}
+		})
+	}
+}
+
 func TestConfigMigrationDryRunCobraLifecycleDoesNotNormalizeHistoricalFiles_SW_CFG_002(t *testing.T) {
 	tests := []struct {
 		name               string
