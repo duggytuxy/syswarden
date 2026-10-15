@@ -12,8 +12,8 @@ from pathlib import Path
 REPOSITORY = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPOSITORY / ".github" / "workflows"
 PLUMBER_ACTION = (
-    "getplumber/plumber@6452d3d9c12dfa4aecaecde6bc6c528eea3b21a5"
-    " # v0.4.55"
+    "getplumber/plumber@d3536bae4727b9290d9e69ee25c4350ddbcd91cd"
+    " # v0.6.0"
 )
 OFFICIAL_LOGO_SHA256 = (
     "616227e08ee7a93e27582976af16664c86d049319f2a8d6774ec5da4c7881895"
