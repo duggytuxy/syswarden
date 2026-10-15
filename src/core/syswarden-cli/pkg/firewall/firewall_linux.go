@@ -271,6 +271,16 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	if len(interfaces) == 0 {
 		return fmt.Errorf("no valid firewall interface is configured")
 	}
+	// An explicit ingress scope also bounds compatibility port selection. An
+	// inferred default route is not authority to exclude other ingress paths.
+	var protectedInterfaces []string
+	if config.GlobalConfig.Interfaces != "" {
+		protectedInterfaces = append([]string(nil), interfaces...)
+	}
+	forwardStrictVersion := ""
+	if strictAllow.configured && len(protectedInterfaces) > 0 {
+		forwardStrictVersion = strictAllowForwardVersion
+	}
 
 	// 2. Hardware Drop Table (L2)
 	_, _ = nftRules.WriteString("table netdev syswarden_hw_drop {\n")
@@ -555,8 +565,14 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 		_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_asn6 counter drop\n")
 	}
 
-	// ZERO-TRUST MODE: Drop everything that is not in the allowed GEO/ASN list (Forward chain for Docker)
-	appendStrictAllowForwardRules(&nftRules, strictAllow.configured)
+	// Country/ASN selection describes client ingress, not the source identity
+	// of a new container-to-backend connection. Reputation and dynamic bans
+	// above remain bidirectional and precede established-flow acceptance.
+	if forwardStrictVersion != "" {
+		_, _ = nftRules.WriteString(strictAllowForwardSource(protectedInterfaces))
+	} else {
+		appendStrictAllowForwardRules(&nftRules, strictAllow.configured)
+	}
 	_, _ = nftRules.WriteString("\t}\n}\n\n")
 
 	// 4. ARP Protection Table (L2)
@@ -599,8 +615,9 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 			},
 			Interfaces: interfaces, ARP: config.GlobalConfig.ArpProtect, ARPAddresses: localIPs,
 		},
-		OperatorChain:    operatorPolicy.chain,
-		IPv6ControlPlane: ipv6ControlPlaneVersion,
+		OperatorChain:      operatorPolicy.chain,
+		IPv6ControlPlane:   ipv6ControlPlaneVersion,
+		ForwardStrictAllow: forwardStrictVersion,
 	}
 	runner, err := newExecNFTCommandRunner()
 	if err != nil {
@@ -616,7 +633,7 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 		verification,
 		func() error {
 			var prepareErr error
-			wrapperPlan, prepareErr = prepareLinuxFirewallWrapperReconciliationForBackend(firewallBackend, validLANSubnets, wrapperPorts)
+			wrapperPlan, prepareErr = prepareLinuxFirewallWrapperReconciliationForInterfaces(firewallBackend, validLANSubnets, wrapperPorts, protectedInterfaces)
 			if prepareErr != nil {
 				return prepareErr
 			}
@@ -2054,60 +2071,6 @@ func validateFirewalldWrapperZones(path string, ruleSets ...map[string]linuxWrap
 	return nil
 }
 
-func resolveUniqueActiveFirewalldZone(path string) (string, error) {
-	output, err := runLinuxFirewallCommand(path, "--get-active-zones")
-	if err != nil {
-		return "", fmt.Errorf("list active firewalld zones: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	interfaceZones := make(map[string]struct{})
-	currentZone := ""
-	for lineNumber, line := range strings.Split(string(output), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-			if currentZone == "" {
-				return "", fmt.Errorf("active firewalld zone detail at line %d has no zone header", lineNumber+1)
-			}
-			fields := strings.Fields(trimmed)
-			if len(fields) > 1 && fields[0] == "interfaces:" {
-				interfaceZones[currentZone] = struct{}{}
-			}
-			continue
-		}
-		fields := strings.Fields(line)
-		// firewalld 2.4 annotates the default zone in --get-active-zones.
-		// This is display metadata, not authority to select a zone: an
-		// interface binding and an unambiguous zone are still required.
-		if len(fields) == 2 && fields[1] == "(default)" {
-			fields = fields[:1]
-		}
-		if len(fields) != 1 {
-			return "", fmt.Errorf("active firewalld zone line %d is malformed", lineNumber+1)
-		}
-		if err := validateFirewalldZone(fields[0]); err != nil {
-			return "", fmt.Errorf("active firewalld zone line %d: %w", lineNumber+1, err)
-		}
-		currentZone = fields[0]
-	}
-	if len(interfaceZones) == 0 {
-		return "", fmt.Errorf("firewalld has no active interface-bound zone for the required compatibility port")
-	}
-	if len(interfaceZones) > 1 {
-		names := make([]string, 0, len(interfaceZones))
-		for zone := range interfaceZones {
-			names = append(names, zone)
-		}
-		sort.Strings(names)
-		return "", fmt.Errorf("firewalld has multiple active interface-bound zones for the required compatibility port: %s", strings.Join(names, ", "))
-	}
-	for zone := range interfaceZones {
-		return zone, nil
-	}
-	return "", fmt.Errorf("firewalld active zone resolution failed")
-}
-
 func discoverLinuxWrapperPaths() (map[string]string, map[string]string, map[string]string, error) {
 	active := make(map[string]string)
 	inactive := make(map[string]string)
@@ -2240,15 +2203,16 @@ func applyLinuxFirewallWrappersLocked(trustedSubnets, ports []string) error {
 }
 
 type linuxWrapperReconciliationPlan struct {
-	backend                string
-	paths                  map[string]string
-	inactivePaths          map[string]string
-	cleanupPaths           map[string]string
-	desired                map[string]linuxWrapperRule
-	previous               map[string]linuxWrapperRule
-	stateExists            bool
-	stateMigrationRequired bool
-	firewalldPortZone      string
+	backend                 string
+	paths                   map[string]string
+	inactivePaths           map[string]string
+	cleanupPaths            map[string]string
+	desired                 map[string]linuxWrapperRule
+	previous                map[string]linuxWrapperRule
+	stateExists             bool
+	stateMigrationRequired  bool
+	firewalldPortZone       string
+	firewalldPortInterfaces []string
 }
 
 func sameLinuxWrapperPaths(left, right map[string]string) bool {
@@ -2282,7 +2246,7 @@ func reattestLinuxWrapperPlan(plan *linuxWrapperReconciliationPlan) error {
 			return err
 		}
 		if plan.firewalldPortZone != "" {
-			currentZone, err := resolveUniqueActiveFirewalldZone(firewalldPath)
+			currentZone, err := resolveFirewalldPortZone(firewalldPath, plan.firewalldPortInterfaces)
 			if err != nil {
 				return err
 			}
@@ -2303,6 +2267,10 @@ func prepareLinuxFirewallWrapperReconciliation(trustedSubnets, ports []string) (
 }
 
 func prepareLinuxFirewallWrapperReconciliationForBackend(backend string, trustedSubnets, ports []string) (*linuxWrapperReconciliationPlan, error) {
+	return prepareLinuxFirewallWrapperReconciliationForInterfaces(backend, trustedSubnets, ports, nil)
+}
+
+func prepareLinuxFirewallWrapperReconciliationForInterfaces(backend string, trustedSubnets, ports, portInterfaces []string) (*linuxWrapperReconciliationPlan, error) {
 	paths, inactivePaths, cleanupPaths, err := discoverLinuxWrapperPaths()
 	if err != nil {
 		return nil, err
@@ -2320,7 +2288,7 @@ func prepareLinuxFirewallWrapperReconciliationForBackend(backend string, trusted
 	}
 	firewalldPortZone := ""
 	if firewalldPath, active := paths["firewalld"]; active && len(intendedPorts) > 0 {
-		firewalldPortZone, err = resolveUniqueActiveFirewalldZone(firewalldPath)
+		firewalldPortZone, err = resolveFirewalldPortZone(firewalldPath, portInterfaces)
 		if err != nil {
 			return nil, err
 		}
@@ -2335,15 +2303,16 @@ func prepareLinuxFirewallWrapperReconciliationForBackend(backend string, trusted
 		}
 	}
 	plan := &linuxWrapperReconciliationPlan{
-		backend:                backend,
-		paths:                  paths,
-		inactivePaths:          inactivePaths,
-		cleanupPaths:           cleanupPaths,
-		desired:                desired,
-		previous:               previous,
-		stateExists:            stateExists,
-		stateMigrationRequired: stateMigrationRequired,
-		firewalldPortZone:      firewalldPortZone,
+		backend:                 backend,
+		paths:                   paths,
+		inactivePaths:           inactivePaths,
+		cleanupPaths:            cleanupPaths,
+		desired:                 desired,
+		previous:                previous,
+		stateExists:             stateExists,
+		stateMigrationRequired:  stateMigrationRequired,
+		firewalldPortZone:       firewalldPortZone,
+		firewalldPortInterfaces: append([]string(nil), portInterfaces...),
 	}
 
 	var preflightErrs []error

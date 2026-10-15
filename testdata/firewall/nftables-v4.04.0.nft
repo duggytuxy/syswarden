@@ -150,7 +150,7 @@ table inet syswarden {
 		ip6 saddr @syswarden_geoip6 counter drop
 		ip saddr @syswarden_asn counter drop
 		ip6 saddr @syswarden_asn6 counter drop
-		ip saddr != @syswarden_zt_allowed counter drop
-		ip6 saddr != @syswarden_zt_allowed6 counter drop
+		iifname { "eth-test0", "eth-test1" } ip saddr != @syswarden_zt_allowed counter drop
+		iifname { "eth-test0", "eth-test1" } ip6 saddr != @syswarden_zt_allowed6 counter drop
 	}
 }

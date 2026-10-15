@@ -40,6 +40,22 @@ integration workflow. A new dashboard approval screen must not interrupt every
 plugin ban/withdrawal request. Human-initiated changes from the console still
 need the reviewed response transaction path and exact scope authorization.
 
+## Container firewall interoperability
+
+[Issue #376](https://github.com/duggytuxy/syswarden/issues/376) adds a v5
+compatibility correction for hosts with multiple firewalld zones and container
+traffic under strict country/ASN selection. The
+[operator and verification contract](../technical/FIREWALL_CONTAINER_INTEROPERABILITY.md)
+requires explicit protected interfaces, retained NetworkManager/container zone
+ownership, live-rule verification and exact product removal. Keep client ingress
+separate from container-to-backend traffic. Neither behavior depends on the
+dashboard or changes BunkerWeb's authenticated synchronization contract.
+
+Before acceptance, exercise a real container deployment through boot, firewalld
+reload, policy replay and removal, with both permitted and rejected traffic.
+The local namespace packet test is supporting evidence, not native integration
+acceptance or proof about a particular deployment.
+
 ## Dedicated dashboard tab
 
 Add a **BunkerWeb** tab to WP18 when at least one authorized server has the
