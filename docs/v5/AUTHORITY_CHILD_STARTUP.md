@@ -57,7 +57,7 @@ crash and service-manager/cgroup lifecycle require separate policy and acceptanc
 
 ## Verification and scope
 
-The mandatory actual-program campaign now requires 276 named cases, normally
+The mandatory actual-program campaign now requires 296 named cases, normally
 and under race instrumentation. Seventeen new startup cases verify rejection of
 incorrect digests, closed/missing inputs and unsafe null descriptors; runtime and
 repeated kernel creation refusal; partial acquisition; a missing creation result;
@@ -77,3 +77,12 @@ fleet enrollment or replace human MFA/approval. Trusted provisioning, native
 service-manager isolation/IVV and full v5 Upgrade IVVQ remain open. BunkerWeb's
 independent API, temporary-ban source ownership, expiry, retries and HA acquire
 no dependency on this component, the dashboard or its identity provider.
+
+[Child lifecycle orchestration](AUTHORITY_CHILD_LIFECYCLE.md) now connects bounded
+readiness, ongoing exit observation, one graceful stop request and bounded drain.
+Its outcome keeps readiness, stop, reaped state and handle closure separate; a
+lost exit observation leaves the child owned and unclosed. The mandatory campaign
+requires 296 cases, including lifecycle fault decisions and actual child/client
+operation, normally and under race. The independent 132-case separate-UID gate
+remains required. This inactive library does not install a supervisor or establish
+native acceptance; BunkerWeb remains independent.

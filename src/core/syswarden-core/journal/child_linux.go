@@ -41,6 +41,7 @@ type AuthorityChild struct {
 	state               *os.ProcessState
 	startErr, closeErr  error
 	closed              bool
+	lifecycleUsed       bool
 }
 
 // StartAuthorityChild executes the pinned root launcher with a fixed descriptor,

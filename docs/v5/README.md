@@ -154,7 +154,7 @@ corresponding feature exists. Keep the product README focused on the stable
 release and canonical guidance. Public diagrams and fixtures must be synthetic.
 
 The [standalone executable assurance](AUTHORITY_EXECUTABLE_ASSURANCE.md) adds a
-separate mandatory 276-case campaign against the actual built authority binary,
+separate mandatory 296-case campaign against the actual built authority binary,
 with exact-byte binding, kernel identity observations, separate client operations,
 direct signal shutdown, crash preservation and stale restart refusal. The existing
 132-case gate remains unchanged. This is component evidence, not installed-service
@@ -174,7 +174,7 @@ image after replacing the source pathname. Native launch policy remains open.
 The [non-root exec bootstrap](AUTHORITY_EXEC_BOOTSTRAP.md) now performs the actual
 sealed-image transition, fixes the target environment and cwd, and isolates the
 complete descriptor table before passing only the four startup handles. The
-276-case executable campaign checks all three real programs and post-exec inheritance.
+296-case executable campaign checks all three real programs and post-exec inheritance.
 Privileged provisioning, loader/MAC policy, supervision and native acceptance
 remain separate work. No native package is activated.
 
@@ -185,7 +185,7 @@ observed service threads. Provisioning, native MAC/loader policy and installed
 service-manager integration remain open. No package is activated.
 
 The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
-actual authenticated image before either exec transition. Its 276-case mandatory
+actual authenticated image before either exec transition. Its 296-case mandatory
 campaign includes correctly hashed malformed images, with no readiness or private
 state changes after refusal. Loader and dependency trust remain separate from
 format admission; no installed service or stable release behavior is changed.
@@ -199,7 +199,7 @@ loader policy and installed supervision remain separate requirements.
 The [immutable launch snapshot](AUTHORITY_LAUNCH_SNAPSHOT.md) now freezes the exact
 approved record before descriptor handoff. Both real startup paths reject missing
 seals with a correct digest; the normal lifecycle survives removal of the source
-inode. The 276-case executable gate includes 21 snapshot cases and four actual
+inode. The 296-case executable gate includes 21 snapshot cases and four actual
 startup refusals. All 132 independent cross-UID cases remain mandatory. Kernel
 support and native deployment policy still require distribution-level IVV.
 
@@ -215,7 +215,7 @@ installed service policy and native IVV remain open.
 immutable configuration/image snapshots and runtime directories as one owned result.
 A late failure releases all intermediate resources; caller parents are retained.
 The actual root and non-root launch paths use this bundle after parent closure and
-source replacement. The mandatory executable campaign has 276 cases; the independent
+source replacement. The mandatory executable campaign has 296 cases; the independent
 132 cross-UID controls remain required. Deployment approval, native isolation and
 installed lifecycle acceptance remain open.
 
@@ -223,7 +223,7 @@ The [authority resource ceilings](AUTHORITY_RESOURCE_LIMITS.md) now require exac
 soft/hard limits of 256 descriptors and zero ordinary core-file bytes in all three
 real startup paths. Insufficient observed budgets or uncertain kernel transitions
 fail before private startup. Live procfs checks and three refusal cases are mandatory
-in the 276-case executable campaign, normally and under race. The separate 132-case
+in the 296-case executable campaign, normally and under race. The separate 132-case
 cross-UID gate remains unchanged. Native capacity and isolation acceptance remain open.
 
 The [bounded readiness monitor](AUTHORITY_READINESS_MONITOR.md) now supplies the
@@ -242,7 +242,7 @@ service-manager integration and full v5 acceptance open.
 independently approved launcher to the four-resource launch bundle. The five held
 resources remain valid after caller-parent closure and source replacement; late
 or partial acquisition failure releases all acquired handles. Its 25 acquisition
-cases and actual handoff are mandatory within the 276-case executable campaign,
+cases and actual handoff are mandatory within the 296-case executable campaign,
 normally and under race. The independent 132-case cross-UID gate remains required.
 This inactive component neither provisions nor starts an installed service and
 preserves BunkerWeb's independent API and HA behavior.
@@ -251,6 +251,15 @@ preserves BunkerWeb's independent API and HA behavior.
 acquisition and pinned process creation. Temporary resources close after handoff;
 caller parents remain borrowed. A non-null child is always retained, and a later
 handoff/cleanup error remains visible through readiness, exit observation and
-final close. Its 17 new cases bring the mandatory real-program campaign to 276,
+final close. Its 17 startup cases remain mandatory within the 296-case real-program campaign,
 normally and under race. The separate 132-case cross-UID gate remains unchanged.
 This is inactive library composition, not installed supervision or fleet enrollment.
+
+[Child lifecycle orchestration](AUTHORITY_CHILD_LIFECYCLE.md) now connects bounded
+readiness, ongoing exit observation, one graceful stop request and bounded drain.
+Its outcome keeps readiness, stop, reaped state and handle closure separate; a
+lost exit observation leaves the child owned and unclosed. The mandatory campaign
+requires 296 cases, including lifecycle fault decisions and actual child/client
+operation, normally and under race. The independent 132-case separate-UID gate
+remains required. This inactive library does not install a supervisor or establish
+native acceptance; BunkerWeb remains independent.

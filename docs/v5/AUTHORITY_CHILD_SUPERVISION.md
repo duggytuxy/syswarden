@@ -58,7 +58,7 @@ shutdown policy and endpoint recovery authorization remain separate work.
 
 ## Verification and remaining scope
 
-The mandatory actual-program campaign requires 276 cases, normally and with race
+The mandatory actual-program campaign requires 296 cases, normally and with race
 instrumentation. New cases cover invalid input admission, repeated failed creation
 without descriptor leaks, retained ownership after a post-creation failure,
 actual launch/readiness/client access/SIGTERM/reap,
@@ -84,3 +84,12 @@ expiry, retries and HA contract acquire no dependency on this component or dashb
 
 [Protected startup composition](AUTHORITY_CHILD_STARTUP.md) connects acquisition
 and process creation while preserving borrowed inputs and post-start failure evidence.
+
+[Child lifecycle orchestration](AUTHORITY_CHILD_LIFECYCLE.md) now connects bounded
+readiness, ongoing exit observation, one graceful stop request and bounded drain.
+Its outcome keeps readiness, stop, reaped state and handle closure separate; a
+lost exit observation leaves the child owned and unclosed. The mandatory campaign
+requires 296 cases, including lifecycle fault decisions and actual child/client
+operation, normally and under race. The independent 132-case separate-UID gate
+remains required. This inactive library does not install a supervisor or establish
+native acceptance; BunkerWeb remains independent.

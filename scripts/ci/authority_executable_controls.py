@@ -68,6 +68,12 @@ def required_tests() -> set[str]:
     cases.add(f"{ROOT_TEST}/child-startup")
     for name in ("lifecycle", "independent-handoff", "wrong-launch-digest", "wrong-image-digest", "wrong-launcher-digest", "closed-inputs", "nil-null", "read-only-null", "closed-null", "regular-null", "runtime-refusal", "creation-refusal", "partial-acquisition-failure", "nil-start-result", "post-start-close-failure", "post-start-error", "startup-failure"):
         cases.add(f"{ROOT_TEST}/child-startup/{name}")
+    cases.add(f"{ROOT_TEST}/lifecycle-decisions")
+    for name in ("clean-cancel", "observation-window", "joined-timeout-error", "readiness-refused", "cancel-before-ready", "stop-refused", "drain-timeout", "drain-error", "observation-error", "missing-observation", "close-error", "unexpected-zero-exit", "unexpected-exit-error", "drain-exit-error"):
+        cases.add(f"{ROOT_TEST}/lifecycle-decisions/{name}")
+    cases.add(f"{ROOT_TEST}/child-lifecycle")
+    for name in ("cancel-after-client", "duplicate-lifecycle", "unexpected-stop", "canceled-startup"):
+        cases.add(f"{ROOT_TEST}/child-lifecycle/{name}")
     return cases
 
 

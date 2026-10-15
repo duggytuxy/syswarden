@@ -41,7 +41,7 @@ not enforcement against future changes or a complete OS sandbox policy.
 
 ## Required cases
 
-The separate verifier requires all 276 named cases and the enclosing successful
+The separate verifier requires all 296 named cases and the enclosing successful
 suite. It rejects missing, duplicate, skipped, failed, truncated, oversized or
 unexpected results. A successful executable exit alone is insufficient.
 
@@ -118,7 +118,7 @@ to an immutable copy of the approved bytes. The real-binary campaign executes th
 image after replacing the source pathname. Native launch policy remains open.
 
 The [bounded native ELF profile](AUTHORITY_EXECUTABLE_FORMAT.md) now checks the
-actual authenticated image before either exec transition. Its 276-case mandatory
+actual authenticated image before either exec transition. Its 296-case mandatory
 campaign includes correctly hashed malformed images, with no readiness or private
 state changes after refusal. Loader and dependency trust remain separate from
 format admission; no installed service or stable release behavior is changed.
@@ -139,7 +139,7 @@ service-manager integration and full v5 acceptance open.
 independently approved launcher to the four-resource launch bundle. The five held
 resources remain valid after caller-parent closure and source replacement; late
 or partial acquisition failure releases all acquired handles. Its 25 acquisition
-cases and actual handoff are mandatory within the 276-case executable campaign,
+cases and actual handoff are mandatory within the 296-case executable campaign,
 normally and under race. The independent 132-case cross-UID gate remains required.
 This inactive component neither provisions nor starts an installed service and
 preserves BunkerWeb's independent API and HA behavior.
@@ -148,6 +148,15 @@ preserves BunkerWeb's independent API and HA behavior.
 acquisition and pinned process creation. Temporary resources close after handoff;
 caller parents remain borrowed. A non-null child is always retained, and a later
 handoff/cleanup error remains visible through readiness, exit observation and
-final close. Its 17 new cases bring the mandatory real-program campaign to 276,
+final close. Its 17 startup cases remain mandatory within the 296-case real-program campaign,
 normally and under race. The separate 132-case cross-UID gate remains unchanged.
 This is inactive library composition, not installed supervision or fleet enrollment.
+
+[Child lifecycle orchestration](AUTHORITY_CHILD_LIFECYCLE.md) now connects bounded
+readiness, ongoing exit observation, one graceful stop request and bounded drain.
+Its outcome keeps readiness, stop, reaped state and handle closure separate; a
+lost exit observation leaves the child owned and unclosed. The mandatory campaign
+requires 296 cases, including lifecycle fault decisions and actual child/client
+operation, normally and under race. The independent 132-case separate-UID gate
+remains required. This inactive library does not install a supervisor or establish
+native acceptance; BunkerWeb remains independent.
