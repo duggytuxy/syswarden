@@ -1950,6 +1950,13 @@ func nftVerificationJSON(plan nftVerificationPlan, countGap int) []byte {
 			entries = append(entries, nftVerificationRuleEntry(family, table, baseChain, 820, "", []any{map[string]any{"jump": map[string]any{"target": ipv6ControlPlaneChain}}}))
 		}
 	}
+	if plan.generation != nil && plan.generation.ForwardStrictAllow == strictAllowForwardVersion {
+		for index := range 2 {
+			expressions := strictAllowForwardExpressions(plan.generation.Base.Interfaces, index == 1)
+			expressions[2] = map[string]any{"counter": map[string]any{"packets": 0, "bytes": 0}}
+			entries = append(entries, nftVerificationRuleEntry("inet", "syswarden", "docker_protect", uint64(830+index), "", expressions))
+		}
+	}
 	if plan.operatorPolicy.chainName != "" {
 		entries = append(entries, map[string]any{"chain": map[string]any{
 			"family": "inet", "table": "syswarden", "name": plan.operatorPolicy.chainName, "handle": 500,

@@ -538,7 +538,10 @@ func writeLinuxFirewallTestTools(t *testing.T, toolDir string) {
 		t.Fatalf("compile empty operator policy verification fixture: %v", err)
 	}
 	verificationPlan := buildNftVerificationPlan(populations, false, emptyOperatorPolicy.verificationPlan())
-	verificationPlan.generation = &nftPolicyGeneration{IPv6ControlPlane: ipv6ControlPlaneVersion}
+	verificationPlan.generation = &nftPolicyGeneration{
+		IPv6ControlPlane: ipv6ControlPlaneVersion, ForwardStrictAllow: strictAllowForwardVersion,
+		Base: nftV4028PersistenceInputs{Interfaces: []string{"eth-test0", "eth-test1"}, Inet: nftInetTemplateInputs{Strict: true}},
+	}
 	// Runtime-owned ban sets are intentionally empty in this isolated generator
 	// fixture. A negative cardinality in the verification plan means
 	// existence-only, but the generic JSON helper uses placeholder strings for

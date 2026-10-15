@@ -53,6 +53,13 @@ not a financial allocation.
 
 ## Non-regression gates by work slice
 
+- Container firewall compatibility (#376): explicit protected-interface zone
+  selection with independent Docker zones, missing/duplicate bindings, zone
+  changes before and after commit, scoped ownership and exact removal. Exercise
+  forwarded IPv4/IPv6 allowed/denied clients, private-source spoofing at ingress,
+  container-to-backend traffic and bidirectional bans. Namespace packet tests
+  support the result; real Docker, NetworkManager, firewalld reload, host reboot
+  and all independent native removal paths remain required before acceptance.
 - Shared schemas: golden, malformed, duplicate, unknown-version, compatibility
   and migration fixtures; preserve existing public protocol/telemetry fields.
 - Journal framing: exact payload bytes, independently bound start/end cursors,

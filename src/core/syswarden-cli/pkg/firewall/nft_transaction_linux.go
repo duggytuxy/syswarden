@@ -2143,6 +2143,11 @@ func verifyNftablesStateWithDynamicBans(ctx context.Context, runner nftCommandRu
 	}
 
 	var errs []error
+	if expected.generation != nil {
+		if err := verifyStrictAllowForward(document, expected.generation.ForwardStrictAllow, expected.generation.Base); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if expected.generation != nil && expected.generation.IPv6ControlPlane != "" {
 		if expected.generation.IPv6ControlPlane != ipv6ControlPlaneVersion {
 			errs = append(errs, fmt.Errorf("unsupported IPv6 control-plane verification generation"))
