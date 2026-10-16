@@ -374,6 +374,9 @@ func (host cronDProviderHost) captureSystemdRuntime(systemctlPath string) (cronD
 	if err != nil {
 		return cronDProviderSnapshot{}, fmt.Errorf("cron provider %s has unapproved systemd drop-ins", unit)
 	}
+	if err := attestLXCServiceLoadedProfile(host.executor, systemctlPath, unit, dropIns); err != nil {
+		return cronDProviderSnapshot{}, err
+	}
 	dropInEvidence, err := host.attestDropIns(host.executor, dropIns)
 	if err != nil {
 		return cronDProviderSnapshot{}, fmt.Errorf("cron provider %s has unapproved systemd drop-ins: %w", unit, err)
@@ -405,6 +408,9 @@ func (host cronDProviderHost) captureSystemdRuntime(systemctlPath string) (cronD
 	}
 	packageEvidence, err := host.attestSystemPackage(packageID, fragmentValue, execPath)
 	if err != nil {
+		return cronDProviderSnapshot{}, err
+	}
+	if err := attestLXCServiceLoadedProfile(host.executor, systemctlPath, unit, dropIns); err != nil {
 		return cronDProviderSnapshot{}, err
 	}
 	return cronDProviderSnapshot{
