@@ -157,6 +157,9 @@ SYSWARDEN_HA_TOKEN=""
 SYSWARDEN_HA_PEER_IP=""
 # Standby NODE TLS Port
 SYSWARDEN_HA_PEER_PORT="62026"
+# Optional API ingress scope for firewalld, independent of SYSWARDEN_INTERFACES.
+# Empty requires a unique interface-bound zone when firewalld is active.
+SYSWARDEN_HA_FIREWALLD_INTERFACES=""
 
 # --- WireGuard Management VPN ---
 # y = Enable, n = Disable

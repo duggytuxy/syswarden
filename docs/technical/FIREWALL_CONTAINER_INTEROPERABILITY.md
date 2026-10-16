@@ -17,25 +17,46 @@ manager. A plain zone port permission applies to all interfaces in that zone;
 it is not an interface-specific rich rule.
 
 The published implementation requires a unique interface-bound port zone.
-The development correction also accepts an explicit protected-interface scope:
+The v5 correction accepts a separate, explicit API ingress scope:
 
 ```toml
 [network]
 interfaces = "eth0"
+
+[integrations.ha]
+firewalld_interfaces = "br-api0"
 ```
 
-The name above is illustrative. Select the actual protected interfaces through
-the existing reviewed SysWarden configuration process. The legacy equivalent is
-`SYSWARDEN_INTERFACES`. All selected interfaces must have an active binding to
-one common existing firewalld zone. Unselected zones, including container zones,
-remain untouched. The zone name and default annotation never establish its role.
+These names are illustrative. `network.interfaces` identifies protected client
+ingress for forwarded GeoIP/ASN selection. `integrations.ha.firewalld_interfaces`
+identifies the interfaces through which HA or local integration clients reach
+the host API. Neither value is inferred from the other. The latter setting is a
+comma-separated string without spaces or duplicate names, like the former.
+Its legacy equivalent is `SYSWARDEN_HA_FIREWALLD_INTERFACES`; migration preserves
+it without enabling HA. CLI and core reject malformed values consistently.
 
-When no explicit scope is supplied, the existing unique-zone requirement remains.
-A missing interface, a duplicated binding, or selected interfaces in different
-zones causes a refusal before the authoritative transaction. The selected scope
-is copied into the plan and rechecked before commit and during reconciliation.
-An interface moving to another zone invalidates the plan. Exact ownership records
-continue to bind each managed permission to its zone.
+All selected API interfaces must have active bindings to one common existing
+firewalld zone. That zone can differ from protected external ingress. Other
+zones and permissions remain untouched unless exact product ownership separately
+authorizes retirement. Zone names and the default annotation do not establish
+roles. A plain port permission applies to every interface in the selected zone,
+not only the interfaces listed here. This controls product-created compatibility
+permissions; it does not replace API authentication, source authorization or
+administrator policy that already permits traffic through another path.
+
+When the API scope is empty, the existing unique-zone requirement remains,
+even if `network.interfaces` is set. This replaces the earlier development-only
+shared-selector behavior; v4.10.4 did not support explicit zone selection.
+When a nonempty API scope and a required API port are configured, active
+firewalld is mandatory. An absent/inactive frontend or an alternative frontend
+does not authorize an unscoped port fallback. A dormant scope with no required
+port does not prevent exact cleanup; it still has to be syntactically valid.
+
+A missing interface, duplicate binding or interfaces in different zones causes
+a refusal before the authoritative transaction. The selected API scope is copied
+into the plan and rechecked before commit and during reconciliation. A binding
+change invalidates the plan. Exact ownership still binds each managed permission
+to its zone, so cleanup does not depend on the currently selected interface.
 
 Do not remove a NetworkManager-managed interface from its zone as a workaround.
 Do not disable Docker's firewall integration, choose a zone by its name, or open
@@ -76,15 +97,11 @@ is needed for current administrator or integration traffic:
   intended configuration have been reviewed. The automatic recovery does not
   claim existing permissions or silently discard unresolved ownership.
 
-Review the protected-interface configuration before resuming the v5 reload.
-The current development implementation uses that same selection for the HA
-compatibility port zone and for forwarded strict-allow ingress. Those scopes
-can differ: an externally protected interface does not establish that a local
-integration port belongs in its zone. Do not choose an external interface just
-to clear a multi-zone refusal when that would expose the integration port in
-an unintended zone. Independent port-zone configuration and native verification
-remain outstanding under issue #376; absent-record recovery alone does not
-resolve this topology.
+Review both interface settings before resuming the v5 reload. Protected external
+ingress is not authority to expose a local integration port in the same zone.
+Select every required API ingress path explicitly; if they span zones, the
+current plain-port model refuses automatic expansion. Review the topology and
+administrator policy instead of dropping required paths to satisfy validation.
 
 Removing an obsolete manual opening on the published v4.10.4 package does not
 provide this new recovery behavior. No command here authorizes installing a
@@ -147,7 +164,9 @@ inside SysWarden.
 
 ## Verification boundaries
 
-Local tests cover explicit and custom zones, an unrelated Docker zone, default
+Local tests cover independent API/protected-ingress configuration, legacy
+migration, active frontend requirements, the actual isolated firewall writer,
+explicit and custom zones, an unrelated Docker zone, default
 annotations, missing and duplicate bindings, selected interfaces in multiple
 zones, caller-slice changes, rebinding before commit, unrelated zones appearing
 through the final post-commit reinspection, runtime reconstruction and

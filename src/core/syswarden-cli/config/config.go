@@ -38,6 +38,7 @@ type Config struct {
 	HAToken                    string
 	HAPeerIP                   string
 	HAPeerPort                 string
+	HAFirewalldInterfaces      string
 	HAV2Enabled                bool
 	HAClusterID                string
 	HAEpoch                    uint64

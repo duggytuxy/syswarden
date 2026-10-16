@@ -8,7 +8,28 @@ import (
 	"strings"
 )
 
-// resolveFirewalldPortZone selects a zone only from explicit protected interface
+// parseFirewalldPortInterfaces validates the API ingress scope independently of
+// protected client ingress. Do not trim, deduplicate or infer interface names.
+func parseFirewalldPortInterfaces(value string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		canonical, err := canonicalInterfaceName(part)
+		if err != nil || canonical != part || len(part) > 15 {
+			return nil, fmt.Errorf("invalid integrations.ha.firewalld_interfaces")
+		}
+		if _, duplicate := seen[part]; duplicate {
+			return nil, fmt.Errorf("duplicate integrations.ha.firewalld_interfaces entry")
+		}
+		seen[part] = struct{}{}
+	}
+	return parts, nil
+}
+
+// resolveFirewalldPortZone selects a zone only from explicit API interface
 // bindings, or from the unique interface-bound zone when no scope was configured.
 // Other zones are preserved regardless of their names or default annotation.
 func resolveFirewalldPortZone(path string, selectedInterfaces []string) (string, error) {
@@ -64,16 +85,16 @@ func resolveFirewalldPortZone(path string, selectedInterfaces []string) (string,
 		for _, name := range selectedInterfaces {
 			canonical, err := canonicalInterfaceName(name)
 			if err != nil {
-				return "", fmt.Errorf("invalid protected firewalld interface: %w", err)
+				return "", fmt.Errorf("invalid API firewalld interface: %w", err)
 			}
 			zone, exists := interfaceBindings[canonical]
 			if !exists {
-				return "", fmt.Errorf("protected interface %q has no active firewalld zone binding; preserve NetworkManager and firewalld assignments", canonical)
+				return "", fmt.Errorf("API interface %q has no active firewalld zone binding; preserve NetworkManager and firewalld assignments", canonical)
 			}
 			selectedZones[zone] = struct{}{}
 		}
 		if len(selectedZones) != 1 {
-			return "", fmt.Errorf("protected interfaces span multiple firewalld zones; automatic compatibility port expansion is refused")
+			return "", fmt.Errorf("API interfaces span multiple firewalld zones; automatic compatibility port expansion is refused")
 		}
 		for zone := range selectedZones {
 			return zone, nil
@@ -88,7 +109,7 @@ func resolveFirewalldPortZone(path string, selectedInterfaces []string) (string,
 			names = append(names, zone)
 		}
 		sort.Strings(names)
-		return "", fmt.Errorf("firewalld has multiple active interface-bound zones for the required compatibility port: %s; configure network.interfaces (legacy SYSWARDEN_INTERFACES) to select the protected interfaces in one existing zone; do not remove interface bindings", strings.Join(names, ", "))
+		return "", fmt.Errorf("firewalld has multiple active interface-bound zones for the required compatibility port: %s; configure integrations.ha.firewalld_interfaces (legacy SYSWARDEN_HA_FIREWALLD_INTERFACES) to select API ingress interfaces in one existing zone; do not remove interface bindings", strings.Join(names, ", "))
 	}
 	for zone := range interfaceZones {
 		return zone, nil

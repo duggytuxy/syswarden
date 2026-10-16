@@ -1198,6 +1198,9 @@ enabled = ` + haEnabled + `
 # Exact IPs are outbound sync destinations; CIDRs authorize inbound peers only.
 peer_ips = [` + peerIPsStr + `]
 peer_port = ` + haPeerPort + `
+# Optional comma-separated API ingress interfaces in one existing firewalld zone.
+# Independent of network.interfaces; empty requires a unique interface-bound zone.
+firewalld_interfaces = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_HA_FIREWALLD_INTERFACES", "")) + `
 
 # HA Shared Secret Token for API Authentication (Required when enabled; must be identical on all nodes)
 # Generate a secure token using: openssl rand -hex 32

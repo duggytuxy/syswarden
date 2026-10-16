@@ -271,11 +271,15 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	if len(interfaces) == 0 {
 		return fmt.Errorf("no valid firewall interface is configured")
 	}
-	// An explicit ingress scope also bounds compatibility port selection. An
-	// inferred default route is not authority to exclude other ingress paths.
+	// Only explicit ingress bounds forwarded strict allow. The API port zone
+	// has its own scope; external ingress never implies API exposure authority.
 	var protectedInterfaces []string
 	if config.GlobalConfig.Interfaces != "" {
 		protectedInterfaces = append([]string(nil), interfaces...)
+	}
+	portInterfaces, err := parseFirewalldPortInterfaces(config.GlobalConfig.HAFirewalldInterfaces)
+	if err != nil {
+		return err
 	}
 	forwardStrictVersion := ""
 	if strictAllow.configured && len(protectedInterfaces) > 0 {
@@ -633,7 +637,7 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 		verification,
 		func() error {
 			var prepareErr error
-			wrapperPlan, prepareErr = prepareLinuxFirewallWrapperReconciliationForInterfaces(firewallBackend, validLANSubnets, wrapperPorts, protectedInterfaces)
+			wrapperPlan, prepareErr = prepareLinuxFirewallWrapperReconciliationForInterfaces(firewallBackend, validLANSubnets, wrapperPorts, portInterfaces)
 			if prepareErr != nil {
 				return prepareErr
 			}
@@ -2283,6 +2287,9 @@ func prepareLinuxFirewallWrapperReconciliationForInterfaces(backend string, trus
 	intendedPorts, intendedSources, err := canonicalLinuxWrapperIntent(trustedSubnets, ports)
 	if err != nil {
 		return nil, fmt.Errorf("prepare wrapper intent: %w", err)
+	}
+	if len(intendedPorts) > 0 && len(portInterfaces) > 0 && paths["firewalld"] == "" {
+		return nil, fmt.Errorf("explicit HA firewalld interface scope requires active firewalld; refusing an unscoped compatibility port fallback")
 	}
 	previous, stateExists, stateMigrationRequired, err := readLinuxWrapperState(linuxWrapperStateFile)
 	if err != nil {

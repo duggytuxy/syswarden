@@ -114,6 +114,8 @@ func loadOldConfig(path string) (loadErr error) {
 			candidate.HAToken = val
 		case "SYSWARDEN_HA_PEER_IP":
 			candidate.HAPeerIP = val
+		case "SYSWARDEN_HA_FIREWALLD_INTERFACES":
+			candidate.HAFirewalldInterfaces = val
 		case "SYSWARDEN_HA_PEER_PORT":
 			candidate.HAPeerPort = val
 		case "SYSWARDEN_SIEM_ENABLED":
@@ -338,7 +340,8 @@ func legacyConfigForPolicyValidation(candidate *Config) (*ModularConfig, error) 
 		},
 		Integrations: IntegrationsConfig{
 			HA: HAConfig{
-				Enabled: candidate.HAEnabled, PeerIPs: split(candidate.HAPeerIP), PeerPort: mustLegacyInt(candidate.HAPeerPort), Token: candidate.HAToken,
+				FirewalldInterfaces: candidate.HAFirewalldInterfaces,
+				Enabled:             candidate.HAEnabled, PeerIPs: split(candidate.HAPeerIP), PeerPort: mustLegacyInt(candidate.HAPeerPort), Token: candidate.HAToken,
 				V2Enabled: candidate.HAV2Enabled, ClusterID: candidate.HAClusterID, Epoch: candidate.HAEpoch,
 				NodeID: candidate.HANodeID, PeerID: candidate.HAPeerID, Role: candidate.HARole, V2SecretFile: candidate.HAV2SecretFile,
 				TLSCertFile: candidate.HATLSCertFile, TLSKeyFile: candidate.HATLSKeyFile, TLSCAFile: candidate.HATLSCAFile,

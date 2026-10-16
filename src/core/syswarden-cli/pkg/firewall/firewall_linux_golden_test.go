@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"syswarden-cli/config"
@@ -123,6 +124,9 @@ func runBubblewrapFirewallGolden(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	writeLinuxFirewallTestTools(t, toolDir)
+	if os.Getenv("SYSWARDEN_TEST_HA_SCOPE") != "" {
+		writeRootedExecutableTestFile(t, filepath.Join(toolDir, "firewall-cmd"), []byte(statefulFirewalldWrapperTestScript))
+	}
 
 	command := exec.Command( // #nosec G204 G702 -- bwrap is resolved by LookPath and every command argument is a controlled test fixture
 		bwrap,
@@ -134,6 +138,12 @@ func runBubblewrapFirewallGolden(t *testing.T) []byte {
 	}
 
 	gotPath := filepath.Join(etcDir, "syswarden", "syswarden.nft")
+	if os.Getenv("SYSWARDEN_TEST_HA_SCOPE") == "unset" {
+		if _, err := os.Lstat(gotPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("refused unscoped API selection published nftables policy")
+		}
+		return nil
+	}
 	got, err := os.ReadFile(gotPath) // #nosec G304 -- gotPath is inside the isolated test root
 	if err != nil {
 		t.Fatalf("read isolated nftables output: %v", err)
@@ -360,8 +370,42 @@ func runLinuxFirewallGoldenHelper(t *testing.T) {
 		HoneyPorts: "23 6379",
 		ArpProtect: false,
 	}
-	if err := ApplyPolicies(); err != nil {
-		t.Fatalf("ApplyPolicies() in isolated sandbox: %v", err)
+	scopeFixture := os.Getenv("SYSWARDEN_TEST_HA_SCOPE")
+	if scopeFixture != "" && scopeFixture != "unset" {
+		config.GlobalConfig.HAFirewalldInterfaces = scopeFixture
+	}
+	applyErr := ApplyPolicies()
+	if scopeFixture == "unset" {
+		if applyErr == nil || !strings.Contains(applyErr.Error(), "multiple active interface-bound zones") {
+			t.Fatalf("empty API scope inherited protected ingress: %v", applyErr)
+		}
+		for _, path := range []string{linuxFirewallTargetFile, linuxFirewallFakeNFTAppliedMarker, linuxWrapperStateFile} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("unscoped API refusal changed policy or ownership")
+			}
+		}
+		return
+	}
+	if applyErr != nil {
+		t.Fatalf("ApplyPolicies() in isolated sandbox: %v", applyErr)
+	}
+	if config.GlobalConfig.HAFirewalldInterfaces != "" {
+		rules, exists, _, err := readLinuxWrapperState(linuxWrapperStateFile)
+		if err != nil || !exists {
+			t.Fatalf("read scoped receipt: %v", err)
+		}
+		found := false
+		for _, rule := range rules {
+			if rule.kind == "port" {
+				if rule.zone != "work" || rule.value != "62026" || rule.pending {
+					t.Fatal("writer selected the external API zone")
+				}
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("writer did not reconcile the API permission")
+		}
 	}
 	receipt, err := readOptionalNFTPolicyOwnership(filepath.Join(linuxFirewallTargetDirectory, nftPolicyOwnershipName))
 	if err != nil {

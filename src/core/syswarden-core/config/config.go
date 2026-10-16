@@ -172,6 +172,7 @@ type integrationsConfig struct {
 }
 
 type haConfig struct {
+	FirewalldInterfaces      string   `mapstructure:"firewalld_interfaces"`
 	Enabled                  bool     `mapstructure:"enabled"`
 	PeerIPs                  []string `mapstructure:"peer_ips"`
 	PeerPort                 int      `mapstructure:"peer_port"`
@@ -665,6 +666,9 @@ func validateRuntimeConfig(value *runtimeConfig) error {
 	}
 	if !validLogSetting(value.WAAP.BruteforceLogs, true) || !validLogSetting(value.WAAP.ModsecLogs, false) {
 		return fmt.Errorf("invalid WAAP log path")
+	}
+	if !validInterfaces(value.Integrations.HA.FirewalldInterfaces) {
+		return fmt.Errorf("invalid integrations.ha.firewalld_interfaces")
 	}
 	if value.Integrations.HA.PeerPort < 1 || value.Integrations.HA.PeerPort > 65535 {
 		return fmt.Errorf("invalid HA peer port")

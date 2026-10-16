@@ -46,9 +46,11 @@ need the reviewed response transaction path and exact scope authorization.
 compatibility correction for hosts with multiple firewalld zones and container
 traffic under strict country/ASN selection. The
 [operator and verification contract](../technical/FIREWALL_CONTAINER_INTEROPERABILITY.md)
-requires explicit protected interfaces, retained NetworkManager/container zone
-ownership, live-rule verification and exact product removal. Keep client ingress
-separate from container-to-backend traffic. Neither behavior depends on the
+requires distinct protected-client and API ingress scopes, retained
+NetworkManager/container zone ownership, live-rule verification and exact product removal. Keep client ingress
+separate from container-to-backend traffic. `integrations.ha.firewalld_interfaces`
+selects the API zone independently of `network.interfaces`; neither setting
+authorizes widening the other. Neither behavior depends on the
 dashboard or changes BunkerWeb's authenticated synchronization contract.
 
 Interrupted compatibility port recovery must not claim or remove an existing

@@ -53,13 +53,20 @@ not a financial allocation.
 
 ## Non-regression gates by work slice
 
-- Container firewall compatibility (#376): explicit protected-interface zone
+- Container firewall compatibility (#376): explicit independent API-interface zone
   selection with independent Docker zones, missing/duplicate bindings, zone
   changes before and after commit, scoped ownership and exact removal. Exercise
   forwarded IPv4/IPv6 allowed/denied clients, private-source spoofing at ingress,
   container-to-backend traffic and bidirectional bans. Namespace packet tests
   support the result; real Docker, NetworkManager, firewalld reload, host reboot
   and all independent native removal paths remain required before acceptance.
+- Independent API ingress (#376): validated CLI/core configuration and legacy
+  migration must preserve the separate firewalld scope. Exercise external
+  protected ingress with local API ingress, reject unavailable frontend and
+  multi-zone scopes, reattest bindings, and preserve unrelated permissions on
+  replay and exact removal. An isolated production writer test must prove that
+  the two settings do not select each other's policy. Native acceptance remains
+  separate from synthetic fixtures.
 - Interrupted firewalld compatibility ports (#376): retire only obsolete pending
   port records repeatedly proven absent from runtime and permanent state.
   Preserve present administrator permissions, changed receipts, unavailable
