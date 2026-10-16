@@ -51,6 +51,11 @@ ownership, live-rule verification and exact product removal. Keep client ingress
 separate from container-to-backend traffic. Neither behavior depends on the
 dashboard or changes BunkerWeb's authenticated synchronization contract.
 
+Interrupted compatibility port recovery must not claim or remove an existing
+manual integration opening. Only an obsolete pending port repeatedly verified
+absent from both firewalld scopes can be forgotten automatically. Keep present
+permissions and their evidence until the administrator establishes their purpose.
+
 Before acceptance, exercise a real container deployment through boot, firewalld
 reload, policy replay and removal, with both permitted and rejected traffic.
 The local namespace packet test is supporting evidence, not native integration

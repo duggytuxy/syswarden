@@ -133,7 +133,7 @@ func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return true
 	}
-	if cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
+	if cmd == configGetCmd || cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
 		return false
 	}
 	if topLevel := topLevelCommand(cmd); topLevel != nil {
@@ -211,6 +211,7 @@ func enforceRemovalState(cmd *cobra.Command) error {
 var degradedConfigAllowlist = map[string]struct{}{
 	"completion":              {},
 	"config":                  {},
+	"config-get":              {},
 	"ha-fence":                {},
 	"help":                    {},
 	"install":                 {},

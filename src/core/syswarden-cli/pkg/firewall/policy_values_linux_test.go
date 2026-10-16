@@ -93,9 +93,10 @@ case "$argument" in
         [ "$permanent" = "1" ] && source="$state"
         if [ -f "$source" ]; then
             while IFS= read -r line; do
-                [ "$line" = "$selector" ] && exit 0
+                if [ "$line" = "$selector" ]; then printf 'yes\n'; exit 0; fi
             done < "$source"
         fi
+        printf 'no\n'
         exit 1
         ;;
     --add-*)

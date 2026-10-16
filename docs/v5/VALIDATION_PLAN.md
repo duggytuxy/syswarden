@@ -60,6 +60,13 @@ not a financial allocation.
   container-to-backend traffic and bidirectional bans. Namespace packet tests
   support the result; real Docker, NetworkManager, firewalld reload, host reboot
   and all independent native removal paths remain required before acceptance.
+- Interrupted firewalld compatibility ports (#376): retire only obsolete pending
+  port records repeatedly proven absent from runtime and permanent state.
+  Preserve present administrator permissions, changed receipts, unavailable
+  frontends/zones and ambiguous observations. Exercise precommit refusal,
+  pre-persistence rollback, postcommit failure, concurrent rule appearance and
+  retry after an operator independently withdraws an unnecessary manual opening.
+  Validate diagnostic configuration reads without historical normalization.
 - Shared schemas: golden, malformed, duplicate, unknown-version, compatibility
   and migration fixtures; preserve existing public protocol/telemetry fields.
 - Journal framing: exact payload bytes, independently bound start/end cursors,
