@@ -166,7 +166,7 @@ var installCmd = &cobra.Command{
 		if err := setupWireGuardWithoutQualificationEgress(); err != nil {
 			return installStageError("WireGuard setup failed", err)
 		}
-		if err := network.SetupHACluster(); err != nil {
+		if err := network.SetupHACluster(firewall.AllowConfiguredHAPeer); err != nil {
 			return installStageError("HA cluster setup failed", err)
 		}
 

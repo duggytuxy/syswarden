@@ -18,7 +18,7 @@ These are failed-candidate evidence, not successful HA campaign receipts. Raw re
 
 ## Correction and boundaries
 
-The CLI now invokes the packaged executable directly with `whitelist <peer> --port <peer_port>`. Both target and port must be canonical and valid before a command is returned. Port-scoped whitelisting preserves global block ownership and does not acquire the legacy unban fence. HA v2 setup keeps the owned legacy synchronization cron disabled, including for exact peer addresses. Invalid peers and failed whitelist setup also disable that cron.
+The original correction invoked the packaged executable directly with `whitelist <peer> --port <peer_port>`. Both target and port had to be canonical and valid before a command was returned. The v5 development path now uses the [automatic HA peer writer](FIREWALL_CONTAINER_INTEROPERABILITY.md#automatic-ha-peer-access-and-removal) to retain exact generated-list provenance. Port-scoped access still preserves global block ownership and does not acquire the legacy unban fence. HA v2 setup keeps the owned legacy synchronization cron disabled, including for exact peer addresses. Invalid peers and failed whitelist setup also disable that cron.
 
 The core TLS loader, fence validation, replication protocol, capability catalogue, frozen native contracts and contract deadlines are unchanged. No incomplete identity is accepted. Existing unscoped whitelist and unban commands retain their fence and HA v2 ownership restrictions.
 
