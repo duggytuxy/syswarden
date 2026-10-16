@@ -123,6 +123,9 @@ func runBubblewrapFirewallGolden(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	writeLinuxFirewallTestTools(t, toolDir)
+	if os.Getenv("SYSWARDEN_TEST_HA_SCOPE") != "" {
+		writeRootedExecutableTestFile(t, filepath.Join(toolDir, "firewall-cmd"), []byte(statefulFirewalldWrapperTestScript))
+	}
 
 	command := exec.Command( // #nosec G204 G702 -- bwrap is resolved by LookPath and every command argument is a controlled test fixture
 		bwrap,
@@ -360,8 +363,29 @@ func runLinuxFirewallGoldenHelper(t *testing.T) {
 		HoneyPorts: "23 6379",
 		ArpProtect: false,
 	}
+	if scope := os.Getenv("SYSWARDEN_TEST_HA_SCOPE"); scope != "" {
+		config.GlobalConfig.HAFirewalldInterfaces = scope
+	}
 	if err := ApplyPolicies(); err != nil {
 		t.Fatalf("ApplyPolicies() in isolated sandbox: %v", err)
+	}
+	if config.GlobalConfig.HAFirewalldInterfaces != "" {
+		rules, exists, _, err := readLinuxWrapperState(linuxWrapperStateFile)
+		if err != nil || !exists {
+			t.Fatalf("read scoped receipt: %v", err)
+		}
+		found := false
+		for _, rule := range rules {
+			if rule.kind == "port" {
+				if rule.zone != "work" || rule.value != "62026" || rule.pending {
+					t.Fatal("writer selected the external API zone")
+				}
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("writer did not reconcile the API permission")
+		}
 	}
 	receipt, err := readOptionalNFTPolicyOwnership(filepath.Join(linuxFirewallTargetDirectory, nftPolicyOwnershipName))
 	if err != nil {

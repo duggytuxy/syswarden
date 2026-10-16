@@ -292,6 +292,7 @@ func mapModularToLegacy(m *ModularConfig) *Config {
 	candidate.HAToken = m.Integrations.HA.Token
 	candidate.HAPeerIP = strings.Join(m.Integrations.HA.PeerIPs, " ")
 	candidate.HAPeerPort = strconv.Itoa(m.Integrations.HA.PeerPort)
+	candidate.HAFirewalldInterfaces = m.Integrations.HA.FirewalldInterfaces
 	candidate.HAV2Enabled = m.Integrations.HA.V2Enabled
 	candidate.HAClusterID = m.Integrations.HA.ClusterID
 	candidate.HAEpoch = m.Integrations.HA.Epoch

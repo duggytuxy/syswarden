@@ -17,7 +17,7 @@ func TestFirewalldProtectedInterfaceZoneSelection_SW_FW_001(t *testing.T) {
 		interfaces  []string
 		want, fail  string
 	}{
-		{name: "unscoped multi-zone remains refused", zones: "docker\n  interfaces: docker0\npublic\n  interfaces: eth0", fail: "configure network.interfaces"},
+		{name: "unscoped multi-zone remains refused", zones: "docker\n  interfaces: docker0\npublic\n  interfaces: eth0", fail: "configure integrations.ha.firewalld_interfaces"},
 		{name: "explicit host beside Docker", zones: "docker\n  interfaces: docker0 br-test\npublic (default)\n  interfaces: eth0", interfaces: []string{"eth0"}, want: "public"},
 		{name: "custom zone beside Docker", zones: "docker (default)\n  interfaces: docker0\nwork\n  interfaces: eth0", interfaces: []string{"eth0"}, want: "work"},
 		{name: "zone names do not imply role", zones: "public\n  interfaces: br-test\ndocker\n  interfaces: eth0", interfaces: []string{"eth0"}, want: "docker"},
@@ -28,7 +28,7 @@ func TestFirewalldProtectedInterfaceZoneSelection_SW_FW_001(t *testing.T) {
 		{name: "source does not bind interface", zones: "trusted\n  sources: 192.0.2.0/24", interfaces: []string{"eth0"}, fail: "has no active firewalld zone binding"},
 		{name: "duplicate cross-zone interface", zones: "public\n  interfaces: eth0\nwork\n  interfaces: eth0", interfaces: []string{"eth0"}, fail: "duplicate bindings"},
 		{name: "duplicate same-zone interface", zones: "public\n  interfaces: eth0 eth0", interfaces: []string{"eth0"}, fail: "duplicate bindings"},
-		{name: "invalid selected interface", zones: "public\n  interfaces: eth0", interfaces: []string{"eth0;"}, fail: "invalid protected firewalld interface"},
+		{name: "invalid selected interface", zones: "public\n  interfaces: eth0", interfaces: []string{"eth0;"}, fail: "invalid API firewalld interface"},
 		{name: "malformed unselected binding", zones: "public\n  interfaces: eth0\nwork\n  interfaces: bad;", interfaces: []string{"eth0"}, fail: "invalid active firewalld interface"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
