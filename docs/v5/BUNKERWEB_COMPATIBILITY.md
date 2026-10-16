@@ -122,6 +122,20 @@ Extend fixtures for v4-to-v5 adapters and the new tab: enabled/disabled/unknown,
 unreachable source, denied node, stale capability, failed operation, overlapping
 claims, expiry, current protection retained by another owner, and HA standby.
 
+## Native restart while legacy synchronization is fenced
+
+An active native-sync fence continues to reject new legacy and local operator
+writes. During startup, the core may restore only the still-live claims attested
+by its durable native runtime history. This replay holds a shared fence lease,
+preserves the active campaign and does not reset a temporary claim's full TTL.
+Expired or withdrawn claims are not recreated. A malformed or transitioning
+fence, unverified history or pending mutation still prevents restoration.
+
+This bounded startup replay keeps the authenticated BunkerWeb API available
+after a restart without releasing the fence. It does not relax the separate HA
+v2 static-writer, peer-health, provenance or recovery requirements. Native
+restart and reboot evidence remains required before final v5.00.0 acceptance.
+
 ## Real integration evidence still required
 
 On existing authorized laboratory resources, pin the partner release and test

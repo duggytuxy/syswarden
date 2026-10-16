@@ -33,7 +33,7 @@ func PrepareRuntimeLifecycle(ctx context.Context, underlying firewall.Manager) (
 		}
 		manager.operatorFence = fence
 	}
-	if err := manager.withOperatorFence(manager.restoreRetainedClaims); err != nil {
+	if err := manager.restoreRetainedClaimsAtStartup(); err != nil {
 		closeStore()
 		return nil, nil, fmt.Errorf("restore retained native runtime claims: %w", err)
 	}
@@ -158,4 +158,34 @@ func (manager *runtimeLifecycleManager) restoreRetainedClaims() error {
 		}
 	}
 	return nil
+}
+
+// Startup restores only claims already attested by durable native history.
+// An active legacy-sync fence must survive this replay without preventing the
+// API from starting. New operator and legacy writes keep their separate guards.
+func (manager *runtimeLifecycleManager) restoreRetainedClaimsAtStartup() error {
+	fence := manager.operatorFence
+	if fence == nil {
+		return manager.restoreRetainedClaims()
+	}
+	root, err := fence.openDirectory(false)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	lease, err := openHAFenceLockMode(root, fence.expectedOwnerUID, false, true)
+	if err != nil {
+		return fmt.Errorf("HA native-sync fence is transitioning during startup: %w", err)
+	}
+	defer closeHAFenceLock(lease)
+	state, err := readHAFenceState(root, fence.expectedOwnerUID)
+	if err != nil {
+		return err
+	}
+	if state.State != haFenceStateInactive && state.State != haFenceStateActiveDrained {
+		return fmt.Errorf("native runtime restoration is blocked by HA fence state %s", state.State)
+	}
+	// Keep the shared lease until every replayed claim has its native witness
+	// and durable commit. An exclusive fence transition cannot interleave.
+	return manager.restoreRetainedClaims()
 }
