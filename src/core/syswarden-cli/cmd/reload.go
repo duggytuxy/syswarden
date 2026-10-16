@@ -82,7 +82,7 @@ var reloadCmd = &cobra.Command{
 			fmt.Printf("[WARN] Threat feeds cron repair failed: %v\n", err)
 			failures = append(failures, fmt.Errorf("threat feeds cron repair: %w", err))
 		}
-		if err := network.SetupHACluster(); err != nil {
+		if err := network.SetupHACluster(firewall.AllowConfiguredHAPeer); err != nil {
 			fmt.Printf("[WARN] HA cluster cron repair failed: %v\n", err)
 			failures = append(failures, fmt.Errorf("HA cluster cron repair: %w", err))
 		}

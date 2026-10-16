@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -27,7 +26,6 @@ import (
 	"time"
 
 	"syswarden-cli/config"
-	"syswarden-cli/pkg/platformpaths"
 )
 
 func TestSetupHAClusterFailsClosedWhenAutoWhitelistFails_SW2_M6(t *testing.T) {
@@ -41,11 +39,11 @@ func TestSetupHAClusterFailsClosedWhenAutoWhitelistFails_SW2_M6(t *testing.T) {
 
 	var cronCalls []bool
 	err := setupHACluster(
-		func(peer, port string) (*exec.Cmd, error) {
+		func(peer, port string) error {
 			if peer != "8.8.8.8" || port != "62026" {
 				t.Fatalf("auto-whitelist peer/port = %q/%q", peer, port)
 			}
-			return exec.Command("false"), nil
+			return errors.New("injected peer mutation failure")
 		},
 		func(enable bool) error {
 			cronCalls = append(cronCalls, enable)
@@ -72,8 +70,8 @@ func TestSetupHAClusterJoinsAutoWhitelistAndCronDisableFailures_SW2_M6(t *testin
 	whitelistErr := errors.New("whitelist failed")
 	cronErr := errors.New("cron disable failed")
 	err := setupHACluster(
-		func(string, string) (*exec.Cmd, error) {
-			return nil, whitelistErr
+		func(string, string) error {
+			return whitelistErr
 		},
 		func(enable bool) error {
 			if enable {
@@ -104,17 +102,12 @@ func TestSetupHAClusterScopesPeerAccessAndClosesLegacyWriters_SW_HA_001(t *testi
 			config.GlobalConfig = &config.Config{HAEnabled: true, HAV2Enabled: test.v2, HAPeerIP: test.peers, HAPeerPort: test.port}
 			var peers []string
 			var cronCalls []bool
-			err := setupHACluster(func(peer, port string) (*exec.Cmd, error) {
-				command, err := platformpaths.WhitelistCommand(peer, port)
-				if err != nil {
-					return nil, err
-				}
-				want := []string{platformpaths.CLI, "whitelist", peer, "--port", test.port}
-				if !reflect.DeepEqual(command.Args, want) {
-					t.Fatalf("HA setup would execute %q, want port-scoped %q", command.Args, want)
+			err := setupHACluster(func(peer, port string) error {
+				if port != test.port {
+					t.Fatalf("HA setup port = %q, want %q", port, test.port)
 				}
 				peers = append(peers, peer)
-				return exec.Command("true"), nil
+				return nil
 			}, func(enabled bool) error {
 				cronCalls = append(cronCalls, enabled)
 				return nil
@@ -136,12 +129,9 @@ func TestSetupHAClusterInvalidScopeDisablesLegacyWriters_SW_HA_001(t *testing.T)
 			t.Cleanup(func() { config.GlobalConfig = previous })
 			config.GlobalConfig = &config.Config{HAEnabled: true, HAPeerIP: test.peer, HAPeerPort: test.port}
 			var cronCalls []bool
-			err := setupHACluster(func(peer, port string) (*exec.Cmd, error) {
-				command, err := platformpaths.WhitelistCommand(peer, port)
-				if err == nil || command != nil {
-					t.Fatal("invalid configuration produced a peer mutation command")
-				}
-				return nil, err
+			err := setupHACluster(func(peer, port string) error {
+				t.Fatal("invalid configuration reached the peer mutation writer")
+				return nil
 			}, func(enabled bool) error {
 				cronCalls = append(cronCalls, enabled)
 				return nil

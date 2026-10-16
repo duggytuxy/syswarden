@@ -112,6 +112,28 @@ starting services, recovering firewall transactions or running the historical
 configuration normalizer. Invalid configuration remains an error. This avoids
 changing older settings merely to inspect an interface selection during recovery.
 
+## Automatic HA peer access and removal
+
+HA setup grants configured peers only the configured TCP API port. The v5
+automatic writer operates directly on the validated configuration; it does not
+invoke the manual whitelist command. It preserves generated-list provenance
+only when the exact previous content and inode already have valid provenance.
+Unmarked, copied or administrator-modified lists are never adopted. Existing
+administrator entries and supported read permissions remain intact.
+
+A failure before the firewall commits restores the previous list bytes. A
+concurrent administrator edit prevents rollback over that edit. A failure after
+commit keeps the persistent list aligned with the committed policy and reports
+the incomplete reconciliation. Retries still reapply policy without duplicating
+the peer entry. Manual whitelist operations retain their separate administrator
+ownership semantics; port-scoped peer access never performs a global unban.
+
+This prevents automatic HA setup from discarding the evidence needed for later
+verified removal. It does not retroactively claim a list whose provenance was
+already lost. Preserve such a list and the removal barrier for explicit verified
+recovery. Native uninstall, package remove and package purge remain distinct IVV
+requirements, including continued operation of unrelated administrator policy.
+
 ## Strict country selection and container traffic
 
 GeoIP/ASN strict allow in SysWarden uses packet source addresses. It does not

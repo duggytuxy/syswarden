@@ -3,11 +3,10 @@ package network
 import (
 	"errors"
 	"fmt"
-	"os/exec"
+	"strconv"
 	"strings"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/cronstate"
-	"syswarden-cli/pkg/platformpaths"
 	"syswarden-cli/pkg/system"
 )
 
@@ -58,8 +57,10 @@ func configureHASyncCron(enableOutbound bool) error {
 	return nil
 }
 
-func SetupHACluster() error {
-	return setupHACluster(platformpaths.WhitelistCommand, configureHASyncCron)
+// SetupHACluster receives the automatic peer writer from the command layer to
+// avoid a network/firewall import cycle and the manual whitelist CLI path.
+func SetupHACluster(allowPeer func(string, string) error) error {
+	return setupHACluster(allowPeer, configureHASyncCron)
 }
 
 func failHASetupClosed(configureSyncCron func(bool) error, setupErr error) error {
@@ -70,7 +71,7 @@ func failHASetupClosed(configureSyncCron func(bool) error, setupErr error) error
 }
 
 func setupHACluster(
-	whitelistCommand func(string, string) (*exec.Cmd, error),
+	allowPeer func(string, string) error,
 	configureSyncCron func(bool) error,
 ) error {
 	if !config.GlobalConfig.HAEnabled {
@@ -93,22 +94,18 @@ func setupHACluster(
 		fmt.Println("[WARN] HA Cluster enabled but no Peer IP configured.")
 		return nil
 	}
+	port, err := strconv.ParseUint(peerPort, 10, 16)
+	if err != nil || port == 0 || strconv.FormatUint(port, 10) != peerPort || allowPeer == nil {
+		return failHASetupClosed(configureSyncCron, fmt.Errorf("HA peer access requires a writer and one canonical TCP port"))
+	}
 
 	fmt.Printf("[INFO] Configuring HA peer allowlist: %v on port %s\n", peerPlan.Allowlist, peerPort)
 
 	// HA needs only its TCP listener port. A global whitelist would also unban
 	// the peer and acquire the legacy writer fence before TLS bootstrap.
 	for _, ip := range peerPlan.Allowlist {
-		// Just call the binary to avoid cyclical imports or complex logic
 		fmt.Printf("[INFO] Auto-whitelisting HA Peer IP: %s\n", ip)
-		whitelistCmd, err := whitelistCommand(ip, peerPort)
-		if err != nil {
-			return failHASetupClosed(
-				configureSyncCron,
-				fmt.Errorf("failed to prepare HA peer auto-whitelist for %s: %w", ip, err),
-			)
-		}
-		if err := whitelistCmd.Run(); err != nil {
+		if err := allowPeer(ip, peerPort); err != nil {
 			return failHASetupClosed(
 				configureSyncCron,
 				fmt.Errorf("failed to auto-whitelist HA peer %s: %w", ip, err),

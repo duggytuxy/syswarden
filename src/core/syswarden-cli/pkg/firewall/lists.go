@@ -44,10 +44,11 @@ type transactionalListSnapshot struct {
 }
 
 type transactionalListMutation struct {
-	target  approvedListFile
-	before  transactionalListSnapshot
-	after   listFileIdentity
-	changed bool
+	target    approvedListFile
+	before    transactionalListSnapshot
+	after     listFileIdentity
+	changed   bool
+	automatic bool
 }
 
 func approvedListFileForPath(path string) (approvedListFile, error) {
@@ -814,8 +815,19 @@ func mutateListFileTransactionally(
 	createDirectory bool,
 	transform func([]byte, bool) ([]byte, bool, error),
 ) (transactionalListMutation, error) {
+	return mutateListFileTransactionallyWithOrigin(target, createDirectory, false, transform)
+}
+
+func mutateListFileTransactionallyWithOrigin(
+	target approvedListFile,
+	createDirectory, automatic bool,
+	transform func([]byte, bool) ([]byte, bool, error),
+) (transactionalListMutation, error) {
 	directory, err := openListDirectory(target, createDirectory)
 	if errors.Is(err, fs.ErrNotExist) && !createDirectory {
+		if automatic {
+			return transactionalListMutation{}, fmt.Errorf("automatic whitelist pair has not been initialized")
+		}
 		return transactionalListMutation{target: target}, nil
 	}
 	if err != nil {
@@ -836,7 +848,7 @@ func mutateListFileTransactionally(
 	if err != nil {
 		return transactionalListMutation{}, err
 	}
-	mutation := transactionalListMutation{target: target, before: before}
+	mutation := transactionalListMutation{target: target, before: before, automatic: automatic}
 	if !changed {
 		return mutation, nil
 	}
@@ -846,7 +858,7 @@ func mutateListFileTransactionally(
 	afterDigest := sha256.Sum256(updated)
 
 	if before.exists {
-		err = writeListFileInDirectoryFromSnapshot(directory, target, updated, before.content)
+		err = writeListFileInDirectoryWithOrigin(directory, target, updated, &before.digest, nil, automatic)
 	} else {
 		err = appendListFileInDirectory(directory, target, updated)
 	}
@@ -888,7 +900,7 @@ func rollbackTransactionalListMutation(mutation transactionalListMutation) error
 		return fmt.Errorf("refuse to overwrite list target changed before rollback: %s", mutation.target.name)
 	}
 	if mutation.before.exists {
-		if err := writeListFileInDirectoryFromSnapshot(directory, mutation.target, mutation.before.content, current.content); err != nil {
+		if err := writeListFileInDirectoryWithOrigin(directory, mutation.target, mutation.before.content, &current.digest, nil, mutation.automatic); err != nil {
 			return fmt.Errorf("restore list target %s: %w", mutation.target.name, err)
 		}
 	} else {
@@ -1183,12 +1195,19 @@ func addToListFileAt(target approvedListFile, line string) error {
 }
 
 func addToListFileTransactionally(target approvedListFile, line string) (transactionalListMutation, error) {
+	return addToListFileTransactionallyWithOrigin(target, line, false)
+}
+
+func addToListFileTransactionallyWithOrigin(target approvedListFile, line string, automatic bool) (transactionalListMutation, error) {
 	requested, err := parseCanonicalListEntry(line, true)
 	if err != nil {
 		return transactionalListMutation{}, fmt.Errorf("invalid list entry: %w", err)
 	}
 	canonicalLine := requested.String()
-	return mutateListFileTransactionally(target, true, func(content []byte, _ bool) ([]byte, bool, error) {
+	return mutateListFileTransactionallyWithOrigin(target, !automatic, automatic, func(content []byte, exists bool) ([]byte, bool, error) {
+		if automatic && !exists {
+			return nil, false, fmt.Errorf("automatic whitelist pair has not been initialized")
+		}
 		for _, existing := range strings.Split(string(content), "\n") {
 			cleanExisting := strings.TrimSpace(existing)
 			if cleanExisting == canonicalLine {
@@ -1198,6 +1217,9 @@ func addToListFileTransactionally(target approvedListFile, line string) (transac
 			if parseErr == nil && sameListEntry(parsedExisting, requested) {
 				return content, false, nil
 			}
+		}
+		if len(content) != 0 && content[len(content)-1] != '\n' {
+			content = append(content, '\n')
 		}
 		return append(content, []byte(canonicalLine+"\n")...), true, nil
 	})
