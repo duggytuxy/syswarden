@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"syswarden-cli/config"
@@ -137,6 +138,12 @@ func runBubblewrapFirewallGolden(t *testing.T) []byte {
 	}
 
 	gotPath := filepath.Join(etcDir, "syswarden", "syswarden.nft")
+	if os.Getenv("SYSWARDEN_TEST_HA_SCOPE") == "unset" {
+		if _, err := os.Lstat(gotPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("refused unscoped API selection published nftables policy")
+		}
+		return nil
+	}
 	got, err := os.ReadFile(gotPath) // #nosec G304 -- gotPath is inside the isolated test root
 	if err != nil {
 		t.Fatalf("read isolated nftables output: %v", err)
@@ -363,11 +370,24 @@ func runLinuxFirewallGoldenHelper(t *testing.T) {
 		HoneyPorts: "23 6379",
 		ArpProtect: false,
 	}
-	if scope := os.Getenv("SYSWARDEN_TEST_HA_SCOPE"); scope != "" {
-		config.GlobalConfig.HAFirewalldInterfaces = scope
+	scopeFixture := os.Getenv("SYSWARDEN_TEST_HA_SCOPE")
+	if scopeFixture != "" && scopeFixture != "unset" {
+		config.GlobalConfig.HAFirewalldInterfaces = scopeFixture
 	}
-	if err := ApplyPolicies(); err != nil {
-		t.Fatalf("ApplyPolicies() in isolated sandbox: %v", err)
+	applyErr := ApplyPolicies()
+	if scopeFixture == "unset" {
+		if applyErr == nil || !strings.Contains(applyErr.Error(), "multiple active interface-bound zones") {
+			t.Fatalf("empty API scope inherited protected ingress: %v", applyErr)
+		}
+		for _, path := range []string{linuxFirewallTargetFile, linuxFirewallFakeNFTAppliedMarker, linuxWrapperStateFile} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("unscoped API refusal changed policy or ownership")
+			}
+		}
+		return
+	}
+	if applyErr != nil {
+		t.Fatalf("ApplyPolicies() in isolated sandbox: %v", applyErr)
 	}
 	if config.GlobalConfig.HAFirewalldInterfaces != "" {
 		rules, exists, _, err := readLinuxWrapperState(linuxWrapperStateFile)

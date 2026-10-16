@@ -78,12 +78,16 @@ func TestHAFirewalldScopeRecoversPendingOtherZoneAndPreservesAdminPolicy(t *test
 }
 
 func TestHAFirewalldIndependentScopeProductionWriter(t *testing.T) {
-	t.Setenv("SYSWARDEN_TEST_HA_SCOPE", "br-api0")
-	t.Setenv("SYSWARDEN_WRAPPER_STATE", "/etc/scoped-rules")
-	t.Setenv("SYSWARDEN_WRAPPER_LOG", "/etc/scoped-calls")
-	t.Setenv("SYSWARDEN_ACTIVE_ZONES_OUTPUT", "public\n  interfaces: eth-test0 eth-test1\nwork\n  interfaces: br-api0")
-	got := runBubblewrapFirewallGolden(t)
-	if !strings.Contains(string(got), strictAllowForwardSource([]string{"eth-test0", "eth-test1"})) {
-		t.Fatal("API scope changed protected forwarding ingress")
+	for _, scope := range []string{"br-api0", "unset"} {
+		t.Run(scope, func(t *testing.T) {
+			t.Setenv("SYSWARDEN_TEST_HA_SCOPE", scope)
+			t.Setenv("SYSWARDEN_WRAPPER_STATE", "/etc/scoped-rules")
+			t.Setenv("SYSWARDEN_WRAPPER_LOG", "/etc/scoped-calls")
+			t.Setenv("SYSWARDEN_ACTIVE_ZONES_OUTPUT", "public\n  interfaces: eth-test0 eth-test1\nwork\n  interfaces: br-api0")
+			got := runBubblewrapFirewallGolden(t)
+			if scope != "unset" && !strings.Contains(string(got), strictAllowForwardSource([]string{"eth-test0", "eth-test1"})) {
+				t.Fatal("API scope changed protected forwarding ingress")
+			}
+		})
 	}
 }
