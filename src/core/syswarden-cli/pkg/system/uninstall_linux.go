@@ -243,6 +243,9 @@ func attestSystemdFirewallRemovalService(
 	if _, err := manager.attestSystemdDropIns(manager.executor, dropIns); err != nil {
 		return fmt.Errorf("refusing unapproved systemd drop-ins for firewall mutator %s: %w", unit, err)
 	}
+	if err := attestLXCServiceLoadedProfile(manager.executor, manager.servicePath, unit, dropIns); err != nil {
+		return fmt.Errorf("refusing stale systemd drop-in metadata for %s: %w", unit, err)
+	}
 	execStart, err := queryFirewallProperty(manager.executor, manager.servicePath, unit, "ExecStart")
 	if err != nil {
 		return err

@@ -328,3 +328,10 @@ requires 296 cases, including lifecycle fault decisions and actual child/client
 operation, normally and under race. The independent 132-case separate-UID gate
 remains required. This inactive library does not install a supervisor or establish
 native acceptance; BunkerWeb remains independent.
+
+The [LXC compatibility boundary](LXC_SERVICE_COMPATIBILITY.md) requires positive
+provider and retirement fixtures plus changed-profile, unsafe-file, context and
+stale-manager refusals. A controlled LXC campaign must separately prove actual
+scheduling, guest reload/reboot, independent removal paths and preservation of
+unrelated jobs. Component success does not establish container capability or
+complete v5.00.0 IVVQ acceptance. Track the remaining native evidence in #384.

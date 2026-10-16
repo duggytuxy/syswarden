@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -352,11 +353,20 @@ func attestSystemdServiceDropInsWithPackageAttestor(
 	dropIns string,
 	attestPackage func(firewallManagerExecutor, string) (string, error),
 ) (string, error) {
+	return attestSystemdServiceDropInsWithAttestors(executor, dropIns, attestPackage, attestLXCServiceDropIn)
+}
+
+func attestSystemdServiceDropInsWithAttestors(
+	executor firewallManagerExecutor,
+	dropIns string,
+	attestPackage, attestLXC func(firewallManagerExecutor, string) (string, error),
+) (string, error) {
 	if dropIns == "" {
 		return "", nil
 	}
 	paths := strings.Split(dropIns, " ")
-	if len(paths) > 2 {
+	if len(paths) > 3 || len(paths) > 2 && !slices.Contains(paths, approvedLXCServiceDropInPath) ||
+		attestPackage == nil || attestLXC == nil {
 		return "", fmt.Errorf("systemd service has unapproved drop-ins")
 	}
 	evidence := make([]string, 0, len(paths))
@@ -370,6 +380,12 @@ func attestSystemdServiceDropInsWithPackageAttestor(
 		}
 		seen[path] = struct{}{}
 		switch path {
+		case approvedLXCServiceDropInPath:
+			item, err := attestLXC(executor, path)
+			if err != nil {
+				return "", err
+			}
+			evidence = append(evidence, item)
 		case approvedSystemdServiceDropInPath:
 			item, err := attestApprovedSystemdServiceDropInsAt(
 				executor, path, approvedSystemdServiceDropInPath, "/", 0, 0,

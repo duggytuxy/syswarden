@@ -126,6 +126,7 @@ func runAllowedRetirementManagerCommand(name string, args ...string) ([]byte, er
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=ActiveState\x00--value":
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=FragmentPath\x00--value":
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=DropInPaths\x00--value":
+	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=NeedDaemonReload\x00--value":
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=ExecStart\x00--value":
 	default:
 		return nil, fmt.Errorf("refusing unexpected legacy Web-TUI manager command")
@@ -149,6 +150,7 @@ func readAllowedRetirementCommandOutput(name string, args ...string) (string, er
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=ActiveState\x00--value":
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=FragmentPath\x00--value":
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=DropInPaths\x00--value":
+	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=NeedDaemonReload\x00--value":
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=ExecStart\x00--value":
 	default:
 		return "", fmt.Errorf("refusing unexpected legacy Web-TUI manager query")
@@ -234,6 +236,17 @@ func attestLegacyServiceManagerRuntime(alpine bool) error {
 	}
 	if _, err := legacySystemdDropInAttestor(legacyRetirementManagerExecutor(), dropIns); err != nil {
 		return fmt.Errorf("refusing loaded legacy Web-TUI unit with drop-ins: %w", err)
+	}
+	for _, path := range strings.Split(dropIns, " ") {
+		if path != approvedLXCServiceDropInPath {
+			continue
+		}
+		current, err := readRetirementCommandOutput(
+			"systemctl", "show", "syswarden-webtui.service", "--property=NeedDaemonReload", "--value",
+		)
+		if err != nil || current != "no" {
+			return fmt.Errorf("refusing stale LXC compatibility metadata for legacy Web-TUI")
+		}
 	}
 	execStart, err := readRetirementCommandOutput(
 		"systemctl", "show", "syswarden-webtui.service", "--property=ExecStart", "--value",

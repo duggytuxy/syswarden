@@ -263,3 +263,9 @@ requires 296 cases, including lifecycle fault decisions and actual child/client
 operation, normally and under race. The independent 132-case separate-UID gate
 remains required. This inactive library does not install a supervisor or establish
 native acceptance; BunkerWeb remains independent.
+
+[Bounded LXC service compatibility](LXC_SERVICE_COMPATIBILITY.md) addresses the
+shared runtime profile seen by cron and service retirement. Exact contents,
+metadata, repeated LXC context and current manager metadata remain mandatory.
+This development correction preserves package attribution and shared files;
+native container and lifecycle acceptance remain open in issue #384.
