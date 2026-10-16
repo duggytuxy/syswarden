@@ -145,7 +145,7 @@ func retireRuntimeHistory(parentPath, backupParentPath string, guard func() erro
 	return retireAttestedDirectory(parentPath, runtimeHistoryName, backupParentPath, "runtime-history", guard, inspectRuntimeHistory, rename)
 }
 func retireAttestedDirectory(parentPath, sourceName, backupParentPath, backupKind string, guard func() error, inspect func(*pinnedServiceDirectory) (retainedDirectorySnapshot, error), rename serviceArtifactRename) (string, error) {
-	if guard == nil || rename == nil || inspect == nil || filepath.Base(sourceName) != sourceName || sourceName == "." || sourceName == ".." || sourceName == "" || backupKind != "runtime-history" && backupKind != "product-logs" && backupKind != "legacy-logs" && backupKind != "legacy-lists" && backupKind != "legacy-ui" && backupKind != "generated-lists" && backupKind != "ui-snapshots" && backupKind != "standalone-payload" {
+	if guard == nil || rename == nil || inspect == nil || filepath.Base(sourceName) != sourceName || sourceName == "." || sourceName == ".." || sourceName == "" || backupKind != "runtime-history" && backupKind != "product-logs" && backupKind != "legacy-logs" && backupKind != "legacy-lists" && backupKind != "legacy-ui" && backupKind != "generated-lists" && backupKind != "ui-snapshots" && backupKind != "standalone-payload" && backupKind != "ha-state" {
 		return "", fmt.Errorf("owned directory retirement requires complete guards")
 	}
 	if err := guard(); err != nil {

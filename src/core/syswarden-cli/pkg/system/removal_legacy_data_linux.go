@@ -17,6 +17,7 @@ type legacyRetentionProfile struct {
 	directory, backupKind, schema, authority string
 	names                                    map[string]string
 	inspect                                  func(*pinnedServiceDirectory, string, string, bool) (removalArtifactIdentity, string, bool, error)
+	inspectDirectory                         func(*pinnedServiceDirectory, bool) (retainedDirectorySnapshot, LegacyLogRetentionPlan, error)
 }
 
 func legacyLogsProfile() legacyRetentionProfile {

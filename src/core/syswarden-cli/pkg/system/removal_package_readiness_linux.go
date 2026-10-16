@@ -111,6 +111,9 @@ func attestRuntimeRetirementTreeWithRetention(tree *pinnedSharedRemovalTree, pat
 		name := entry.Name()
 		candidate := filepath.Join(path, name)
 		if !slices.Contains(directories, name) && !slices.Contains(payload, name) && !isRetainedOperatorConfiguration(candidate, retained) {
+			if candidate == haRetentionDirectory {
+				return fmt.Errorf("unretired HA state remains at %q; preserve the CLI and removal barrier; review exclusive private archival with 'sudo syswarden recover-removal --retain-ha-state' before retrying removal", candidate)
+			}
 			if inactiveLegacyConfigPath(candidate) {
 				return fmt.Errorf("unretired artifact remains at %q; review private archival of this inactive backup with 'sudo syswarden recover-removal --retain-legacy-config' before retrying removal", candidate)
 			}
