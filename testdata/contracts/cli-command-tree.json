@@ -985,6 +985,13 @@
         "persistent": true
       },
       {
+        "name": "confirm-exclusive-ha-state",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Confirm the reviewed HA files have no other consumer or producer and may leave their active paths"
+      },
+      {
         "name": "confirm-historical-inputs",
         "type": "bool",
         "default": "false",
@@ -1051,6 +1058,13 @@
         "default": "false",
         "no_option": "true",
         "usage": "Review current protection before resuming only the remaining proven unused definitions; preserve original evidence"
+      },
+      {
+        "name": "retain-ha-state",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Inspect exact private archival of stopped exclusively used HA state and TLS identity"
       },
       {
         "name": "retain-legacy-config",

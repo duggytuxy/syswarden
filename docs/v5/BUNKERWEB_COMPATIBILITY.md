@@ -63,6 +63,11 @@ reload, policy replay and removal, with both permitted and rejected traffic.
 The local namespace packet test is supporting evidence, not native integration
 acceptance or proof about a particular deployment.
 
+Removal must also account for the retained HA identity and recovery files.
+The [bounded HA archival contract](HA_STATE_RETENTION.md) requires explicit
+review when creation provenance is unavailable. It preserves private original
+state without treating a path or certificate as ownership evidence.
+
 ## Dedicated dashboard tab
 
 Add a **BunkerWeb** tab to WP18 when at least one authorized server has the

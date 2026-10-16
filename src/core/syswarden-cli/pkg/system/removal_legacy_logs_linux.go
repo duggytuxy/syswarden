@@ -31,6 +31,7 @@ type LegacyLogRetentionIdentity struct {
 
 type LegacyLogRetentionFile struct {
 	Path               string                     `json:"path"`
+	Type               string                     `json:"type,omitempty"`
 	Identity           LegacyLogRetentionIdentity `json:"identity"`
 	Size               int64                      `json:"size"`
 	Modified           syscall.Timespec           `json:"modified"`
@@ -69,6 +70,9 @@ func inspectLegacyProductLogDirectory(directory *pinnedServiceDirectory, syncDat
 }
 
 func inspectLegacyDataDirectory(directory *pinnedServiceDirectory, syncData bool, profile legacyRetentionProfile) (retainedDirectorySnapshot, LegacyLogRetentionPlan, error) {
+	if profile.inspectDirectory != nil {
+		return profile.inspectDirectory(directory, syncData)
+	}
 	snapshot := retainedDirectorySnapshot{files: map[string]removalArtifactIdentity{}, content: map[string][]byte{}}
 	plan := LegacyLogRetentionPlan{Schema: profile.schema, Directory: profile.directory, Authority: profile.authority}
 	info, err := directory.root.Stat(".")

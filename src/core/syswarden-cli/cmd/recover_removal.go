@@ -27,8 +27,11 @@ var inspectUnusedLegacyFail2banResume = firewall.InspectUnusedLegacyFail2banResu
 var applyUnusedLegacyFail2banResume = firewall.ApplyUnusedLegacyFail2banResume
 var inspectLegacyCronRetirement = system.InspectLegacyCronRetirement
 var applyLegacyCronRetirement = system.ApplyLegacyCronRetirement
+var inspectHAStateRetention = firewall.InspectHAStateRetention
+var applyHAStateRetention = firewall.ApplyHAStateRetention
 
 func newRecoverRemovalCommand() *cobra.Command {
+	var retainHAState, confirmExclusiveHAState bool
 	var retainLegacyConfig, retainLegacyLogs, retainLegacyLists, retainLegacyUI, retireLegacyCron, retireLegacyFail2ban, retireFail2banPersistence, resumeUnusedFail2ban, retainOperatorConfig, retireHistoricalFirewall, confirmHistoricalInputs, preserveOperatorPolicy, exportOperatorPolicy, apply bool
 	var digest, fileDigest, historicalInputs string
 	var retireLegacyIPTables, preserveOperatorIPTables, confirmOperatorIPTables bool
@@ -42,7 +45,7 @@ func newRecoverRemovalCommand() *cobra.Command {
 			for _, candidate := range []struct {
 				selected bool
 				kind     string
-			}{{retainLegacyConfig, "config"}, {retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}, {retireHistoricalFirewall, "historical-firewall-persistence"}, {retireLegacyIPTables, "historical-iptables"}, {preserveOperatorIPTables, "operator-iptables"}, {preserveOperatorPolicy, "operator-policy"}, {exportOperatorPolicy, "operator-policy-export"}} {
+			}{{retainHAState, "ha-state"}, {retainLegacyConfig, "config"}, {retainLegacyLogs, "logs"}, {retainLegacyLists, "lists"}, {retainLegacyUI, "ui"}, {retireLegacyCron, "cron"}, {retireLegacyFail2ban, "fail2ban"}, {retireFail2banPersistence, "fail2ban-persistence"}, {resumeUnusedFail2ban, "unused-fail2ban-resume"}, {retainOperatorConfig, "operator-config"}, {retireHistoricalFirewall, "historical-firewall-persistence"}, {retireLegacyIPTables, "historical-iptables"}, {preserveOperatorIPTables, "operator-iptables"}, {preserveOperatorPolicy, "operator-policy"}, {exportOperatorPolicy, "operator-policy-export"}} {
 				if candidate.selected {
 					if selection != "" {
 						return fmt.Errorf("select exactly one legacy retention inventory")
@@ -58,6 +61,15 @@ func newRecoverRemovalCommand() *cobra.Command {
 			}
 			if apply && digest == "" {
 				return fmt.Errorf("--apply requires --plan-sha256 from a reviewed dry run")
+			}
+			if confirmExclusiveHAState && (selection != "ha-state" || !apply) {
+				return fmt.Errorf("--confirm-exclusive-ha-state applies only to HA state retention with --apply")
+			}
+			if selection == "ha-state" {
+				if apply != confirmExclusiveHAState || historicalInputs != "" || fileDigest != "" || confirmHistoricalInputs || confirmOperatorIPTables {
+					return fmt.Errorf("HA retention requires --confirm-exclusive-ha-state when applying and accepts no unrelated recovery inputs")
+				}
+				return runHAStateRetention(cmd, apply, digest)
 			}
 			if confirmOperatorIPTables && (selection != "operator-iptables" || !apply) {
 				return fmt.Errorf("--confirm-operator-iptables applies only to administrator iptables preservation with --apply")
@@ -159,6 +171,8 @@ func newRecoverRemovalCommand() *cobra.Command {
 			return err
 		},
 	}
+	command.Flags().BoolVar(&retainHAState, "retain-ha-state", false, "Inspect exact private archival of stopped exclusively used HA state and TLS identity")
+	command.Flags().BoolVar(&confirmExclusiveHAState, "confirm-exclusive-ha-state", false, "Confirm the reviewed HA files have no other consumer or producer and may leave their active paths")
 	command.Flags().BoolVar(&preserveOperatorIPTables, "preserve-operator-iptables", false, "Review preservation of independently confirmed administrator IPv4 nf_tables compatibility rules")
 	command.Flags().BoolVar(&confirmOperatorIPTables, "confirm-operator-iptables", false, "Confirm every reviewed shared IPv4 filter rule is administrator-owned and must remain unchanged")
 	command.Flags().BoolVar(&preserveOperatorPolicy, "preserve-operator-policy", false, "Review exact independent administrator policy preservation before product removal")
@@ -183,6 +197,37 @@ func newRecoverRemovalCommand() *cobra.Command {
 }
 
 var recoverRemovalCmd = newRecoverRemovalCommand()
+
+func runHAStateRetention(cmd *cobra.Command, apply bool, digest string) error {
+	var plan system.LegacyLogRetentionPlan
+	var backup string
+	var err error
+	if apply {
+		plan, backup, err = applyHAStateRetention(digest)
+	} else {
+		plan, err = inspectHAStateRetention()
+	}
+	if err != nil {
+		return err
+	}
+	wire, err := json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		return err
+	}
+	actual, err := system.LegacyLogRetentionPlanSHA256(plan)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\n\nPlan SHA-256: %s\n", wire, actual); err != nil {
+		return err
+	}
+	if apply {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "HA state retained privately: %s\nResume the original removal command. The backup must never be restored automatically by a later installation.\n", backup)
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Dry run only. Confirm that every listed file is exclusively used by this retired SysWarden instance, with no other consumer or producer. Applying moves the complete reviewed inode tree into a private backup, including TLS keys and HA recovery evidence. It does not infer ownership or delete original bytes. Custom paths and unrelated files are excluded. Apply with: sudo syswarden recover-removal --retain-ha-state --confirm-exclusive-ha-state --apply --plan-sha256 %s\n", actual)
+	return err
+}
 
 func init() { rootCmd.AddCommand(recoverRemovalCmd) }
 
