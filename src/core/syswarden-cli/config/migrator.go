@@ -1141,6 +1141,8 @@ bruteforce_logs = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_BRUTEFORCE_LOG
 bruteforce_threshold = ` + threshold + `
 bruteforce_window_seconds = ` + window + `
 modsec_logs = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_MODSEC_LOGS", "")) + `
+# Exact path=UID grants for the secure core follower, empty by default.
+trusted_log_producers = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_TRUSTED_LOG_PRODUCERS", "")) + `
 `
 	return canonicalizeGeneratedTOML(content)
 }

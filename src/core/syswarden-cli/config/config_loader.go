@@ -267,6 +267,7 @@ func mapModularToLegacy(m *ModularConfig) *Config {
 	candidate.WGPort = m.Network.Wireguard.Port
 	candidate.WGSubnet = m.Network.Wireguard.Subnet
 	candidate.ModsecLogs = m.WAAP.ModsecLogs
+	candidate.TrustedLogProducers = m.WAAP.TrustedLogProducers
 	candidate.BruteforceLogs = m.WAAP.BruteforceLogs
 	candidate.BruteforceThreshold = strconv.Itoa(m.WAAP.BruteforceThreshold)
 	candidate.BruteforceWindow = strconv.Itoa(m.WAAP.BruteforceWindowSeconds) + "s"

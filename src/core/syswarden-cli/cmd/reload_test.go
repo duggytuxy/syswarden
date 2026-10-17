@@ -137,3 +137,37 @@ func TestReloadRefusesMissingInitializedWhitelistBeforeFirewall(t *testing.T) {
 		t.Fatalf("lost initialized family was not refused: %v", err)
 	}
 }
+
+func TestReloadRefusesProducerActivationAfterBridgeFailure(t *testing.T) {
+	previousConfig := config.GlobalConfig
+	previousCron, previousBackend := hostCronSchedulingPreflight, hostFirewallBackendPreflight
+	previousForwarding, previousRecovery := recoverPendingWireGuardForwardingForReload, recoverPendingWireGuardForReload
+	previousPreflight, previousApply := preflightWireGuardForReload, applyPoliciesForReload
+	previousBlocklists, previousWhitelist := ensurePersistentBlocklistPairForReload, ensurePersistentWhitelistPairForReload
+	previousWG, previousSIEM, previousWAF, previousAbuse := setupWireGuardForReload, setupSIEMForReload, setupWAFForReload, setupAbuseForReload
+	t.Cleanup(func() {
+		config.GlobalConfig = previousConfig
+		hostCronSchedulingPreflight, hostFirewallBackendPreflight = previousCron, previousBackend
+		recoverPendingWireGuardForwardingForReload, recoverPendingWireGuardForReload = previousForwarding, previousRecovery
+		preflightWireGuardForReload, applyPoliciesForReload = previousPreflight, previousApply
+		ensurePersistentBlocklistPairForReload, ensurePersistentWhitelistPairForReload = previousBlocklists, previousWhitelist
+		setupWireGuardForReload, setupSIEMForReload, setupWAFForReload, setupAbuseForReload = previousWG, previousSIEM, previousWAF, previousAbuse
+	})
+	config.GlobalConfig = &config.Config{FirewallBackend: "keep", TrustedLogProducers: "/var/log/waf/audit.log=999"}
+	hostCronSchedulingPreflight = func(bool) error { return nil }
+	hostFirewallBackendPreflight = func(string) error { return nil }
+	recoverPendingWireGuardForwardingForReload = func() error { return nil }
+	recoverPendingWireGuardForReload = func() error { return nil }
+	preflightWireGuardForReload = func() error { return nil }
+	applyPoliciesForReload = func() error { return nil }
+	ensurePersistentBlocklistPairForReload = func() error { return nil }
+	ensurePersistentWhitelistPairForReload = func() error { return nil }
+	setupWireGuardForReload = func() error { return nil }
+	setupSIEMForReload = func() error { return nil }
+	failure := errors.New("bridge replacement not verified")
+	setupWAFForReload = func() error { return failure }
+	setupAbuseForReload = func() error { t.Fatal("reload continued toward core restart after bridge failure"); return nil }
+	if err := reloadCmd.RunE(reloadCmd, nil); !errors.Is(err, failure) || !strings.Contains(err.Error(), "producer policy cannot activate") {
+		t.Fatalf("activation failure=%v", err)
+	}
+}

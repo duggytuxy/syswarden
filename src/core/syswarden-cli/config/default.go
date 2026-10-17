@@ -124,6 +124,8 @@ SYSWARDEN_BRUTEFORCE_WINDOW="60"
 # Crucial for multi-tenant architectures (e.g., Traefik + Multiple ModSecurity WAFs)
 # Leave empty for standard single-node installations
 SYSWARDEN_MODSEC_LOGS="/var/log/modsec/*.log"
+# Optional exact path=collector-visible-UID grants. No automatic service trust.
+SYSWARDEN_TRUSTED_LOG_PRODUCERS=""
 
 
 # ==========================================
