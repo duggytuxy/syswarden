@@ -849,6 +849,7 @@ class ActFixtureTests(unittest.TestCase):
             "FuzzIncidentRecordReference",
             "FuzzRateSnapshotRoundTrip",
             "FuzzRateArithmetic",
+            "FuzzNodeRatePopulationPermutation",
             "FuzzEventJournalScan",
             "FuzzEventJournalEncoding",
             "FuzzJournalCheckpointVerification",
