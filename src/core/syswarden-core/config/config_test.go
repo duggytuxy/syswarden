@@ -485,3 +485,28 @@ modsec_logs = "/var/log/modsec/*.log"
 		t.Fatal("log override changed the WAAP enforcement policy")
 	}
 }
+
+func TestLoadConfigDirectoryValidatesTrustedLogProducers(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	for _, test := range []struct {
+		value string
+		valid bool
+	}{
+		{"/var/log/waf/audit.log=999", true},
+		{"/var/log/waf/*.log=999", false},
+		{"/var/log/waf/audit.log=65534", false},
+		{"/var/log/waf/audit.log=999 /var/log/waf/audit.log=1000", false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			viper.Reset()
+			root := writeConfigFixture(t, validMaster("schema_version = 1"), map[string]string{"99-user.toml": "[waap]\ntrusted_log_producers = " + strconv.Quote(test.value) + "\n"})
+			_, err := LoadConfigDirectory(root)
+			if (err == nil) != test.valid {
+				t.Fatalf("load error=%v, want valid=%v", err, test.valid)
+			}
+			if test.valid && viper.GetString("waap.trusted_log_producers") != test.value {
+				t.Fatal("producer policy not published")
+			}
+		})
+	}
+}

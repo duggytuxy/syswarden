@@ -65,6 +65,8 @@ func loadOldConfig(path string) (loadErr error) {
 			candidate.WGPort = val
 		case "SYSWARDEN_WG_SUBNET":
 			candidate.WGSubnet = val
+		case "SYSWARDEN_TRUSTED_LOG_PRODUCERS":
+			candidate.TrustedLogProducers = val
 		case "SYSWARDEN_MODSEC_LOGS":
 			candidate.ModsecLogs = val
 		case "SYSWARDEN_BRUTEFORCE_LOGS":
@@ -337,6 +339,7 @@ func legacyConfigForPolicyValidation(candidate *Config) (*ModularConfig, error) 
 		WAAP: WAAPConfig{
 			EnforcementMode: candidate.EnforcementMode, BruteforceLogs: candidate.BruteforceLogs,
 			BruteforceThreshold: threshold, BruteforceWindowSeconds: windowSeconds, ModsecLogs: candidate.ModsecLogs,
+			TrustedLogProducers: candidate.TrustedLogProducers,
 		},
 		Integrations: IntegrationsConfig{
 			HA: HAConfig{

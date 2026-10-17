@@ -278,3 +278,8 @@ retains conflicting assessments as unknown with their evidence. The immutable
 private manifest binds the same scope, membership, policy and measurement instant.
 Producer authentication, policy evaluation, consumer integration and native IVVQ
 remain open; the 500-node fixture is simulation only. BunkerWeb stays independent.
+
+## Explicit log producer trust
+
+[Service-owned log inputs](TRUSTED_LOG_PRODUCERS.md) describes exact path/UID
+approval, secure collection after rotation and the remaining native acceptance.

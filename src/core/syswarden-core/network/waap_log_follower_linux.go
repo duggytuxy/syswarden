@@ -9,10 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
+	"syswarden-core/config"
 	"time"
-	"unicode"
 
 	"golang.org/x/sys/unix"
 )
@@ -43,16 +42,20 @@ type secureWAAPLogFollower struct {
 	offset       int64
 	pollInterval time.Duration
 	expectedUID  int64
+	producerUID  *uint32
 }
 
 func newSecureWAAPLogFollower(path string, startAtEnd bool) (*secureWAAPLogFollower, error) {
-	dirFD, name, err := openPinnedWAAPLogParent(path)
+	return newSecureWAAPLogFollowerWithAccess(path, startAtEnd, config.TrustedLogAccess{AuthorityUID: int64(os.Geteuid())})
+}
+
+func newSecureWAAPLogFollowerWithAccess(path string, startAtEnd bool, access config.TrustedLogAccess) (*secureWAAPLogFollower, error) {
+	dirFD, name, err := access.OpenParent(path)
 	if err != nil {
 		return nil, err
 	}
 
-	expectedUID := int64(os.Geteuid())
-	file, identity, err := openRegularWAAPLogAt(dirFD, name, path, expectedUID)
+	file, identity, err := openRegularWAAPLogWithAccess(dirFD, name, path, access)
 	if err != nil {
 		_ = unix.Close(dirFD)
 		return nil, err
@@ -77,79 +80,17 @@ func newSecureWAAPLogFollower(path string, startAtEnd bool) (*secureWAAPLogFollo
 		identity:     identity,
 		offset:       offset,
 		pollInterval: defaultWAAPLogPollInterval,
-		expectedUID:  expectedUID,
+		expectedUID:  access.AuthorityUID,
+		producerUID:  access.ProducerUID,
 	}, nil
 }
 
-func openPinnedWAAPLogParent(path string) (int, string, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.IndexFunc(path, unicode.IsControl) >= 0 {
-		return -1, "", fmt.Errorf("WAAP log %q is not an absolute canonical path", path)
-	}
-
-	components := strings.Split(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator))
-	if len(components) == 0 || components[len(components)-1] == "" {
-		return -1, "", fmt.Errorf("WAAP log %q has no file component", path)
-	}
-
-	fd, err := unix.Open(string(filepath.Separator), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+func openRegularWAAPLogWithAccess(dirFD int, name, path string, access config.TrustedLogAccess) (*os.File, unix.Stat_t, error) {
+	fd, identity, err := access.OpenFile(dirFD, name)
 	if err != nil {
-		return -1, "", fmt.Errorf("open filesystem root for WAAP log %q: %w", path, err)
+		return nil, unix.Stat_t{}, fmt.Errorf("open verified WAAP log %q: %w", path, err)
 	}
-
-	for _, component := range components[:len(components)-1] {
-		nextFD, openErr := unix.Openat(fd, component, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		if openErr != nil {
-			_ = unix.Close(fd)
-			return -1, "", fmt.Errorf("open pinned parent for WAAP log %q: %w", path, openErr)
-		}
-		if closeErr := unix.Close(fd); closeErr != nil {
-			_ = unix.Close(nextFD)
-			return -1, "", fmt.Errorf("close parent descriptor for WAAP log %q: %w", path, closeErr)
-		}
-		fd = nextFD
-	}
-
-	return fd, components[len(components)-1], nil
-}
-
-func openRegularWAAPLogAt(dirFD int, name, path string, expectedUID int64) (*os.File, unix.Stat_t, error) {
-	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, unix.Stat_t{}, fmt.Errorf("open WAAP log %q without following links: %w", path, err)
-	}
-
-	closeOnError := func(openErr error) (*os.File, unix.Stat_t, error) {
-		_ = unix.Close(fd)
-		return nil, unix.Stat_t{}, openErr
-	}
-
-	var opened unix.Stat_t
-	if err := unix.Fstat(fd, &opened); err != nil {
-		return closeOnError(fmt.Errorf("inspect opened WAAP log %q: %w", path, err))
-	}
-	if opened.Mode&unix.S_IFMT != unix.S_IFREG {
-		return closeOnError(fmt.Errorf("WAAP log %q is not a real regular file", path))
-	}
-	if err := validateWAAPLogSecurity(opened, expectedUID); err != nil {
-		return closeOnError(fmt.Errorf("WAAP log %q has unsafe ownership or mode: %w", path, err))
-	}
-
-	var linked unix.Stat_t
-	if err := unix.Fstatat(dirFD, name, &linked, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		return closeOnError(fmt.Errorf("revalidate WAAP log %q: %w", path, err))
-	}
-	if linked.Mode&unix.S_IFMT != unix.S_IFREG || !sameWAAPLogIdentity(opened, linked) {
-		return closeOnError(fmt.Errorf("WAAP log %q changed while opening", path))
-	}
-	if err := validateWAAPLogSecurity(linked, expectedUID); err != nil {
-		return closeOnError(fmt.Errorf("WAAP log %q ownership or mode changed while opening: %w", path, err))
-	}
-
-	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		return closeOnError(fmt.Errorf("adopt descriptor for WAAP log %q", path))
-	}
-	return file, opened, nil
+	return os.NewFile(uintptr(fd), path), identity, nil
 }
 
 func sameWAAPLogIdentity(left, right unix.Stat_t) bool {
@@ -157,11 +98,28 @@ func sameWAAPLogIdentity(left, right unix.Stat_t) bool {
 }
 
 func validateWAAPLogSecurity(identity unix.Stat_t, expectedUID int64) error {
-	if int64(identity.Uid) != expectedUID {
-		return fmt.Errorf("owner UID %d does not match expected UID %d", identity.Uid, expectedUID)
+	return (config.TrustedLogAccess{AuthorityUID: expectedUID}).ValidateFile(identity, false)
+}
+
+func (f *secureWAAPLogFollower) access() config.TrustedLogAccess {
+	return config.TrustedLogAccess{AuthorityUID: f.expectedUID, ProducerUID: f.producerUID}
+}
+
+func (f *secureWAAPLogFollower) attestParent() error {
+	fd, _, err := f.access().OpenParent(f.path)
+	if err != nil {
+		return fmt.Errorf("revalidate WAAP log ancestry: %w", err)
 	}
-	if identity.Mode&0022 != 0 {
-		return fmt.Errorf("group or other write bits are set")
+	defer unix.Close(fd)
+	var pinned, linked unix.Stat_t
+	if err := unix.Fstat(f.dirFD, &pinned); err != nil {
+		return err
+	}
+	if err := unix.Fstat(fd, &linked); err != nil {
+		return err
+	}
+	if !sameWAAPLogIdentity(pinned, linked) {
+		return fmt.Errorf("WAAP log parent was replaced")
 	}
 	return nil
 }
@@ -236,13 +194,16 @@ func (f *secureWAAPLogFollower) attestOpenFile() error {
 	if opened.Mode&unix.S_IFMT != unix.S_IFREG || !sameWAAPLogIdentity(opened, f.identity) {
 		return fmt.Errorf("opened WAAP log %q identity drifted", f.path)
 	}
-	if err := validateWAAPLogSecurity(opened, f.expectedUID); err != nil {
+	if err := f.access().ValidateFile(opened, true); err != nil {
 		return fmt.Errorf("opened WAAP log %q ownership or mode drifted: %w", f.path, err)
 	}
 	return nil
 }
 
 func (f *secureWAAPLogFollower) refresh() (waapLogRefresh, error) {
+	if err := f.attestParent(); err != nil {
+		return waapLogUnchanged, err
+	}
 	var linked unix.Stat_t
 	err := unix.Fstatat(f.dirFD, f.name, &linked, unix.AT_SYMLINK_NOFOLLOW)
 	if errors.Is(err, unix.ENOENT) {
@@ -254,7 +215,7 @@ func (f *secureWAAPLogFollower) refresh() (waapLogRefresh, error) {
 	if linked.Mode&unix.S_IFMT != unix.S_IFREG {
 		return waapLogUnchanged, fmt.Errorf("WAAP log %q was replaced by a non-regular file", f.path)
 	}
-	if err := validateWAAPLogSecurity(linked, f.expectedUID); err != nil {
+	if err := f.access().ValidateFile(linked, false); err != nil {
 		return waapLogUnchanged, fmt.Errorf("WAAP log %q ownership or mode drifted: %w", f.path, err)
 	}
 
@@ -271,7 +232,7 @@ func (f *secureWAAPLogFollower) refresh() (waapLogRefresh, error) {
 		return waapLogTruncated, nil
 	}
 
-	next, identity, err := openRegularWAAPLogAt(f.dirFD, f.name, f.path, f.expectedUID)
+	next, identity, err := openRegularWAAPLogWithAccess(f.dirFD, f.name, f.path, f.access())
 	if errors.Is(err, unix.ENOENT) {
 		return waapLogUnchanged, nil
 	}
