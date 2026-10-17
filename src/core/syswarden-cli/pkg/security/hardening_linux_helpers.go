@@ -36,7 +36,6 @@ type hardeningHost struct {
 	expectedRootGID     int
 	executor            hardeningExecutor
 	executionProbe      func() (hardeningExecutionDecision, error)
-	capabilityProbe     func(uint) (bool, error)
 	processProbe        func(string) (bool, error)
 	systemdRuntimeProbe func() (bool, error)
 	profileFlagsProbe   func(*os.File) (int, error)
@@ -84,7 +83,6 @@ func productionHardeningHost() hardeningHost {
 		expectedRootUID:     0,
 		expectedRootGID:     0,
 		executionProbe:      productionHardeningExecutionDecision,
-		capabilityProbe:     productionEffectiveCapability,
 		processProbe:        productionProcessNamedRunning,
 		systemdRuntimeProbe: productionSystemdRuntimeActive,
 		profileFlagsProbe:   productionProfileFlags,
@@ -141,46 +139,11 @@ func productionHardeningHost() hardeningHost {
 	}
 }
 
-func (host hardeningHost) hasEffectiveCapability(capability uint) (bool, error) {
-	if host.capabilityProbe == nil {
-		return true, nil
-	}
-	return host.capabilityProbe(capability)
-}
-
 func (host hardeningHost) processNamedRunning(name string) (bool, error) {
 	if host.processProbe == nil {
 		return false, nil
 	}
 	return host.processProbe(name)
-}
-
-func productionEffectiveCapability(capability uint) (bool, error) {
-	if capability >= 64 {
-		return false, fmt.Errorf("capability index %d is outside the supported mask", capability)
-	}
-	status, err := readBoundedProcFile(fmt.Sprintf("/proc/%d/status", os.Getpid()), 64<<10)
-	if err != nil {
-		return false, fmt.Errorf("read effective capabilities: %w", err)
-	}
-	var encoded string
-	for _, line := range strings.Split(string(status), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == "CapEff:" {
-			if encoded != "" {
-				return false, fmt.Errorf("process status contains multiple CapEff values")
-			}
-			encoded = fields[1]
-		}
-	}
-	if encoded == "" {
-		return false, fmt.Errorf("process status does not contain CapEff")
-	}
-	mask, err := strconv.ParseUint(encoded, 16, 64)
-	if err != nil {
-		return false, fmt.Errorf("parse effective capability mask: %w", err)
-	}
-	return mask&(uint64(1)<<capability) != 0, nil
 }
 
 func productionProcessNamedRunning(name string) (bool, error) {
@@ -262,15 +225,14 @@ func reportHardeningRuntimeNotApplicable(control, reason string) {
 }
 
 func productionHardeningExecutionDecision() (hardeningExecutionDecision, error) {
-	packageInstall := os.Getenv("SYSWARDEN_PKG_INSTALL") == "1"
-	if !packageInstall {
-		return hardeningExecutionDecision{state: hardeningExecutionActive}, nil
-	}
-
 	uidMap, err := readBoundedProcFile(fmt.Sprintf("/proc/%d/uid_map", os.Getpid()), 4096)
 	if err != nil {
-		return hardeningExecutionDecision{}, fmt.Errorf("read package-hook user namespace map: %w", err)
+		return hardeningExecutionDecision{}, fmt.Errorf("read user namespace map: %w", err)
 	}
+	if os.Getenv("SYSWARDEN_PKG_INSTALL") != "1" {
+		return classifyHardeningRuntime(hardeningRuntimeEvidence{uidMap: string(uidMap)})
+	}
+
 	initNameBytes, err := readBoundedProcFile("/proc/1/comm", 256)
 	if err != nil {
 		return hardeningExecutionDecision{}, fmt.Errorf("read package-hook PID 1 identity: %w", err)
@@ -545,7 +507,13 @@ func inspectRuntimeFile(path string, expectedUID uint32) (bool, error) {
 
 func classifyHardeningRuntime(evidence hardeningRuntimeEvidence) (hardeningExecutionDecision, error) {
 	if !evidence.packageInstall {
-		return hardeningExecutionDecision{state: hardeningExecutionActive}, nil
+		// Unprivileged containers (LXC, rootless Podman) are reached by
+		// manual installs too; kernel-owned controls depend on this map.
+		rootless, err := rootUIDIsRemapped(evidence.uidMap)
+		if err != nil {
+			return hardeningExecutionDecision{}, fmt.Errorf("validate user namespace map: %w", err)
+		}
+		return hardeningExecutionDecision{state: hardeningExecutionActive, rootUIDRemapped: rootless}, nil
 	}
 	if evidence.effectiveUID != 0 {
 		return hardeningExecutionDecision{}, fmt.Errorf("package hardening hook effective UID is %d, want 0", evidence.effectiveUID)
