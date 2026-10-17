@@ -32,8 +32,10 @@ Node identity means the exact cluster, node and membership epoch. Observation
 identity also includes the stable event ID; a transaction uses its stable
 transaction ID. Expected telemetry slots need a source and expected slot
 identity. IP addresses, group labels and retry attempts cannot replace these
-identities. The catalog specifies these rules but does not implement the
-membership resolver or deduplicator.
+identities. The catalog specifies these rules. The separate
+[node population component](NODE_RATE_POPULATION.md) deduplicates independently
+authorized node membership and evaluated assessments for the three node formulas.
+Authenticated membership resolution and the other population types remain open.
 
 Severity categories are `informational`, `low`, `medium`, `high` and `critical`.
 They are copied from authoritative classifications, never reclassified here.
@@ -156,7 +158,7 @@ One binary report alone does not validate an entire pie chart.
 
 This slice exposes no operation that adds scalar rate reports. Their quantities
 cannot prove that populations are disjoint. To combine groups, the future
-resolver must union authorized stable identities, resolve duplicate or
+producer must union authorized stable identities, resolve duplicate or
 conflicting records, apply one exact policy/formula/window, and generate a new
 manifest and report. It must preserve denominators and unknown/stale parts.
 

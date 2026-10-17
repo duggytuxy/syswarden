@@ -16,7 +16,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
 3. [BunkerWeb compatibility and dashboard integration](BUNKERWEB_COMPATIBILITY.md).
 4. [Validation profile and resource limits](VALIDATION_PLAN.md).
 5. [Shared event envelope and conservative v4 projection](EVENT_ENVELOPE.md).
-6. [Node identity and read snapshot](NODE_SNAPSHOT.md).
+6. [Node identity and read snapshot](NODE_SNAPSHOT.md), with independent
+   [fleet exposure classification](NODE_EXPOSURE.md).
 7. [Policy decision records and exact input binding](POLICY_DECISION.md).
 8. [Action history and scoped control reports](ACTION_AND_CONTROL.md).
 9. [Evidence objects and explicit transformation lineage](EVIDENCE_DESCRIPTOR.md).
@@ -269,3 +270,11 @@ shared runtime profile seen by cron and service retirement. Exact contents,
 metadata, repeated LXC context and current manager metadata remain mandatory.
 This development correction preserves package attribution and shared files;
 native container and lifecycle acceptance remain open in issue #384.
+
+[Authorized node rate populations](NODE_RATE_POPULATION.md) now provide an inactive
+deterministic resolver for the three node percentage formulas. Exact membership
+deduplication preserves missing/stale nodes, rejects scope or epoch mismatches and
+retains conflicting assessments as unknown with their evidence. The immutable
+private manifest binds the same scope, membership, policy and measurement instant.
+Producer authentication, policy evaluation, consumer integration and native IVVQ
+remain open; the 500-node fixture is simulation only. BunkerWeb stays independent.
