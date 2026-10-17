@@ -33,7 +33,7 @@ func inspectProductLogDirectory(directory *pinnedServiceDirectory) (retainedDire
 	if err != nil {
 		return result, err
 	}
-	if len(entries) == 0 || len(entries) > 3 {
+	if len(entries) == 0 || len(entries) > 5 {
 		return result, fmt.Errorf("product log directory has no closed owned inventory")
 	}
 	names := make([]string, 0, len(entries))
@@ -45,7 +45,7 @@ func inspectProductLogDirectory(directory *pinnedServiceDirectory) (retainedDire
 	for _, name := range names {
 		kind := ""
 		switch name {
-		case "core.log":
+		case "core.log", "core.log.1", ".core.log.tail":
 			kind = "core"
 		case "waf.json", "waf.json.1":
 			kind = "telemetry"

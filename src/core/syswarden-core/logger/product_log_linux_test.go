@@ -53,7 +53,7 @@ func TestProductLogCreationAndCompactionPreserveOriginBoundary(t *testing.T) {
 }
 
 func TestCoreProcessLogReopenDoesNotAdoptExistingFile(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateCoreLogTestDirectory(t)
 	root, err := os.OpenRoot(directory)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestCoreProcessLogReopenDoesNotAdoptExistingFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		present, err := fileorigin.HasLogOrigin(file, fileorigin.CoreLog)
+		present, err := fileorigin.HasLogOrigin(file.file, fileorigin.CoreLog)
 		_ = file.Close()
 		if err != nil || present != (name == "new") {
 			t.Fatal("core log origin was assigned incorrectly", name, present, err)
