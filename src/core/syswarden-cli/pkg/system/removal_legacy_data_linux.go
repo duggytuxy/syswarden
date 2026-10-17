@@ -24,7 +24,7 @@ func legacyLogsProfile() legacyRetentionProfile {
 	return legacyRetentionProfile{
 		directory: "/var/log/syswarden", backupKind: "legacy-logs",
 		schema: "syswarden-legacy-log-retention-v1", authority: "explicit-operator-confirmation-of-exact-legacy-log-retention",
-		names: map[string]string{"core.log": "core", "waf.json": "telemetry", "waf.json.1": "telemetry"}, inspect: inspectLegacyProductLogFile,
+		names: map[string]string{"core.log": "core", "core.log.1": "core", ".core.log.tail": "core", "waf.json": "telemetry", "waf.json.1": "telemetry"}, inspect: inspectLegacyProductLogFile,
 	}
 }
 

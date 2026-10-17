@@ -109,14 +109,6 @@ func main() {
 		log.Fatalf("[SYSWARDEN-Core] Refusing startup while %s is present", coreRemovalTombstonePath)
 	}
 
-	// Parity: Ensure syswarden-core standard logs go to /var/log/syswarden/core.log
-	_ = os.MkdirAll("/var/log/syswarden", 0750)
-	logFile, err := logger.OpenCoreProcessLog("/var/log/syswarden/core.log")
-	if err == nil {
-		mw := io.MultiWriter(os.Stdout, logFile)
-		log.SetOutput(mw)
-	}
-
 	if err := config.LoadConfig(); err != nil {
 		log.Fatalf("[SYSWARDEN-Core] Refusing invalid modular config: %v", err)
 	}
@@ -125,12 +117,22 @@ func main() {
 		log.Fatalf("[SYSWARDEN-Core] Refusing firewall backend: %v", err)
 	}
 
-	// Reserve HA v2 ownership before telemetry compaction or shared startup.
+	// Reserve HA v2 ownership before log compaction or shared startup.
 	haStartupLease, err := network.ReserveHAStartupLease()
 	if err != nil {
 		log.Fatalf("[SYSWARDEN-Core] Failed to reserve HA runtime: %v", err)
 	}
 	defer haStartupLease.Close()
+
+	// Keep bounded file logging independent of the service journal.
+	_ = os.MkdirAll("/var/log/syswarden", 0750)
+	logFile, err := logger.OpenCoreProcessLog("/var/log/syswarden/core.log")
+	if err == nil {
+		defer func() { _ = logFile.Close() }()
+		log.SetOutput(logger.CoreProcessOutput(os.Stdout, logFile, os.Stderr))
+	} else {
+		log.Printf("[SYSWARDEN-Core] File logging unavailable; system journal output continues: %v", err)
+	}
 
 	log.Println("[SYSWARDEN-Core] Starting Next-Gen WAF Daemon...")
 

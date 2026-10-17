@@ -47,7 +47,7 @@ func TestProductLogRetirementKeepsOwnedBytesAndRefusesUnknownData(t *testing.T) 
 					t.Fatal(err)
 				}
 			}
-			for _, name := range []string{"core.log", "waf.json", "waf.json.1"} {
+			for _, name := range []string{"core.log", "core.log.1", ".core.log.tail", "waf.json", "waf.json.1"} {
 				path := "logs/" + name
 				if err := root.WriteFile(path, []byte("Private product log bytes.\n"), 0600); err != nil {
 					t.Fatal(err)
@@ -56,7 +56,7 @@ func TestProductLogRetirementKeepsOwnedBytesAndRefusesUnknownData(t *testing.T) 
 					continue
 				}
 				role := "telemetry"
-				if name == "core.log" {
+				if name == "core.log" || name == "core.log.1" || name == ".core.log.tail" {
 					role = "core"
 				}
 				if kind == "wrong-kind" && name == "core.log" {
@@ -135,12 +135,49 @@ func TestProductLogRetirementKeepsOwnedBytesAndRefusesUnknownData(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range []string{"core.log", "waf.json", "waf.json.1"} {
+			for _, name := range []string{"core.log", "core.log.1", ".core.log.tail", "waf.json", "waf.json.1"} {
 				saved, err := root.ReadFile(filepath.Join(relative, name))
 				if err != nil || string(saved) != "Private product log bytes.\n" {
 					t.Fatal("private original log was lost", name, err)
 				}
 			}
 		})
+	}
+}
+
+func TestCoreLogRetentionGenerationsRequireExactOrigin(t *testing.T) {
+	for _, name := range []string{"core.log.1", ".core.log.tail"} {
+		for _, kind := range []string{"core", "telemetry", "unmarked"} {
+			t.Run(name+"/"+kind, func(t *testing.T) {
+				base := t.TempDir()
+				root, err := os.OpenRoot(base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer root.Close()
+				if err := root.Mkdir("logs", 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := root.WriteFile("logs/"+name, []byte("Retain original bytes.\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if kind != "unmarked" {
+					markProductLogFixture(t, root, "logs/"+name, kind)
+				}
+				dir, err := openExistingPinnedServiceDirectory(filepath.Join(base, "logs"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer dir.close()
+				_, err = inspectProductLogDirectory(dir)
+				if (err == nil) != (kind == "core") {
+					t.Fatalf("origin %s inspection: %v", kind, err)
+				}
+				data, err := root.ReadFile("logs/" + name)
+				if err != nil || string(data) != "Retain original bytes.\n" {
+					t.Fatal("inspection changed data", err)
+				}
+			})
+		}
 	}
 }
