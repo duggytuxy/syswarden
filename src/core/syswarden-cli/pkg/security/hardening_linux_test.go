@@ -652,6 +652,7 @@ func TestClassifyHardeningRuntimeMatrix(t *testing.T) {
 		{name: "ordinary execution", evidence: hardeningRuntimeEvidence{uidMap: hostMap}, wantState: hardeningExecutionActive},
 		{name: "rootless ordinary execution", evidence: hardeningRuntimeEvidence{uidMap: rootlessMap}, wantState: hardeningExecutionActive, wantRootless: true},
 		{name: "ordinary execution without uid map", evidence: hardeningRuntimeEvidence{}, wantError: "does not map container UID 0"},
+		{name: "ordinary execution with malformed uid map", evidence: hardeningRuntimeEvidence{uidMap: "0 1000\n"}, wantError: "malformed uid_map"},
 		{name: "host package without init", evidence: hardeningRuntimeEvidence{packageInstall: true, effectiveUID: 0, uidMap: hostMap, initName: "sh", initExecutable: "/usr/bin/sh"}, wantState: hardeningExecutionNotApplicable},
 		{name: "rootless package without init", evidence: hardeningRuntimeEvidence{packageInstall: true, effectiveUID: 0, uidMap: rootlessMap, initName: "sh", initExecutable: "/usr/bin/sh"}, wantState: hardeningExecutionNotApplicable, wantRootless: true},
 		{name: "rootless systemd", evidence: hardeningRuntimeEvidence{packageInstall: true, effectiveUID: 0, uidMap: rootlessMap, initName: "systemd", initExecutable: "/usr/lib/systemd/systemd", systemdActive: true}, wantState: hardeningExecutionActive, wantManager: "systemd", wantRootless: true},
@@ -1218,8 +1219,8 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 		return host, profile
 	}
 
-	// An unprivileged LXC root keeps CAP_LINUX_IMMUTABLE in CapEff, but the
-	// kernel answers EPERM; remapped root must stay mode-only in every state.
+	// CapEff may advertise CAP_LINUX_IMMUTABLE inside an unprivileged user
+	// namespace; remapped root must stay mode-only in every execution state.
 	for name, state := range map[string]hardeningExecutionState{"active": hardeningExecutionActive, "not applicable": hardeningExecutionNotApplicable} {
 		t.Run("remapped root is mode only when "+name, func(t *testing.T) {
 			flags := newProfileTransactionTestState(mutableFlags)
