@@ -4,7 +4,6 @@ package logger
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"syscall"
@@ -28,11 +27,4 @@ func openAppendProductLog(path, kind string) (*os.File, error) {
 		log.Printf("[Logger] Product log origin could not be recorded; preserve this log during removal: %v", err)
 	}
 	return file, nil
-}
-
-func OpenCoreProcessLog(path string) (*os.File, error) {
-	if path == "" {
-		return nil, fmt.Errorf("core process log path is empty")
-	}
-	return openAppendProductLog(path, fileorigin.CoreLog)
 }

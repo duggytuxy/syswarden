@@ -279,6 +279,11 @@ private manifest binds the same scope, membership, policy and measurement instan
 Producer authentication, policy evaluation, consumer integration and native IVVQ
 remain open; the 500-node fixture is simulation only. BunkerWeb stays independent.
 
+The [bounded core process log sink](CORE_PROCESS_LOG_RETENTION.md) adds independent
+rolling file retention while keeping the system journal available and preserving
+unproven legacy data. It does not restart services or alter BunkerWeb contracts.
+Native lifecycle acceptance remains tracked in issue #391.
+
 ## Explicit log producer trust
 
 [Service-owned log inputs](TRUSTED_LOG_PRODUCERS.md) describes exact path/UID
