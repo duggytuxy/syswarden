@@ -276,14 +276,10 @@ func lockUserProfilesOn(host hardeningHost) error {
 	if err != nil {
 		return fmt.Errorf("classify immutable-profile execution context: %w", err)
 	}
-	immutableNotApplicable := false
-	if decision.rootUIDRemapped {
-		capable, err := host.hasEffectiveCapability(9) // CAP_LINUX_IMMUTABLE
-		if err != nil {
-			return err
-		}
-		immutableNotApplicable = !capable
-	}
+	// FS_IOC_SETFLAGS checks CAP_LINUX_IMMUTABLE against the initial user
+	// namespace, so a remapped root can never set or clear the flag even
+	// when CapEff advertises the capability inside its own namespace.
+	immutableNotApplicable := decision.rootUIDRemapped
 	homeExists, err := host.directoryExists("/home")
 	if err != nil {
 		return err
@@ -327,7 +323,7 @@ func lockUserProfilesOn(host hardeningHost) error {
 			}
 			if immutableNotApplicable {
 				if !reportedImmutableNotApplicable {
-					fmt.Println(" -> Immutable profile flags are not applicable: root UID is remapped and CAP_LINUX_IMMUTABLE is absent. Profile modes were written and attested; no immutable flag was claimed.")
+					fmt.Println(" -> Immutable profile flags are not applicable: root UID is remapped, so CAP_LINUX_IMMUTABLE is unavailable in the initial user namespace. Profile modes were written and attested; no immutable flag was claimed.")
 					reportedImmutableNotApplicable = true
 				}
 			}

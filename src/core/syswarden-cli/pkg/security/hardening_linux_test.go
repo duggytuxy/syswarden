@@ -649,7 +649,10 @@ func TestClassifyHardeningRuntimeMatrix(t *testing.T) {
 		wantRootless bool
 		wantError    string
 	}{
-		{name: "ordinary execution", evidence: hardeningRuntimeEvidence{}, wantState: hardeningExecutionActive},
+		{name: "ordinary execution", evidence: hardeningRuntimeEvidence{uidMap: hostMap}, wantState: hardeningExecutionActive},
+		{name: "rootless ordinary execution", evidence: hardeningRuntimeEvidence{uidMap: rootlessMap}, wantState: hardeningExecutionActive, wantRootless: true},
+		{name: "ordinary execution without uid map", evidence: hardeningRuntimeEvidence{}, wantError: "does not map container UID 0"},
+		{name: "ordinary execution with malformed uid map", evidence: hardeningRuntimeEvidence{uidMap: "0 1000\n"}, wantError: "malformed uid_map"},
 		{name: "host package without init", evidence: hardeningRuntimeEvidence{packageInstall: true, effectiveUID: 0, uidMap: hostMap, initName: "sh", initExecutable: "/usr/bin/sh"}, wantState: hardeningExecutionNotApplicable},
 		{name: "rootless package without init", evidence: hardeningRuntimeEvidence{packageInstall: true, effectiveUID: 0, uidMap: rootlessMap, initName: "sh", initExecutable: "/usr/bin/sh"}, wantState: hardeningExecutionNotApplicable, wantRootless: true},
 		{name: "rootless systemd", evidence: hardeningRuntimeEvidence{packageInstall: true, effectiveUID: 0, uidMap: rootlessMap, initName: "systemd", initExecutable: "/usr/lib/systemd/systemd", systemdActive: true}, wantState: hardeningExecutionActive, wantManager: "systemd", wantRootless: true},
@@ -1197,13 +1200,12 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 	const otherProfileFlag = 0x20
 	mutableFlags := otherProfileFlag
 	immutableFlags := otherProfileFlag | linuxImmutableFileFlag
-	newHost := func(t *testing.T, state *profileTransactionTestState, decision hardeningExecutionDecision, capable bool) (hardeningHost, string) {
+	newHost := func(t *testing.T, state *profileTransactionTestState, decision hardeningExecutionDecision) (hardeningHost, string) {
 		t.Helper()
 		host := hardeningTestHost(t, hardeningExecutor{})
 		host.executionProbe = func() (hardeningExecutionDecision, error) {
 			return decision, nil
 		}
-		host.capabilityProbe = func(uint) (bool, error) { return capable, nil }
 		host.profileFlagsProbe = state.probe
 		host.profileFlagsSet = state.set
 		host.profileChmod = state.chmod
@@ -1217,17 +1219,23 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 		return host, profile
 	}
 
-	t.Run("mode only without capability", func(t *testing.T) {
-		state := newProfileTransactionTestState(mutableFlags)
-		host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionNotApplicable, rootUIDRemapped: true}, false)
-		if err := lockUserProfilesOn(host); err != nil {
-			t.Fatal(err)
-		}
-		info, _ := os.Stat(profile)
-		if strings.Contains(strings.Join(state.calls, "|"), "probe") || info.Mode().Perm() != 0600 || state.flags != mutableFlags {
-			t.Fatalf("calls=%v mode=%04o flags=%#x", state.calls, info.Mode().Perm(), state.flags)
-		}
-	})
+	// CapEff may advertise CAP_LINUX_IMMUTABLE inside an unprivileged user
+	// namespace; remapped root must stay mode-only in every execution state.
+	for name, state := range map[string]hardeningExecutionState{"active": hardeningExecutionActive, "not applicable": hardeningExecutionNotApplicable} {
+		t.Run("remapped root is mode only when "+name, func(t *testing.T) {
+			flags := newProfileTransactionTestState(mutableFlags)
+			flags.setFailures[immutableFlags] = []error{syscall.EPERM}
+			host, profile := newHost(t, flags, hardeningExecutionDecision{state: state, rootUIDRemapped: true})
+			if err := lockUserProfilesOn(host); err != nil {
+				t.Fatal(err)
+			}
+			info, _ := os.Stat(profile)
+			calls := strings.Join(flags.calls, "|")
+			if strings.Contains(calls, "probe") || strings.Contains(calls, "set ") || info.Mode().Perm() != 0600 || flags.flags != mutableFlags {
+				t.Fatalf("calls=%v mode=%04o flags=%#x", flags.calls, info.Mode().Perm(), flags.flags)
+			}
+		})
+	}
 
 	for _, initial := range []bool{false, true} {
 		name := "initial mutable"
@@ -1240,7 +1248,7 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 				initialFlags = immutableFlags
 			}
 			state := newProfileTransactionTestState(initialFlags)
-			host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive}, true)
+			host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive})
 			if err := lockUserProfilesOn(host); err != nil {
 				t.Fatal(err)
 			}
@@ -1253,7 +1261,7 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 
 	t.Run("special mode bits are cleared on success", func(t *testing.T) {
 		state := newProfileTransactionTestState(mutableFlags)
-		host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive}, true)
+		host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive})
 		initialMode := os.FileMode(0644) | os.ModeSetuid
 		if err := chmodHardeningFixture(profile, initialMode); err != nil {
 			t.Fatal(err)
@@ -1271,7 +1279,7 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 		state := newProfileTransactionTestState(mutableFlags)
 		cause := errors.New("set immutable failed")
 		state.setFailures[immutableFlags] = []error{cause}
-		host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive}, true)
+		host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive})
 		initialMode := os.FileMode(0644) | os.ModeSetuid
 		if err := chmodHardeningFixture(profile, initialMode); err != nil {
 			t.Fatal(err)
@@ -1335,7 +1343,7 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 			state := newProfileTransactionTestState(initialFlags)
 			cause := errors.New("injected profile transaction failure")
 			test.configure(state, cause)
-			host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive}, true)
+			host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive})
 			infoBefore, err := os.Stat(profile)
 			if err != nil {
 				t.Fatal(err)
@@ -1360,7 +1368,7 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 		rollbackFailure := errors.New("rollback clear failed")
 		state.setFailures[immutableFlags] = []error{cause}
 		state.setFailures[mutableFlags] = []error{rollbackFailure}
-		host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive}, true)
+		host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive})
 		err := lockUserProfilesOn(host)
 		if !errors.Is(err, cause) || !errors.Is(err, rollbackFailure) {
 			t.Fatalf("profile errors were not aggregated: %v", err)
@@ -1373,7 +1381,7 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 
 	t.Run("path replacement cannot produce false success", func(t *testing.T) {
 		state := newProfileTransactionTestState(mutableFlags)
-		host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive}, true)
+		host, profile := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive})
 		originalPath := profile + ".original"
 		replaced := false
 		state.onSet = func(flags int) {
@@ -1407,7 +1415,7 @@ func TestProfileImmutableCapabilityMatrix(t *testing.T) {
 	t.Run("host permission error fails closed", func(t *testing.T) {
 		state := newProfileTransactionTestState(mutableFlags)
 		state.setFailures[immutableFlags] = []error{syscall.EPERM}
-		host, _ := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive}, true)
+		host, _ := newHost(t, state, hardeningExecutionDecision{state: hardeningExecutionActive})
 		if err := lockUserProfilesOn(host); !errors.Is(err, syscall.EPERM) {
 			t.Fatalf("error=%v, want EPERM", err)
 		}
