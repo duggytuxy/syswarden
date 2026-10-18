@@ -221,6 +221,10 @@ not a financial allocation.
   gate does not accept the installed product or replace independent review.
 - BunkerWeb-related changes: the [compatibility contract](BUNKERWEB_COMPATIBILITY.md),
   including existing automatic synchronization and the contextual dashboard tab.
+  The [withdrawal regression contract](BUNKERWEB_WITHDRAWAL.md) keeps source
+  removal, cached lists, delivery and applied worker state separate. Run the
+  automated API and pinned partner-job tests; complete the native HTTP matrix
+  before v5.00.0 IVVQ acceptance.
 - Response changes: exact approved targets, preconditions, TTL, durable outcome,
   retries, partial failure and rollback, with administrator access preserved.
 - Lifecycle changes: uninstall, native remove, native purge and deferred purge

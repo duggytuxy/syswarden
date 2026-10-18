@@ -1,0 +1,32 @@
+{
+  "repository": "https://github.com/bunkerity/bunkerweb-plugins",
+  "commit": "45c1f989ca558f47a49046098de5586b06fd9ba7",
+  "plugin_version": "1.13",
+  "files": {
+    "syswarden-blocklist-download.py.txt": {
+      "path": "syswarden/jobs/syswarden-blocklist-download.py",
+      "sha256": "c7a8a8ca1e9a512b1c5a73e6c4deb8870046e6ffd6bedc324bf412fd7a0aed5d",
+      "git_blob": "09d99d5b5ab5c4ba3cec514d125c9aa859c537cf"
+    },
+    "syswarden_helpers.py.txt": {
+      "path": "syswarden/jobs/syswarden_helpers.py",
+      "sha256": "c7a4b1c70efbc02f753a47eca8df40869b826dc3b139e20e5a2a1e929e49877e",
+      "git_blob": "f489692bbf831fbc3d5f46ca6e216abddae5ca52"
+    },
+    "syswarden_client.py.txt": {
+      "path": "syswarden/jobs/syswarden_client.py",
+      "sha256": "254a25dce042a7b84c652e84ba12c091b470ba850895b64ecb1bbfbe928ff37b",
+      "git_blob": "71e1895be5025b95423ac334cab889ebe3894af9"
+    },
+    "plugin.json.txt": {
+      "path": "syswarden/plugin.json",
+      "sha256": "5dba85fec284d3705bb032f54d2e01b8cf98600cee715af25c18a2eee29bc409",
+      "git_blob": "56b85766a6102f016df8949f05cf4ed86c5905c5"
+    },
+    "LICENSE.md.txt": {
+      "path": "LICENSE.md",
+      "sha256": "6222fdf64728d91bef797fae1c610f97737df67fd07026b7a83d661252fdade6",
+      "git_blob": "e066202aa1f8607c2ba4721d6d5fb8f7200c5b16"
+    }
+  }
+}
