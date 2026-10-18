@@ -108,3 +108,9 @@ RBAC, visual rendering, exports, fleet simulation and native acceptance remain
 separate work. The independent BunkerWeb API, temporary-ban source ownership,
 TTL, retry and HA contracts are unchanged. Component validation is intermediate
 evidence under the major v5.00.0 IVVQ contract, not final acceptance.
+
+The [complete authorized node-state inventory](NODE_STATE_INVENTORY.md) now
+retains missing and stale members without inventing current reachability or
+protection. Its bound manifest, source quality, resource limits and synthetic
+500-node outage cases are component evidence; consumer integration, enrollment
+and native v5.00.0 IVVQ acceptance remain open.

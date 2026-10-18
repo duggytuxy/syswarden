@@ -358,3 +358,9 @@ selection, nanosecond expiry, agent/collector clock separation and all source
 availability states. Its existing node fuzz target now covers current and stale
 projection as well as canonical round trips. These checks do not authenticate
 ingestion, activate remote reads or establish final v5.00.0 IVVQ acceptance.
+
+The [complete authorized node-state inventory](NODE_STATE_INVENTORY.md) now
+retains missing and stale members without inventing current reachability or
+protection. Its bound manifest, source quality, resource limits and synthetic
+500-node outage cases are component evidence; consumer integration, enrollment
+and native v5.00.0 IVVQ acceptance remain open.
