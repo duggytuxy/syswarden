@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNodeSnapshotRejectsAmbiguousJSON(t *testing.T) {
@@ -105,6 +106,22 @@ func FuzzNodeSnapshotRoundTrip(f *testing.F) {
 		if err != nil || !bytes.Equal(second, encoded) {
 			t.Fatal("unstable node encoding", err)
 		}
+		// Synthetic selection derived from fuzz input only, not production admission.
+		context := nodeViewContext(t, s)
+		context.ReadContext.ExpectedIdentity = s.Identity
+		context.ReadContext.Now, _ = time.Parse(time.RFC3339Nano, s.CollectedAt)
+		context.ReadContext.MaxAge = MaxSnapshotLifetime
+		view, err := ProjectNodeSnapshot(s, context)
+		if err != nil || view.ReportState != Present || view.CurrentReachability != s.Reachability {
+			t.Fatal("valid report lost current projection", err)
+		}
+		checkNodeViewFields(t, s, view, false)
+		context.ReadContext.Now, _ = time.Parse(time.RFC3339Nano, s.ValidUntil)
+		view, err = ProjectNodeSnapshot(s, context)
+		if err != nil || view.ReportState != Stale || view.CurrentReachability != "unknown" || view.Identity != s.Identity {
+			t.Fatal("expired report lost identity or retained current transport", err)
+		}
+		checkNodeViewFields(t, s, view, true)
 		if err := CheckCurrentNodeSnapshot(s, readContext()); err == nil && s.Identity != readContext().ExpectedIdentity {
 			t.Fatal("accepted substituted identity")
 		}

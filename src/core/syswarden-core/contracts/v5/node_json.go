@@ -1,6 +1,8 @@
 package v5
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"reflect"
 )
@@ -37,4 +39,15 @@ func EncodeNodeSnapshot(snapshot NodeSnapshot) ([]byte, error) {
 		return nil, invalidNode("size")
 	}
 	return data, nil
+}
+
+// NodeSnapshotSHA256 binds every field of the existing canonical node schema.
+// It supplies byte identity only, not collector authentication or read authority.
+func NodeSnapshotSHA256(s NodeSnapshot) (string, error) {
+	data, err := EncodeNodeSnapshot(s)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }

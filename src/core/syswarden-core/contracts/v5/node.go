@@ -133,6 +133,11 @@ type NodeReadContext struct {
 	MaxAge           time.Duration
 }
 
+func (c NodeReadContext) validate() bool {
+	return c.ExpectedIdentity.Validate() == nil && c.MaxAge > 0 && c.MaxAge <= MaxSnapshotLifetime &&
+		timestamp(c.Now.UTC().Format(time.RFC3339Nano))
+}
+
 // CheckCurrentNodeSnapshot checks exact membership generation and freshness.
 // It does not authenticate the collector, authorize a read, track replay or
 // verify the referenced evidence. Those are separate ingestion obligations.
@@ -141,11 +146,7 @@ func CheckCurrentNodeSnapshot(s NodeSnapshot, context NodeReadContext) error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
-	if err := context.ExpectedIdentity.Validate(); err != nil {
-		return ErrInvalidNodeReadContext
-	}
-	if context.MaxAge <= 0 || context.MaxAge > MaxSnapshotLifetime ||
-		!timestamp(context.Now.UTC().Format(time.RFC3339Nano)) {
+	if !context.validate() {
 		return ErrInvalidNodeReadContext
 	}
 	if s.Identity != context.ExpectedIdentity {
