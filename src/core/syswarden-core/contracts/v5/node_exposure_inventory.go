@@ -92,6 +92,7 @@ type nodeExposureInventoryManifest struct {
 // NodeExposureInventory is immutable through this API. It is not a registry,
 // authenticated export, map permission, health verdict or KPI population.
 type NodeExposureInventory struct {
+	context  NodeExposureInventoryContext
 	entries  []NodeExposureInventoryEntry
 	manifest []byte
 }
@@ -217,7 +218,8 @@ func ResolveNodeExposureInventory(c NodeExposureInventoryContext, members []Node
 	if err != nil || len(data) > MaxNodeExposureInventoryBytes {
 		return NodeExposureInventory{}, invalidNodeExposureInventory("manifest bounds")
 	}
-	return NodeExposureInventory{entries: entries, manifest: data}, nil
+	c.Now = c.Now.UTC()
+	return NodeExposureInventory{context: c, entries: entries, manifest: data}, nil
 }
 
 func unavailableNodeExposureEntry(m NodeExposureInventoryMember, state, reason string) NodeExposureInventoryEntry {

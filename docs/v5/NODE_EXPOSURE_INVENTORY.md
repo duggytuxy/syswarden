@@ -2,6 +2,8 @@
 
 Status: inactive v5 read-model component for #224 and #315. It composes the
 [exposure snapshot](NODE_EXPOSURE.md) over a complete authorized population.
+The [fleet context](FLEET_CONTEXT.md) binds this inventory to the BunkerWeb
+inventory before exposing a consistent selection from both components.
 Stable remains v4.10.4. No dashboard, enrollment service, network scan, address
 geolocation or final v5.00.0 IVVQ acceptance is implemented by this helper.
 
