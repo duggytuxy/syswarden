@@ -32,8 +32,8 @@ func (c NodeSnapshotViewContext) validate() bool {
 // Consumers must display State alongside any Reported.Value. Present does not
 // authenticate or resolve the value, nor attest the referenced protection.
 type NodeSnapshotFieldView struct {
-	Reported Field
-	State    string
+	Reported Field  `json:"reported"`
+	State    string `json:"state"`
 }
 
 // NodeSnapshotView distinguishes current transport from historical observations.

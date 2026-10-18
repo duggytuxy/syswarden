@@ -19,7 +19,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
 4. [Validation profile and resource limits](VALIDATION_PLAN.md).
 5. [Shared event envelope and conservative v4 projection](EVENT_ENVELOPE.md).
 6. [Node identity and read snapshot](NODE_SNAPSHOT.md), with
-   [bound current and historical node state](NODE_VIEW.md), independent
+   [bound current and historical node state](NODE_VIEW.md),
+   [complete authorized state inventory](NODE_STATE_INVENTORY.md), independent
    [fleet exposure classification](NODE_EXPOSURE.md) and
    [authorized External/Internal inventory](NODE_EXPOSURE_INVENTORY.md), then
    [shared exposure and BunkerWeb fleet context](FLEET_CONTEXT.md).
@@ -293,3 +294,9 @@ Native lifecycle acceptance remains tracked in issue #391.
 
 [Service-owned log inputs](TRUSTED_LOG_PRODUCERS.md) describes exact path/UID
 approval, secure collection after rotation and the remaining native acceptance.
+
+The [complete authorized node-state inventory](NODE_STATE_INVENTORY.md) now
+retains missing and stale members without inventing current reachability or
+protection. Its bound manifest, source quality, resource limits and synthetic
+500-node outage cases are component evidence; consumer integration, enrollment
+and native v5.00.0 IVVQ acceptance remain open.
