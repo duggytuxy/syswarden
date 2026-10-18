@@ -13,7 +13,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
 
 1. [Scope, authority and sequencing](SCOPE_AND_AUTHORITY.md).
 2. [Threat model and acceptance map](THREAT_MODEL.md).
-3. [BunkerWeb compatibility and dashboard integration](BUNKERWEB_COMPATIBILITY.md).
+3. [BunkerWeb compatibility and dashboard integration](BUNKERWEB_COMPATIBILITY.md),
+   with the [bounded integration presence contract](BUNKERWEB_PRESENCE.md).
 4. [Validation profile and resource limits](VALIDATION_PLAN.md).
 5. [Shared event envelope and conservative v4 projection](EVENT_ENVELOPE.md).
 6. [Node identity and read snapshot](NODE_SNAPSHOT.md), with independent

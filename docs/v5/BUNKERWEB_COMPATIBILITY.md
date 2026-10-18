@@ -70,6 +70,10 @@ state without treating a path or certificate as ownership evidence.
 
 ## Dedicated dashboard tab
 
+The inactive [integration presence schema](BUNKERWEB_PRESENCE.md) separates
+retained registration from independently fresh configuration mode. It provides
+no discovery, authentication, tab rendering or runtime integration changes.
+
 Add a **BunkerWeb** tab to WP18 when at least one authorized server has the
 integration configured or a previously established integration state. Decide
 this from authoritative configuration/capability information, not from an
