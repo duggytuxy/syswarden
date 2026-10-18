@@ -1,5 +1,9 @@
 # Complete authorized node-state inventory
 
+The [shared fleet state](FLEET_STATE.md) composes this inventory with exposure
+and BunkerWeb context under one complete identity population and one assessment
+instant. Node-state uncertainty cannot erase independent integration history.
+
 Status: inactive v5 read-model component for #224, #233 and #315. It composes
 the [bound node projection](NODE_VIEW.md) over complete authorized membership.
 Stable remains v4.10.4. This helper does not enroll nodes, discover servers,
@@ -73,7 +77,7 @@ There is no I/O, background worker or shared mutable store.
 
 This component does not authorize External map coordinates or address display,
 calculate KPI percentages, render UI or join inventories automatically. Shared
-selection with exposure and BunkerWeb inventories remains a subsequent step.
+selection is provided separately by the [fleet state composition](FLEET_STATE.md).
 BunkerWeb integration presence and applied state require their own evidence.
 An integration reference does not prove a ban was withdrawn from every worker;
 see the [withdrawal contract](BUNKERWEB_WITHDRAWAL.md). The authenticated partner

@@ -5,6 +5,10 @@ v4.10.4. This component joins the [exposure inventory](NODE_EXPOSURE_INVENTORY.m
 and [BunkerWeb inventory](BUNKERWEB_INVENTORY.md). It does not implement a console,
 enrollment, authenticated ingestion or final v5.00.0 IVVQ acceptance.
 
+The [fleet state composition](FLEET_STATE.md) joins this context with complete
+node-state membership while preserving all three independent assessments. This
+context retains its expected binding privately without changing its manifest.
+
 ## Bind before joining
 
 `ComposeFleetContext` accepts the two already constructed immutable inventories

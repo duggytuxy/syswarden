@@ -45,6 +45,7 @@ type fleetContextManifest struct {
 // FleetContext is an immutable join of two already authorized read models.
 // It is not an enrollment registry, health verdict, permission or live cache.
 type FleetContext struct {
+	binding  FleetContextBinding
 	entries  []FleetContextEntry
 	manifest []byte
 }
@@ -129,7 +130,7 @@ func ComposeFleetContext(binding FleetContextBinding, exposure NodeExposureInven
 	if err != nil || len(data) > MaxFleetContextBytes {
 		return FleetContext{}, invalidFleetContext("manifest bounds")
 	}
-	return FleetContext{entries: entries, manifest: data}, nil
+	return FleetContext{binding: FleetContextBinding{Exposure: e, BunkerWeb: b}, entries: entries, manifest: data}, nil
 }
 
 // Select requires an explicit all, external, internal or needs_classification
