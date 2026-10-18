@@ -95,3 +95,7 @@ bytes remain unchanged. Producer attestation, field RBAC, UI and exports,
 enrollment, authenticated ingestion and native acceptance remain open.
 BunkerWeb's authentication, API, TTL, source ownership, retries and HA continue
 independently of the dashboard and these read models.
+
+[Population-bound reports](NODE_RATE_REPORTS.md) preserve this selected basis
+through report construction and verify actual counts and provenance before
+projecting percentages. They do not attest the producer or activate consumers.

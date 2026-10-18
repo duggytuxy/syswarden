@@ -132,3 +132,7 @@ chart-wide category partition checks, UI integration, export permissions and
 native IVVQ remain open. Event, telemetry-slot and transaction formulas require
 their own identities; this resolver deliberately refuses them. BunkerWeb's
 authenticated API, source-owned TTL claims, retries and HA remain independent.
+
+[Population-bound rate reports](NODE_RATE_REPORTS.md) connect this resolver to
+the existing snapshot codec and require exact population agreement before
+percentage projection. Independent producer authorization remains required.

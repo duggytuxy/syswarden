@@ -378,3 +378,10 @@ the existing node rate resolver. Independent golden bytes, group boundaries,
 source-change replay refusal, 500-node unknown coverage and empty-denominator
 cases are mandatory component checks. Producer attestation, UI and native IVVQ
 remain open; this adapter cannot infer protection from reachability.
+
+The [population-bound node rate reports](NODE_RATE_REPORTS.md) require exact
+source basis, population digest, scalar partition and current read selection.
+Independent vectors, unchanged-total substitution, changed evidence, source
+quality, thresholds and complete selected-fleet codec/projection scenarios are
+mandatory component checks. A fresh report cannot refresh historical evidence.
+Authentication, consumer parity and native major IVVQ remain separate gates.

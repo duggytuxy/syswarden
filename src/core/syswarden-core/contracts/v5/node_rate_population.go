@@ -98,6 +98,7 @@ type nodeRateManifest struct {
 // export. Its private manifest contains authorized identities and evidence
 // references; access must be reauthorized before disclosure or export.
 type NodeRatePopulation struct {
+	basis    NodeRateBasis
 	manifest []byte
 	counts   RateCounts
 }
@@ -174,7 +175,7 @@ func ResolveNodeRatePopulation(basis NodeRateBasis, members []NodeRateMember, as
 	if err != nil || len(data) > MaxNodeRateManifestBytes {
 		return NodeRatePopulation{}, invalidNodeRatePopulation("manifest encoding budget")
 	}
-	return NodeRatePopulation{manifest: data, counts: counts}, nil
+	return NodeRatePopulation{basis: basis, manifest: data, counts: counts}, nil
 }
 
 func indexNodeRateMembers(members []NodeRateMember) (map[NodeIdentity]NodeRateMember, error) {
