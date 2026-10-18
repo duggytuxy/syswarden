@@ -114,6 +114,10 @@ A bounded fuzz target runs in the security workflow. A 500-identity synthetic
 exercise checks scope isolation using existing resources; it is not a deployed
 fleet, load benchmark, capacity certification or new infrastructure expense.
 
+The [authorized inventory assembler](BUNKERWEB_INVENTORY.md) retains nonresponding
+known registrations and applies this projection only after exact selection and
+membership checks. It does not provide the external admission or history store.
+
 ## Remaining integration and compatibility work
 
 This is an isolated shared contract with no production caller. Authenticated
