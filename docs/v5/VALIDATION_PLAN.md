@@ -364,3 +364,10 @@ retains missing and stale members without inventing current reachability or
 protection. Its bound manifest, source quality, resource limits and synthetic
 500-node outage cases are component evidence; consumer integration, enrollment
 and native v5.00.0 IVVQ acceptance remain open.
+
+The [shared fleet state](FLEET_STATE.md) joins exposure, BunkerWeb context and
+node observations only after exact authority-context and identity-population
+matching. Its canonical vectors, defensive copies, 500-node partial and total
+outages, independent freshness and reclassification checks prevent a missing
+report from becoming a healthy state or an omitted member. These are component
+checks; enrollment, consumer wiring and native v5.00.0 IVVQ remain open.

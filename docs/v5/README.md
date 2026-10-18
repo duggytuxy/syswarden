@@ -23,7 +23,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
    [complete authorized state inventory](NODE_STATE_INVENTORY.md), independent
    [fleet exposure classification](NODE_EXPOSURE.md) and
    [authorized External/Internal inventory](NODE_EXPOSURE_INVENTORY.md), then
-   [shared exposure and BunkerWeb fleet context](FLEET_CONTEXT.md).
+   [shared exposure and BunkerWeb fleet context](FLEET_CONTEXT.md) and
+   [complete fleet state with independent node observations](FLEET_STATE.md).
 7. [Policy decision records and exact input binding](POLICY_DECISION.md).
 8. [Action history and scoped control reports](ACTION_AND_CONTROL.md).
 9. [Evidence objects and explicit transformation lineage](EVIDENCE_DESCRIPTOR.md).
