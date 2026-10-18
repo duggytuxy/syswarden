@@ -98,6 +98,12 @@ protection evidence. Callers still need authenticated collection, scope checks,
 evidence verification, replay/deduplication state and a trustworthy local clock.
 The helper has no side effects and cannot grant read or response authority.
 
+The [bound node state projection](NODE_VIEW.md) adds independent exact report
+selection and an explicit current/historical presentation. It preserves the
+schema and this helper's interval, and returns no fields for rejected reports.
+The projection does not resolve references or implement the remaining trust
+obligations described above.
+
 ## Encoding and migration boundary
 
 The existing event parser's 16-KiB byte limit, depth/member/value bounds,

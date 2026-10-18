@@ -348,3 +348,9 @@ stale-manager refusals. A controlled LXC campaign must separately prove actual
 scheduling, guest reload/reboot, independent removal paths and preservation of
 unrelated jobs. Component success does not establish container capability or
 complete v5.00.0 IVVQ acceptance. Track the remaining native evidence in #384.
+
+The [bound node state projection](NODE_VIEW.md) is exercised with exact report
+selection, nanosecond expiry, agent/collector clock separation and all source
+availability states. Its existing node fuzz target now covers current and stale
+projection as well as canonical round trips. These checks do not authenticate
+ingestion, activate remote reads or establish final v5.00.0 IVVQ acceptance.

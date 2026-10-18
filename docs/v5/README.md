@@ -18,7 +18,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
    [authorized inventory assembly](BUNKERWEB_INVENTORY.md).
 4. [Validation profile and resource limits](VALIDATION_PLAN.md).
 5. [Shared event envelope and conservative v4 projection](EVENT_ENVELOPE.md).
-6. [Node identity and read snapshot](NODE_SNAPSHOT.md), with independent
+6. [Node identity and read snapshot](NODE_SNAPSHOT.md), with
+   [bound current and historical node state](NODE_VIEW.md), independent
    [fleet exposure classification](NODE_EXPOSURE.md) and
    [authorized External/Internal inventory](NODE_EXPOSURE_INVENTORY.md), then
    [shared exposure and BunkerWeb fleet context](FLEET_CONTEXT.md).
