@@ -1,5 +1,8 @@
 # Authorized BunkerWeb inventory
 
+The [shared fleet context](FLEET_CONTEXT.md) combines this inventory with exposure
+classification and binds BunkerWeb relevance to the selected fleet group.
+
 Status: inactive v5 read-model component for #224 and #315, dependent on the
 [presence snapshot](BUNKERWEB_PRESENCE.md). Stable remains v4.10.4. This helper
 implements no enrollment service, authenticated endpoint, persistent registration

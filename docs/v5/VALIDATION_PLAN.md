@@ -81,6 +81,12 @@ not a financial allocation.
   payload disclosure, immutable group copies, input limits and 500 synthetic
   identities. This component does not establish map permission, field RBAC,
   authenticated enrollment or native capacity. See [the inventory contract](NODE_EXPOSURE_INVENTORY.md).
+- Fleet context (#224/#315): exact expected component contexts, shared scope,
+  membership, policy and time, plus identical actual identity populations. Reject
+  union/intersection fallback and stale context reuse. Verify selection-local
+  BunkerWeb relevance, unchanged component assessments, reclassification,
+  deterministic manifests, empty versus invalid selections, defensive copies,
+  500 synthetic nodes and complete outages. See [the composition contract](FLEET_CONTEXT.md).
 - Shared schemas: golden, malformed, duplicate, unknown-version, compatibility
   and migration fixtures; preserve existing public protocol/telemetry fields.
 - Journal framing: exact payload bytes, independently bound start/end cursors,

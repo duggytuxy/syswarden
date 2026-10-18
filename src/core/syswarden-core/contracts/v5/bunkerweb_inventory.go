@@ -103,6 +103,7 @@ type bunkerWebInventoryManifest struct {
 // BunkerWebInventory is immutable through this API. Its private manifest is not
 // a public endpoint, authenticated export, persistent registry or KPI population.
 type BunkerWebInventory struct {
+	context   BunkerWebInventoryContext
 	entries   []BunkerWebInventoryEntry
 	relevance string
 	manifest  []byte
@@ -207,9 +208,7 @@ func ResolveBunkerWebInventory(c BunkerWebInventoryContext, members []BunkerWebI
 			entry = observation.entry
 		}
 		entries = append(entries, entry)
-		if entry.Relevance == "known" || (entry.Relevance == "unknown" && relevance == "absent") {
-			relevance = entry.Relevance
-		}
+		relevance = mergeBunkerWebRelevance(relevance, entry.Relevance)
 	}
 	slices.SortFunc(entries, func(a, b BunkerWebInventoryEntry) int {
 		return compareNodeRateFields([3]string{a.Identity.ClusterID, a.Identity.NodeID, a.Identity.Epoch},
@@ -223,7 +222,15 @@ func ResolveBunkerWebInventory(c BunkerWebInventoryContext, members []BunkerWebI
 	if err != nil || len(data) > MaxBunkerWebInventoryBytes {
 		return BunkerWebInventory{}, invalidBunkerWebInventory("manifest bounds")
 	}
-	return BunkerWebInventory{entries: entries, relevance: relevance, manifest: data}, nil
+	c.Now = c.Now.UTC()
+	return BunkerWebInventory{context: c, entries: entries, relevance: relevance, manifest: data}, nil
+}
+
+func mergeBunkerWebRelevance(current, next string) string {
+	if next == "known" || (next == "unknown" && current == "absent") {
+		return next
+	}
+	return current
 }
 
 func unavailableBunkerWebInventoryEntry(m BunkerWebInventoryMember, state, reason string) BunkerWebInventoryEntry {
