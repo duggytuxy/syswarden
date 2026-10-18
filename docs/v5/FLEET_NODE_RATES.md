@@ -99,3 +99,7 @@ independently of the dashboard and these read models.
 [Population-bound reports](NODE_RATE_REPORTS.md) preserve this selected basis
 through report construction and verify actual counts and provenance before
 projecting percentages. They do not attest the producer or activate consumers.
+
+The [checked fleet KPI projection](FLEET_RATE_PROJECTION.md) also verifies the
+actual population of each independently selected report before assembling the
+three named node indicators for one fleet selection and read instant.

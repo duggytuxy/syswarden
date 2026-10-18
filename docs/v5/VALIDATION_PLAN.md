@@ -385,3 +385,11 @@ Independent vectors, unchanged-total substitution, changed evidence, source
 quality, thresholds and complete selected-fleet codec/projection scenarios are
 mandatory component checks. A fresh report cannot refresh historical evidence.
 Authentication, consumer parity and native major IVVQ remain separate gates.
+
+The [checked fleet KPI projection](FLEET_RATE_PROJECTION.md) requires complete
+formula coverage, exact actual identity matching, common measurement and read
+instants, and independently retained eligibility/quality for all three node KPIs.
+Coherent foreign populations, late-slot failures, mixed read contexts, exact
+freshness boundaries and zero/500-node selected-fleet simulations are mandatory
+component checks. These do not authenticate assessments, activate a dashboard
+or establish final v5.00.0 IVVQ acceptance.

@@ -25,7 +25,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
    [authorized External/Internal inventory](NODE_EXPOSURE_INVENTORY.md), then
    [shared exposure and BunkerWeb fleet context](FLEET_CONTEXT.md) and
    [complete fleet state with independent node observations](FLEET_STATE.md), with
-   [percentage populations bound to that selection](FLEET_NODE_RATES.md).
+   [percentage populations bound to that selection](FLEET_NODE_RATES.md) and
+   [checked fleet KPI projection](FLEET_RATE_PROJECTION.md).
 7. [Policy decision records and exact input binding](POLICY_DECISION.md).
 8. [Action history and scoped control reports](ACTION_AND_CONTROL.md).
 9. [Evidence objects and explicit transformation lineage](EVIDENCE_DESCRIPTOR.md).
