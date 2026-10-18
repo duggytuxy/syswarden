@@ -74,6 +74,13 @@ not a financial allocation.
   pre-persistence rollback, postcommit failure, concurrent rule appearance and
   retry after an operator independently withdraws an unnecessary manual opening.
   Validate diagnostic configuration reads without historical normalization.
+- Exposure inventory (#224/#315): complete authorized membership and exact selected
+  report binding, disjoint External/Internal/Needs classification partitions,
+  nonresponders, reclassification, revoked membership, epoch conflicts, stale
+  provenance and unknown clocks. Verify deterministic deduplication, no rejected
+  payload disclosure, immutable group copies, input limits and 500 synthetic
+  identities. This component does not establish map permission, field RBAC,
+  authenticated enrollment or native capacity. See [the inventory contract](NODE_EXPOSURE_INVENTORY.md).
 - Shared schemas: golden, malformed, duplicate, unknown-version, compatibility
   and migration fixtures; preserve existing public protocol/telemetry fields.
 - Journal framing: exact payload bytes, independently bound start/end cursors,
