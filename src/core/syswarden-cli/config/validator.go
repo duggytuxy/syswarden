@@ -91,6 +91,9 @@ func validateConfig(config *ModularConfig) error {
 	if err := validate.Struct(config); err != nil {
 		return err
 	}
+	if _, err := ParseTrustedLogProducers(config.WAAP.TrustedLogProducers); err != nil {
+		return fmt.Errorf("invalid waap.trusted_log_producers: %w", err)
+	}
 	if err := ValidateOperatorPolicy(config.OperatorPolicy); err != nil {
 		return err
 	}

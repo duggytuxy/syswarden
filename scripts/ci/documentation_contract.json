@@ -1030,8 +1030,18 @@
     },
     {
       "id": "core-waap-real-regular-log",
+      "path": "src/core/syswarden-core/config/trusted_log_files_linux.go",
+      "literal": "identity.Mode&unix.S_IFMT != unix.S_IFREG"
+    },
+    {
+      "id": "core-waap-authorized-file-open",
       "path": "src/core/syswarden-core/network/waap_log_follower_linux.go",
-      "literal": "is not a real regular file"
+      "literal": "fd, identity, err := access.OpenFile(dirFD, name)"
+    },
+    {
+      "id": "cli-waap-authorized-file-open",
+      "path": "src/core/syswarden-cli/pkg/integration/trusted_log_producers_linux.go",
+      "literal": "fd, _, err := access.OpenFile(parent, name)"
     },
     {
       "id": "wireguard-context-validation",

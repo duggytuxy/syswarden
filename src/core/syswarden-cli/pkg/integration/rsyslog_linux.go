@@ -36,6 +36,10 @@ func quoteRsyslogString(value string) (string, error) {
 }
 
 func validatedRsyslogLogPatterns(raw string) ([]string, error) {
+	return validatedLogPatternsUsing(raw, verifyRsyslogLogFile)
+}
+
+func validatedLogPatternsUsing(raw string, verify func(string) error) ([]string, error) {
 	if raw == "" {
 		return nil, nil
 	}
@@ -64,7 +68,7 @@ func validatedRsyslogLogPatterns(raw string) ([]string, error) {
 			continue
 		}
 		for _, match := range matches {
-			if err := verifyRsyslogLogFile(match); err != nil {
+			if err := verify(match); err != nil {
 				return nil, err
 			}
 			// Emit the verified exact match rather than its glob. Rsyslog must not

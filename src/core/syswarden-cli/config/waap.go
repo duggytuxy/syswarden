@@ -1,6 +1,7 @@
 package config
 
 type WAAPConfig struct {
+	TrustedLogProducers     string `mapstructure:"trusted_log_producers"`
 	EnforcementMode         string `mapstructure:"enforcement_mode" validate:"required,oneof=enforcing audit"`
 	BruteforceLogs          string `mapstructure:"bruteforce_logs" validate:"log_path_or_auto"`
 	BruteforceThreshold     int    `mapstructure:"bruteforce_threshold" validate:"min=1"`

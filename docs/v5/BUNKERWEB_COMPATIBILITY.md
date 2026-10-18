@@ -35,6 +35,11 @@ the current boundaries. Their historical candidate wording is not a v5 claim.
 | Shared services | Do not rewrite BunkerWeb/Nginx policy, reload it for a read-only dashboard view, loosen log permissions, or remove unrelated rsyslog configuration. |
 | Migration and lifecycle | Verify retained claims, expiry, source scopes, log overrides and service permissions after upgrade, restart and rollback. Validate product removal without damaging the partner's configuration or unrelated protection. |
 
+For service-owned file inputs, the v5 candidate adds
+[explicit per-file producer authorization](TRUSTED_LOG_PRODUCERS.md). This moves
+the generated bridge's file ingestion to the secure core follower when enabled;
+it does not grant dashboard authority or change the synchronization API.
+
 The operator's existing opt-in authorizes the established bounded automatic
 integration workflow. A new dashboard approval screen must not interrupt every
 plugin ban/withdrawal request. Human-initiated changes from the console still

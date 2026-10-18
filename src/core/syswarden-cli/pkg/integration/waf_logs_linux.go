@@ -214,15 +214,19 @@ func renderLegacyV4032WAFRsyslogConfig(rawPatterns string) (string, int, error) 
 func SetupWAFLogForwarder() error {
 	fmt.Println("[INFO] Configuring WAF Multi-Tenant Log Bridge (Rsyslog -> UDS)...")
 
-	rsyslogConf, activePatterns, err := renderWAFRsyslogConfig(
+	rsyslogConf, activePatterns, err := renderWAFRsyslogWithProducers(
 		config.GlobalConfig.ModsecLogs,
 		config.GlobalConfig.SiemEnabled,
+		config.GlobalConfig.TrustedLogProducers,
 	)
 	if err != nil {
 		return fmt.Errorf("render WAF bridge config: %w", err)
 	}
 	if config.GlobalConfig.ModsecLogs != "" && activePatterns == 0 {
-		fmt.Println("[WARN] Configured ModSecurity log patterns have no real regular-file match; custom rsyslog input was omitted.")
+		fmt.Println("[WARN] Configured ModSecurity log patterns have no real regular-file match; custom log input was omitted.")
+	}
+	if config.GlobalConfig.TrustedLogProducers != "" {
+		fmt.Println("[INFO] Explicit producer policy enabled: WAF file inputs use the secure core follower, with ownership checked again after rotation.")
 	}
 	if err := withRsyslogAppArmorSocketPolicy(func() error {
 		return setupWAFLogForwarderWithSELinux(rsyslogConf)

@@ -15,6 +15,7 @@ type Config struct {
 	WGPort                     string
 	WGSubnet                   string
 	ModsecLogs                 string
+	TrustedLogProducers        string
 	BruteforceLogs             string
 	BruteforceThreshold        string
 	BruteforceWindow           string

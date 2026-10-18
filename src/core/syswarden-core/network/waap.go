@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"syswarden-core/config"
 	"syswarden-core/engine"
 	"syswarden-core/firewall"
 	"syswarden-core/logger"
@@ -22,10 +24,12 @@ import (
 )
 
 type WAAPConfig struct {
-	Logs      []string
-	Threshold int
-	Window    time.Duration
-	Mode      string
+	TrustedLogProducers map[string]uint32
+	producerPolicyError error
+	Logs                []string
+	Threshold           int
+	Window              time.Duration
+	Mode                string
 }
 
 const maxWAAPLogLineBytes = 1 << 20
@@ -80,6 +84,8 @@ func loadWAAPConfig() WAAPConfig {
 			cfg.Logs = append(cfg.Logs, strings.Fields(modLogs)...)
 		}
 	}
+	cfg.TrustedLogProducers, cfg.producerPolicyError = config.ParseTrustedLogProducers(viper.GetString("waap.trusted_log_producers"))
+	cfg.Logs = append(cfg.Logs, config.DirectBridgeLogPatterns(cfg.TrustedLogProducers)...)
 	return cfg
 }
 
@@ -141,12 +147,16 @@ func (w *WAAPEngine) StartContext(ctx context.Context) {
 		log.Println("[WAAP Engine] Disabled (No lifecycle context provided).")
 		return
 	}
+	if w.config.producerPolicyError != nil {
+		log.Printf("[WAAP Engine] Invalid trusted log producer policy: %v", w.config.producerPolicyError)
+		return
+	}
 	if len(w.config.Logs) == 0 {
 		log.Println("[WAAP Engine] Disabled (No logs configured).")
 		return
 	}
 
-	uniqueFiles, rejected := resolveWAAPLogFiles(w.config.Logs)
+	uniqueFiles, rejected := resolveWAAPLogFilesWithProducers(w.config.Logs, w.config.TrustedLogProducers)
 	for _, err := range rejected {
 		log.Printf("[WAAP Engine] Rejecting log input: %v", err)
 	}
@@ -171,6 +181,10 @@ func (w *WAAPEngine) Wait() {
 }
 
 func resolveWAAPLogFiles(patterns []string) ([]string, []error) {
+	return resolveWAAPLogFilesWithProducers(patterns, nil)
+}
+
+func resolveWAAPLogFilesWithProducers(patterns []string, producers map[string]uint32) ([]string, []error) {
 	files := make(map[string]struct{})
 	var rejected []error
 	for _, pattern := range patterns {
@@ -188,7 +202,7 @@ func resolveWAAPLogFiles(patterns []string) ([]string, []error) {
 			continue
 		}
 		for _, match := range matches {
-			if err := verifyWAAPLogFile(match); err != nil {
+			if err := verifyWAAPLogFileWithProducers(match, producers); err != nil {
 				rejected = append(rejected, err)
 				continue
 			}
@@ -203,8 +217,16 @@ func resolveWAAPLogFiles(patterns []string) ([]string, []error) {
 	return resolved, rejected
 }
 
-func verifyWAAPLogFile(path string) error {
-	follower, err := newSecureWAAPLogFollower(path, false)
+func waapLogAccess(path string, producers map[string]uint32) config.TrustedLogAccess {
+	access := config.TrustedLogAccess{AuthorityUID: int64(os.Geteuid())}
+	if uid, ok := producers[path]; ok {
+		access.ProducerUID = &uid
+	}
+	return access
+}
+
+func verifyWAAPLogFileWithProducers(path string, producers map[string]uint32) error {
+	follower, err := newSecureWAAPLogFollowerWithAccess(path, false, waapLogAccess(path, producers))
 	if err != nil {
 		return err
 	}
@@ -215,7 +237,7 @@ func verifyWAAPLogFile(path string) error {
 }
 
 func (w *WAAPEngine) tailFile(ctx context.Context, path string) {
-	follower, err := newSecureWAAPLogFollower(path, true)
+	follower, err := newSecureWAAPLogFollowerWithAccess(path, true, waapLogAccess(path, w.config.TrustedLogProducers))
 	if err != nil {
 		log.Printf("[WAAP Engine] Refusing to tail unverified log: %v", err)
 		return
