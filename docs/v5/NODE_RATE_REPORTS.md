@@ -51,6 +51,10 @@ An empty or fully excluded population, or one below the reviewed minimum, has no
 numeric percentage. Exclusions retain their separate provenance and are not
 silently converted to failures or successes.
 
+The [fleet KPI projection](FLEET_RATE_PROJECTION.md) checks all three node
+formulas together against the actual selected fleet identities and one read
+instant, retaining their separate eligibility, quality and provenance.
+
 ## Keep authority and time boundaries explicit
 
 These functions bind already resolved inputs. They neither authenticate a

@@ -23,13 +23,8 @@ func ResolveFleetNodeRatePopulation(view FleetStateView, selection RateReference
 		return NodeRatePopulation{}, invalidFleetNodeRatePopulation("input count")
 	}
 	expected, err := view.Reference(selection.Ref)
-	if err != nil || selection != expected || !basis.validate() || basis.Membership != selection {
+	if err != nil || selection != expected || !fleetNodeRateBasisMatches(view, selection, basis) {
 		return NodeRatePopulation{}, invalidFleetNodeRatePopulation("selection binding")
-	}
-	context := view.binding.Context.Exposure
-	instant, _ := time.Parse(time.RFC3339Nano, basis.Window.Start)
-	if basis.Scope != context.Scope || basis.Policy != context.Policy || !instant.Equal(context.Now) {
-		return NodeRatePopulation{}, invalidFleetNodeRatePopulation("scope, policy or instant")
 	}
 	population, err := indexNodeRateMembers(members)
 	if err != nil {
@@ -50,4 +45,12 @@ func ResolveFleetNodeRatePopulation(view FleetStateView, selection RateReference
 		return NodeRatePopulation{}, fmt.Errorf("%w: %w", ErrInvalidFleetNodeRatePopulation, err)
 	}
 	return result, nil
+}
+
+// The selected view was already constructed and its exact reference checked.
+func fleetNodeRateBasisMatches(view FleetStateView, selection RateReference, basis NodeRateBasis) bool {
+	context := view.binding.Context.Exposure
+	instant, err := time.Parse(time.RFC3339Nano, basis.Window.Start)
+	return err == nil && basis.validate() && basis.Membership == selection &&
+		basis.Scope == context.Scope && basis.Policy == context.Policy && instant.Equal(context.Now)
 }
