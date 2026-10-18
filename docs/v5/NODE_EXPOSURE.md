@@ -97,6 +97,11 @@ unknown exposure or unavailable exposure. `current_classification` means that th
 provided claims passed contextual checks, not that the helper verified a network
 path. The output is a value copy and grants no additional authority.
 
+The [authorized exposure inventory](NODE_EXPOSURE_INVENTORY.md) now assembles
+these projections over complete membership, retaining nonresponders and providing
+consistent External, Internal and Needs classification subsets. It does not
+implement authenticated admission, registry storage or field permissions.
+
 ## Consumer and map obligations
 
 Scope and field permissions must be applied before tab selection, aggregation,
