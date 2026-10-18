@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"syswarden-cli/config"
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
 	"syswarden-cli/pkg/network"
@@ -20,6 +21,7 @@ var preflightWireGuardForReload = network.PreflightWireguard
 var setupWireGuardForReload = network.SetupWireguard
 var setupWAFForReload = integration.SetupWAFLogForwarder
 var setupSIEMForReload = integration.SetupSIEM
+var setupAbuseForReload = integration.SetupAbuseIPDB
 
 var reloadCmd = &cobra.Command{
 	Use:   "reload",
@@ -68,10 +70,16 @@ var reloadCmd = &cobra.Command{
 		}
 
 		// Reconcile the optional SIEM forwarder before its WAF-owned imfile input.
-		failures = append(failures, reloadRsyslogIntegrations()...)
+		rsyslogFailures := reloadRsyslogIntegrations()
+		failures = append(failures, rsyslogFailures...)
+		// Never activate producer grants while an older generic imfile bridge is
+		// still active. Standard startup also uses this reload as a dependency.
+		if config.GlobalConfig != nil && config.GlobalConfig.TrustedLogProducers != "" && len(rsyslogFailures) > 0 {
+			return fmt.Errorf("explicit log producer policy cannot activate before verified rsyslog reconciliation: %w", errors.Join(failures...))
+		}
 
 		// Re-apply AbuseIPDB / Telemetry configuration
-		if err := integration.SetupAbuseIPDB(); err != nil {
+		if err := setupAbuseForReload(); err != nil {
 			fmt.Printf("[ERROR] AbuseIPDB reload failed: %v\n", err)
 			failures = append(failures, fmt.Errorf("AbuseIPDB reload: %w", err))
 		}

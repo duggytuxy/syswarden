@@ -284,3 +284,8 @@ The [bounded core process log sink](CORE_PROCESS_LOG_RETENTION.md) adds independ
 rolling file retention while keeping the system journal available and preserving
 unproven legacy data. It does not restart services or alter BunkerWeb contracts.
 Native lifecycle acceptance remains tracked in issue #391.
+
+## Explicit log producer trust
+
+[Service-owned log inputs](TRUSTED_LOG_PRODUCERS.md) describes exact path/UID
+approval, secure collection after rotation and the remaining native acceptance.

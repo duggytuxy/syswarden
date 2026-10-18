@@ -155,6 +155,7 @@ type complianceConfig struct {
 }
 
 type waapConfig struct {
+	TrustedLogProducers     string `mapstructure:"trusted_log_producers"`
 	EnforcementMode         string `mapstructure:"enforcement_mode"`
 	BruteforceLogs          string `mapstructure:"bruteforce_logs"`
 	BruteforceThreshold     int    `mapstructure:"bruteforce_threshold"`
@@ -666,6 +667,9 @@ func validateRuntimeConfig(value *runtimeConfig) error {
 	}
 	if !validLogSetting(value.WAAP.BruteforceLogs, true) || !validLogSetting(value.WAAP.ModsecLogs, false) {
 		return fmt.Errorf("invalid WAAP log path")
+	}
+	if _, err := ParseTrustedLogProducers(value.WAAP.TrustedLogProducers); err != nil {
+		return fmt.Errorf("invalid waap.trusted_log_producers: %w", err)
 	}
 	if !validInterfaces(value.Integrations.HA.FirewalldInterfaces) {
 		return fmt.Errorf("invalid integrations.ha.firewalld_interfaces")
