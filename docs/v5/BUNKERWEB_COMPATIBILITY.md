@@ -115,6 +115,11 @@ merely to display a log-only integration.
 
 ## Existing executable regression anchors
 
+The [withdrawal and applied-state contract](BUNKERWEB_WITHDRAWAL.md) adds
+executable API/publication and pinned partner-cache checks. It requires distinct
+native evidence for scheduler delivery, every serving worker and new HTTP
+requests before final IVVQ acceptance. A local unban is not a global allow.
+
 The following source suites already exercise important SysWarden-side
 contracts. Keep them in the validation path when the related code changes:
 
