@@ -5,6 +5,9 @@ v4.10.4. This joins the [fleet context](FLEET_CONTEXT.md) with the
 [complete node-state inventory](NODE_STATE_INVENTORY.md). It does not activate
 a dashboard, remote ingestion, enrollment or final v5.00.0 IVVQ acceptance.
 
+The [node percentage adapter](FLEET_NODE_RATES.md) binds independent eligibility
+and assessments to one exact selection of this state, retaining nonresponders.
+
 ## Bind the complete population before disclosure
 
 `ComposeFleetState` accepts two constructed immutable sources and an independent

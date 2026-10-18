@@ -44,6 +44,7 @@ type fleetStateManifest struct {
 // FleetState is an immutable, bounded join. It is not an enrollment registry,
 // authorized browser response, live cache or cross-component security verdict.
 type FleetState struct {
+	binding  FleetStateBinding
 	entries  []FleetStateEntry
 	manifest []byte
 }
@@ -64,6 +65,7 @@ type fleetStateViewManifest struct {
 // FleetStateView selects all components together. Missing node reports cannot
 // remove members or change their independently assessed exposure or relevance.
 type FleetStateView struct {
+	binding   FleetStateBinding
 	group     string
 	relevance string
 	entries   []FleetStateEntry
@@ -125,7 +127,7 @@ func ComposeFleetState(binding FleetStateBinding, context FleetContext, nodes No
 	if err != nil || len(data) > MaxFleetStateBytes {
 		return FleetState{}, invalidFleetState("manifest bounds")
 	}
-	return FleetState{entries: entries, manifest: data}, nil
+	return FleetState{binding: FleetStateBinding{Context: FleetContextBinding{Exposure: e, BunkerWeb: b}, NodeState: n}, entries: entries, manifest: data}, nil
 }
 
 // Select filters one already authorized complete population. Selection never
@@ -148,5 +150,5 @@ func (f FleetState) Select(group string) (FleetStateView, error) {
 	if err != nil || len(data) > MaxFleetStateBytes {
 		return FleetStateView{}, invalidFleetState("view bounds")
 	}
-	return FleetStateView{group: group, relevance: relevance, entries: entries, manifest: data}, nil
+	return FleetStateView{binding: f.binding, group: group, relevance: relevance, entries: entries, manifest: data}, nil
 }

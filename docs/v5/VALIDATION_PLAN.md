@@ -371,3 +371,10 @@ matching. Its canonical vectors, defensive copies, 500-node partial and total
 outages, independent freshness and reclassification checks prevent a missing
 report from becoming a healthy state or an omitted member. These are component
 checks; enrollment, consumer wiring and native v5.00.0 IVVQ remain open.
+
+The [fleet selection percentage adapter](FLEET_NODE_RATES.md) verifies exact
+selection, scope, policy, instant and complete eligibility before delegating to
+the existing node rate resolver. Independent golden bytes, group boundaries,
+source-change replay refusal, 500-node unknown coverage and empty-denominator
+cases are mandatory component checks. Producer attestation, UI and native IVVQ
+remain open; this adapter cannot infer protection from reachability.

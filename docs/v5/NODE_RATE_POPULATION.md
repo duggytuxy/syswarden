@@ -4,6 +4,10 @@ Status: inactive v5 component for #224 and #315. It does not implement the
 dashboard, enrollment, a trusted collector or an authenticated export. Stable
 remains v4.10.4. The major v5.00.0 release still requires full IVVQ acceptance.
 
+The [fleet selection adapter](FLEET_NODE_RATES.md) additionally verifies that
+these complete member decisions match one exact authorized fleet view before
+using this population resolver. It does not infer producer verdicts.
+
 ## What this component computes
 
 `ResolveNodeRatePopulation` assembles one deterministic population for the three
