@@ -62,6 +62,31 @@ recovery procedure.
 
 ## Required evidence
 
+### Profile attributes and kernel authority
+
+The immutable-profile follow-up inspects the process UID map during both
+package hooks and manual hardening. A remapped root receives verified private
+profile modes, but no attempt to set or clear the immutable attribute. The
+diagnostic explicitly reports that runtime restriction as not applicable;
+it does not claim that the attribute is enforced.
+
+The process capability mask is not sufficient evidence of authority over this
+attribute. The [kernel inode flag check](https://github.com/torvalds/linux/blob/v6.12/fs/ioctl.c)
+uses `capable(CAP_LINUX_IMMUTABLE)`, which checks the
+[initial user namespace](https://github.com/torvalds/linux/blob/v6.12/kernel/capability.c).
+A capability in a child user namespace cannot substitute for that authority.
+Unknown or malformed UID maps fail closed. Host permission errors remain
+errors, with the existing profile rollback and identity checks preserved.
+
+Tests cover remapped-root execution with and without an active service manager,
+manual execution, malformed namespace evidence, mode attestation, host attribute
+updates, rollback failures and concurrent pathname replacement. HA ownership
+validation is unchanged: test runners must provide trusted mapped directory
+ancestors and the required loopback operations. An overflow UID does not grant
+ownership and must not be added to the trusted-owner set to make a test pass.
+
+### Native acceptance still required
+
 Component tests cover the exact Debian cron and RPM Cronie provider paths,
 unsafe or changing profiles, context errors, composition with verified package
 drop-ins, stale manager metadata and service removal preparation without
