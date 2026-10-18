@@ -190,3 +190,8 @@ without acquiring a dashboard availability dependency. WP02 and WP18 remain
 open for trusted population resolution, deduplication, policy evaluation,
 consumer parity, complete chart contracts, authorization, exports and native
 acceptance. The 500-node target remains simulation on existing resources.
+
+[Population-bound node rate reports](NODE_RATE_REPORTS.md) provide the typed
+constructor and checked percentage projection for already resolved node
+populations. The existing codec alone still validates declarations; producer
+authentication, evidence truth and authorization remain separate obligations.

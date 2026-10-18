@@ -302,3 +302,8 @@ retains missing and stale members without inventing current reachability or
 protection. Its bound manifest, source quality, resource limits and synthetic
 500-node outage cases are component evidence; consumer integration, enrollment
 and native v5.00.0 IVVQ acceptance remain open.
+
+[Population-bound node rate reports](NODE_RATE_REPORTS.md) now connect resolved
+node populations to the existing codec and percentage projection. Exact basis,
+manifest, partition and current report checks prevent cross-population reuse.
+Authenticated producers, consumer wiring and native IVVQ remain open.
