@@ -14,7 +14,7 @@
     "sha256": "5ab5392b3ed705bac98ad92dabb1018cb6451e265bc4fd92f86f774e1ee14ee3",
     "source_archive_sha256": "298c1a093c2924909bcc0d5c792c594e2b732c6c65c5bdb1817c5f6757caedb9"
   },
-  "product_command_count": 26,
+  "product_command_count": 27,
   "forbidden_phrases": [
     "Production Ready",
     "Enterprise Ready",
@@ -757,6 +757,20 @@
       "before": null,
       "after": "added",
       "reason": "Add bounded historical removal recovery with an inspection-first inventory, exact digest authorization, private original retention and preservation of unrelated protection."
+    },
+    {
+      "path": "syswarden ssh-policy",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Add a read-only development entry point for protected SSH migration planning. No application or service mutation is exposed."
+    },
+    {
+      "path": "syswarden ssh-policy plan",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Inspect explicit protected role and ownership declarations, complete SSH inputs and bounded operator-attributed legacy edits without returning configuration contents or applying the plan."
     }
   ],
   "package_platform_contract": {

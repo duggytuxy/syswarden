@@ -129,8 +129,13 @@ scoped bastion policy using temporary files and the local daemon parser only.
 It opens no listener and executes no Ansible tasks. These checks do not prove
 a login, a ProxyJump connection, a file transfer or privilege escalation.
 
-Protected role selection, external-management mode, scoped bastion publication,
-controller tests and lifecycle integration remain open. Do not activate the
+The [protected migration planner](SSH_MIGRATION_PLAN.md) now reads explicit
+target/jump-host roles and independent policy ownership. External observation
+creates no policy. This implements read-only intent binding, not runtime role
+selection, activation or proof that external protection is effective.
+
+Scoped bastion publication, controller tests and lifecycle integration remain
+open. Do not activate the
 fixed preparer for arbitrary machines before those prerequisites are met.
 The broader v5 compatibility work for firewalld/NetworkManager, containers and
 [BunkerWeb](BUNKERWEB_COMPATIBILITY.md) retains its independent evidence gates;

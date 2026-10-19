@@ -49,6 +49,10 @@ bounded descriptor-based collection and revalidation path for a restricted
 Include layout. It does not yet provide role declarations, migration approval,
 publication or lifecycle integration.
 
+The [protected migration planner](SSH_MIGRATION_PLAN.md) now binds an explicit
+administrator declaration and bounded legacy main-file edits to a complete
+inventory. Its CLI is read-only; it does not yet approve or apply a migration.
+
 Preparation requires the main file and an absent reserved destination. Even an
 existing byte-identical drop-in is refused: an independent ownership receipt is
 required before update or removal. The generated file must be included exactly

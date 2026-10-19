@@ -68,8 +68,10 @@ server campaign, paid resource or public v5 release is authorized by this text.
     required bastion, Ansible and external-policy ownership boundaries.
     The [protected SSH inventory reader](SSH_INVENTORY.md) adds bounded Linux
     filesystem observations and rechecks before preparation, including a
-    restricted crypto-policies alias adapter. Runtime integration and reviewed
-    migration remain open.
+    restricted crypto-policies alias adapter. The [protected migration planner](SSH_MIGRATION_PLAN.md)
+    adds explicit role/ownership and bounded administrator-attributed legacy
+    edits, exposed through the read-only `ssh-policy plan` command. Durable
+    application, runtime integration and native migration validation remain open.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
