@@ -842,6 +842,7 @@ class ActFixtureTests(unittest.TestCase):
             "FuzzNodeSnapshotRoundTrip",
             "FuzzNodeAdmissionRoundTrip",
             "FuzzNodeRegistryPermutation",
+            "FuzzNodeContinuityCanonical",
             "FuzzNodeStateInventoryPermutation",
             "FuzzNodeExposureRoundTrip",
             "FuzzNodeExposureInventoryPermutation",

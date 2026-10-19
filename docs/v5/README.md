@@ -56,7 +56,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     the proposed WP11/WP18 protocol, credential lifecycle and bounded profile
     to review before implementing the optional node connector.
     Executable slices define [node admission grants and credential bindings](NODE_ADMISSION_GRANTS.md)
-    and a [bounded registry snapshot](NODE_ADMISSION_REGISTRY.md). Protected
+    and a [bounded registry snapshot](NODE_ADMISSION_REGISTRY.md). The
+    [continuity contract](NODE_REGISTRY_CONTINUITY.md) binds independent approval
+    and retained history before protected storage is implemented. Protected
     membership administration and runtime enrollment remain open.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
