@@ -53,6 +53,13 @@ not a financial allocation.
 
 ## Non-regression gates by work slice
 
+- Registry continuity (#224/#233/#315): exact independently expected generation,
+  checkpoint and whole snapshot; reject rollback, replay, skipped/overflowed
+  sequence, foreign lineage/policy, revoked-member or key reactivation, forgotten
+  history and widened admission windows. Test canonical bounded decoding and
+  disabled-state refusal. See the [continuity contract](NODE_REGISTRY_CONTINUITY.md).
+  These are pure component checks; protected storage, approval consumption,
+  competing commits, crash recovery and native tampering remain FA-02 gates.
 - Fleet admission (#223/#224/#233/#315): use FA-01 through FA-07 in the
   [proposed admission ADR](FLEET_ADMISSION_ADR.md) as the staged evidence map.
   Exercise independently approved enrollment, wrong-purpose credentials,
