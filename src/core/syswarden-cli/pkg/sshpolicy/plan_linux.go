@@ -164,7 +164,7 @@ func hashPart(h hash.Hash, value []byte) {
 // Both capture and any eventual apply must freshly attest the same inputs.
 func planDigest(plan migrationPlan) string {
 	h := sha256.New()
-	hashPart(h, []byte("SYSWARDEN-SSH-MIGRATION-PLAN-V1"))
+	hashPart(h, []byte("SYSWARDEN-SSH-MIGRATION-PLAN-V2"))
 	hashPart(h, []byte(plan.summary.Operation))
 	hashPart(h, plan.main)
 	hashPart(h, plan.candidate.Bytes())
@@ -203,6 +203,15 @@ func planDigest(plan migrationPlan) string {
 		hashPart(h, []byte("alias"))
 		hashPart(h, []byte(name))
 		hashPart(h, []byte(plan.inventory.links[name]))
+	}
+	for _, name := range sortedKeys(plan.inventory.attributes) {
+		hashPart(h, []byte("attributes"))
+		hashPart(h, []byte(name))
+		for _, key := range sortedKeys(plan.inventory.attributes[name]) {
+			hashPart(h, []byte(key))
+			hashPart(h, plan.inventory.attributes[name][key])
+		}
+		hashPart(h, nil)
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }

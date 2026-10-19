@@ -126,7 +126,9 @@ role/owner/profile and hashes, not usernames, addresses or configuration text.
 
 `plan_sha256` binds exact intent/configuration bytes, the transformed main file,
 the candidate drop-in, every observed file and ancestor identity/metadata,
-negative lookups, directory membership and restricted vendor alias text. A
+negative lookups, directory membership, extended attributes and restricted
+vendor alias text. Attribute names and values remain private. The development
+digest domain is now version 2, so earlier plan hashes require reinspection. A
 second complete capture must match the first before a result is returned.
 The digest is deterministic for unchanged observations. It is not a signature,
 an ownership receipt, concurrency protection or durable migration approval.
@@ -176,6 +178,11 @@ lock or filesystem rollback mechanism is claimed by this read-only command.
 The complete migration and lifecycle gates below are still required.
 
 ## Remaining activation and lifecycle work
+
+The internal [transaction preparation component](SSH_TRANSACTION_PREPARATION.md)
+now provides anonymous staging and private immutable preparation records.
+The read-only CLI does not invoke these helpers, and no active configuration
+publication or service activation is available yet.
 
 Before a tester can validate an applied package migration, implement and review:
 

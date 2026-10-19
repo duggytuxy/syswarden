@@ -53,10 +53,11 @@ func stamp(st unix.Stat_t) inventoryStamp {
 }
 
 type inventorySnapshot struct {
-	files   map[string][]byte
-	nodes   map[string]inventoryStamp
-	entries map[string][]string
-	links   map[string]string
+	files      map[string][]byte
+	nodes      map[string]inventoryStamp
+	entries    map[string][]string
+	links      map[string]string
+	attributes map[string]map[string][]byte
 }
 
 // OpenInventory reads the fixed production SSH configuration graph beneath /.
@@ -195,6 +196,25 @@ func (reader *inventoryReader) observe(name string, value inventoryStamp) error 
 	return nil
 }
 
+func (reader *inventoryReader) observeAttributes(name string, fd int, expected inventoryStamp) error {
+	attrs, err := readSSHAttributes(fd)
+	if err != nil {
+		return err
+	}
+	var current unix.Stat_t
+	if err := unix.Fstat(fd, &current); err != nil || stamp(current) != expected {
+		return errors.Join(ErrInventoryChanged, err)
+	}
+	if reader.state.attributes == nil {
+		reader.state.attributes = make(map[string]map[string][]byte)
+	}
+	if previous, exists := reader.state.attributes[name]; exists && !reflect.DeepEqual(previous, attrs) {
+		return ErrInventoryChanged
+	}
+	reader.state.attributes[name] = attrs
+	return nil
+}
+
 func (reader *inventoryReader) trusted(st unix.Stat_t, directory bool) bool {
 	if int64(st.Uid) != int64(reader.uid) || st.Mode&07022 != 0 || st.Nlink == 0 {
 		return false
@@ -223,6 +243,9 @@ func (reader *inventoryReader) openDirectory(name string) (*os.File, error) {
 	if err := reader.observe("/", stamp(rootStamp)); err != nil {
 		return nil, err
 	}
+	if err := reader.observeAttributes("/", fd, stamp(rootStamp)); err != nil {
+		return nil, err
+	}
 	prefix := ""
 	for _, part := range strings.Split(strings.TrimPrefix(name, "/"), "/") {
 		if part == "" {
@@ -247,6 +270,9 @@ func (reader *inventoryReader) openDirectory(name string) (*os.File, error) {
 			return nil, errors.Join(ErrInventoryChanged, err, next.Close())
 		}
 		if err := reader.observe(prefix, stamp(opened)); err != nil {
+			return nil, errors.Join(err, next.Close())
+		}
+		if err := reader.observeAttributes(prefix, nextFD, stamp(opened)); err != nil {
 			return nil, errors.Join(err, next.Close())
 		}
 		if err := current.Close(); err != nil {
@@ -297,6 +323,9 @@ func (reader *inventoryReader) readFile(name string) ([]byte, bool, error) {
 	if err := unix.Fstat(fd, &opened); err != nil || stamp(before) != stamp(opened) {
 		return nil, false, errors.Join(ErrInventoryChanged, err)
 	}
+	if err := reader.observeAttributes(name, fd, stamp(opened)); err != nil {
+		return nil, false, err
+	}
 	content, err := io.ReadAll(io.LimitReader(file, int64(MaxBytes-reader.bytes)+1))
 	if err != nil || int64(len(content)) != opened.Size {
 		return nil, false, errors.Join(ErrInventoryChanged, err)
@@ -304,6 +333,9 @@ func (reader *inventoryReader) readFile(name string) ([]byte, bool, error) {
 	err = errors.Join(unix.Fstat(fd, &after), unix.Fstatat(int(parent.Fd()), path.Base(name), &before, unix.AT_SYMLINK_NOFOLLOW))
 	if err != nil || stamp(opened) != stamp(after) || stamp(after) != stamp(before) {
 		return nil, false, errors.Join(ErrInventoryChanged, err)
+	}
+	if err := reader.observeAttributes(name, fd, stamp(after)); err != nil {
+		return nil, false, err
 	}
 	if err := reader.observe(name, stamp(after)); err != nil {
 		return nil, false, err
