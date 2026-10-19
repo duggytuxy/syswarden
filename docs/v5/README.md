@@ -66,6 +66,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     historical migration, owned publication and independent removal validation.
     [Environment compatibility](SSH_ENVIRONMENT_COMPATIBILITY.md) defines the
     required bastion, Ansible and external-policy ownership boundaries.
+    The [protected SSH inventory reader](SSH_INVENTORY.md) adds bounded Linux
+    filesystem observations and rechecks before preparation; runtime integration
+    and reviewed migration remain open.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
