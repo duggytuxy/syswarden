@@ -70,8 +70,11 @@ server campaign, paid resource or public v5 release is authorized by this text.
     filesystem observations and rechecks before preparation, including a
     restricted crypto-policies alias adapter. The [protected migration planner](SSH_MIGRATION_PLAN.md)
     adds explicit role/ownership and bounded administrator-attributed legacy
-    edits, exposed through the read-only `ssh-policy plan` command. Durable
-    application, runtime integration and native migration validation remain open.
+    edits, exposed through the read-only `ssh-policy plan` command. The `verify`
+    subcommand checks the complete candidate with the installed daemon, using
+    sealed inputs and all declared contexts while preserving unrelated settings.
+    Durable application, runtime integration and native migration validation
+    remain open.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the

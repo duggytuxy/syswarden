@@ -7,11 +7,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newSSHPolicyCommand(inspect func() (sshpolicy.PlanSummary, error)) *cobra.Command {
+func newSSHPolicyCommand(inspect func() (sshpolicy.PlanSummary, error), verify func() (sshpolicy.VerificationSummary, error)) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "ssh-policy",
 		Short: "Inspect the dedicated SSH policy migration",
-		Long:  "Inspect protected administrator intent and the current SSH configuration. This development command is read-only; migration application is not available yet.",
+		Long:  "Inspect protected administrator intent and verify candidate configuration with the installed SSH parser. These development commands are read-only; migration application is not available yet.",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
@@ -29,15 +29,29 @@ func newSSHPolicyCommand(inspect func() (sshpolicy.PlanSummary, error)) *cobra.C
 			return encoder.Encode(plan)
 		},
 	})
+	command.AddCommand(&cobra.Command{
+		Use:   "verify",
+		Short: "Verify the SSH candidate with the installed parser without activation",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			summary, err := verify()
+			if err != nil {
+				return err
+			}
+			encoder := json.NewEncoder(cmd.OutOrStdout())
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(summary)
+		},
+	})
 	return command
 }
 
-func init() { rootCmd.AddCommand(newSSHPolicyCommand(sshpolicy.InspectPlan)) }
+func init() { rootCmd.AddCommand(newSSHPolicyCommand(sshpolicy.InspectPlan, sshpolicy.VerifyPlan)) }
 
 func readOnlySSHPolicyCommand(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return false
 	}
 	path := cmd.CommandPath()
-	return path == "syswarden ssh-policy" || path == "syswarden ssh-policy plan"
+	return path == "syswarden ssh-policy" || path == "syswarden ssh-policy plan" || path == "syswarden ssh-policy verify"
 }

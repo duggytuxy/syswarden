@@ -1,10 +1,12 @@
 # Protected SSH intent and migration planning
 
 Status: read-only SSH integration step for v5.00.0. Refs #235 and #337.
-`syswarden ssh-policy plan` is available in development source. It does not
+`syswarden ssh-policy plan` and `syswarden ssh-policy verify` are available in
+development source. Neither command will
 activate the dedicated file, replace either existing installation writer,
 restart SSH, establish a new connection or authorize publication. A package
-containing this command can test planning, not a completed SSH migration.
+containing these commands can test planning and parser verification, not a
+completed SSH migration.
 Stable v4.10.4 and final v5.00.0 IVVQ acceptance remain unchanged.
 
 ## Explicit administrator declaration
@@ -57,7 +59,9 @@ The two independent decisions are:
 
 External observation refuses an occupied reserved drop-in and unresolved
 historical SysWarden markers. It does not adopt files, remove old contributions,
-claim that an external manager enforces CIS, or validate effective daemon output.
+claim that an external manager enforces CIS, or claim a successful login. The
+separate `verify` command checks effective daemon output without changing the
+external policy.
 The [environment contract](SSH_ENVIRONMENT_COMPATIBILITY.md) still requires
 actual role-specific access, forwarding and controller tests before activation.
 
@@ -113,7 +117,8 @@ sudo syswarden ssh-policy plan
 
 The command skips general configuration loading, normalization and firewall
 recovery. It remains available during an incomplete removal. Those exemptions
-apply only to the exact read-only command paths, not a future apply subcommand.
+apply only to the exact read-only `plan` and `verify` paths, not a future apply
+subcommand.
 The planner creates no lock, backup, receipt or directory and executes no daemon.
 Errors return no partial plan. JSON output contains bounded counts, operation,
 role/owner/profile and hashes, not usernames, addresses or configuration text.
@@ -126,6 +131,50 @@ second complete capture must match the first before a result is returned.
 The digest is deterministic for unchanged observations. It is not a signature,
 an ownership receipt, concurrency protection or durable migration approval.
 
+## Installed-daemon candidate verification
+
+```sh
+sudo syswarden ssh-policy verify
+```
+
+This root-only command first performs the same protected planning capture. It
+pins and hashes the installed Linux AMD64 ELF `sshd` in the standard protected
+`/usr/bin` or `/usr/sbin` layout. It does not search `PATH`, execute a shell,
+follow an executable/directory alias or accept executable options from intent.
+Missing, changed, writable, linked or non-executable daemon files are refused.
+The package's trusted runtime libraries remain part of the operating-system
+trust boundary; this is not a package-signature verification service.
+
+The verifier retains every configuration file separately in sealed anonymous
+memory. Only Include references are translated to those retained descriptors;
+file boundaries, expansion ordering and Match scope remain intact. OpenSSH
+closes inherited nonstandard descriptors, so the sealed files are accessed
+through the retained parent process's procfs descriptors. A host policy that
+denies this access causes verification to fail; no weaker filesystem fallback
+or alteration of that policy is attempted.
+
+It runs `sshd -t` and `sshd -T` on the live baseline, its sealed equivalent and
+the candidate. It checks global defaults and every declared `-C` connection
+context. The live and sealed baselines must agree on every effective directive,
+including repeated values and ordering. The candidate must satisfy its fixed
+profile while preserving every unrelated effective value. External observation
+permits no effective changes. Inputs and the pinned daemon are rechecked before
+and after each invocation, including failed invocations, and at completion.
+
+Each parser invocation is limited to ten seconds, the complete verification to
+two minutes, and each output stream to one MiB. The child receives a fixed
+minimal environment. Raw parser output and configuration contents never appear
+in the JSON result or diagnostic messages. Successful JSON contains the plan,
+parser hash and declared-context count, with `parser_verified: true`,
+`runtime_activated: false` and `apply_available: false`. Refusal returns no
+partial successful result.
+
+These checks do not publish a drop-in, modify the main configuration, load keys
+into an agent, start a listener, reload a service, authenticate a user or run an
+Ansible controller. A route label is not a tested connection. No configuration
+lock or filesystem rollback mechanism is claimed by this read-only command.
+The complete migration and lifecycle gates below are still required.
+
 ## Remaining activation and lifecycle work
 
 Before a tester can validate an applied package migration, implement and review:
@@ -133,8 +182,8 @@ Before a tester can validate an applied package migration, implement and review:
 1. Exact plan approval, independently verified ownership and durable transaction
    state containing private recovery data, without an old-writer fallback.
 2. Publication with input revalidation and external-writer coordination; complete
-   installed-daemon syntax/effective checks for all declared contexts, activation
-   and rollback after failures or interruption.
+   reverification of the candidate immediately before and after publication,
+   activation and rollback after failures or interruption.
 3. A single shared install/CIS path, update and recovery handling, then separate
    uninstall, native remove and native purge behavior preserving administrator
    files and effective access.

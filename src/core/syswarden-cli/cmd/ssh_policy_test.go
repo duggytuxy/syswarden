@@ -18,7 +18,7 @@ func TestSSHPolicyPlanCommandIsReadOnly(t *testing.T) {
 			command := newSSHPolicyCommand(func() (sshpolicy.PlanSummary, error) {
 				calls++
 				return sshpolicy.PlanSummary{Schema: 1, Operation: "publish"}, nil
-			})
+			}, nil)
 			root := &cobra.Command{Use: "syswarden", SilenceErrors: true, SilenceUsage: true}
 			root.AddCommand(command)
 			var output bytes.Buffer
@@ -39,7 +39,7 @@ func TestSSHPolicyPlanCommandIsReadOnly(t *testing.T) {
 }
 
 func TestSSHPolicyPlanSkipsMutatingRootPreparation(t *testing.T) {
-	command := newSSHPolicyCommand(nil)
+	command := newSSHPolicyCommand(nil, nil)
 	root := &cobra.Command{Use: "syswarden"}
 	root.AddCommand(command)
 	plan, _, err := root.Find([]string{"ssh-policy", "plan"})
@@ -61,7 +61,7 @@ func TestSSHPolicyPlanSkipsMutatingRootPreparation(t *testing.T) {
 
 func TestSSHPolicyPlanPropagatesRefusalWithoutPartialOutput(t *testing.T) {
 	want := errors.New("fixture refused")
-	command := newSSHPolicyCommand(func() (sshpolicy.PlanSummary, error) { return sshpolicy.PlanSummary{Operation: "publish"}, want })
+	command := newSSHPolicyCommand(func() (sshpolicy.PlanSummary, error) { return sshpolicy.PlanSummary{Operation: "publish"}, want }, nil)
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetArgs([]string{"plan"})
@@ -72,5 +72,54 @@ func TestSSHPolicyPlanPropagatesRefusalWithoutPartialOutput(t *testing.T) {
 	}
 	if output.Len() != 0 {
 		t.Fatal("refusal returned a partial plan")
+	}
+}
+
+func TestSSHPolicyVerifyCommandBoundary(t *testing.T) {
+	for _, args := range [][]string{{"verify"}, {"verify", "--apply"}, {"verify", "extra"}, {"verify", "--plan-sha256", strings.Repeat("a", 64)}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			calls := 0
+			command := newSSHPolicyCommand(nil, func() (sshpolicy.VerificationSummary, error) {
+				calls++
+				return sshpolicy.VerificationSummary{ParserVerified: true}, nil
+			})
+			root := &cobra.Command{Use: "syswarden", SilenceErrors: true, SilenceUsage: true}
+			root.AddCommand(command)
+			var output bytes.Buffer
+			root.SetOut(&output)
+			root.SetErr(&output)
+			root.SetArgs(append([]string{"ssh-policy"}, args...))
+			err := root.Execute()
+			if len(args) != 1 {
+				if err == nil || calls != 0 {
+					t.Fatal("unsupported mutation option ran verification")
+				}
+				return
+			}
+			if err != nil || calls != 1 || !strings.Contains(output.String(), `"runtime_activated": false`) || !strings.Contains(output.String(), `"apply_available": false`) {
+				t.Fatalf("verification claimed activation or failed: %v %s", err, output.String())
+			}
+			verify, _, err := root.Find([]string{"ssh-policy", "verify"})
+			if err != nil || commandRequiresAutomaticConfigLoad(verify) || commandRequiresEarlyFirewallRecovery(verify) || !commandAllowedDuringRemoval(verify) {
+				t.Fatal("verification entered mutating root preparation")
+			}
+			if err := enforceValidatedConfiguration(verify); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestSSHPolicyVerifyRefusalHasNoPartialJSON(t *testing.T) {
+	want := errors.New("fixture parser refusal")
+	command := newSSHPolicyCommand(nil, func() (sshpolicy.VerificationSummary, error) {
+		return sshpolicy.VerificationSummary{ParserVerified: true}, want
+	})
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetArgs([]string{"verify"})
+	command.SilenceErrors, command.SilenceUsage = true, true
+	if err := command.Execute(); !errors.Is(err, want) || output.Len() != 0 {
+		t.Fatal("lost refusal or returned partial verification")
 	}
 }

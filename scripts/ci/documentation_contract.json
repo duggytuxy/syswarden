@@ -771,6 +771,13 @@
       "before": null,
       "after": "added",
       "reason": "Inspect explicit protected role and ownership declarations, complete SSH inputs and bounded operator-attributed legacy edits without returning configuration contents or applying the plan."
+    },
+    {
+      "path": "syswarden ssh-policy verify",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Run the trusted installed SSH parser against sealed candidate inputs and all declared contexts without publishing files, activating a daemon, or claiming a successful login."
     }
   ],
   "package_platform_contract": {
