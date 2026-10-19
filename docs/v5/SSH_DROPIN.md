@@ -23,6 +23,13 @@ authentication methods, passwords, keys, MFA or administrator access groups.
 The dedicated file is intended to isolate product policy from administrator
 configuration. Its filename and comments alone do not establish ownership.
 
+These fixed profiles are not suitable for every SSH role. The
+[environment compatibility contract](SSH_ENVIRONMENT_COMPATIBILITY.md)
+distinguishes a target behind a bastion from a host providing the jump service,
+and separates Ansible/external policy ownership from access role. A protected
+role decision is required before runtime integration, even when no explicit
+forwarding directive is found. The preparer cannot establish that intent.
+
 OpenSSH generally uses the first obtained value for a keyword, with documented
 exceptions. Included files are processed at the inclusion point and glob matches
 in lexical order. Includes may also occur inside `Match`. A low-numbered filename
@@ -76,7 +83,8 @@ validation and explicit connection contexts remain mandatory. The official
 
 ## Required integration and lifecycle gates
 
-These stages remain open and must be completed before replacing either writer:
+These stages remain open and must be completed before replacing either writer.
+The environment compatibility contract is an additional gate for each stage:
 
 1. **SSH-02, protected inventory and migration.** Descriptor-based file and
    parent attestation, ownership/mode/link checks, bounded glob enumeration,

@@ -39,6 +39,8 @@ func TestOpenSSHOracle(t *testing.T) {
 			process = exec.CommandContext(ctx, "sshd", "-T", "-f", "sshd_config")
 		case "connection":
 			process = exec.CommandContext(ctx, "sshd", "-T", "-f", "sshd_config", "-C", "user=administrator,host=fixture.example,addr=192.0.2.10,laddr=192.0.2.20,lport=2222")
+		case "other-user":
+			process = exec.CommandContext(ctx, "sshd", "-T", "-f", "sshd_config", "-C", "user=unrelated,host=fixture.example,addr=192.0.2.10,laddr=192.0.2.20,lport=2222")
 		case "keygen":
 			process = exec.CommandContext(ctx, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", "fixture-host-key")
 		default:
@@ -63,7 +65,7 @@ func TestOpenSSHOracle(t *testing.T) {
 		t.Run(map[Profile]string{Forwarding: "forwarding", CIS: "cis"}[profile], func(t *testing.T) {
 			fixture := filepath.Join(dir, "sshd_config")
 			include := filepath.Join(dir, "00-syswarden-hardening.conf")
-			main := "Include " + include + "\nPort 2222\nHostKey " + key + "\nPasswordAuthentication no\nAuthenticationMethods publickey\nPermitRootLogin no\nUsePAM no\n"
+			main := "Include " + include + "\nPort 2222\nHostKey " + key + "\nPasswordAuthentication no\nAuthenticationMethods publickey\nPermitRootLogin no\nUsePAM no\nSubsystem sftp internal-sftp\nMaxSessions 12\nPermitTTY yes\n"
 			candidate, err := Prepare(profile, inventory(includeDropIns))
 			if err != nil {
 				t.Fatal(err)
@@ -76,7 +78,7 @@ func TestOpenSSHOracle(t *testing.T) {
 				if err := candidate.CheckEffective(output); err != nil {
 					t.Fatal(err)
 				}
-				for _, kept := range []string{"port 2222\n", "passwordauthentication no\n", "authenticationmethods publickey\n", "permitrootlogin no\n"} {
+				for _, kept := range []string{"port 2222\n", "passwordauthentication no\n", "authenticationmethods publickey\n", "permitrootlogin no\n", "subsystem sftp internal-sftp\n", "maxsessions 12\n", "permittty yes\n"} {
 					if !strings.Contains(string(output), kept) {
 						t.Fatalf("administrator setting changed: %s", kept)
 					}
@@ -92,6 +94,31 @@ func TestOpenSSHOracle(t *testing.T) {
 			}
 			if err := candidate.CheckEffective(run(t, "connection")); err == nil {
 				t.Fatal("Match override was missed")
+			}
+			const jumpPolicy = "Match User administrator\n AllowTcpForwarding local\n PermitOpen 192.0.2.30:22\n AllowAgentForwarding no\n"
+			files := inventory(includeDropIns + jumpPolicy)
+			if rejected, err := Prepare(profile, files); err == nil || rejected != (Candidate{}) {
+				t.Fatal("target profile accepted an administrator-owned bastion policy")
+			}
+			if string(files[MainPath]) != includeDropIns+jumpPolicy {
+				t.Fatal("bastion policy was modified on refusal")
+			}
+			write(fixture, main+jumpPolicy)
+			run(t, "syntax")
+			if err := candidate.CheckEffective(run(t, "global")); err != nil {
+				t.Fatalf("bastion default view unexpectedly rejected: %v", err)
+			}
+			jump := run(t, "connection")
+			for _, kept := range []string{"allowtcpforwarding local\n", "permitopen 192.0.2.30:22\n", "allowagentforwarding no\n"} {
+				if !strings.Contains(string(jump), kept) {
+					t.Fatalf("administrator bastion restriction changed: %s", kept)
+				}
+			}
+			if err := candidate.CheckEffective(jump); err == nil {
+				t.Fatal("bastion context falsely accepted as a no-forwarding target")
+			}
+			if err := candidate.CheckEffective(run(t, "other-user")); err != nil {
+				t.Fatalf("bastion exception unexpectedly applies to unrelated user: %v", err)
 			}
 			write(fixture, main)
 			if err := os.Remove(include); err != nil {
