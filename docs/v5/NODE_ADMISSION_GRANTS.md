@@ -130,12 +130,13 @@ critical extensions and expired/not-yet-valid/non-CA/wrong-purpose issuers.
 No production key, filesystem mutation, network listener or native server is
 used by these tests.
 
-FA-01 remains incomplete at collection level: unique keys across identities and
-purposes, membership limits, the 16-source bound, and two-key/credential rotation
-with at most one hour of overlap require the complete registry model. These
-per-record helpers cannot detect reuse against records they have not received.
-FA-02 through FA-07, bootstrap, protected storage, issuance, real TLS, sample
-proofs, recovery, UI wiring and native lifecycle/capacity evidence remain open.
+The [bounded registry snapshot](NODE_ADMISSION_REGISTRY.md) separately checks
+collection limits, key uniqueness and rotation admission windows, then binds
+lookups to an independently approved complete digest. These per-record helpers
+alone cannot detect reuse or enforce an earlier registry retirement deadline.
+Protected administration, historical key denial, FA-02 through FA-07, bootstrap,
+issuance, real TLS, sample proofs, recovery, UI wiring and native lifecycle/capacity
+evidence remain open.
 
 BunkerWeb retains its independent API, source ownership, TTL, withdrawal, cache
 and HA contract. No plugin token is accepted as a grant, and a node grant does

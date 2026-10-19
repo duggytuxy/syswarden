@@ -409,3 +409,11 @@ must reject ambiguous SANs, server-purpose leaves, wrong keys/issuers, invalid
 signatures and inactive grants. Golden vectors and bounded grant fuzzing are
 component evidence only. Real TLS key possession, protected registry revocation,
 collection/rotation limits, signed samples and native IVVQ remain open.
+
+The [bounded admission registry snapshot](NODE_ADMISSION_REGISTRY.md) additionally
+requires complete digest binding, unique keys across its nodes and purposes,
+source/credential/count/byte ceilings, defensive copies and exclusive slot
+retirement independent of public certificate expiry. Test one-hour rotation
+boundaries, source/schema widening refusal, late faults, complete 500-member
+synthetic lookups and deterministic permutation. Protected history, durable
+revocation, TLS, issuance and native capacity/IVVQ remain separate evidence.

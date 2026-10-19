@@ -55,7 +55,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
 32. [Fleet enrollment and observation admission ADR](FLEET_ADMISSION_ADR.md),
     the proposed WP11/WP18 protocol, credential lifecycle and bounded profile
     to review before implementing the optional node connector.
-    Its first executable slice defines [node admission grants and credential bindings](NODE_ADMISSION_GRANTS.md); collection admission and runtime enrollment remain open.
+    Executable slices define [node admission grants and credential bindings](NODE_ADMISSION_GRANTS.md)
+    and a [bounded registry snapshot](NODE_ADMISSION_REGISTRY.md). Protected
+    membership administration and runtime enrollment remain open.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the

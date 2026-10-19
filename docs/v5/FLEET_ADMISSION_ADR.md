@@ -419,7 +419,12 @@ shared PKI, unrelated firewall rules and deliberately retained recovery backups.
 
 Merge of this ADR does not complete any row. The first FA-01 slice provides
 [individual grants and credential binding checks](NODE_ADMISSION_GRANTS.md).
-Collection constraints and protected registry admission remain open; network
+The [bounded registry snapshot](NODE_ADMISSION_REGISTRY.md) adds collection
+constraints and explicit admission windows inside credential validity. This
+allows one-hour retirement overlap without modifying an old signed certificate.
+Its first profile permits one payload schema per source and limits the complete
+snapshot to 16 MiB inside the 32 MiB aggregate working-state budget. Protected
+registry administration and aggregate resource measurement remain open; network
 activation waits for the dependent stages. Source-reference
 encoding, protected layouts, exact wire schemas and recovery tooling are reviewed
 in those stages, not guessed by an installer. Any change to the security or
