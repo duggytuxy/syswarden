@@ -52,6 +52,11 @@ The new console's role model must not turn an existing BunkerWeb bearer token
 into a console login, a fleet enrollment token or a general response credential.
 Likewise, new node read identities must not inherit scheduler write scope.
 
+The [fleet admission ADR](FLEET_ADMISSION_ADR.md) maps V5-T02/T03/T06/T07/T10
+to proposed enrollment, revocation, source admission and replay decisions.
+FA-01 through FA-07 identify the required implementation and evidence stages.
+Those stages remain open; the ADR itself is not a passing security test.
+
 ## Failure behavior
 
 Loss of the console, IdP or management connection must not stop autonomous local

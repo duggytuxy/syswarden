@@ -52,6 +52,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
 29. [Startup from protected authority directories](PROVISIONED_AUTHORITY.md).
 30. [Protected local authority launch configuration](AUTHORITY_LAUNCH.md).
 31. [Explicit local authority process and draining exit](AUTHORITY_PROCESS.md).
+32. [Fleet enrollment and observation admission ADR](FLEET_ADMISSION_ADR.md),
+    the proposed WP11/WP18 protocol, credential lifecycle and bounded profile
+    to review before implementing the optional node connector.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
