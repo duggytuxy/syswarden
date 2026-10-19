@@ -61,6 +61,43 @@ func TestOpenSSHOracle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	t.Run("vendor-crypto-policy", func(t *testing.T) {
+		const policy = "Ciphers aes256-ctr\nMACs hmac-sha2-256\n"
+		fixture := vendorInventoryFixture(t, policy)
+		candidate, err := fixture.open().Prepare(CIS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Translate the fixture to ordinary temporary absolute paths for the
+		// real parser. No production path, crypto-policy tool or listener runs.
+		target := filepath.Join(dir, "vendor-policy.txt")
+		alias := filepath.Join(dir, "vendor-policy.config")
+		dropIn := filepath.Join(dir, "vendor-test-hardening.conf")
+		write(target, policy)
+		if err := os.Symlink(target, alias); err != nil {
+			t.Fatal(err)
+		}
+		write(dropIn, string(candidate.Bytes()))
+		write(filepath.Join(dir, "sshd_config"), "Include "+dropIn+"\nInclude "+alias+"\nHostKey "+key+"\nUsePAM no\nPasswordAuthentication no\n")
+		run(t, "syntax")
+		output := run(t, "global")
+		if err := candidate.CheckEffective(output); err != nil {
+			t.Fatal(err)
+		}
+		for _, kept := range []string{"ciphers aes256-ctr\n", "macs hmac-sha2-256\n", "passwordauthentication no\n"} {
+			if !strings.Contains(string(output), kept) {
+				t.Fatalf("vendor or administrator policy changed: %s", kept)
+			}
+		}
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		if content, err := root.ReadFile("vendor-policy.txt"); err != nil || string(content) != policy {
+			t.Fatal("parser fixture policy was modified")
+		}
+	})
 	for _, profile := range []Profile{Forwarding, CIS} {
 		t.Run(map[Profile]string{Forwarding: "forwarding", CIS: "cis"}[profile], func(t *testing.T) {
 			fixture := filepath.Join(dir, "sshd_config")

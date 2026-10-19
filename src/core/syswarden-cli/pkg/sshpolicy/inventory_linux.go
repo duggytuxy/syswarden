@@ -56,6 +56,7 @@ type inventorySnapshot struct {
 	files   map[string][]byte
 	nodes   map[string]inventoryStamp
 	entries map[string][]string
+	links   map[string]string
 }
 
 // OpenInventory reads the fixed production SSH configuration graph beneath /.
@@ -167,7 +168,8 @@ type inventoryReader struct {
 
 func collectInventory(root *os.File, uid int) (inventorySnapshot, error) {
 	reader := inventoryReader{root: root, uid: uid,
-		state:  inventorySnapshot{make(map[string][]byte), make(map[string]inventoryStamp), make(map[string][]string)},
+		state: inventorySnapshot{files: make(map[string][]byte), nodes: make(map[string]inventoryStamp),
+			entries: make(map[string][]string), links: make(map[string]string)},
 		active: make(map[string]bool), walked: make(map[string]bool)}
 	// Record the reserved path even when the existing Include graph misses it.
 	if _, _, err := reader.readFile(DropInPath); err != nil {
@@ -274,8 +276,14 @@ func (reader *inventoryReader) readFile(name string) ([]byte, bool, error) {
 	if errors.Is(err, unix.ENOENT) {
 		return nil, false, reader.observe(name, inventoryStamp{})
 	}
-	if err != nil || !reader.trusted(before, false) {
+	if err != nil {
 		return nil, false, errors.Join(ErrInventoryUnsafe, err)
+	}
+	if before.Mode&unix.S_IFMT == unix.S_IFLNK {
+		return reader.readVendorLink(parent, name, before)
+	}
+	if !reader.trusted(before, false) {
+		return nil, false, ErrInventoryUnsafe
 	}
 	if len(reader.state.files) >= MaxFiles || before.Size > int64(MaxBytes-reader.bytes) {
 		return nil, false, ErrInventoryBounds

@@ -17,8 +17,9 @@ Every path component is opened relative to a pinned directory descriptor, with
 no-follow checks. Ancestors must be root-owned directories with owner search
 permission. Files must be root-owned, singly linked regular files. Group/other
 write permission and special mode bits are rejected; configuration files must
-not be executable. Symlinks, FIFOs, device files and directories used as files
-are refused. File identity and metadata are compared before and after opening
+not be executable. Symlinks are refused except for the bounded vendor alias
+described below. FIFOs, device files and directories used as files are refused.
+File identity and metadata are compared before and after opening
 and reading. No file, mode, owner, directory or service is changed.
 
 The reader preserves exact configuration bytes. It observes device/inode,
@@ -35,8 +36,40 @@ names are refused. Non-ASCII or control-character names in a glob directory are
 rejected even when the Go matcher would consider them unmatched. Dotfiles may
 be collected conservatively rather than relying on libc/locale glob behavior.
 These restrictions can refuse valid OpenSSH layouts; they must never cause a
-fallback through the old writer. Vendor configurations using symlinks need a
-separately verified adapter before their environments can be declared supported.
+fallback through the old writer. Vendor configurations outside the explicit
+alias adapter below remain unsupported; no generic symlink resolver is used.
+
+## Crypto-policies vendor alias
+
+The upstream [crypto-policies updater](https://gitlab.com/redhat-crypto/fedora-crypto-policies/-/blob/master/python/update-crypto-policies.py)
+can publish a backend as a regular generated file or an absolute link to a
+precomputed policy. The reader accepts exactly one terminal alias source:
+`/etc/crypto-policies/back-ends/opensshserver.config`. Its target must be an
+absolute canonical `/usr/share/crypto-policies/<label>/opensshserver.txt` path.
+The single policy label has at most 128 uppercase ASCII letters, digits,
+hyphens, underscores or colons, with no empty colon-delimited component.
+Relative links, other paths, directory links and chained links are refused.
+
+The alias must be root-owned and singly linked. Linux symlink permission bits
+are not write authorization; the protected parent and link owner are checked.
+The reader opens the link itself with `O_PATH|O_NOFOLLOW`, reads its text through
+that descriptor and compares descriptor/named identity before and after reading
+the target. All target ancestors independently pass the existing no-follow
+directory checks; the target must be an existing trusted regular file.
+
+Exact link text, alias and target metadata, and both logical input paths are
+retained and rechecked. Both path/content entries count toward file/byte limits.
+Retargeting, same-text link replacement, target replacement or an unsafe change
+invalidates the handle. Includes inside the target remain subject to complete
+graph collection, conflict detection, cycle checks and resource bounds.
+
+A recognized path is not package provenance, policy ownership or cryptographic
+compliance. The reader never selects a policy, rewrites either path, runs
+`update-crypto-policies`, removes an Include or overrides crypto algorithms.
+Regular generated backends remain supported by the original regular-file path.
+The [upstream manual](https://gitlab.com/redhat-crypto/fedora-crypto-policies/-/blob/master/update-crypto-policies.8.txt)
+describes the external policy manager. Preserving this input does not validate
+the whole distribution, FIPS status or administrator access.
 
 ## Lifetime and revalidation
 
@@ -82,8 +115,11 @@ owners/modes/types, symlinks and hard links. Mutation tests cover identical-byte
 inode replacement, new includes, parent replacement, permission changes and
 permanent handle invalidation. Further cases exercise cycles, malformed syntax,
 locale-sensitive names, resource ceilings and concurrent close/recheck/prepare.
-The existing real OpenSSH parser oracle remains separate from this filesystem
-evidence; neither starts a listener or proves an administrator connection.
+The real OpenSSH parser oracle also checks a temporary linked crypto policy
+with the prepared candidate, preserving its cipher/MAC values. This remains
+separate from native distribution evidence; neither test starts a listener or
+proves an administrator connection. Alias cases cover invalid targets, unsafe
+storage, policy changes, nested Includes and unchanged input bytes.
 
 Protected role and policy-owner declarations are still required by the
 [environment compatibility contract](SSH_ENVIRONMENT_COMPATIBILITY.md),
