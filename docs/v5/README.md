@@ -58,8 +58,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     Executable slices define [node admission grants and credential bindings](NODE_ADMISSION_GRANTS.md)
     and a [bounded registry snapshot](NODE_ADMISSION_REGISTRY.md). The
     [continuity contract](NODE_REGISTRY_CONTINUITY.md) binds independent approval
-    and retained history before protected storage is implemented. Protected
-    membership administration and runtime enrollment remain open.
+    and retained history. The [protected snapshot reader](NODE_REGISTRY_STORAGE.md)
+    adds bounded persistence inputs and a read-only Linux lease. Durable writers,
+    protected membership administration and runtime enrollment remain open.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the

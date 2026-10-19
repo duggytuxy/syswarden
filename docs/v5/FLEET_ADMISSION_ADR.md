@@ -427,7 +427,9 @@ snapshot to 16 MiB inside the 32 MiB aggregate working-state budget. Protected
 registry administration and aggregate resource measurement remain open. The
 [continuity prerequisite](NODE_REGISTRY_CONTINUITY.md) defines independent
 generation/checkpoint bytes and ordinary transition checks that preserve revoked
-history. It does not authenticate approvals or implement durable storage; network
+history. The [protected snapshot reader](NODE_REGISTRY_STORAGE.md) adds a bounded
+storage format and a verified read-only Linux lease. Neither component
+authenticates approvals or implements a durable registry writer; network
 activation waits for the dependent stages. Source-reference
 encoding, protected layouts, exact wire schemas and recovery tooling are reviewed
 in those stages, not guessed by an installer. Any change to the security or

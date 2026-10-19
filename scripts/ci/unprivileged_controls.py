@@ -16,6 +16,9 @@ def required_tests() -> set[str]:
     cases.add(f"{ROOT_TEST}/launch-configuration")
     for case in ("valid", "nil", "closed", "writable-fd", "wrong-owner", "wrong-group", "mode", "special-mode", "hardlink", "acl", "directory", "fifo", "empty", "oversized", "corrupt", "wrong-digest", "uppercase-digest", "service-identity"):
         cases.add(f"{ROOT_TEST}/launch-configuration/{case}")
+    cases.add(f"{ROOT_TEST}/fleet-registry")
+    for case in ("read", "overwrite", "append", "truncate", "unlink", "rename", "hardlink", "chmod", "chown", "create", "symlink", "replace-directory", "verified-read-after-attacks"):
+        cases.add(f"{ROOT_TEST}/fleet-registry/{case}")
     for resource in ("policy", "custody", "anchor", "segment", "checkpoint"):
         for attack in ("read", "overwrite", "append", "truncate", "unlink", "rename", "hardlink", "chmod", "chown"):
             cases.add(f"{ROOT_TEST}/{resource}/{attack}")

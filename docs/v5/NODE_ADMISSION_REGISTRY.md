@@ -106,8 +106,10 @@ There are two distinct references:
 
 The first cannot be the hash of a document recursively containing itself. A
 caller must not authenticate a submitted manifest by accepting its own hash.
-There is deliberately no submitted-manifest decoder or enrollment fallback in
-this component. `BuildNodeAdmissionRegistry` checks structure, not authority.
+`BuildNodeAdmissionRegistry` checks structure, not authority. The later
+[protected snapshot reader](NODE_REGISTRY_STORAGE.md) decodes only a complete
+canonical manifest with an independently expected reference. It does not expose
+an upload endpoint or enrollment fallback.
 The [continuity contract](NODE_REGISTRY_CONTINUITY.md) now defines the independent
 generation and checkpoint formats, exact expected authority and ordinary
 transition restrictions. Protected persistence and real approval remain open.

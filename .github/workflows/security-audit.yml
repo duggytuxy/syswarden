@@ -307,6 +307,8 @@ jobs:
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzNodeAdmissionRoundTrip
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzNodeRegistryPermutation
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzNodeContinuityCanonical
+          fuzz_target src/core/syswarden-core ./contracts/v5 FuzzNodeRegistryDecode
+          fuzz_target src/core/syswarden-core ./fleetregistry FuzzSnapshotDecode
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzNodeStateInventoryPermutation
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzNodeExposureRoundTrip
           fuzz_target src/core/syswarden-core ./contracts/v5 FuzzNodeExposureInventoryPermutation
