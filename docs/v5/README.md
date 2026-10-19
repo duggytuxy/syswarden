@@ -61,6 +61,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     and retained history. The [protected snapshot reader](NODE_REGISTRY_STORAGE.md)
     adds bounded persistence inputs and a read-only Linux lease. Durable writers,
     protected membership administration and runtime enrollment remain open.
+33. [Dedicated SSH hardening preparation and lifecycle gates](SSH_DROPIN.md).
+    The inactive common policy component precedes protected inventory,
+    historical migration, owned publication and independent removal validation.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
