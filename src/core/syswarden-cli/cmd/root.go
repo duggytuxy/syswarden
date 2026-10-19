@@ -136,6 +136,9 @@ func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
 	if cmd == configGetCmd || cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
 		return false
 	}
+	if readOnlySSHPolicyCommand(cmd) {
+		return false
+	}
 	if topLevel := topLevelCommand(cmd); topLevel != nil {
 		switch topLevel.Name() {
 		case "completion", "recover-wireguard", "recover-removal":
@@ -170,6 +173,9 @@ func topLevelCommand(cmd *cobra.Command) *cobra.Command {
 }
 
 func commandAllowedDuringRemoval(cmd *cobra.Command) bool {
+	if readOnlySSHPolicyCommand(cmd) {
+		return true
+	}
 	if cmd != nil && cmd.CommandPath() == "syswarden config validate" {
 		return true
 	}
@@ -224,6 +230,9 @@ var degradedConfigAllowlist = map[string]struct{}{
 }
 
 func enforceValidatedConfiguration(cmd *cobra.Command) error {
+	if readOnlySSHPolicyCommand(cmd) {
+		return nil
+	}
 	if cmd == nil || cmd.Parent() == nil {
 		return nil
 	}

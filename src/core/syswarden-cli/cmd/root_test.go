@@ -26,6 +26,7 @@ func TestTopLevelCommandContract(t *testing.T) {
 		"reload",
 		"revoke-ssh",
 		"runtime-unblock",
+		"ssh-policy",
 		"tui",
 		"unblock",
 		"uninstall",

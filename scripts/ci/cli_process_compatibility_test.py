@@ -110,6 +110,30 @@ class CLIProcessCompatibilityTest(unittest.TestCase):
                 case, before, changed, baseline, candidate, [], approvals
             )
 
+    def test_root_help_approval_matches_every_public_top_level_command(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        contract = json.loads(
+            (root / "scripts/ci/documentation_contract.json").read_text(encoding="utf-8")
+        )
+        snapshot = json.loads(
+            (root / "testdata/contracts/cli-command-tree.json").read_text(encoding="utf-8")
+        )
+        approvals = [
+            item
+            for item in contract["approved_cli_process_differences"]
+            if item["case"] == "help:syswarden" and item["stream"] == "stdout"
+        ]
+        self.assertEqual(len(approvals), 1)
+        commands = approvals[0]["after"].split("\nAvailable Commands:\n", 1)[1]
+        commands = commands.split("\nFlags:\n", 1)[0]
+        rendered = [line.split(None, 1) for line in commands.splitlines() if line.strip()]
+        expected = [
+            [item["path"].split(" ")[1], item["short"]]
+            for item in snapshot
+            if item["path"].startswith("syswarden ") and item["path"].count(" ") == 1
+        ]
+        self.assertEqual(rendered, expected)
+
     def test_snapshot_probe_filters_only_by_hidden_attribute_and_public_changes_remain_visible(
         self,
     ) -> None:

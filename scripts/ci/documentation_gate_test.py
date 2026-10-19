@@ -1024,7 +1024,8 @@ class DocumentationGateTest(unittest.TestCase):
 
     def test_cli_command_inventory_and_exact_add_remove_approvals(self) -> None:
         commands = documentation_gate.cobra_commands(REPO_ROOT)
-        self.assertEqual(len(commands), 26)
+        self.assertEqual(len(commands), 27)
+        self.assertIn("ssh-policy", commands)
         self.assertIn("runtime-unblock", commands)
         self.assertIn("ha-fence", commands)
         self.assertIn("recover-wireguard", commands)
@@ -1065,6 +1066,8 @@ class DocumentationGateTest(unittest.TestCase):
             "syswarden config migrate",
             "syswarden runtime-unblock",
             "syswarden recover-removal",
+            "syswarden ssh-policy",
+            "syswarden ssh-policy plan",
         ):
             self.assertEqual(command_approvals[path], (None, "added"))
 
@@ -1091,7 +1094,8 @@ class DocumentationGateTest(unittest.TestCase):
         manual_commands = set(documentation_gate.MANUAL_COMMAND_RE.findall(manual))
         commands = documentation_gate.cobra_commands(REPO_ROOT)
         self.assertEqual(manual_commands, commands)
-        self.assertEqual(len(commands), 26)
+        self.assertEqual(len(commands), 27)
+        self.assertIn("ssh-policy", manual_commands)
         self.assertIn("runtime-unblock", manual_commands)
         self.assertIn("ha-fence", manual_commands)
         self.assertIn("recover-wireguard", manual_commands)

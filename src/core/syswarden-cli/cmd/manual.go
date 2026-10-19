@@ -44,6 +44,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %srecover-wireguard%s   : Dry-runs exact historical WireGuard recovery; mutation requires the reviewed plan SHA-256.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sreload%s              : Reapplies policy, repairs cron jobs and normally restarts the core.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %srevoke-ssh%s          : Removes an address from the SSH exception registry.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sssh-policy%s          : Provides read-only SSH migration inspection through its plan subcommand; application is not available.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %stui%s                 : Launches the local terminal dashboard; it opens no network listener.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sunblock%s             : Removes one or more addresses or CIDRs from the blocklist.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sruntime-unblock%s     : Removes local runtime claims through the authenticated core; persistent and independent HA claims remain.\n", ansiGreen, ansiReset)
