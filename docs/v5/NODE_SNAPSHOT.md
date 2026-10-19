@@ -31,6 +31,9 @@ the registry's lifecycle cannot be replaced by a string comparison.
 The [fleet admission ADR](FLEET_ADMISSION_ADR.md) proposes that lifecycle and
 the separate node upload boundary. Nodes must not upload collector snapshots
 as if they could choose collector time, authority or verified protection.
+The separate [admission grant checks](NODE_ADMISSION_GRANTS.md) bind individual
+credentials and producer keys to independently supplied registry context; they
+do not turn a node snapshot into an authenticated upload.
 
 ## Snapshot semantics
 

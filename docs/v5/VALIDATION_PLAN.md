@@ -401,3 +401,11 @@ Coherent foreign populations, late-slot failures, mixed read contexts, exact
 freshness boundaries and zero/500-node selected-fleet simulations are mandatory
 component checks. These do not authenticate assessments, activate a dashboard
 or establish final v5.00.0 IVVQ acceptance.
+
+The [individual node admission grants](NODE_ADMISSION_GRANTS.md) require strict
+bounded decoding, exact independently supplied record/registry/policy/identity
+bindings, exclusive expiry and purpose separation. Synthetic certificate paths
+must reject ambiguous SANs, server-purpose leaves, wrong keys/issuers, invalid
+signatures and inactive grants. Golden vectors and bounded grant fuzzing are
+component evidence only. Real TLS key possession, protected registry revocation,
+collection/rotation limits, signed samples and native IVVQ remain open.

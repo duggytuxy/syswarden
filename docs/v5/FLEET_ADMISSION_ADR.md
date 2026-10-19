@@ -417,8 +417,10 @@ shared PKI, unrelated firewall rules and deliberately retained recovery backups.
 | FA-06 | Three independent evidence evaluators and shared consumers | Reachable-but-unverified nodes, current receipt of stale evidence, partial control scope, policy substitution, conflict and complete outage denominators |
 | FA-07 | Native lifecycle and bounded fleet campaign | Real renewal/revocation, outage/recovery, separate uninstall/remove/purge, BunkerWeb independence and 500-identity capacity with private evidence |
 
-Merge of this ADR does not complete any row. The next executable PR starts at
-FA-01; network activation waits for the dependent stages. Source-reference
+Merge of this ADR does not complete any row. The first FA-01 slice provides
+[individual grants and credential binding checks](NODE_ADMISSION_GRANTS.md).
+Collection constraints and protected registry admission remain open; network
+activation waits for the dependent stages. Source-reference
 encoding, protected layouts, exact wire schemas and recovery tooling are reviewed
 in those stages, not guessed by an installer. Any change to the security or
 resource decisions above requires an explicit ADR update with its migration and
