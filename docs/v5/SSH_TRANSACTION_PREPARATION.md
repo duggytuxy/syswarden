@@ -43,7 +43,8 @@ The helpers do not publish a temporary name or exchange a live file.
 The internal journal expects the fixed protected directory
 `/var/lib/syswarden/ssh-policy-v1`, owned by root:root with mode 0700, beneath
 protected real ancestors. It does not create, repair or adopt an unsafe
-directory. Installation must provision this storage before enabling migration.
+directory. The internal [provisioner](SSH_STATE_PROVISIONING.md) now records
+independent directory ownership; installation does not invoke it yet.
 A nonblocking exclusive lock on the directory coordinates product processes.
 It does not prevent an administrator or external configuration manager from
 writing SSH configuration. Replaced or detached directories invalidate handles.
@@ -81,7 +82,8 @@ records, reopening after candidate descriptors close, malformed storage,
 stale approval, changed candidates and injected directory-sync failure. These
 are temporary fixture tests; no installed configuration or server is changed.
 
-Still required: provisioned state ownership, durable phase transitions,
+Internal state ownership is now implemented and rechecked by the journal.
+Still required: installation provisioning, pre-receipt orphan recovery, durable phase transitions,
 intermediate-state parser checks, publication and interrupted recovery,
 post-publication verification, activation/rollback and a shared installation/CIS
 adapter without an old-writer fallback. Follow with independent SSH, ProxyJump

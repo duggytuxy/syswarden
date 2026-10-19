@@ -129,14 +129,15 @@ func prepareSSHRecord(plan migrationPlan, approved, parser string, before sshFil
 }
 
 // sshJournal holds a nonblocking exclusive lock on a fixed protected directory.
-// It does not create that directory or infer ownership from an arbitrary name.
-// The installation adapter must provision it before any migration is enabled.
+// It requires the independent sibling receipt and exact private marker. It
+// does not create or repair storage; the internal provisioner owns that step.
 // This lock coordinates product processes only, not administrator tools.
 type sshJournal struct {
 	root      *os.File // borrowed for the handle lifetime
 	directory *os.File
 	uid       int
 	poisoned  bool
+	owner     sshFileImage
 	// Sync injection is private to filesystem failure tests.
 	syncDirectory func(*os.File) error
 }
@@ -144,6 +145,10 @@ type sshJournal struct {
 func openSSHJournal(root *os.File, uid int) (*sshJournal, error) {
 	if root == nil {
 		return nil, ErrInventoryUnsafe
+	}
+	owner, err := verifySSHStateOwner(root, uid)
+	if err != nil {
+		return nil, err
 	}
 	reader := inventoryReader{root: root, uid: uid, state: inventorySnapshot{nodes: make(map[string]inventoryStamp)}}
 	directory, err := reader.openDirectory(sshJournalDirectory)
@@ -163,7 +168,7 @@ func openSSHJournal(root *os.File, uid int) (*sshJournal, error) {
 	if err := unix.Flock(int(directory.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		return nil, fmt.Errorf("SSH transaction directory is busy or cannot be locked: %w", err)
 	}
-	journal := &sshJournal{root: root, directory: directory, uid: uid, syncDirectory: (*os.File).Sync}
+	journal := &sshJournal{root: root, directory: directory, uid: uid, owner: owner, syncDirectory: (*os.File).Sync}
 	if err := journal.recheck(); err != nil {
 		return nil, err
 	}
@@ -176,6 +181,10 @@ func (journal *sshJournal) recheck() error {
 		return ErrInventoryClosed
 	}
 	journal.poisoned = true
+	owner, err := verifySSHStateOwner(journal.root, journal.uid)
+	if err != nil || !reflect.DeepEqual(owner, journal.owner) {
+		return errors.Join(ErrInventoryChanged, err)
+	}
 	reader := inventoryReader{root: journal.root, uid: journal.uid, state: inventorySnapshot{nodes: make(map[string]inventoryStamp)}}
 	current, err := reader.openDirectory(sshJournalDirectory)
 	if err != nil || current == nil {

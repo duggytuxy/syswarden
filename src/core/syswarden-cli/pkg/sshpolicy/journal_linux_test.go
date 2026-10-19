@@ -17,7 +17,10 @@ import (
 func preparationFixture(t *testing.T) (*inventoryFixture, migrationPlan, sshFileImage, *sshAnonymousStage, *sshAnonymousStage) {
 	t.Helper()
 	f := planFixture(t, includeDropIns+"PasswordAuthentication no\n")
-	if err := os.MkdirAll(f.path(sshJournalDirectory), 0700); err != nil {
+	if err := os.MkdirAll(f.path(sshStateParent), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := provisionSSHState(f.root, os.Geteuid(), sshProvisionDefaults()); err != nil {
 		t.Fatal(err)
 	}
 	plan := f.plan()
@@ -115,7 +118,11 @@ func TestSSHJournalRefusesConcurrentAndReplacedDirectory(t *testing.T) {
 	}
 	for _, path := range []string{sshJournalDirectory, sshJournalDirectory + "-retained"} {
 		entries, err := os.ReadDir(f.path(path))
-		if err != nil || len(entries) != 0 {
+		want := 0
+		if strings.HasSuffix(path, "-retained") {
+			want = 1
+		}
+		if err != nil || len(entries) != want {
 			t.Fatal("changed replaced directory", err)
 		}
 	}

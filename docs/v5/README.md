@@ -74,10 +74,11 @@ server campaign, paid resource or public v5 release is authorized by this text.
     subcommand checks the complete candidate with the installed daemon, using
     sealed inputs and all declared contexts while preserving unrelated settings.
     [Transaction preparation](SSH_TRANSACTION_PREPARATION.md) adds exact
-    attributes, anonymous staging and private durable records. Runtime
-    publication, activation and lifecycle integration remain open.
-    Durable application, runtime integration and native migration validation
-    remain open.
+    attributes, anonymous staging and private durable records.
+    [State provisioning](SSH_STATE_PROVISIONING.md) independently attributes
+    the private directory and resumes verified interrupted creation. Runtime
+    publication, activation, lifecycle integration and native migration
+    validation remain open.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
