@@ -73,6 +73,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     edits, exposed through the read-only `ssh-policy plan` command. The `verify`
     subcommand checks the complete candidate with the installed daemon, using
     sealed inputs and all declared contexts while preserving unrelated settings.
+    [Transaction preparation](SSH_TRANSACTION_PREPARATION.md) adds exact
+    attributes, anonymous staging and private durable records. Runtime
+    publication, activation and lifecycle integration remain open.
     Durable application, runtime integration and native migration validation
     remain open.
 
