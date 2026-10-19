@@ -112,13 +112,17 @@ A competing successor with the same predecessor still requires a single writer
 to choose and durably commit one transition. The pure checker does not lock files
 or prevent competing calls from succeeding against the same current input.
 
-FA-02 still needs protected provisioning, canonical snapshot persistence,
+FA-02 still needs protected provisioning, durable snapshot publication,
 single-writer serialization, authenticated approval and recovery, crash-safe
 publication, independent continuity anchors, historical denial retention and
 combined registry/receipt/audit resource accounting. Ordinary-user file attacks,
 process death, storage exhaustion and restored snapshots must be tested there.
 Later stages add invitation/CSR issuance, real TLS, signed producer samples,
 replay receipts and native lifecycle acceptance.
+
+The [protected snapshot reader](NODE_REGISTRY_STORAGE.md) now supplies the
+canonical storage object and checked Linux read-only lease. It is a persistence
+prerequisite, not the durable writer, independent anchor or approval authority.
 
 These tests cover malformed encoding, exact references, generation substitution,
 rollback, replay, disabled state, narrowing, retained rotation history, revoked

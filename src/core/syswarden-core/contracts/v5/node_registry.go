@@ -71,8 +71,8 @@ type nodeRegistryManifest struct {
 type nodeRegistryLocation struct{ member, slot int }
 
 // NodeAdmissionRegistry is an immutable, structurally checked snapshot. It does
-// not authenticate its input or establish durable/live membership. There is no
-// decoder that turns a submitted manifest directly into admission authority.
+// not authenticate its input or establish durable/live membership. Decoding a
+// manifest requires an independent pin and never establishes admission authority.
 type NodeAdmissionRegistry struct {
 	binding   NodeAdmissionRegistryBinding
 	reference RateReference

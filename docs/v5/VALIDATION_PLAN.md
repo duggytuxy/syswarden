@@ -53,6 +53,13 @@ not a financial allocation.
 
 ## Non-regression gates by work slice
 
+- Registry storage (#224/#233/#315): exact independent checkpoint and generation,
+  canonical whole-object framing, member/slot limits during decoding, private
+  descriptor ownership, symlink/hardlink/FIFO refusal, replacement during reads,
+  poisoned-state refusal and serialized close. Disabled state stays readable
+  administratively without admission. See [the reader contract](NODE_REGISTRY_STORAGE.md).
+  Durability, authenticated provisioning, ordinary-user native isolation and
+  independent recovery anchors are not established by these component tests.
 - Registry continuity (#224/#233/#315): exact independently expected generation,
   checkpoint and whole snapshot; reject rollback, replay, skipped/overflowed
   sequence, foreign lineage/policy, revoked-member or key reactivation, forgotten

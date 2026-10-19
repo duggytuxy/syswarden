@@ -138,7 +138,10 @@ type NodeRegistryContinuityContext struct {
 	Checkpoint  RateReference
 }
 
-func checkNodeContinuity(g NodeRegistryGeneration, c NodeRegistryCheckpoint, r NodeAdmissionRegistry, expected NodeRegistryContinuityContext) error {
+// CheckNodeRegistryContinuity verifies exact independently expected metadata,
+// including disabled state needed for administrative recovery. It does not grant
+// admission: NodeRegistryReadContext separately requires an active checkpoint.
+func CheckNodeRegistryContinuity(g NodeRegistryGeneration, c NodeRegistryCheckpoint, r NodeAdmissionRegistry, expected NodeRegistryContinuityContext) error {
 	gr, ge := g.Reference()
 	cr, ce := c.Reference()
 	if ge != nil || ce != nil || !identifier(expected.AuthorityID) || !identifier(expected.LineageID) ||
@@ -157,7 +160,7 @@ func checkNodeContinuity(g NodeRegistryGeneration, c NodeRegistryCheckpoint, r N
 // independent continuity checks. It is not a reusable lease. The future writer
 // must serialize this check with durable admission and revocation at each use.
 func NodeRegistryReadContext(g NodeRegistryGeneration, c NodeRegistryCheckpoint, r NodeAdmissionRegistry, expected NodeRegistryContinuityContext, now time.Time) (NodeAdmissionRegistryReadContext, error) {
-	if err := checkNodeContinuity(g, c, r, expected); err != nil {
+	if err := CheckNodeRegistryContinuity(g, c, r, expected); err != nil {
 		return NodeAdmissionRegistryReadContext{}, err
 	}
 	if c.State != "active" {
@@ -177,12 +180,12 @@ func NodeRegistryReadContext(g NodeRegistryGeneration, c NodeRegistryCheckpoint,
 // Generation, lineage, reactivation, retention and epoch recovery are excluded.
 func CheckNodeRegistryAdvance(g NodeRegistryGeneration, before NodeRegistryCheckpoint, current NodeAdmissionRegistry,
 	next NodeRegistryCheckpoint, candidate NodeAdmissionRegistry, expected NodeRegistryContinuityContext, approvedNext RateReference) error {
-	if err := checkNodeContinuity(g, before, current, expected); err != nil {
+	if err := CheckNodeRegistryContinuity(g, before, current, expected); err != nil {
 		return err
 	}
 	proposal := expected
 	proposal.Checkpoint = approvedNext
-	if err := checkNodeContinuity(g, next, candidate, proposal); err != nil {
+	if err := CheckNodeRegistryContinuity(g, next, candidate, proposal); err != nil {
 		return err
 	}
 	n, _ := strconv.ParseUint(before.Sequence, 10, 64)

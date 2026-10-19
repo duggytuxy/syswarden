@@ -58,6 +58,8 @@ func TestLocalUnprivilegedBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Run("fleet-registry", func(t *testing.T) { testFleetRegistryBoundary(t, work, canary) })
+
 	before := adversarialSnapshot(t, dirs)
 	_, checkpoint := checkpointNames(testName)
 	files := []string{filepath.Join(f.policyPath, policyFileName), filepath.Join(f.custodyPath, custodyFileName), filepath.Join(f.files.anchorPath, anchorName), filepath.Join(f.files.journalPath, testName), filepath.Join(f.files.journalPath, checkpoint)}
