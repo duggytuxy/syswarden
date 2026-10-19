@@ -53,6 +53,14 @@ not a financial allocation.
 
 ## Non-regression gates by work slice
 
+- Fleet admission (#223/#224/#233/#315): use FA-01 through FA-07 in the
+  [proposed admission ADR](FLEET_ADMISSION_ADR.md) as the staged evidence map.
+  Exercise independently approved enrollment, wrong-purpose credentials,
+  live-session revocation, durable replay, receipt retries without freshness
+  renewal, expired source evidence, compromised-node scope, ordinary-user
+  tampering and bounded 500-identity load. Real native lifecycle and BunkerWeb
+  independence remain separate requirements. These are planned tests; no
+  connector, authenticated producer or capacity acceptance is established.
 - Container firewall compatibility (#376): explicit independent API-interface zone
   selection with independent Docker zones, missing/duplicate bindings, zone
   changes before and after commit, scoped ownership and exact removal. Exercise

@@ -28,6 +28,10 @@ registry recovery remain WP11 work. This schema does not implement them. A
 comparison with an obsolete trusted registry can still accept obsolete data;
 the registry's lifecycle cannot be replaced by a string comparison.
 
+The [fleet admission ADR](FLEET_ADMISSION_ADR.md) proposes that lifecycle and
+the separate node upload boundary. Nodes must not upload collector snapshots
+as if they could choose collector time, authority or verified protection.
+
 ## Snapshot semantics
 
 `syswarden.node-snapshot.v1` is one collector statement about one managed node.

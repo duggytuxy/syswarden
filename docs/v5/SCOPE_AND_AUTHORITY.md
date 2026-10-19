@@ -127,3 +127,9 @@ changing the existing execution path.
 Before freezing WP01, review the exact supported matrix, numeric journal and
 agent budgets, signature/canonicalization choices, key lifecycle, role/action
 catalog, console recovery objectives and full acceptance evidence map.
+
+The [fleet admission ADR](FLEET_ADMISSION_ADR.md) proposes the next WP11/WP18
+decision: outbound node mTLS, independent enrollment approval, per-request
+membership checks, bounded credential/replay lifecycle and source admission
+before KPI evaluation. Its numeric profile needs review and measured evidence;
+it does not freeze the remaining WP01 budgets or activate a fleet service.
