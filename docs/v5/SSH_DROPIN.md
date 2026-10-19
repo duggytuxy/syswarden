@@ -44,6 +44,11 @@ reachable file, directory membership and negative glob result. Supplying an
 incomplete map can omit a conflict; this pure component cannot detect that. It
 does not open a pathname, trust remote input, or attest file ownership/modes.
 
+The inactive [protected Linux inventory reader](SSH_INVENTORY.md) supplies a
+bounded descriptor-based collection and revalidation path for a restricted
+Include layout. It does not yet provide role declarations, migration approval,
+publication or lifecycle integration.
+
 Preparation requires the main file and an absent reserved destination. Even an
 existing byte-identical drop-in is refused: an independent ownership receipt is
 required before update or removal. The generated file must be included exactly

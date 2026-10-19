@@ -215,16 +215,9 @@ func (graph *inspector) include(pattern string, depth int) error {
 	if graph.patterns > MaxExpansions {
 		return fmt.Errorf("SSH Include pattern count exceeds bounds")
 	}
-	if !path.IsAbs(pattern) {
-		pattern = "/etc/ssh/" + pattern
-	}
-	// Restrict globs to * and ?. Go bracket negation and libc glob negation
-	// differ, and locale-dependent path matching is not a planning authority.
-	if len(pattern) > 1024 || path.Clean(pattern) != pattern || !printableASCII(pattern) || strings.ContainsAny(pattern, "\\ []\"#~") {
-		return fmt.Errorf("unsupported SSH Include path")
-	}
-	if _, err := path.Match(pattern, ""); err != nil {
-		return fmt.Errorf("invalid SSH Include pattern")
+	pattern, err := includePattern(pattern)
+	if err != nil {
+		return err
 	}
 	for _, name := range graph.names {
 		matched, err := path.Match(pattern, name)
@@ -238,6 +231,21 @@ func (graph *inspector) include(pattern string, depth int) error {
 		}
 	}
 	return nil
+}
+
+func includePattern(pattern string) (string, error) {
+	if !path.IsAbs(pattern) {
+		pattern = "/etc/ssh/" + pattern
+	}
+	// Restrict globs to * and ?. Go bracket negation and libc glob negation
+	// differ, and locale-dependent path matching is not a planning authority.
+	if len(pattern) > 1024 || path.Clean(pattern) != pattern || !printableASCII(pattern) || strings.ContainsAny(pattern, "\\ []\"#~") {
+		return "", fmt.Errorf("unsupported SSH Include path")
+	}
+	if _, err := path.Match(pattern, ""); err != nil {
+		return "", fmt.Errorf("invalid SSH Include pattern")
+	}
+	return pattern, nil
 }
 
 func splitDirective(line string) (string, string) {
