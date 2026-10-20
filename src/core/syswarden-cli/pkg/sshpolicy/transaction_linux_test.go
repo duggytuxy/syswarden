@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"syswarden-cli/pkg/sshselection"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -17,6 +18,7 @@ import (
 func transactionFixture(t *testing.T) (*inventoryFixture, migrationPlan, sshTransactionDependencies) {
 	t.Helper()
 	f := planFixture(t, includeDropIns+"PasswordAuthentication no\n")
+	f.write(sshselection.Path, "[ssh]\nhardening = \"forwarding\"\n")
 	if err := os.MkdirAll(f.path(sshStateParent), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +85,7 @@ func TestSSHTransactionExternalOwnerDoesNotProvisionOrResolveLabels(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.write(sshselection.Path, "[ssh]\nhardening = \"disabled\"\n")
 	declaration.Owner = "external"
 	declaration.Profile = "observe"
 	f.intent(declaration)
