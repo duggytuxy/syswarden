@@ -216,11 +216,17 @@ jobs:
             --run \
             --report "${RUNNER_TEMP}/cli-process-compatibility.json"
 
-      - name: Lint public Markdown
-        uses: DavidAnson/markdownlint-cli2-action@fa0cd0f1a052f54da593c83860f2292982f5d142 # v23.2.0
+      - name: Set up pinned Markdown runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          config: .markdownlint.json
-          globs: README.md
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Lint public Markdown
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/lint_public_markdown.sh
 
       - name: Enforce documentation truth contract
         shell: bash
@@ -634,15 +640,10 @@ jobs:
           printf '%s\n' "${trivy_dir}" >> "${GITHUB_PATH}"
 
       - name: Generate source dependency SBOM
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          skip-setup-trivy: true
-          cache: false
-          version: 'v0.70.0'
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'spdx-json'
-          output: 'syswarden-sbom.spdx.json'
+        shell: bash
+        run: |
+          set -euo pipefail
+          trivy fs --format spdx-json --output syswarden-sbom.spdx.json .
 
       - name: Validate source dependency SBOM
         shell: bash
@@ -672,20 +673,11 @@ jobs:
           retention-days: 90
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          skip-setup-trivy: true
-          cache: false
-          version: 'v0.70.0'
-          scan-type: 'fs'
-          scan-ref: '.'
-          scanners: 'vuln'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          exit-code: '1'
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-          limit-severities-for-sarif: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          trivy fs --scanners vuln --format sarif --output trivy-results.sarif \
+            --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH .
 
       - name: Validate local Trivy report
         if: ${{ always() }}

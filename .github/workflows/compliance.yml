@@ -16,8 +16,10 @@ jobs:
     name: Plumber analysis (pull request)
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,9 +27,10 @@ jobs:
           persist-credentials: false
 
       - name: Run Plumber analysis
-        uses: getplumber/plumber@d3536bae4727b9290d9e69ee25c4350ddbcd91cd # v0.6.0
+        uses: getplumber/plumber@93ea968a173204b9a7f91df270a4e853845aefa3 # v0.7.9
         with:
-          version: v0.4.55
+          version: v0.7.9
+          verify-attestation: true
           min-points: 100
           fail-warnings: true
           score-push: false
@@ -38,8 +41,10 @@ jobs:
     name: Plumber analysis and publication
     if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
       id-token: write
       security-events: write
     steps:
@@ -49,9 +54,10 @@ jobs:
           persist-credentials: false
 
       - name: Run and publish Plumber analysis
-        uses: getplumber/plumber@d3536bae4727b9290d9e69ee25c4350ddbcd91cd # v0.6.0
+        uses: getplumber/plumber@93ea968a173204b9a7f91df270a4e853845aefa3 # v0.7.9
         with:
-          version: v0.4.55
+          version: v0.7.9
+          verify-attestation: true
           min-points: 100
           fail-warnings: true
           score-push: true

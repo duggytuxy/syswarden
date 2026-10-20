@@ -3,6 +3,10 @@ version: "2.0"
 
 github:
   controls:
+    workflowMustIncludeRequiredActions:
+      enabled: true
+      requiredGroups:
+        - [getplumber/plumber, ossf/scorecard-action, actions/attest-build-provenance]
     branchMustBeProtected:
       codeOwnerApprovalRequired: true
     githubActionMustComeFromAuthorizedSources:
@@ -17,8 +21,6 @@ github:
         - docker/build-push-action
         - ossf/scorecard-action
         - anchore/scan-action
-        - DavidAnson/markdownlint-cli2-action
         - ruby/setup-ruby
         - gitleaks/gitleaks-action
         - golangci/golangci-lint-action
-        - aquasecurity/trivy-action
