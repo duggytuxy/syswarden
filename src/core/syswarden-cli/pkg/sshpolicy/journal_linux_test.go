@@ -16,7 +16,12 @@ import (
 
 func preparationFixture(t *testing.T) (*inventoryFixture, migrationPlan, sshFileImage, *sshAnonymousStage, *sshAnonymousStage) {
 	t.Helper()
-	f := planFixture(t, includeDropIns+"PasswordAuthentication no\n")
+	return preparationFixtureWithMain(t, includeDropIns+"PasswordAuthentication no\n")
+}
+
+func preparationFixtureWithMain(t *testing.T, content string) (*inventoryFixture, migrationPlan, sshFileImage, *sshAnonymousStage, *sshAnonymousStage) {
+	t.Helper()
+	f := planFixture(t, content)
 	if err := os.MkdirAll(f.path(sshStateParent), 0700); err != nil {
 		t.Fatal(err)
 	}

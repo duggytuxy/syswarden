@@ -125,6 +125,9 @@ func prepareSSHRecord(plan migrationPlan, approved, parser string, before sshFil
 	if err := record.validate(uid); err != nil {
 		return sshPreparation{}, err
 	}
+	if err := checkSSHPublicationIsolation(plan, record.Transaction); err != nil {
+		return sshPreparation{}, err
+	}
 	return record, nil
 }
 
