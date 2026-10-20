@@ -509,7 +509,7 @@ jobs:
 
       - name: Upload gosec report artifact with Act-compatible protocol
         if: ${{ github.event.act }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         env:
           ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
         with:
@@ -594,7 +594,7 @@ jobs:
 
       - name: Upload Gitleaks reports with Act-compatible protocol
         if: ${{ github.event.act }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         env:
           ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
         with:
@@ -663,7 +663,7 @@ jobs:
 
       - name: Store SBOM artifact with Act-compatible protocol
         if: ${{ github.event.act }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         env:
           ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
         with:
@@ -698,7 +698,7 @@ jobs:
 
       - name: Store Trivy report artifact with Act-compatible protocol
         if: ${{ always() && github.event.act }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         env:
           ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
         with:
@@ -767,7 +767,7 @@ jobs:
 
       - name: Upload validated bundle with Act-compatible protocol
         if: ${{ github.event.act }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         env:
           ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
         with:

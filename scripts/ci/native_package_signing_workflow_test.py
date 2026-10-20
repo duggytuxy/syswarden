@@ -293,7 +293,7 @@ print(json.dumps(document, separators=(",", ":")))
                 "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
                 "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
                 "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
-                "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
             ],
         )
         for reference in action_references:
@@ -307,7 +307,7 @@ print(json.dumps(document, separators=(",", ":")))
             action_references,
         )
         self.assertIn(
-            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
             action_references,
         )
 

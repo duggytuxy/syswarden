@@ -6977,7 +6977,7 @@ systemctl() {
         self.assertNotRegex(scripts.lower(), r"\brollback\b")
 
     def test_package_artifact_upload_is_github_strict_and_act_compatible(self) -> None:
-        github_sha = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+        github_sha = "cf430e030ddbb5b0abf93d22962f4752f3646cd9"
         act_sha = "ea165f8d65b6e75b540449e92b4886f43607fa02"
         self.assertEqual(self.workflow.count(f"actions/upload-artifact@{github_sha}"), 2)
         self.assertEqual(self.workflow.count(f"actions/upload-artifact@{act_sha}"), 2)
