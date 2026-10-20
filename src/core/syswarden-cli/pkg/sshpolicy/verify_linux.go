@@ -71,7 +71,7 @@ func verifyPlan(ctx context.Context, plan migrationPlan, digest string, run sshP
 	}
 	files := make(map[string][]byte, len(plan.inventory.files))
 	for name, content := range plan.inventory.files {
-		if name != IntentPath {
+		if isSSHConfiguration(name) {
 			files[name] = content
 		}
 	}

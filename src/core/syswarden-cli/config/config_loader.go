@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syswarden-cli/pkg/sshselection"
 
 	"github.com/spf13/viper"
 )
@@ -54,6 +55,9 @@ func loadModularConfig(configDir string) (loadErr error) {
 			recordConfigLoadFailure(configDir, loadErr)
 		}
 	}()
+	if err := sshselection.RejectEnvironment(); err != nil {
+		return err
+	}
 	if err := rejectOperatorPolicyEnvironment(); err != nil {
 		return err
 	}
