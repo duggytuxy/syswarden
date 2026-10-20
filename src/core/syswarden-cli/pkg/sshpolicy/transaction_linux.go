@@ -78,6 +78,9 @@ func executeSSHTransaction(ctx context.Context, root *os.File, uid int, approved
 	if approved != plan.summary.PlanSHA256 || approved != planDigest(plan) {
 		return result, fmt.Errorf("SSH inputs no longer match the explicitly approved plan")
 	}
+	if err := plan.selection.Authorize(plan.intent.Owner, plan.intent.Profile); err != nil {
+		return result, err
+	}
 	guard := func() error {
 		if err := errors.Join(ctx.Err(), deps.checkParser()); err != nil {
 			return err

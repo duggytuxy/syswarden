@@ -21,7 +21,7 @@ func checkSSHStateIsolation(snapshot inventorySnapshot) error {
 		return ErrInventoryUnsafe
 	}
 	for name, content := range snapshot.files {
-		if name == IntentPath {
+		if !isSSHConfiguration(name) {
 			continue
 		}
 		for _, line := range strings.Split(string(content), "\n") {

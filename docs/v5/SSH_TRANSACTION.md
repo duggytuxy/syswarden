@@ -10,7 +10,9 @@ proof of a successful login, a migration-ready package or final IVVQ acceptance.
 The planned minimal native installation profile in #422 must not enable SSH,
 CIS or general OS hardening. The shared SSH transaction belongs to the path
 selected explicitly by an administrator through the configuration and reviewed
-migration procedure. A TOML boolean cannot replace approval of the exact plan,
+migration procedure. The [independent TOML choice](SSH_SELECTION.md) is now
+checked by the internal transaction and bound into the plan inventory.
+A selection cannot replace approval of the exact plan,
 SSH ownership and role declarations, or the access checks.
 
 The independent [port observation command](SSH_PORT_OBSERVATION.md) needs no
@@ -29,7 +31,8 @@ no transaction directory, target-label lookup or staged policy is created.
 
 The engine combines the existing components in this order:
 
-1. Recompute the plan and compare it with the explicit approval.
+1. Recompute the plan, compare it with the explicit approval and require matching
+   explicit SSH selection from the protected dedicated TOML module.
 2. Verify the installed parser and all reviewed configuration graphs.
 3. Resolve and recheck the new policy's target label.
 4. Provision independently owned private state and acquire its exclusive lock.
