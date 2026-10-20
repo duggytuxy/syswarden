@@ -878,7 +878,7 @@ class ActFixtureTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         github_pin = (
             "actions/upload-artifact@"
-            "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+            "cf430e030ddbb5b0abf93d22962f4752f3646cd9"
         )
         act_pin = (
             "actions/upload-artifact@"

@@ -80,7 +80,7 @@ jobs:
           done
 
       - name: Set up pinned Ruby for package comparison
-        uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: '3.2'
 
@@ -496,7 +496,7 @@ jobs:
           sha256sum "${evidence_dir}/evaluation.json"
 
       - name: Upload Go 1.27 evaluation evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: syswarden-go127-evaluation-${{ github.sha }}
           path: ${{ runner.temp }}/go127-evidence/evaluation.json
