@@ -53,6 +53,9 @@ func stableSSHRollback(journal *sshJournal, transaction string) (sshStoredInvent
 // The original complete inventory, including negative observations, must hash
 // to the preparation. This is not adoption of current files by content.
 func recoverSSHPlan(journal *sshJournal, prepared sshPreparation, digest string) (migrationPlan, error) {
+	if err := journal.requireNoPreparationAbort(); err != nil {
+		return migrationPlan{}, err
+	}
 	first, err := journal.readPublication(1, false, prepared, digest)
 	if err != nil {
 		return migrationPlan{}, err

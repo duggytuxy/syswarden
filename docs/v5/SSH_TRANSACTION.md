@@ -86,18 +86,35 @@ original configuration identities. A changed parser or unrelated administrator
 edit cannot silently acquire new approval. Recovery retains evidence and checks
 the restored live configuration; it does not claim service or login success.
 
-An interrupted preparation without the publication history needed for rollback
-still requires separate inspected recovery. Recreating a lost unnamed inode from
-matching bytes is not an authorized resume operation.
+If no first publication intent exists, recovery can only abort the preparation.
+It recomputes the complete protected plan and requires the original approved
+digest, exact original main inode and metadata, unchanged explicit selection,
+and absence of the reserved policy and both transaction staging paths. It
+rejects unknown journal entries, partial publication, rollback records and
+mixed histories. Recreating a lost unnamed inode from matching bytes is not an
+authorized resume operation.
+
+Before recording an abort, the installed parser must verify the live original
+configuration against its sealed image, globally and for every declared access
+context. Inventory, parser identity and journal contents are checked around
+each parser call. The immutable `aborted-before-publication.json` record binds
+the preparation digest and full unchanged inventory. An explicit retry verifies
+the same record and repairs uncertain directory durability without replacing it.
+No SSH file, daemon or listener is modified. Aborted evidence prevents later
+publication and stays retained until a separately verified lifecycle retirement;
+it does not make the journal reusable or establish operational access.
 
 ## Validation and remaining work
 
 Temporary-filesystem tests cover publication and explicit restoration, external
 ownership, invalid prerequisites, existing journal contents, changed parser or
 target-label observations, cancellation, repeated apply and stale recovery
-approval. The installed OpenSSH oracle exercises the whole transaction for
-forwarding, CIS and historical CIS migration, with direct, ProxyJump and Ansible
-context declarations. It runs parser modes only and never opens a listener.
+approval. Preparation-abort tests cover lost anonymous inodes, repeated recovery,
+uncertain sync, changed configuration and selection, mixed history, and changes
+during parser checks. The installed OpenSSH oracle exercises the whole
+transaction for forwarding, CIS and historical CIS migration, with direct,
+ProxyJump and Ansible context declarations, including abort before publication.
+It runs parser modes only and never opens a listener.
 
 The separate read-only label oracle checks the installed SELinux helper without
 changing enforcement. These tests do not prove that root can apply the target

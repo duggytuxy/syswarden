@@ -15,15 +15,20 @@ import (
 )
 
 func TestOpenSSHPublicationOracle(t *testing.T) {
-	testOpenSSHPublicationOracle(t, false)
+	testOpenSSHPublicationOracle(t, "publication")
 }
 
 func TestOpenSSHTransactionOracle(t *testing.T) {
-	testOpenSSHPublicationOracle(t, true)
+	testOpenSSHPublicationOracle(t, "transaction")
 }
 
-func testOpenSSHPublicationOracle(t *testing.T, transaction bool) {
+func TestOpenSSHPreparationAbortOracle(t *testing.T) {
+	testOpenSSHPublicationOracle(t, "abort")
+}
+
+func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 	t.Helper()
+	transaction := operation == "transaction"
 	if os.Getenv("SYSWARDEN_SSH_ORACLE_TEST") != "1" {
 		t.Skip("set SYSWARDEN_SSH_ORACLE_TEST=1 for the installed OpenSSH parser oracle")
 	}
@@ -148,6 +153,30 @@ func testOpenSSHPublicationOracle(t *testing.T, transaction bool) {
 				journal = fixtureJournal(t, f)
 				if err := journal.write(record); err != nil {
 					t.Fatal(err)
+				}
+				if operation == "abort" {
+					if err := main.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := drop.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := journal.Close(); err != nil {
+						t.Fatal(err)
+					}
+					for attempt := 0; attempt < 2; attempt++ {
+						result, err := recoverSSHTransaction(ctx, f.root, os.Geteuid(), plan.summary.PlanSHA256,
+							daemon.digest, run, func() error { return daemon.recheck(root, 0) }, sshPublicationDefaults())
+						if err != nil || !result.Aborted || result.Restored || result.Published || result.RecoveryRequired ||
+							result.Verification.RuntimeActivated {
+							t.Fatal("preparation abort failed installed parser verification", result, err)
+						}
+					}
+					after := fixtureMainImage(t, f)
+					if before.state != after.state || !bytes.Equal(before.data, after.data) {
+						t.Fatal("preparation abort changed original SSH configuration")
+					}
+					return
 				}
 				if err := publishSSHConfiguration(ctx, journal, plan, main, drop, run,
 					func() error { return daemon.recheck(root, 0) }, sshPublicationDefaults()); err != nil {

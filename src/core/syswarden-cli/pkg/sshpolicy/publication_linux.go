@@ -190,6 +190,9 @@ func publishSSHConfiguration(ctx context.Context, journal *sshJournal, plan migr
 }
 
 func (journal *sshJournal) requireNoPublicationRecords() error {
+	if err := journal.requireNoPreparationAbort(); err != nil {
+		return err
+	}
 	for step := 1; step <= 3; step++ {
 		for _, done := range []bool{false, true} {
 			_, err := journal.readRecord(sshPublicationName(step, done))
