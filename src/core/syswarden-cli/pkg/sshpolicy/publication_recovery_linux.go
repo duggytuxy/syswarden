@@ -24,6 +24,24 @@ func inspectSSHPublication(journal *sshJournal) (sshPublicationPosition, error) 
 	if err != nil {
 		return sshPublicationPosition{}, err
 	}
+	stage, err := sshMainStagePath(prepared.Transaction)
+	if err != nil {
+		return sshPublicationPosition{}, err
+	}
+	current, err := stableSSHPublication(journal.root, journal.uid, stage)
+	if err != nil {
+		return sshPublicationPosition{}, err
+	}
+	if err := journal.requireNoRollbackRecords(); err != nil {
+		return sshPublicationPosition{}, err
+	}
+	return matchSSHPublication(journal, prepared, current)
+}
+
+// Validate immutable publication history against an explicitly supplied
+// observation. Rollback uses its retained start inventory, never a guessed
+// reconstruction of the current filesystem.
+func matchSSHPublication(journal *sshJournal, prepared sshPreparation, current sshStoredInventory) (sshPublicationPosition, error) {
 	data, err := json.Marshal(prepared)
 	if err != nil {
 		return sshPublicationPosition{}, err
@@ -71,10 +89,6 @@ func inspectSSHPublication(journal *sshJournal) (sshPublicationPosition, error) 
 		}
 		previous = complete.After
 		position = sshPublicationPosition{step, "complete"}
-	}
-	current, err := stableSSHPublication(journal.root, journal.uid, stage)
-	if err != nil {
-		return sshPublicationPosition{}, err
 	}
 	switch {
 	case pending != nil:

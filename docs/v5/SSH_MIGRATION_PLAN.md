@@ -90,8 +90,9 @@ Only two actions exist:
 - `remove`: select an exact historical hardening directive emitted by SysWarden.
   The known six-line CIS block can be removed only with every exact line selected
   together. Modified blocks and arbitrary administrator lines are refused.
-- `restore`: remove exactly one historical `# SYSWARDEN OVERRIDE: ` prefix from
-  a supported SSH hardening directive. Preserve the original indentation and
+- `restore`: remove exactly one historical `# SYSWARDEN OVERRIDE:` prefix,
+  including its following ASCII space, from a supported SSH hardening directive.
+  Preserve the original indentation and
   value. No other setting, include, port, authentication or `Match` line can be
   restored through this operation.
 
@@ -192,7 +193,9 @@ The complete migration and lifecycle gates below are still required.
 The internal [transaction preparation component](SSH_TRANSACTION_PREPARATION.md)
 now provides anonymous staging and private immutable preparation records.
 The internal [publisher](SSH_PUBLICATION.md) provides ordered configuration
-writes, phase evidence and post-publication parser verification. The read-only
+writes, phase evidence and post-publication parser verification. The internal
+[rollback helper](SSH_ROLLBACK.md) restores original configuration identities
+with durable inverse phases and explicit interrupted recovery. The read-only
 CLI does not invoke these helpers; public apply and service activation remain
 unavailable.
 

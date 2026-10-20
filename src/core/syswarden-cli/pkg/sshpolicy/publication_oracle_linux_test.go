@@ -133,6 +133,15 @@ func TestOpenSSHPublicationOracle(t *testing.T) {
 			if err != nil || position != (sshPublicationPosition{3, "complete"}) {
 				t.Fatal("publication evidence cannot be verified", position, err)
 			}
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			journal = fixtureJournal(t, f)
+			if err := rollbackSSHConfiguration(ctx, journal, plan.summary.PlanSHA256, run,
+				func() error { return daemon.recheck(root, 0) }, sshPublicationDefaults()); err != nil {
+				t.Fatal(err)
+			}
+			assertSSHRestored(t, f, record, journal)
 		})
 	}
 }
