@@ -13,6 +13,10 @@ selected explicitly by an administrator through the configuration and reviewed
 migration procedure. A TOML boolean cannot replace approval of the exact plan,
 SSH ownership and role declarations, or the access checks.
 
+The independent [port observation command](SSH_PORT_OBSERVATION.md) needs no
+hardening intent and does not mutate SSH. Its configuration-only result is not
+proof of runtime listeners and cannot authorize an SSH-specific firewall change.
+
 The internal entry point requires root and the lowercase SHA-256 of the reviewed
 plan. It independently reads the protected intent and inventory, pins the
 installed AMD64 OpenSSH executable, and checks syntax and effective policy for

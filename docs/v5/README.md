@@ -78,9 +78,14 @@ server campaign, paid resource or public v5 release is authorized by this text.
     [State provisioning](SSH_STATE_PROVISIONING.md) independently attributes
     the private directory and resumes verified interrupted creation.
     [Private recovery](SSH_STATE_RECOVERY.md) retains explicitly reviewed
-    pre-receipt stages without adopting them and isolates state from Includes. Runtime
-    publication, activation, lifecycle integration and native migration
-    validation remain open.
+    pre-receipt stages without adopting them and isolates state from Includes.
+    The internal [shared transaction](SSH_TRANSACTION.md) composes publication,
+    target labeling and explicit rollback. Independent
+    [port observation](SSH_PORT_OBSERVATION.md) parses the standard configuration
+    without requiring hardening intent or claiming active listeners.
+    Production activation, lifecycle integration, the minimal package profile
+    in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
+    migration validation remain open.
 
 The [v5 roadmap](https://github.com/duggytuxy/syswarden/issues/222) remains the
 work-package index. The accepted presentation work spans the
@@ -105,7 +110,7 @@ records. Version transitions follow the existing reviewed release process.
 
 This first slice leaves #223 open: numeric budgets, the final supported matrix
 and the complete acceptance-to-evidence map still require review. It leaves
-#224 open: the first executable event envelope and frozen v4 projection were
+issue #224 open: the first executable event envelope and frozen v4 projection were
 reviewed in PR #317; node identity and read snapshots were reviewed in PR #318.
 Historical policy decisions and exact input binding were reviewed in PR #319.
 Historical action outcomes and scoped control reports were reviewed in PR #320.
@@ -188,7 +193,7 @@ retention remain future work.
 The remaining schemas and shared consumer integration still follow the agreed
 authority contract. No record alone grants response authority.
 
-Detailed operator guidance belongs at https://syswarden.io/docs/ when the
+Detailed operator guidance belongs in the [canonical documentation](https://syswarden.io/docs/) when the
 corresponding feature exists. Keep the product README focused on the stable
 release and canonical guidance. Public diagrams and fixtures must be synthetic.
 

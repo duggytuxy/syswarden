@@ -6,10 +6,64 @@ import (
 	"strings"
 	"testing"
 
+	"syswarden-cli/config"
 	"syswarden-cli/pkg/sshpolicy"
 
 	"github.com/spf13/cobra"
 )
+
+func TestSSHPolicyPortsCommandDoesNotLoadOrMutateConfiguration(t *testing.T) {
+	for _, args := range [][]string{{"ports"}, {"ports", "--apply"}, {"ports", "extra"}, {"ports", "--port", "2222"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			previous := config.GlobalConfig
+			config.GlobalConfig = &config.Config{SSHPort: "4400"}
+			t.Cleanup(func() { config.GlobalConfig = previous })
+			calls := 0
+			command := newSSHPolicyCommand(nil, nil, func() (sshpolicy.PortSummary, error) {
+				calls++
+				return sshpolicy.PortSummary{Schema: 1, ParserVerified: true, ListenPorts: []uint16{2222}}, nil
+			})
+			root := &cobra.Command{Use: "syswarden", SilenceErrors: true, SilenceUsage: true}
+			root.AddCommand(command)
+			var output bytes.Buffer
+			root.SetOut(&output)
+			root.SetErr(&output)
+			root.SetArgs(append([]string{"ssh-policy"}, args...))
+			err := root.Execute()
+			if len(args) != 1 {
+				if err == nil || calls != 0 {
+					t.Fatal("unsupported option reached port inspection")
+				}
+				return
+			}
+			if err != nil || calls != 1 || config.GlobalConfig.SSHPort != "4400" ||
+				!strings.Contains(output.String(), `"runtime_verified": false`) || !strings.Contains(output.String(), `"hardening_applied": false`) {
+				t.Fatalf("port observation failed or claimed mutation: %v %s", err, output.String())
+			}
+			ports, _, err := root.Find([]string{"ssh-policy", "ports"})
+			if err != nil || commandRequiresAutomaticConfigLoad(ports) || commandRequiresEarlyFirewallRecovery(ports) || !commandAllowedDuringRemoval(ports) {
+				t.Fatal("port observation entered mutating preparation")
+			}
+			if err := enforceValidatedConfiguration(ports); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestSSHPolicyPortsRefusalHasNoPartialJSON(t *testing.T) {
+	want := errors.New("fixture parser refused")
+	command := newSSHPolicyCommand(nil, nil, func() (sshpolicy.PortSummary, error) {
+		return sshpolicy.PortSummary{ParserVerified: true, ListenPorts: []uint16{2222}}, want
+	})
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetArgs([]string{"ports"})
+	command.SilenceErrors, command.SilenceUsage = true, true
+	if err := command.Execute(); !errors.Is(err, want) || output.Len() != 0 {
+		t.Fatal("lost refusal or exposed a partial port result")
+	}
+}
 
 func TestSSHPolicyPlanCommandIsReadOnly(t *testing.T) {
 	for _, args := range [][]string{{"ssh-policy", "plan"}, {"ssh-policy", "plan", "--apply"}, {"ssh-policy", "apply"}, {"ssh-policy", "plan", "extra"}} {
@@ -18,7 +72,7 @@ func TestSSHPolicyPlanCommandIsReadOnly(t *testing.T) {
 			command := newSSHPolicyCommand(func() (sshpolicy.PlanSummary, error) {
 				calls++
 				return sshpolicy.PlanSummary{Schema: 1, Operation: "publish"}, nil
-			}, nil)
+			}, nil, nil)
 			root := &cobra.Command{Use: "syswarden", SilenceErrors: true, SilenceUsage: true}
 			root.AddCommand(command)
 			var output bytes.Buffer
@@ -39,7 +93,7 @@ func TestSSHPolicyPlanCommandIsReadOnly(t *testing.T) {
 }
 
 func TestSSHPolicyPlanSkipsMutatingRootPreparation(t *testing.T) {
-	command := newSSHPolicyCommand(nil, nil)
+	command := newSSHPolicyCommand(nil, nil, nil)
 	root := &cobra.Command{Use: "syswarden"}
 	root.AddCommand(command)
 	plan, _, err := root.Find([]string{"ssh-policy", "plan"})
@@ -61,7 +115,7 @@ func TestSSHPolicyPlanSkipsMutatingRootPreparation(t *testing.T) {
 
 func TestSSHPolicyPlanPropagatesRefusalWithoutPartialOutput(t *testing.T) {
 	want := errors.New("fixture refused")
-	command := newSSHPolicyCommand(func() (sshpolicy.PlanSummary, error) { return sshpolicy.PlanSummary{Operation: "publish"}, want }, nil)
+	command := newSSHPolicyCommand(func() (sshpolicy.PlanSummary, error) { return sshpolicy.PlanSummary{Operation: "publish"}, want }, nil, nil)
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetArgs([]string{"plan"})
@@ -82,7 +136,7 @@ func TestSSHPolicyVerifyCommandBoundary(t *testing.T) {
 			command := newSSHPolicyCommand(nil, func() (sshpolicy.VerificationSummary, error) {
 				calls++
 				return sshpolicy.VerificationSummary{ParserVerified: true}, nil
-			})
+			}, nil)
 			root := &cobra.Command{Use: "syswarden", SilenceErrors: true, SilenceUsage: true}
 			root.AddCommand(command)
 			var output bytes.Buffer
@@ -114,7 +168,7 @@ func TestSSHPolicyVerifyRefusalHasNoPartialJSON(t *testing.T) {
 	want := errors.New("fixture parser refusal")
 	command := newSSHPolicyCommand(nil, func() (sshpolicy.VerificationSummary, error) {
 		return sshpolicy.VerificationSummary{ParserVerified: true}, want
-	})
+	}, nil)
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetArgs([]string{"verify"})

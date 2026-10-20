@@ -778,6 +778,13 @@
       "before": null,
       "after": "added",
       "reason": "Run the trusted installed SSH parser against sealed candidate inputs and all declared contexts without publishing files, activating a daemon, or claiming a successful login."
+    },
+    {
+      "path": "syswarden ssh-policy ports",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Inspect the protected standard SSH configuration with the installed parser independently of hardening intent; no runtime listener proof, firewall authority, configuration mutation or activation is granted."
     }
   ],
   "package_platform_contract": {
