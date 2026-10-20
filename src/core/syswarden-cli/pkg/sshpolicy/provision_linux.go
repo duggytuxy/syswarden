@@ -250,6 +250,11 @@ func provisionSSHState(root *os.File, uid int, ops sshProvisionOps) error {
 	if uid < 0 || uid > math.MaxUint32 || ops.sync == nil || ops.rename == nil {
 		return ErrInventoryUnsafe
 	}
+	snapshot, err := collectSSHStateInventory(root, uid)
+	if err != nil {
+		return err
+	}
+	guard := func() error { return recheckSSHStateInventory(root, uid, snapshot) }
 	parent, err := openSSHStateParent(root, uid)
 	if err != nil {
 		return err
@@ -265,12 +270,15 @@ func provisionSSHState(root *os.File, uid int, ops sshProvisionOps) error {
 	if err := identity.validate(uid, false); err != nil {
 		return err
 	}
+	if err := guard(); err != nil {
+		return err
+	}
 	owner, _, err := readSSHOwner(parent, uid)
 	if errors.Is(err, unix.ENOENT) {
 		if err := checkSSHUnclaimedState(parent); err != nil {
 			return err
 		}
-		owner, err = createSSHState(root, parent, uid, identity, ops)
+		owner, err = createSSHState(root, parent, uid, identity, ops, guard)
 	}
 	if err != nil {
 		return err
@@ -278,7 +286,10 @@ func provisionSSHState(root *os.File, uid int, ops sshProvisionOps) error {
 	if !reflect.DeepEqual(owner.Parent, identity) {
 		return ErrInventoryChanged
 	}
-	return completeSSHState(root, parent, uid, owner, ops)
+	if err := completeSSHState(root, parent, uid, owner, ops, guard); err != nil {
+		return err
+	}
+	return guard()
 }
 
 func checkSSHUnclaimedState(parent *os.File) error {
@@ -301,7 +312,7 @@ func checkSSHUnclaimedState(parent *os.File) error {
 
 func writeSSHPrivateChild(parent *os.File, name string, data []byte, uid int, syncDirectory func(*os.File) error) (sshFileImage, error) {
 	if uid < 0 || uid > math.MaxUint32 || parent == nil || syncDirectory == nil ||
-		(name != sshOwnerName && name != sshMarkerName) {
+		(name != sshOwnerName && name != sshMarkerName && !validSSHRetirementReceiptName(name)) {
 		return sshFileImage{}, ErrInventoryUnsafe
 	}
 	if len(data) == 0 || len(data) > maxSSHOwnerBytes {
@@ -342,7 +353,7 @@ func writeSSHPrivateChild(parent *os.File, name string, data []byte, uid int, sy
 	return image, nil
 }
 
-func createSSHState(root, parent *os.File, uid int, parentIdentity sshDirectoryIdentity, ops sshProvisionOps) (sshStateOwner, error) {
+func createSSHState(root, parent *os.File, uid int, parentIdentity sshDirectoryIdentity, ops sshProvisionOps, guard func() error) (sshStateOwner, error) {
 	var random [32]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return sshStateOwner{}, err
@@ -350,6 +361,9 @@ func createSSHState(root, parent *os.File, uid int, parentIdentity sshDirectoryI
 	instance := hex.EncodeToString(random[:])
 	name := sshStateStagePrefix + instance
 	if err := recheckSSHStateParent(root, parent, uid, parentIdentity); err != nil {
+		return sshStateOwner{}, err
+	}
+	if err := guard(); err != nil {
 		return sshStateOwner{}, err
 	}
 	if err := unix.Mkdirat(int(parent.Fd()), name, 0700); err != nil {
@@ -387,6 +401,9 @@ func createSSHState(root, parent *os.File, uid int, parentIdentity sshDirectoryI
 	if err := replaceSSHAttributes(fd, wanted); err != nil {
 		return sshStateOwner{}, err
 	}
+	if err := guard(); err != nil {
+		return sshStateOwner{}, err
+	}
 	marker, err := writeSSHPrivateChild(directory, sshMarkerName, sshMarkerBytes(instance), uid, ops.sync)
 	if err != nil {
 		return sshStateOwner{}, err
@@ -412,13 +429,16 @@ func createSSHState(root, parent *os.File, uid int, parentIdentity sshDirectoryI
 	if err != nil {
 		return sshStateOwner{}, err
 	}
+	if err := guard(); err != nil {
+		return sshStateOwner{}, err
+	}
 	if _, err := writeSSHPrivateChild(parent, sshOwnerName, data, uid, ops.sync); err != nil {
 		return sshStateOwner{}, err
 	}
 	return owner, nil
 }
 
-func completeSSHState(root, parent *os.File, uid int, owner sshStateOwner, ops sshProvisionOps) error {
+func completeSSHState(root, parent *os.File, uid int, owner sshStateOwner, ops sshProvisionOps, guard func() error) error {
 	if err := recheckSSHStateParent(root, parent, uid, owner.Parent); err != nil {
 		return err
 	}
@@ -441,6 +461,9 @@ func completeSSHState(root, parent *os.File, uid int, owner sshStateOwner, ops s
 			return err
 		}
 		if err := attestSSHStateDirectory(parent, stage, owner, uid, true); err != nil {
+			return err
+		}
+		if err := guard(); err != nil {
 			return err
 		}
 		if err := ops.rename(int(parent.Fd()), stage, int(parent.Fd()), sshStateName, unix.RENAME_NOREPLACE); err != nil {

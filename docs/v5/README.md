@@ -76,7 +76,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     [Transaction preparation](SSH_TRANSACTION_PREPARATION.md) adds exact
     attributes, anonymous staging and private durable records.
     [State provisioning](SSH_STATE_PROVISIONING.md) independently attributes
-    the private directory and resumes verified interrupted creation. Runtime
+    the private directory and resumes verified interrupted creation.
+    [Private recovery](SSH_STATE_RECOVERY.md) retains explicitly reviewed
+    pre-receipt stages without adopting them and isolates state from Includes. Runtime
     publication, activation, lifecycle integration and native migration
     validation remain open.
 

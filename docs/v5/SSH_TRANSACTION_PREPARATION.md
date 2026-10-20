@@ -83,7 +83,10 @@ stale approval, changed candidates and injected directory-sync failure. These
 are temporary fixture tests; no installed configuration or server is changed.
 
 Internal state ownership is now implemented and rechecked by the journal.
-Still required: installation provisioning, pre-receipt orphan recovery, durable phase transitions,
+Internal [pre-receipt retention](SSH_STATE_RECOVERY.md) preserves explicitly
+reviewed orphan directories without adopting them. Include isolation prevents
+private state from entering the SSH configuration graph.
+Still required: installation provisioning, a public recovery adapter, durable phase transitions,
 intermediate-state parser checks, publication and interrupted recovery,
 post-publication verification, activation/rollback and a shared installation/CIS
 adapter without an old-writer fallback. Follow with independent SSH, ProxyJump
