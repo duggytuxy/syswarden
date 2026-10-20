@@ -101,9 +101,11 @@ target checks the canonical receipt decoder.
 
 The internal [publisher](SSH_PUBLICATION.md) now implements durable configuration
 phase transitions, checked intermediate graphs, ordered writes and read-only
-interruption inspection. Still required: interrupted rollback, service
-activation checks, the shared installation/CIS adapter, and separate
-uninstall/remove/purge handling. Retained private backups must be reported
+interruption inspection. The [rollback protocol](SSH_ROLLBACK.md) handles
+interrupted reversal, and the [shared transaction](SSH_TRANSACTION.md) composes
+approval, target labels, publication and explicit recovery. Still required:
+service activation checks, production installation/CIS opt-in wiring, and
+separate uninstall/remove/purge handling. Retained private backups must be reported
 separately and must not recreate product configuration.
 
 The coherent migration package must then pass native AMD64 access, ProxyJump,

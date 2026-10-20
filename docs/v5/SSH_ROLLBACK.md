@@ -79,9 +79,11 @@ It never opens a listener or authenticates a user.
 
 ## Remaining integration
 
-Target-policy SELinux labeling, shared install/CIS integration, owned updates,
-public recovery orchestration, service activation, independent access testing and
-transaction retirement remain required. Run separate native uninstall, package
+The internal [shared transaction](SSH_TRANSACTION.md) now composes approval,
+target-policy SELinux labeling, publication and explicit rollback. Production
+install/CIS opt-in integration, owned updates, public recovery orchestration,
+service activation, independent access testing and transaction retirement remain
+required. Run separate native uninstall, package
 remove and purge checks as soon as that coherent adapter is available. Preserve
 later administrator changes and distinguish retained private evidence from
 active product artifacts. BunkerWeb's independent API, temporary-ban ownership

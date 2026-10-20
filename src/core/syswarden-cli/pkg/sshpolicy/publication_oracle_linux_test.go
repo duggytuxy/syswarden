@@ -14,6 +14,15 @@ import (
 )
 
 func TestOpenSSHPublicationOracle(t *testing.T) {
+	testOpenSSHPublicationOracle(t, false)
+}
+
+func TestOpenSSHTransactionOracle(t *testing.T) {
+	testOpenSSHPublicationOracle(t, true)
+}
+
+func testOpenSSHPublicationOracle(t *testing.T, transaction bool) {
+	t.Helper()
 	if os.Getenv("SYSWARDEN_SSH_ORACLE_TEST") != "1" {
 		t.Skip("set SYSWARDEN_SSH_ORACLE_TEST=1 for the installed OpenSSH parser oracle")
 	}
@@ -68,31 +77,8 @@ func TestOpenSSHPublicationOracle(t *testing.T) {
 			if err := os.MkdirAll(f.path(sshStateParent), 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err := provisionSSHState(f.root, os.Geteuid(), sshProvisionDefaults()); err != nil {
-				t.Fatal(err)
-			}
 			plan := f.plan()
 			before := fixtureMainImage(t, f)
-			main, err := newSSHAnonymousStage(fixtureDirectory(t, f, "/etc/ssh"), plan.main,
-				before.state.mode&0777, before.state.gid, before.attrs, os.Geteuid())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer main.Close()
-			drop, err := newSSHAnonymousStage(fixtureDirectory(t, f, "/etc/ssh/sshd_config.d"), plan.candidate.Bytes(),
-				0600, before.state.gid, before.attrs, os.Geteuid())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer drop.Close()
-			record, err := prepareSSHRecord(plan, plan.summary.PlanSHA256, daemon.digest, before, main, drop, os.Geteuid())
-			if err != nil {
-				t.Fatal(err)
-			}
-			journal := fixtureJournal(t, f)
-			if err := journal.write(record); err != nil {
-				t.Fatal(err)
-			}
 			// Read current main bytes on every live invocation. Only fixture
 			// Include paths are translated; their files are the actual published
 			// inodes. The same pinned installed parser handles sealed candidates.
@@ -122,9 +108,49 @@ func TestOpenSSHPublicationOracle(t *testing.T) {
 				process.Env = []string{"LC_ALL=C", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
 				return process.CombinedOutput()
 			}
-			if err := publishSSHConfiguration(ctx, journal, plan, main, drop, run,
-				func() error { return daemon.recheck(root, 0) }, sshPublicationDefaults()); err != nil {
-				t.Fatal(err)
+			var journal *sshJournal
+			var record sshPreparation
+			if transaction {
+				deps := transactionFixtureDependencies(f)
+				deps.parserDigest, deps.run = daemon.digest, run
+				deps.checkParser = func() error { return daemon.recheck(root, 0) }
+				result, err := executeSSHTransaction(ctx, f.root, os.Geteuid(), plan.summary.PlanSHA256, deps)
+				if err != nil || !result.Published || result.RecoveryRequired || result.Verification.RuntimeActivated {
+					t.Fatal("shared transaction failed installed parser verification", result, err)
+				}
+				journal = fixtureJournal(t, f)
+				record, err = journal.read()
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := provisionSSHState(f.root, os.Geteuid(), sshProvisionDefaults()); err != nil {
+					t.Fatal(err)
+				}
+				main, err := newSSHAnonymousStage(fixtureDirectory(t, f, "/etc/ssh"), plan.main,
+					before.state.mode&0777, before.state.gid, before.attrs, os.Geteuid())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer main.Close()
+				drop, err := newSSHAnonymousStage(fixtureDirectory(t, f, "/etc/ssh/sshd_config.d"), plan.candidate.Bytes(),
+					0600, before.state.gid, before.attrs, os.Geteuid())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer drop.Close()
+				record, err = prepareSSHRecord(plan, plan.summary.PlanSHA256, daemon.digest, before, main, drop, os.Geteuid())
+				if err != nil {
+					t.Fatal(err)
+				}
+				journal = fixtureJournal(t, f)
+				if err := journal.write(record); err != nil {
+					t.Fatal(err)
+				}
+				if err := publishSSHConfiguration(ctx, journal, plan, main, drop, run,
+					func() error { return daemon.recheck(root, 0) }, sshPublicationDefaults()); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if profile == "legacy-cis" && bytes.Equal(before.data, fixtureMainImage(t, f).data) {
 				t.Fatal("legacy directives were not migrated")
@@ -137,9 +163,21 @@ func TestOpenSSHPublicationOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 			journal = fixtureJournal(t, f)
-			if err := rollbackSSHConfiguration(ctx, journal, plan.summary.PlanSHA256, run,
-				func() error { return daemon.recheck(root, 0) }, sshPublicationDefaults()); err != nil {
-				t.Fatal(err)
+			if transaction {
+				if err := journal.Close(); err != nil {
+					t.Fatal(err)
+				}
+				result, err := recoverSSHTransaction(ctx, f.root, os.Geteuid(), plan.summary.PlanSHA256,
+					daemon.digest, run, func() error { return daemon.recheck(root, 0) }, sshPublicationDefaults())
+				if err != nil || !result.Restored || result.RecoveryRequired {
+					t.Fatal("shared transaction rollback failed installed parser verification", result, err)
+				}
+				journal = fixtureJournal(t, f)
+			} else {
+				if err := rollbackSSHConfiguration(ctx, journal, plan.summary.PlanSHA256, run,
+					func() error { return daemon.recheck(root, 0) }, sshPublicationDefaults()); err != nil {
+					t.Fatal(err)
+				}
 			}
 			assertSSHRestored(t, f, record, journal)
 		})
