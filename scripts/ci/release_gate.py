@@ -25,12 +25,12 @@ BUNDLE_NAME = "syswarden-release.tar.gz"
 SBOM_NAME = "syswarden-sbom.spdx.json"
 COMPLIANCE_ARCHIVE_NAME = "plumber-report.zip"
 PLUMBER_REPORT_NAME = "plumber-report.json"
-# Plumber v0.4.55 embeds the exact analyzed workflows. The current report is
-# about 487 KiB; this bound leaves measured growth headroom without weakening
-# the independent one-megabyte aggregate archive ceiling.
-PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES = 768 * 1024
+# Plumber v0.7.9 embeds the analyzed workflows and scoring-v4 evidence.
+# A measured development report is about 779 KiB. Keep separate bounded
+# report and aggregate budgets; compressed size alone is not a safety limit.
+PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES = 1024 * 1024
 COMPLIANCE_ARCHIVE_MAX_MEMBERS = 128
-COMPLIANCE_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 1024 * 1024
+COMPLIANCE_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024
 PACKAGE_CHECKSUM_NAME = "SHA256SUMS.txt"
 RELEASE_CHECKSUM_NAME = "RELEASE_SHA256SUMS.txt"
 UPDATE_MANIFEST_NAME = "syswarden-update-manifest-v1.json"
@@ -886,7 +886,7 @@ def validate_compliance_archive(
                 > COMPLIANCE_ARCHIVE_MAX_UNCOMPRESSED_BYTES
             ):
                 raise ReleaseGateError(
-                    "Plumber report archive exceeds the one-megabyte "
+                    "Plumber report archive exceeds the two-megabyte "
                     "aggregate uncompressed size limit"
                 )
             entries: dict[str, bool] = {}
@@ -944,7 +944,7 @@ def validate_compliance_archive(
                 )
             if report_member.file_size > PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES:
                 raise ReleaseGateError(
-                    "Plumber report exceeds the 768-KiB uncompressed size limit"
+                    "Plumber report exceeds the 1-MiB uncompressed size limit"
                 )
             bad_member = archive.testzip()
             if bad_member is not None:
@@ -957,7 +957,7 @@ def validate_compliance_archive(
                 )
             if len(report_content) > PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES:
                 raise ReleaseGateError(
-                    "Plumber report exceeds the 768-KiB uncompressed size limit"
+                    "Plumber report exceeds the 1-MiB uncompressed size limit"
                 )
             report = _strict_plumber_report(report_content)
             _validate_plumber_verdict(report)
