@@ -20,6 +20,13 @@ func sshMainStagePath(transaction string) (string, error) {
 	return "/etc/ssh/.syswarden-ssh-main-" + transaction, nil
 }
 
+func sshDropStagePath(transaction string) (string, error) {
+	if !lowerDigest.MatchString(transaction) {
+		return "", ErrInventoryUnsafe
+	}
+	return "/etc/ssh/sshd_config.d/.syswarden-ssh-drop-" + transaction, nil
+}
+
 // Both the candidate main file and the displaced original will occupy the
 // stage name during a future exchange. Neither may enter an Include expansion.
 // Examine all attested files, including nested/conditional and empty Includes,
@@ -28,6 +35,10 @@ func checkSSHPublicationIsolation(plan migrationPlan, transaction string) error 
 	stage, err := sshMainStagePath(transaction)
 	if err != nil || plan.intent.Owner != "syswarden" {
 		return errors.Join(ErrInventoryUnsafe, err)
+	}
+	dropStage, err := sshDropStagePath(transaction)
+	if err != nil {
+		return err
 	}
 	if _, exists := plan.inventory.files[MainPath]; !exists {
 		return ErrInventoryUnsafe
@@ -55,7 +66,8 @@ func checkSSHPublicationIsolation(plan migrationPlan, transaction string) error 
 					return err
 				}
 				matches, err := path.Match(pattern, stage)
-				if err != nil || matches {
+				dropMatches, dropErr := path.Match(pattern, dropStage)
+				if err != nil || dropErr != nil || matches || dropMatches {
 					return fmt.Errorf("SSH Include can reach the transaction stage; preserve configuration for review: %w", errors.Join(ErrInventoryUnsafe, err))
 				}
 			}

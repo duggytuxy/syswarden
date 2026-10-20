@@ -46,6 +46,10 @@ func sshPublicationName(step int, done bool) string {
 }
 
 func (journal *sshJournal) writePublication(record sshPublicationRecord, done bool) error {
+	return journal.writeSSHPhase(sshPublicationName(record.Step, done), record, done)
+}
+
+func (journal *sshJournal) writeSSHPhase(name string, record sshPublicationRecord, done bool) error {
 	if record.Schema != 1 || record.Step < 1 || record.Step > 3 ||
 		!lowerDigest.MatchString(record.Transaction) || !lowerDigest.MatchString(record.Prepared) ||
 		(record.After != nil) != done {
@@ -63,11 +67,15 @@ func (journal *sshJournal) writePublication(record sshPublicationRecord, done bo
 	if err != nil {
 		return err
 	}
-	return journal.writeRecord(sshPublicationName(record.Step, done), data)
+	return journal.writeRecord(name, data)
 }
 
 func (journal *sshJournal) readPublication(step int, done bool, prepared sshPreparation, digest string) (sshPublicationRecord, error) {
-	data, err := journal.readRecord(sshPublicationName(step, done))
+	return journal.readSSHPhase(sshPublicationName(step, done), step, done, prepared, digest)
+}
+
+func (journal *sshJournal) readSSHPhase(name string, step int, done bool, prepared sshPreparation, digest string) (sshPublicationRecord, error) {
+	data, err := journal.readRecord(name)
 	if err != nil {
 		return sshPublicationRecord{}, err
 	}
@@ -190,7 +198,7 @@ func (journal *sshJournal) requireNoPublicationRecords() error {
 			}
 		}
 	}
-	return nil
+	return journal.requireNoRollbackRecords()
 }
 
 func executeSSHPublication(ctx context.Context, journal *sshJournal, phase sshPublicationRecord,

@@ -93,7 +93,8 @@ is `/etc/ssh/.syswarden-ssh-main-`, followed by the validated random transaction
 identity. Inspection covers original and candidate main files, nested files,
 conditional Includes and currently empty glob expansions. Both the candidate
 and the displaced original could occupy this name during a future exchange;
-neither may become a new SSH input.
+neither may become a new SSH input. The nonincluded drop-in retention name used by
+rollback must also be excluded by every captured Include pattern.
 
 This check creates no named stage and performs no exchange. It does not replace
 input revalidation, durable phase records, external-writer coordination or
@@ -119,9 +120,10 @@ reviewed orphan directories without adopting them. Include isolation prevents
 private state from entering the SSH configuration graph.
 The internal [publisher](SSH_PUBLICATION.md) adds durable phase transitions,
 ordered configuration writes, read-only interrupted-state inspection and
-post-publication parser verification.
+post-publication parser verification. The internal [rollback helper](SSH_ROLLBACK.md)
+adds inverse transitions and explicit interrupted recovery.
 Still required: installation provisioning, a public recovery adapter,
-activation/rollback and a shared installation/CIS
+service activation and a shared installation/CIS
 adapter without an old-writer fallback. Follow with independent SSH, ProxyJump
 and Ansible access, reload/reboot, and separate uninstall/remove/purge tests
 that preserve administrator configuration and later edits. Prepared recovery

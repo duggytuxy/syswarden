@@ -39,8 +39,9 @@ a successful login or activate the daemon.
 
 Each step has an immutable private intent record before the filesystem operation
 and a separate completion record after it. Records bind the preparation digest,
-transaction, step and complete configuration inventory. Only six fixed phase
-filenames are accepted. Individual records remain bounded to 8 MiB and protected
+transaction, step and complete configuration inventory. Only six fixed publication phase
+filenames are accepted. The separate [rollback protocol](SSH_ROLLBACK.md) adds
+its own fixed start and phase records. Individual records remain bounded to 8 MiB and protected
 as root-owned mode 0600 files within the independently attested directory.
 
 The target directory is synced after each operation, before completion evidence
@@ -56,7 +57,9 @@ observed. It also validates completed phase continuity and detects missing or
 contradictory records.
 
 An observed after-state does not repair a failed sync or prove daemon activation.
-The recovery inspector never completes or reverses a write. Anonymous candidates
+The publication inspector never completes or reverses a write. A separate
+[verified rollback helper](SSH_ROLLBACK.md) can reverse an inspected transaction
+and explicitly resume its own interrupted operations. Anonymous candidates
 lost before publication cannot be recreated or adopted without a separately
 verified recovery operation.
 
@@ -89,7 +92,7 @@ declared direct, ProxyJump and Ansible contexts without opening a listener.
 These are component checks, not native access tests or final IVVQ acceptance.
 
 Still required: target-policy SELinux label integration, the shared installation
-and CIS adapter, activation and verified rollback, public recovery orchestration,
+and CIS adapter, service activation, public recovery orchestration,
 and independent native SSH/ProxyJump/Ansible access and lifecycle verification.
 Uninstall, native remove and purge must each preserve administrator changes and
 handle retained private recovery data separately. BunkerWeb's independent API,
