@@ -201,15 +201,22 @@ func openSSHD(root *os.File, uid int) (*pinnedSSHD, error) {
 }
 
 func readSSHD(directory *os.File, uid int) (*os.File, inventoryStamp, string, error) {
+	return readSSHExecutable(directory, "sshd", uid)
+}
+
+func readSSHExecutable(directory *os.File, name string, uid int) (*os.File, inventoryStamp, string, error) {
+	if directory == nil || (name != "sshd" && name != "matchpathcon") {
+		return nil, inventoryStamp{}, "", ErrInventoryUnsafe
+	}
 	var before, opened, after unix.Stat_t
-	if err := unix.Fstatat(int(directory.Fd()), "sshd", &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+	if err := unix.Fstatat(int(directory.Fd()), name, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return nil, inventoryStamp{}, "", err
 	}
 	if int64(before.Uid) != int64(uid) || before.Mode&unix.S_IFMT != unix.S_IFREG || before.Mode&07022 != 0 ||
 		before.Mode&0100 == 0 || before.Nlink != 1 || before.Size < 1 || before.Size > maxSSHDBytes {
 		return nil, inventoryStamp{}, "", ErrInventoryUnsafe
 	}
-	fd, err := unix.Openat(int(directory.Fd()), "sshd", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY, 0)
+	fd, err := unix.Openat(int(directory.Fd()), name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY, 0)
 	if err != nil {
 		return nil, inventoryStamp{}, "", err
 	}
@@ -225,14 +232,14 @@ func readSSHD(directory *os.File, uid int) (*os.File, inventoryStamp, string, er
 	}
 	var header [20]byte
 	if _, err := file.ReadAt(header[:], 0); err != nil || !bytes.Equal(header[:7], []byte{0x7f, 'E', 'L', 'F', 2, 1, 1}) || header[18] != 62 || header[19] != 0 {
-		return nil, inventoryStamp{}, "", fmt.Errorf("SSH parser must be a Linux AMD64 ELF executable")
+		return nil, inventoryStamp{}, "", fmt.Errorf("SSH helper must be a Linux AMD64 ELF executable")
 	}
 	hash := sha256.New()
 	n, err := io.Copy(hash, io.LimitReader(file, maxSSHDBytes+1))
 	if err != nil || n != before.Size {
 		return nil, inventoryStamp{}, "", errors.Join(ErrInventoryChanged, err)
 	}
-	err = errors.Join(unix.Fstat(fd, &after), unix.Fstatat(int(directory.Fd()), "sshd", &before, unix.AT_SYMLINK_NOFOLLOW))
+	err = errors.Join(unix.Fstat(fd, &after), unix.Fstatat(int(directory.Fd()), name, &before, unix.AT_SYMLINK_NOFOLLOW))
 	if err != nil || stamp(opened) != stamp(after) || stamp(after) != stamp(before) {
 		return nil, inventoryStamp{}, "", errors.Join(ErrInventoryChanged, err)
 	}
