@@ -2170,7 +2170,7 @@ jobs:
       - name: Upload Exact Unsigned Qualification Evidence
         id: upload
         if: ${{ always() && steps.inventory.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.inventory.outputs.artifact_name }}
           path: ${{ steps.workspace.outputs.artifact_root }}
@@ -3946,7 +3946,7 @@ jobs:
       - name: Upload Exact Final Qualification Evidence
         id: final_upload
         if: ${{ steps.final_inventory.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: syswarden-release-qualification
           path: ${{ steps.signing_workspace.outputs.unsigned_root }}
