@@ -99,8 +99,9 @@ unsafe marker and receipt objects, changed retained content, nested Includes,
 negative lookups, and preservation of external configuration. A bounded fuzz
 target checks the canonical receipt decoder.
 
-Still required: durable configuration phase transitions, safe intermediate
-Include graphs, publication and interrupted rollback, parser and service
+The internal [publisher](SSH_PUBLICATION.md) now implements durable configuration
+phase transitions, checked intermediate graphs, ordered writes and read-only
+interruption inspection. Still required: interrupted rollback, service
 activation checks, the shared installation/CIS adapter, and separate
 uninstall/remove/purge handling. Retained private backups must be reported
 separately and must not recreate product configuration.

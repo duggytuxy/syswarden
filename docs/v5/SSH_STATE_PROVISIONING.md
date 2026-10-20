@@ -78,9 +78,10 @@ unreceipted names, foreign destinations, detached parents, unsafe record modes,
 links and types, bounded canonical decoding, and journal invalidation after
 ownership changes. SSH inputs remain unchanged during these tests.
 
-No provisioning function is exported or connected to package hooks. Remaining
-work includes the public recovery adapter, durable configuration phase
-records, intermediate-state parser checks, publication, activation and rollback,
+No provisioning function is exported or connected to package hooks.
+The internal [publisher](SSH_PUBLICATION.md) now uses phase records, checked
+intermediate states, ordered writes and post-publication parser verification.
+Remaining work includes the public recovery adapter, activation and rollback,
 the shared installation/CIS adapter, and independent uninstall/remove/purge
 retirement. Ownership of a directory does not establish ownership of arbitrary
 children added later. Removal must inventory them and preserve administrator

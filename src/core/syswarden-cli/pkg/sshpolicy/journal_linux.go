@@ -214,32 +214,51 @@ func (journal *sshJournal) Close() error {
 }
 
 func (journal *sshJournal) read() (sshPreparation, error) {
-	if err := journal.recheck(); err != nil {
-		return sshPreparation{}, err
-	}
-	fd, err := unix.Openat(int(journal.directory.Fd()), sshPreparedRecord,
-		unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOCTTY, 0)
+	data, err := journal.readRecord(sshPreparedRecord)
 	if err != nil {
 		return sshPreparation{}, err
+	}
+	return decodeSSHPreparation(data, journal.uid)
+}
+
+func sshRecordName(name string) bool {
+	if name == sshPreparedRecord {
+		return true
+	}
+	for step := 1; step <= 3; step++ {
+		if name == sshPublicationName(step, false) || name == sshPublicationName(step, true) {
+			return true
+		}
+	}
+	return false
+}
+
+func (journal *sshJournal) readRecord(name string) ([]byte, error) {
+	if !sshRecordName(name) {
+		return nil, ErrInventoryUnsafe
+	}
+	if err := journal.recheck(); err != nil {
+		return nil, err
+	}
+	fd, err := unix.Openat(int(journal.directory.Fd()), name,
+		unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOCTTY, 0)
+	if err != nil {
+		return nil, err
 	}
 	file := os.NewFile(uintptr(fd), "ssh-private-recovery-record")
 	defer file.Close()
 	image, err := readSSHImage(file, journal.uid, 1, maxSSHJournalBytes)
 	if err != nil || image.state.mode&07777 != 0600 || int64(image.state.gid) != int64(journal.uid) {
-		return sshPreparation{}, errors.Join(ErrInventoryUnsafe, err)
-	}
-	record, err := decodeSSHPreparation(image.data, journal.uid)
-	if err != nil {
-		return sshPreparation{}, err
+		return nil, errors.Join(ErrInventoryUnsafe, err)
 	}
 	var named unix.Stat_t
-	if err := unix.Fstatat(int(journal.directory.Fd()), sshPreparedRecord, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || stamp(named) != image.state {
-		return sshPreparation{}, errors.Join(ErrInventoryChanged, err)
+	if err := unix.Fstatat(int(journal.directory.Fd()), name, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || stamp(named) != image.state {
+		return nil, errors.Join(ErrInventoryChanged, err)
 	}
 	if err := journal.recheck(); err != nil {
-		return sshPreparation{}, err
+		return nil, err
 	}
-	return record, nil
+	return image.data, nil
 }
 
 func decodeSSHPreparation(data []byte, uid int) (sshPreparation, error) {
@@ -266,16 +285,29 @@ func (journal *sshJournal) write(record sshPreparation) error {
 	if err := journal.recheck(); err != nil {
 		return err
 	}
-	uid := journal.uid
-	if uid < 0 || uid > math.MaxUint32 {
-		return ErrInventoryUnsafe
-	}
 	if err := record.validate(journal.uid); err != nil {
 		return err
 	}
 	data, err := json.Marshal(record)
-	if err != nil || len(data) > maxSSHJournalBytes {
-		return errors.Join(ErrInventoryBounds, err)
+	if err != nil {
+		return err
+	}
+	return journal.writeRecord(sshPreparedRecord, data)
+}
+
+func (journal *sshJournal) writeRecord(name string, data []byte) error {
+	if !sshRecordName(name) {
+		return ErrInventoryUnsafe
+	}
+	if err := journal.recheck(); err != nil {
+		return err
+	}
+	uid := journal.uid
+	if uid < 0 || uid > math.MaxUint32 {
+		return ErrInventoryUnsafe
+	}
+	if len(data) == 0 || len(data) > maxSSHJournalBytes {
+		return ErrInventoryBounds
 	}
 	file, err := openSSHAnonymous(journal.directory, journal.uid)
 	if err != nil {
@@ -305,20 +337,20 @@ func (journal *sshJournal) write(record sshPreparation) error {
 	// The proc path identifies only our retained unnamed descriptor. linkat
 	// cannot overwrite an existing record, including an unrecognized one.
 	if err := unix.Linkat(unix.AT_FDCWD, fmt.Sprintf("/proc/self/fd/%d", stage.file.Fd()),
-		int(journal.directory.Fd()), sshPreparedRecord, unix.AT_SYMLINK_FOLLOW); err != nil {
+		int(journal.directory.Fd()), name, unix.AT_SYMLINK_FOLLOW); err != nil {
 		return err
 	}
 	if err := journal.syncDirectory(journal.directory); err != nil {
 		journal.poisoned = true
-		return fmt.Errorf("SSH preparation durability is uncertain; retain the record for recovery: %w", err)
+		return fmt.Errorf("SSH journal durability is uncertain; retain the record for recovery: %w", err)
 	}
-	got, err := journal.read()
-	if err != nil || !reflect.DeepEqual(got, record) {
+	got, err := journal.readRecord(name)
+	if err != nil || !bytes.Equal(got, data) {
 		journal.poisoned = true
 		return errors.Join(ErrInventoryChanged, err)
 	}
 	var named, retained unix.Stat_t
-	err = errors.Join(unix.Fstatat(int(journal.directory.Fd()), sshPreparedRecord, &named, unix.AT_SYMLINK_NOFOLLOW),
+	err = errors.Join(unix.Fstatat(int(journal.directory.Fd()), name, &named, unix.AT_SYMLINK_NOFOLLOW),
 		unix.Fstat(int(stage.file.Fd()), &retained))
 	if err != nil || stamp(named) != stamp(retained) || retained.Dev != stage.image.state.dev ||
 		retained.Ino != stage.image.state.ino || retained.Nlink != 1 {

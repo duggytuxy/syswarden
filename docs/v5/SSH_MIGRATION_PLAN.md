@@ -191,8 +191,10 @@ The complete migration and lifecycle gates below are still required.
 
 The internal [transaction preparation component](SSH_TRANSACTION_PREPARATION.md)
 now provides anonymous staging and private immutable preparation records.
-The read-only CLI does not invoke these helpers, and no active configuration
-publication or service activation is available yet.
+The internal [publisher](SSH_PUBLICATION.md) provides ordered configuration
+writes, phase evidence and post-publication parser verification. The read-only
+CLI does not invoke these helpers; public apply and service activation remain
+unavailable.
 
 Before a tester can validate an applied package migration, implement and review:
 

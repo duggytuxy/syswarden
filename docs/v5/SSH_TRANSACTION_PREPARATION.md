@@ -36,7 +36,9 @@ copying a directory label is not a substitute.
 An unnamed inode cannot be found through an SSH Include pattern. Closing its
 last descriptor discards it if it has never been linked. These properties use
 Linux [O_TMPFILE semantics](https://man7.org/linux/man-pages/man2/open.2.html).
-The helpers do not publish a temporary name or exchange a live file.
+The staging helpers do not publish a temporary name or exchange a live file.
+The separate internal [publisher](SSH_PUBLICATION.md) now implements those
+ordered operations with durable phase evidence.
 
 ## Private durable preparation record
 
@@ -115,9 +117,11 @@ Internal state ownership is now implemented and rechecked by the journal.
 Internal [pre-receipt retention](SSH_STATE_RECOVERY.md) preserves explicitly
 reviewed orphan directories without adopting them. Include isolation prevents
 private state from entering the SSH configuration graph.
-Still required: installation provisioning, a public recovery adapter, durable
-phase transitions, publication and interrupted recovery,
-post-publication verification, activation/rollback and a shared installation/CIS
+The internal [publisher](SSH_PUBLICATION.md) adds durable phase transitions,
+ordered configuration writes, read-only interrupted-state inspection and
+post-publication parser verification.
+Still required: installation provisioning, a public recovery adapter,
+activation/rollback and a shared installation/CIS
 adapter without an old-writer fallback. Follow with independent SSH, ProxyJump
 and Ansible access, reload/reboot, and separate uninstall/remove/purge tests
 that preserve administrator configuration and later edits. Prepared recovery
