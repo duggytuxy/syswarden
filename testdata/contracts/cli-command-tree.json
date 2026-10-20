@@ -1301,7 +1301,7 @@
     "path": "syswarden ssh-policy",
     "use": "ssh-policy",
     "short": "Inspect the dedicated SSH policy migration",
-    "long": "Inspect configured SSH ports independently of hardening intent, or verify a declared policy candidate with the installed parser. These development commands are read-only; migration application is not available yet.",
+    "long": "Inspect configured SSH ports independently of hardening intent, or verify a declared candidate or an independently owned publication with the installed parser. These development commands are read-only; migration application is not available yet.",
     "flags": [
       {
         "name": "config",
@@ -1412,6 +1412,41 @@
       "2": "unknown command \"arg-1\" for \"syswarden ssh-policy verify\"",
       "3": "unknown command \"arg-1\" for \"syswarden ssh-policy verify\"",
       "4": "unknown command \"arg-1\" for \"syswarden ssh-policy verify\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy verify-owned",
+    "use": "verify-owned",
+    "short": "Verify an existing owned SSH publication without activation or recovery",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for verify-owned"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Original independently approved migration plan SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy verify-owned\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy verify-owned\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy verify-owned\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy verify-owned\""
     }
   },
   {

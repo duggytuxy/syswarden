@@ -34,9 +34,13 @@ func TestOpenSSHRestoredRetirementOracle(t *testing.T) {
 	testOpenSSHPublicationOracle(t, "retire-restored")
 }
 
+func TestOpenSSHOwnedPublicationOracle(t *testing.T) {
+	testOpenSSHPublicationOracle(t, "owned")
+}
+
 func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 	t.Helper()
-	transaction := operation == "transaction" || operation == "retire-restored"
+	transaction := operation == "transaction" || operation == "retire-restored" || operation == "owned"
 	if os.Getenv("SYSWARDEN_SSH_ORACLE_TEST") != "1" {
 		t.Skip("set SYSWARDEN_SSH_ORACLE_TEST=1 for the installed OpenSSH parser oracle")
 	}
@@ -223,6 +227,16 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 				t.Fatal(err)
 			}
 			journal = fixtureJournal(t, f)
+			if operation == "owned" {
+				for range 2 {
+					result, err := verifySSHOwnedPublication(ctx, journal, plan.summary.PlanSHA256, daemon.digest,
+						run, func() error { return daemon.recheck(root, 0) })
+					if err != nil || !result.OwnershipVerified || !result.PublicationObserved || !result.ParserVerified ||
+						result.RuntimeActivated || result.AccessVerified || result.ContextsVerified != 3 {
+						t.Fatal("installed parser could not revalidate the owned publication", result, err)
+					}
+				}
+			}
 			if transaction {
 				if err := journal.Close(); err != nil {
 					t.Fatal(err)
