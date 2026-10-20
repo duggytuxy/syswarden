@@ -177,3 +177,66 @@ func TestSSHPolicyVerifyRefusalHasNoPartialJSON(t *testing.T) {
 		t.Fatal("lost refusal or returned partial verification")
 	}
 }
+
+func TestSSHPolicyOwnedVerificationBoundary(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	for _, args := range [][]string{
+		{"verify-owned", "--plan-sha256", digest},
+		{"verify-owned"},
+		{"verify-owned", "--plan-sha256", digest, "extra"},
+		{"verify-owned", "--plan-sha256", digest, "--apply"},
+		{"verify-owned", "--plan-sha256", digest, "--recover"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			previous := config.GlobalConfig
+			config.GlobalConfig = &config.Config{SSHPort: "4400"}
+			t.Cleanup(func() { config.GlobalConfig = previous })
+			calls := 0
+			command := newSSHPolicyCommand(nil, nil, nil)
+			command.AddCommand(newSSHOwnedCommand(func(approved string) (sshpolicy.OwnedSummary, error) {
+				calls++
+				if approved != digest {
+					t.Fatal("lost original plan identity")
+				}
+				return sshpolicy.OwnedSummary{Schema: 1, PlanSHA256: approved, OwnershipVerified: true}, nil
+			}))
+			root := &cobra.Command{Use: "syswarden", SilenceErrors: true, SilenceUsage: true}
+			root.AddCommand(command)
+			var output bytes.Buffer
+			root.SetOut(&output)
+			root.SetErr(&output)
+			root.SetArgs(append([]string{"ssh-policy"}, args...))
+			err := root.Execute()
+			if len(args) != 3 {
+				if err == nil || calls != 0 {
+					t.Fatal("unsupported input reached verification")
+				}
+				return
+			}
+			if err != nil || calls != 1 || config.GlobalConfig.SSHPort != "4400" ||
+				!strings.Contains(output.String(), `"runtime_activated": false`) ||
+				!strings.Contains(output.String(), `"access_verified": false`) {
+				t.Fatal("verification failed or claimed runtime acceptance", err, output.String())
+			}
+			owned, _, err := root.Find([]string{"ssh-policy", "verify-owned"})
+			if err != nil || commandRequiresAutomaticConfigLoad(owned) || commandRequiresEarlyFirewallRecovery(owned) ||
+				!commandAllowedDuringRemoval(owned) || enforceValidatedConfiguration(owned) != nil {
+				t.Fatal("owned verification entered mutating preparation")
+			}
+		})
+	}
+}
+
+func TestSSHPolicyOwnedRefusalHasNoPartialJSON(t *testing.T) {
+	want := errors.New("fixture owned verification refused")
+	command := newSSHOwnedCommand(func(string) (sshpolicy.OwnedSummary, error) {
+		return sshpolicy.OwnedSummary{OwnershipVerified: true}, want
+	})
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetArgs([]string{"--plan-sha256", strings.Repeat("a", 64)})
+	command.SilenceErrors, command.SilenceUsage = true, true
+	if err := command.Execute(); !errors.Is(err, want) || output.Len() != 0 {
+		t.Fatal("lost refusal or returned partial owned verification")
+	}
+}

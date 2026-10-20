@@ -785,6 +785,13 @@
       "before": null,
       "after": "added",
       "reason": "Inspect the protected standard SSH configuration with the installed parser independently of hardening intent; no runtime listener proof, firewall authority, configuration mutation or activation is granted."
+    },
+    {
+      "path": "syswarden ssh-policy verify-owned",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Verify an existing independently owned SSH publication using its original approved plan digest, complete publication history, explicit TOML selection and installed parser; no configuration mutation, activation, recovery or journal reuse is authorized."
     }
   ],
   "package_platform_contract": {

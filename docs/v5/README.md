@@ -92,6 +92,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     without requiring hardening intent or claiming active listeners.
     [Explicit SSH selection](SSH_SELECTION.md) binds the separate TOML choice
     into the migration plan without inheriting historical OS/CIS consent.
+    [Owned publication verification](SSH_OWNED_VERIFICATION.md) reopens the
+    independent receipt and complete history, verifies the unchanged live
+    policy with the installed parser, and reports no activation or access claim.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

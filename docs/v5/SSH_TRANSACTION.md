@@ -164,6 +164,22 @@ cannot be replayed over the restored timestamps and retained directory entries.
 No policy update, service activation or successful login is inferred from this
 retirement.
 
+## Revalidate an existing owned publication
+
+The read-only [`verify-owned` command](SSH_OWNED_VERIFICATION.md) requires the
+original independently approved plan digest and a completed publication.
+It reopens the independent ownership receipt, reconstructs the original plan,
+checks every phase transition and verifies the unchanged live configuration.
+The installed parser must still match the original digest and pass the sealed
+original, intermediate and final graphs plus all declared access contexts.
+
+Exact journal membership and record identities are checked around each parser
+call. Missing, mixed, restored or changed history is refused. The independent
+TOML choice must still match. A successful observation does not repair uncertain
+durability, activate SSH, prove a new login or permit another apply to reuse
+the occupied journal. This supports later activation and owned update work
+without treating a matching filename or generated comment as ownership.
+
 ## Validation and remaining work
 
 Temporary-filesystem tests cover publication and explicit restoration, external
