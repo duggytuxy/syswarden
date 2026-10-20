@@ -1068,6 +1068,7 @@ class DocumentationGateTest(unittest.TestCase):
             "syswarden recover-removal",
             "syswarden ssh-policy",
             "syswarden ssh-policy plan",
+            "syswarden ssh-policy verify-owned",
         ):
             self.assertEqual(command_approvals[path], (None, "added"))
 
