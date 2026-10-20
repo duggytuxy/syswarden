@@ -31,7 +31,7 @@ func TestVerifyPlanChecksLiveBaselineAndEveryContextWithoutPublication(t *testin
 		return []byte("port 2222\nauthenticationmethods publickey\nallowtcpforwarding " + forwarding + "\n"), nil
 	}
 	summary, err := verifyPlan(context.Background(), plan, strings.Repeat("a", 64), run, func() error { checks++; return nil })
-	if err != nil || !summary.ParserVerified || summary.RuntimeActivated || summary.Plan.ApplyAvailable || summary.ContextsVerified != 1 || calls != 9 || checks != 19 {
+	if err != nil || !summary.ParserVerified || summary.RuntimeActivated || summary.Plan.ApplyAvailable || summary.ContextsVerified != 1 || calls != 12 || checks != 25 {
 		t.Fatalf("incomplete verification: %+v calls=%d checks=%d err=%v", summary, calls, checks, err)
 	}
 	if !reflect.DeepEqual(plan.inventory, f.plan().inventory) {
@@ -76,7 +76,7 @@ func TestVerifyPlanRejectsEveryParserAndRecheckFailureWithoutPartialResult(t *te
 			}
 			recheck := func() error {
 				checks++
-				if (failure == "before" && checks == 1) || (failure == "after" && checks == 2) || (failure == "final" && checks == 19) {
+				if (failure == "before" && checks == 1) || (failure == "after" && checks == 2) || (failure == "final" && checks == 25) {
 					return ErrInventoryChanged
 				}
 				return nil

@@ -155,13 +155,23 @@ through the retained parent process's procfs descriptors. A host policy that
 denies this access causes verification to fail; no weaker filesystem fallback
 or alteration of that policy is attempted.
 
-It runs `sshd -t` and `sshd -T` on the live baseline, its sealed equivalent and
-the candidate. It checks global defaults and every declared `-C` connection
-context. The live and sealed baselines must agree on every effective directive,
-including repeated values and ordering. The candidate must satisfy its fixed
-profile while preserving every unrelated effective value. External observation
-permits no effective changes. Inputs and the pinned daemon are rechecked before
-and after each invocation, including failed invocations, and at completion.
+It runs `sshd -t` and `sshd -T` on the live baseline, its sealed equivalent,
+the intermediate configuration and the final candidate. For SysWarden-owned
+policy, the intermediate configuration adds the new drop-in while retaining
+the exact original main file. This represents publishing the drop-in before
+exchanging the legacy main file. Each configuration is checked against global
+defaults and every declared `-C` connection context.
+
+The live and sealed baselines must agree on every effective directive,
+including repeated values and ordering. The final candidate must satisfy its
+fixed profile while preserving every unrelated effective value. In the
+intermediate configuration, each policy setting must retain its original value
+or already use its reviewed replacement; a third value, missing setting or
+change to an unrelated directive is refused. This also preserves ports and
+access settings at that step. External observation uses three configurations,
+adds no drop-in and permits no effective changes. Inputs and the pinned daemon
+are rechecked before and after each invocation, including failed invocations,
+and at completion.
 
 Each parser invocation is limited to ten seconds, the complete verification to
 two minutes, and each output stream to one MiB. The child receives a fixed

@@ -51,9 +51,12 @@ func TestOpenSSHSealedVerificationOracle(t *testing.T) {
 	if output, err := exec.CommandContext(ctx, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key).CombinedOutput(); err != nil { // #nosec G204 -- Fixed fixture key generation writes only inside t.TempDir; no operator configuration or secret is passed.
 		t.Fatalf("fixture key: %v %s", err, output)
 	}
-	for _, profile := range []string{"forwarding", "cis", "observe"} {
+	for _, profile := range []string{"forwarding", "cis", "legacy-cis", "observe"} {
 		t.Run(profile, func(t *testing.T) {
 			main := includeDropIns + "HostKey " + key + "\nPort 2222\nUsePAM no\nPasswordAuthentication no\nAuthenticationMethods publickey\nSubsystem sftp internal-sftp\nInclude /etc/ssh/access.conf\n"
+			if profile == "legacy-cis" {
+				main = "AllowTcpForwarding no\n" + strings.Join(legacyCISBlock, "\n") + "\n" + main
+			}
 			f := planFixture(t, main)
 			f.write("/etc/ssh/access.conf", "Match User administrator\n MaxSessions 12\n PermitTTY no\nMatch all\n")
 			declaration, err := parseIntent([]byte(validIntentJSON))
@@ -61,6 +64,13 @@ func TestOpenSSHSealedVerificationOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 			declaration.Profile = profile
+			if profile == "legacy-cis" {
+				declaration.Profile = "cis"
+				declaration.Legacy = &legacyIntent{Attribution: "operator-reviewed", MainSHA256: digestBytes([]byte(main))}
+				for line := 1; line <= 7; line++ {
+					declaration.Legacy.Edits = append(declaration.Legacy.Edits, legacyEdit{line, "remove"})
+				}
+			}
 			if profile == "observe" {
 				declaration.Owner, declaration.Role = "external", "jump-host"
 				f.write("/etc/ssh/access.conf", "Match User administrator\n AllowTcpForwarding local\n PermitOpen 192.0.2.30:22\nMatch all\n")
@@ -82,7 +92,9 @@ func TestOpenSSHSealedVerificationOracle(t *testing.T) {
 			if err := os.WriteFile(baseline, []byte(translated), 0600); err != nil {
 				t.Fatal(err)
 			}
+			calls := 0
 			run := func(ctx context.Context, image *parserImage, mode, access string) ([]byte, error) {
+				calls++
 				if image != nil {
 					return daemon.run(ctx, image, mode, access)
 				}
@@ -116,6 +128,13 @@ func TestOpenSSHSealedVerificationOracle(t *testing.T) {
 			summary, err := verifyPlan(ctx, plan, daemon.digest, run, recheck)
 			if err != nil || !summary.ParserVerified || summary.ContextsVerified != 3 || summary.RuntimeActivated || summary.Plan.ApplyAvailable {
 				t.Fatalf("sealed verification: %+v %v", summary, err)
+			}
+			expectedCalls := 20 // Four graphs, syntax plus four effective contexts.
+			if profile == "observe" {
+				expectedCalls = 15
+			}
+			if calls != expectedCalls {
+				t.Fatalf("missing intermediate or access-context verification: calls=%d", calls)
 			}
 			if _, err := os.Lstat(f.path(DropInPath)); !os.IsNotExist(err) {
 				t.Fatal("verification published the drop-in")

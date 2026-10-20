@@ -80,15 +80,25 @@ func verifyPlan(ctx context.Context, plan migrationPlan, digest string, run sshP
 		return VerificationSummary{}, err
 	}
 	defer before.Close()
-	files[MainPath] = plan.main
+	images := []*parserImage{nil, before}
 	if plan.intent.Owner == "syswarden" {
+		// The drop-in is published before the legacy main-file exchange. Check
+		// that exact intermediate graph too, with the original main bytes.
 		files[DropInPath] = plan.candidate.Bytes()
+		intermediate, err := newParserImage(files)
+		if err != nil {
+			return VerificationSummary{}, err
+		}
+		defer intermediate.Close()
+		images = append(images, intermediate)
 	}
+	files[MainPath] = plan.main
 	after, err := newParserImage(files)
 	if err != nil {
 		return VerificationSummary{}, err
 	}
 	defer after.Close()
+	images = append(images, after)
 	invoke := func(image *parserImage, mode, access string) ([]byte, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -103,7 +113,7 @@ func verifyPlan(ctx context.Context, plan migrationPlan, digest string, run sshP
 		}
 		return output, err
 	}
-	for _, image := range []*parserImage{nil, before, after} {
+	for _, image := range images {
 		if _, err := invoke(image, "syntax", ""); err != nil {
 			return VerificationSummary{}, fmt.Errorf("SSH syntax verification failed: %w", err)
 		}
@@ -123,13 +133,13 @@ func verifyPlan(ctx context.Context, plan migrationPlan, digest string, run sshP
 		}
 	}
 	for index, access := range contexts {
-		var effective [3]sshEffective
-		for position, image := range []*parserImage{nil, before, after} {
+		effective := make([]sshEffective, len(images))
+		for position, image := range images {
 			output, err := invoke(image, "effective", access)
 			if err == nil {
 				effective[position], err = parseEffective(output)
 			}
-			if err == nil && position == 2 && plan.intent.Owner == "syswarden" {
+			if err == nil && position == len(images)-1 && plan.intent.Owner == "syswarden" {
 				err = plan.candidate.CheckEffective(output)
 			}
 			if err != nil {
@@ -139,8 +149,13 @@ func verifyPlan(ctx context.Context, plan migrationPlan, digest string, run sshP
 		if err := compareEffective(effective[0], effective[1], nil); err != nil {
 			return VerificationSummary{}, fmt.Errorf("SSH sealed baseline differs from installed configuration for context %d: %w", index, err)
 		}
-		if err := compareEffective(effective[1], effective[2], allowed); err != nil {
+		if err := compareEffective(effective[1], effective[len(images)-1], allowed); err != nil {
 			return VerificationSummary{}, fmt.Errorf("SSH candidate changed unrelated settings for context %d: %w", index, err)
+		}
+		if plan.intent.Owner == "syswarden" {
+			if err := compareSSHIntermediate(effective[1], effective[2], effective[3], allowed); err != nil {
+				return VerificationSummary{}, fmt.Errorf("SSH publication intermediate state is unsafe for context %d: %w", index, err)
+			}
 		}
 	}
 	if err := recheck(); err != nil {

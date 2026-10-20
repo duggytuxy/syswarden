@@ -74,6 +74,30 @@ the private record retains their bytes. The record must not authorize a later
 same-named or same-content file. Recovery must independently reconcile exact
 identities and record any replacement staging operation before publication.
 
+## Publication preflight
+
+The read-only verifier now checks the exact intermediate configuration with
+the new drop-in and the original main file, in addition to the live baseline,
+sealed baseline and final candidate. Every configuration passes syntax checks
+and effective-policy comparison for the global defaults and all declared
+connection contexts. A reviewed policy setting can retain its original value
+or take its final value during the transition. Every unrelated setting must
+remain identical. This includes an exact historical CIS block before removal,
+administrator Match rules and explicitly declared access paths.
+
+Before a preparation record can be returned, every captured Include directive
+must also exclude the proposed same-directory main-file stage. Its fixed prefix
+is `/etc/ssh/.syswarden-ssh-main-`, followed by the validated random transaction
+identity. Inspection covers original and candidate main files, nested files,
+conditional Includes and currently empty glob expansions. Both the candidate
+and the displaced original could occupy this name during a future exchange;
+neither may become a new SSH input.
+
+This check creates no named stage and performs no exchange. It does not replace
+input revalidation, durable phase records, external-writer coordination or
+post-publication verification. It establishes conditions for a future ordered
+publication; it does not claim that two separate configuration writes are atomic.
+
 ## Tests and remaining integration
 
 Component tests cover real unnamed files and access ACLs, inheritance removal,
@@ -81,13 +105,18 @@ attribute binding, concurrent product handles, directory replacement, immutable
 records, reopening after candidate descriptors close, malformed storage,
 stale approval, changed candidates and injected directory-sync failure. These
 are temporary fixture tests; no installed configuration or server is changed.
+Additional tests reject intermediate syntax errors, changes to access settings,
+unreviewed policy values and Includes reaching the proposed stage. The optional
+installed-OpenSSH oracle exercises all four configurations with temporary host
+keys, including a legacy CIS migration and multiple connection contexts. It
+does not start a listener or authenticate a user.
 
 Internal state ownership is now implemented and rechecked by the journal.
 Internal [pre-receipt retention](SSH_STATE_RECOVERY.md) preserves explicitly
 reviewed orphan directories without adopting them. Include isolation prevents
 private state from entering the SSH configuration graph.
-Still required: installation provisioning, a public recovery adapter, durable phase transitions,
-intermediate-state parser checks, publication and interrupted recovery,
+Still required: installation provisioning, a public recovery adapter, durable
+phase transitions, publication and interrupted recovery,
 post-publication verification, activation/rollback and a shared installation/CIS
 adapter without an old-writer fallback. Follow with independent SSH, ProxyJump
 and Ansible access, reload/reboot, and separate uninstall/remove/purge tests
