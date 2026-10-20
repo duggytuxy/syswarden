@@ -55,7 +55,7 @@ device, inode, ownership, mode, attributes and the immutable marker identity.
 
 | Interrupted boundary | Retry behavior |
 | --- | --- |
-| Before the sibling receipt exists | Preserve the unclaimed private staging directory and refuse automatic adoption. Explicit bounded recovery is still required. |
+| Before the sibling receipt exists | Preserve the unclaimed private staging directory and refuse automatic adoption. Internal [explicit retirement](SSH_STATE_RECOVERY.md) can retain an exact reviewed empty or marked stage without adopting it. |
 | Receipt exists and its exact staged directory remains | Reestablish directory-entry durability and finish only that exact creation. Extra children or replacement identities refuse recovery. |
 | Fixed directory exists and matches the receipt | Verify the marker and ownership, sync the parent, and finish without rewriting the receipt. |
 | Missing or changed marker, foreign destination, unexpected stage, detached parent or unsafe metadata | Preserve evidence and fail without replacing administrator content. |
@@ -79,16 +79,17 @@ links and types, bounded canonical decoding, and journal invalidation after
 ownership changes. SSH inputs remain unchanged during these tests.
 
 No provisioning function is exported or connected to package hooks. Remaining
-work includes explicit pre-receipt orphan recovery, durable configuration phase
+work includes the public recovery adapter, durable configuration phase
 records, intermediate-state parser checks, publication, activation and rollback,
 the shared installation/CIS adapter, and independent uninstall/remove/purge
 retirement. Ownership of a directory does not establish ownership of arbitrary
 children added later. Removal must inventory them and preserve administrator
 data. Recovery bytes must remain distinct from active configuration.
 
-Before invoking provisioning, the future adapter must inspect the complete SSH
-Include graph and prove that none of these new state names can enter it. A
-location under `/var/lib` or a temporary-looking name is not that proof. Rebuild
+Provisioning now inspects the complete SSH Include graph and refuses Includes
+that can reach the shared product state parent, including unmatched and nested
+patterns. It rechecks this isolation before mutations and after completion.
+A location under `/var/lib` or a temporary-looking name alone is not that proof. Rebuild
 the approved configuration inventory after provisioning, because creating state
 legitimately changes ancestor directory timestamps and membership.
 

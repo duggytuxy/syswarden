@@ -136,6 +136,9 @@ func preparePlan(snapshot inventorySnapshot, declaration intent) (migrationPlan,
 		}
 		plan.summary.Operation = "observe"
 	} else {
+		if err := checkSSHStateIsolation(snapshot); err != nil {
+			return migrationPlan{}, err
+		}
 		profile := Forwarding
 		if declaration.Profile == "cis" {
 			profile = CIS
