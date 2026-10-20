@@ -73,8 +73,11 @@ claim of successful preparation follows an uncertain write.
 
 If a process dies before linking its candidates, those inodes disappear while
 the private record retains their bytes. The record must not authorize a later
-same-named or same-content file. Recovery must independently reconcile exact
-identities and record any replacement staging operation before publication.
+same-named or same-content file. The internal
+[transaction recovery](SSH_TRANSACTION.md#failure-and-recovery) can now abort
+an unpublished preparation after verifying the unchanged approved inventory and
+original live policy. It records a terminal outcome and preserves all evidence;
+it does not recreate those inodes or make the journal reusable.
 
 ## Publication preflight
 

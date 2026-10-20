@@ -80,7 +80,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     [Private recovery](SSH_STATE_RECOVERY.md) retains explicitly reviewed
     pre-receipt stages without adopting them and isolates state from Includes.
     The internal [shared transaction](SSH_TRANSACTION.md) composes publication,
-    target labeling and explicit rollback. Independent
+    target labeling and explicit rollback. Preparation-only interruptions can
+    be explicitly aborted after verification of the unchanged original policy;
+    their terminal evidence prevents reuse. Independent
     [port observation](SSH_PORT_OBSERVATION.md) parses the standard configuration
     without requiring hardening intent or claiming active listeners.
     [Explicit SSH selection](SSH_SELECTION.md) binds the separate TOML choice

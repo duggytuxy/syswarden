@@ -222,7 +222,7 @@ func (journal *sshJournal) read() (sshPreparation, error) {
 }
 
 func sshRecordName(name string) bool {
-	if name == sshPreparedRecord || name == sshRollbackStartName {
+	if name == sshPreparedRecord || name == sshRollbackStartName || name == sshPreparationAbortName {
 		return true
 	}
 	for step := 1; step <= 3; step++ {

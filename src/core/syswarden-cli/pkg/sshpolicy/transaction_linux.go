@@ -22,6 +22,7 @@ type sshTransactionResult struct {
 	Transaction      string
 	Published        bool
 	Restored         bool
+	Aborted          bool
 	RecoveryRequired bool
 }
 
@@ -234,6 +235,15 @@ func recoverSSHTransaction(ctx context.Context, root *os.File, uid int, approved
 		return result, fmt.Errorf("SSH recovery requires the original approved plan and installed parser identity")
 	}
 	result.Transaction, result.RecoveryRequired = record.Transaction, true
+	if _, readErr := journal.readRecord(sshPublicationName(1, false)); errors.Is(readErr, os.ErrNotExist) {
+		if err := abortSSHPreparation(ctx, journal, record, run, checkParser); err != nil {
+			return result, err
+		}
+		result.Aborted, result.RecoveryRequired = true, false
+		return result, nil
+	} else if readErr != nil {
+		return result, readErr
+	}
 	if err := rollbackSSHConfiguration(ctx, journal, approved, run, checkParser, ops); err != nil {
 		return result, err
 	}
