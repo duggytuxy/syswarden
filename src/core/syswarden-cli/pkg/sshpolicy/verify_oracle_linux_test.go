@@ -45,12 +45,9 @@ func TestOpenSSHSealedVerificationOracle(t *testing.T) {
 		}
 	})
 	directory := t.TempDir()
-	key := filepath.Join(directory, "fixture-key")
+	key := sshOracleKey(t, directory)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if output, err := exec.CommandContext(ctx, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key).CombinedOutput(); err != nil { // #nosec G204 -- Fixed fixture key generation writes only inside t.TempDir; no operator configuration or secret is passed.
-		t.Fatalf("fixture key: %v %s", err, output)
-	}
 	for _, profile := range []string{"forwarding", "cis", "legacy-cis", "observe"} {
 		t.Run(profile, func(t *testing.T) {
 			main := includeDropIns + "HostKey " + key + "\nPort 2222\nUsePAM no\nPasswordAuthentication no\nAuthenticationMethods publickey\nSubsystem sftp internal-sftp\nInclude /etc/ssh/access.conf\n"
@@ -141,4 +138,15 @@ func TestOpenSSHSealedVerificationOracle(t *testing.T) {
 			}
 		})
 	}
+}
+
+func sshOracleKey(t *testing.T, directory string) string {
+	t.Helper()
+	key := filepath.Join(directory, "fixture-key")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(ctx, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key).CombinedOutput(); err != nil { // #nosec G204 -- Fixed fixture key generation writes only inside t.TempDir; no operator configuration or secret is passed.
+		t.Fatalf("fixture key: %v %s", err, output)
+	}
+	return key
 }

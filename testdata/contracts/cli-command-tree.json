@@ -1301,7 +1301,7 @@
     "path": "syswarden ssh-policy",
     "use": "ssh-policy",
     "short": "Inspect the dedicated SSH policy migration",
-    "long": "Inspect protected administrator intent and verify candidate configuration with the installed SSH parser. These development commands are read-only; migration application is not available yet.",
+    "long": "Inspect configured SSH ports independently of hardening intent, or verify a declared policy candidate with the installed parser. These development commands are read-only; migration application is not available yet.",
     "flags": [
       {
         "name": "config",
@@ -1354,6 +1354,35 @@
       "2": "unknown command \"arg-1\" for \"syswarden ssh-policy plan\"",
       "3": "unknown command \"arg-1\" for \"syswarden ssh-policy plan\"",
       "4": "unknown command \"arg-1\" for \"syswarden ssh-policy plan\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy ports",
+    "use": "ports",
+    "short": "Inspect configured SSH ports without hardening or runtime access claims",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for ports"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\""
     }
   },
   {
