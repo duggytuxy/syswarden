@@ -130,6 +130,40 @@ patterns. A later transaction receives a new storage instance and transaction
 identity; a retained journal never becomes active again. This adapter does not
 retire already published policies or establish successful daemon activation.
 
+## Verified retirement after configuration restoration
+
+A second internal adapter handles journals whose configuration rollback has
+finished. It verifies the entire recorded publication and inverse history,
+including partial publication, against the original approved plan and pinned
+parser. A terminal filename alone cannot establish restoration. The live
+original policy must pass syntax and effective-policy comparison for every
+declared access context, and its full inventory must match the recorded
+restoration exactly.
+
+The original journal directory and independent owner receipt move to the
+`.ssh-policy-restored-<instance>` prefix under `/var/lib/syswarden/`. Separate
+canonical intent and completion records bind every retained record's exact
+inode, bytes, permissions, attributes and link count. The journal and parent
+are synced. Both renames prohibit replacement; a failed or unacknowledged
+rename can resume only with the original authorization and unchanged custody.
+Incomplete or damaged retirement blocks fresh provisioning.
+
+The inactive candidates remain at their original transaction-specific recovery
+names in `/etc/ssh/` and `/etc/ssh/sshd_config.d/`. They retain their original
+inodes and metadata, including the main candidate's original access mode and
+the policy candidate's `0600` mode. There is no cross-filesystem copy or removal.
+Every later provisioning verifies their custody and rejects Includes that could
+activate either retained path. These are identified recovery artifacts, not a
+completed uninstall, and must be accounted for by the future removal adapter.
+
+History inspection uses a read-only journal capability: it cannot write
+records, publish configuration or execute rollback. After retirement, a new
+transaction needs a newly computed and explicitly approved plan, the matching
+TOML choice, and new storage and transaction identities. The prior approval
+cannot be replayed over the restored timestamps and retained directory entries.
+No policy update, service activation or successful login is inferred from this
+retirement.
+
 ## Validation and remaining work
 
 Temporary-filesystem tests cover publication and explicit restoration, external
@@ -139,10 +173,15 @@ approval. Preparation-abort tests cover lost anonymous inodes, repeated recovery
 uncertain sync, changed configuration and selection, mixed history, and changes
 during parser checks. The installed OpenSSH oracle exercises the whole
 transaction for forwarding, CIS and historical CIS migration, with direct,
-ProxyJump and Ansible context declarations, including abort before publication, verified private retirement, a new
-independently owned transaction, and its restoration. Retirement tests also
+ProxyJump and Ansible context declarations, including abort before publication,
+verified private retirement, a new independently owned transaction, and its
+restoration. Retirement tests also
 interrupt every directory sync and both renames, exercise lost acknowledgements,
 and reject replaced records, conflicting paths, changed input and busy locks.
+Restored-journal tests additionally cover each partial publication boundary,
+retained candidate tampering, incomplete rollback, read-only history mutation
+attempts, stale authorization and a second independently approved publication
+and restoration with the installed parser.
 It runs parser modes only and never opens a listener.
 
 The separate read-only label oracle checks the installed SELinux helper without
@@ -150,8 +189,9 @@ changing enforcement. These tests do not prove that root can apply the target
 label on every supported native host.
 
 Production opt-in wiring, already-owned updates, activation and independent
-access checks, public recovery orchestration, and published/restored transaction
-retirement remain
-required. Run native uninstall, package remove and purge separately once the
-coherent adapter is available, including administrator edits, reload and reboot.
+access checks, public recovery orchestration, and the lifecycle of successfully
+activated policies remain required. Restored candidates still need explicit
+handling in complete removal. Run native uninstall, package remove and purge
+separately once the coherent adapter is available, including administrator edits,
+reload and reboot.
 Preserve BunkerWeb's independent API, temporary-ban ownership, expiry and HA.

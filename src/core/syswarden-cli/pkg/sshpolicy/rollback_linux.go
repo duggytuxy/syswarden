@@ -18,7 +18,7 @@ import (
 // falls back to content-based ownership. A failed handle must be reopened and
 // inspected before an explicit resume with the same approval.
 func rollbackSSHConfiguration(ctx context.Context, journal *sshJournal, approved string, run sshParserRun, parserCheck func() error, ops sshPublicationOps) (err error) {
-	if ctx == nil || journal == nil || run == nil || parserCheck == nil || ops.sync == nil || ops.rename == nil || !lowerDigest.MatchString(approved) {
+	if ctx == nil || journal == nil || journal.retained != nil || run == nil || parserCheck == nil || ops.sync == nil || ops.rename == nil || !lowerDigest.MatchString(approved) {
 		return ErrInventoryUnsafe
 	}
 	prepared, err := journal.read()
