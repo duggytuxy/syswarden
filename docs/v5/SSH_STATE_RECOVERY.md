@@ -111,3 +111,14 @@ separately and must not recreate product configuration.
 The coherent migration package must then pass native AMD64 access, ProxyJump,
 Ansible, SELinux, reload, reboot and lifecycle scenarios. BunkerWeb's independent
 API, temporary-ban ownership and HA contract remain unchanged.
+
+## Owned preparation-only journals
+
+The [shared SSH transaction](SSH_TRANSACTION.md) has a separate internal path
+for retiring verified aborted preparations. It requires independent storage
+ownership, the original approved plan, installed-parser verification and a
+complete preparation-only terminal record. It moves the original journal and
+ownership receipt into private retention, with durable intent/completion and
+restart-safe checks. Provisioning refuses unfinished or changed retirement
+records. This does not broaden the pre-receipt orphan path described above,
+claim ownership from names or permit deletion of administrator files.

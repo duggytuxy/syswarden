@@ -26,6 +26,10 @@ func TestOpenSSHPreparationAbortOracle(t *testing.T) {
 	testOpenSSHPublicationOracle(t, "abort")
 }
 
+func TestOpenSSHAbortedRetirementOracle(t *testing.T) {
+	testOpenSSHPublicationOracle(t, "retire")
+}
+
 func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 	t.Helper()
 	transaction := operation == "transaction"
@@ -154,7 +158,7 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 				if err := journal.write(record); err != nil {
 					t.Fatal(err)
 				}
-				if operation == "abort" {
+				if operation == "abort" || operation == "retire" {
 					if err := main.Close(); err != nil {
 						t.Fatal(err)
 					}
@@ -175,6 +179,27 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 					after := fixtureMainImage(t, f)
 					if before.state != after.state || !bytes.Equal(before.data, after.data) {
 						t.Fatal("preparation abort changed original SSH configuration")
+					}
+					if operation == "retire" {
+						owner := fixtureOwner(t, f)
+						check := func() error { return daemon.recheck(root, 0) }
+						for range 2 {
+							if err := retireSSHAbortedPreparation(ctx, f.root, os.Geteuid(), owner.Instance,
+								plan.summary.PlanSHA256, daemon.digest, run, check, sshProvisionDefaults()); err != nil {
+								t.Fatal(err)
+							}
+						}
+						deps := transactionFixtureDependencies(f)
+						deps.parserDigest, deps.run, deps.checkParser = daemon.digest, run, check
+						result, err := executeSSHTransaction(ctx, f.root, os.Geteuid(), plan.summary.PlanSHA256, deps)
+						if err != nil || !result.Published || result.RecoveryRequired || result.Verification.RuntimeActivated {
+							t.Fatal("cannot publish a new verified transaction after retirement", result, err)
+						}
+						result, err = recoverSSHTransaction(ctx, f.root, os.Geteuid(), plan.summary.PlanSHA256,
+							daemon.digest, run, check, sshPublicationDefaults())
+						if err != nil || !result.Restored || result.RecoveryRequired {
+							t.Fatal("cannot restore the new transaction", result, err)
+						}
 					}
 					return
 				}

@@ -87,6 +87,13 @@ func verifySSHRestored(ctx context.Context, journal *sshJournal, plan migrationP
 	if !matchesSSHRecovery(expected, MainPath, prepared.MainBefore) || expected.Nodes[DropInPath] != (sshStoredStamp{}) {
 		return ErrInventoryChanged
 	}
+	guard := sshRollbackGuard(ctx, journal, prepared.Transaction, expected, parserCheck)
+	return verifySSHOriginal(ctx, plan, run, guard)
+}
+
+// Compare the live original configuration against its sealed graph without
+// coupling parser verification to an active journal pathname.
+func verifySSHOriginal(ctx context.Context, plan migrationPlan, run sshParserRun, guard func() error) error {
 	files := make(map[string][]byte, len(plan.inventory.files))
 	for name, data := range plan.inventory.files {
 		if isSSHConfiguration(name) {
@@ -98,7 +105,6 @@ func verifySSHRestored(ctx context.Context, journal *sshJournal, plan migrationP
 		return err
 	}
 	defer baseline.Close()
-	guard := sshRollbackGuard(ctx, journal, prepared.Transaction, expected, parserCheck)
 	if _, err := sshRollbackParserCall(ctx, run, guard, nil, "syntax", ""); err != nil {
 		return err
 	}
