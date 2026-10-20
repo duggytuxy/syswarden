@@ -122,3 +122,21 @@ ownership receipt into private retention, with durable intent/completion and
 restart-safe checks. Provisioning refuses unfinished or changed retirement
 records. This does not broaden the pre-receipt orphan path described above,
 claim ownership from names or permit deletion of administrator files.
+
+## Restored configuration journals
+
+The [shared transaction](SSH_TRANSACTION.md) also retires journals after verified
+configuration rollback, including rollback of partial publication. It
+independently checks the complete forward and inverse history, original plan,
+parser and live restored inventory before moving the original directory and
+receipt into retained custody. Durable intent and completion records support
+explicit recovery of interrupted moves. Read-only history inspection cannot
+reactivate an archived transaction.
+
+The existing inactive candidates retain their original protected paths and
+metadata on the SSH filesystem. Later provisioning verifies these exact
+artifacts and their isolation from all Includes, while allowing separately
+approved changes to active configuration. Changed, missing or included retained
+candidates block provisioning. This does not delete recovery files or establish
+complete uninstall, package remove or purge. Those independent native paths
+remain required, along with activation and actual access verification.

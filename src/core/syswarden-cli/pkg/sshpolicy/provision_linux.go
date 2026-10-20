@@ -273,7 +273,7 @@ func provisionSSHState(root *os.File, uid int, ops sshProvisionOps) error {
 	if err := guard(); err != nil {
 		return err
 	}
-	if err := checkSSHAbortedRetirements(parent, uid); err != nil {
+	if err := errors.Join(checkSSHAbortedRetirements(parent, uid), checkSSHRestoredRetirements(root, parent, uid)); err != nil {
 		return fmt.Errorf("SSH retirement requires verified completion before provisioning: %w", err)
 	}
 	owner, _, err := readSSHOwner(parent, uid)
@@ -315,7 +315,8 @@ func checkSSHUnclaimedState(parent *os.File) error {
 
 func writeSSHPrivateChild(parent *os.File, name string, data []byte, uid int, syncDirectory func(*os.File) error) (sshFileImage, error) {
 	if uid < 0 || uid > math.MaxUint32 || parent == nil || syncDirectory == nil ||
-		(name != sshOwnerName && name != sshMarkerName && !validSSHRetirementReceiptName(name) && !validSSHAbortedReceiptName(name)) {
+		(name != sshOwnerName && name != sshMarkerName && !validSSHRetirementReceiptName(name) &&
+			!validSSHAbortedReceiptName(name) && !validSSHRestoredReceiptName(name)) {
 		return sshFileImage{}, ErrInventoryUnsafe
 	}
 	if len(data) == 0 || len(data) > maxSSHOwnerBytes {

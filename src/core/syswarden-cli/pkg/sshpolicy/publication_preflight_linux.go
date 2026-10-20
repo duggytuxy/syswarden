@@ -32,24 +32,31 @@ func sshDropStagePath(transaction string) (string, error) {
 // Examine all attested files, including nested/conditional and empty Includes,
 // not only the graph currently selected for one administrator context.
 func checkSSHPublicationIsolation(plan migrationPlan, transaction string) error {
+	if plan.intent.Owner != "syswarden" {
+		return ErrInventoryUnsafe
+	}
+	return checkSSHStageIsolation(plan.inventory, [][]byte{plan.main, plan.candidate.Bytes()}, transaction)
+}
+
+func checkSSHStageIsolation(snapshot inventorySnapshot, extra [][]byte, transaction string) error {
 	stage, err := sshMainStagePath(transaction)
-	if err != nil || plan.intent.Owner != "syswarden" {
-		return errors.Join(ErrInventoryUnsafe, err)
+	if err != nil {
+		return err
 	}
 	dropStage, err := sshDropStagePath(transaction)
 	if err != nil {
 		return err
 	}
-	if _, exists := plan.inventory.files[MainPath]; !exists {
+	if _, exists := snapshot.files[MainPath]; !exists {
 		return ErrInventoryUnsafe
 	}
-	contents := make([][]byte, 0, len(plan.inventory.files)+2)
-	for name, content := range plan.inventory.files {
+	contents := make([][]byte, 0, len(snapshot.files)+len(extra))
+	for name, content := range snapshot.files {
 		if isSSHConfiguration(name) {
 			contents = append(contents, content)
 		}
 	}
-	contents = append(contents, plan.main, plan.candidate.Bytes())
+	contents = append(contents, extra...)
 	for _, content := range contents {
 		for _, line := range strings.Split(string(content), "\n") {
 			key, rest := splitDirective(line)

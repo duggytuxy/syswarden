@@ -141,6 +141,7 @@ type sshJournal struct {
 	uid       int
 	poisoned  bool
 	owner     sshFileImage
+	retained  *sshRetainedJournal // read-only history inspection during retirement
 	// Sync injection is private to filesystem failure tests.
 	syncDirectory func(*os.File) error
 }
@@ -184,6 +185,13 @@ func (journal *sshJournal) recheck() error {
 		return ErrInventoryClosed
 	}
 	journal.poisoned = true
+	if journal.retained != nil {
+		if err := journal.retained.recheck(journal); err != nil {
+			return err
+		}
+		journal.poisoned = false
+		return nil
+	}
 	owner, err := verifySSHStateOwner(journal.root, journal.uid)
 	if err != nil || !reflect.DeepEqual(owner, journal.owner) {
 		return errors.Join(ErrInventoryChanged, err)
@@ -301,7 +309,7 @@ func (journal *sshJournal) write(record sshPreparation) error {
 }
 
 func (journal *sshJournal) writeRecord(name string, data []byte) error {
-	if !sshRecordName(name) {
+	if journal == nil || journal.retained != nil || !sshRecordName(name) {
 		return ErrInventoryUnsafe
 	}
 	if err := journal.recheck(); err != nil {

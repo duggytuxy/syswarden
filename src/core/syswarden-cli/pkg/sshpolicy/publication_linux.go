@@ -106,7 +106,7 @@ func (journal *sshJournal) readSSHPhase(name string, step int, done bool, prepar
 func publishSSHConfiguration(ctx context.Context, journal *sshJournal, plan migrationPlan,
 	main, drop *sshAnonymousStage, run sshParserRun, parserCheck func() error, ops sshPublicationOps) (err error) {
 	if journal == nil || main == nil || drop == nil || run == nil || parserCheck == nil ||
-		ops.sync == nil || ops.link == nil || ops.rename == nil || ctx == nil {
+		ops.sync == nil || ops.link == nil || ops.rename == nil || ctx == nil || journal.retained != nil {
 		return ErrInventoryUnsafe
 	}
 	record, err := journal.read()

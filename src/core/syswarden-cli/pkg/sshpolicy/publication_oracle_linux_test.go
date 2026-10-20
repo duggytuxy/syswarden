@@ -30,9 +30,13 @@ func TestOpenSSHAbortedRetirementOracle(t *testing.T) {
 	testOpenSSHPublicationOracle(t, "retire")
 }
 
+func TestOpenSSHRestoredRetirementOracle(t *testing.T) {
+	testOpenSSHPublicationOracle(t, "retire-restored")
+}
+
 func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 	t.Helper()
-	transaction := operation == "transaction"
+	transaction := operation == "transaction" || operation == "retire-restored"
 	if os.Getenv("SYSWARDEN_SSH_ORACLE_TEST") != "1" {
 		t.Skip("set SYSWARDEN_SSH_ORACLE_TEST=1 for the installed OpenSSH parser oracle")
 	}
@@ -236,6 +240,31 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 				}
 			}
 			assertSSHRestored(t, f, record, journal)
+			if operation == "retire-restored" {
+				if err := journal.Close(); err != nil {
+					t.Fatal(err)
+				}
+				owner := fixtureOwner(t, f)
+				check := func() error { return daemon.recheck(root, 0) }
+				for range 2 {
+					if err := retireSSHRestoredTransaction(ctx, f.root, os.Geteuid(), owner.Instance,
+						plan.summary.PlanSHA256, daemon.digest, run, check, sshProvisionDefaults()); err != nil {
+						t.Fatal("cannot retire restored transaction with installed parser", err)
+					}
+				}
+				next := f.plan()
+				deps := transactionFixtureDependencies(f)
+				deps.parserDigest, deps.run, deps.checkParser = daemon.digest, run, check
+				result, err := executeSSHTransaction(ctx, f.root, os.Geteuid(), next.summary.PlanSHA256, deps)
+				if err != nil || !result.Published || result.RecoveryRequired || result.Verification.RuntimeActivated {
+					t.Fatal("cannot publish after verified restoration retirement", result, err)
+				}
+				result, err = recoverSSHTransaction(ctx, f.root, os.Geteuid(), next.summary.PlanSHA256,
+					daemon.digest, run, check, sshPublicationDefaults())
+				if err != nil || !result.Restored || result.RecoveryRequired {
+					t.Fatal("cannot restore independently approved retry", result, err)
+				}
+			}
 		})
 	}
 }
