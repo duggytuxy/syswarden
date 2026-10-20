@@ -12,26 +12,30 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syswarden-cli/pkg/sshselection"
 )
 
 // PlanSummary contains no configuration contents, account names, addresses or
 // hostnames. Its digest identifies an inspection, not an apply authorization.
 type PlanSummary struct {
-	Schema           int    `json:"schema"`
-	Operation        string `json:"operation"`
-	Role             string `json:"role"`
-	Owner            string `json:"owner"`
-	Profile          string `json:"profile"`
-	ContextCount     int    `json:"context_count"`
-	LegacyEditCount  int    `json:"legacy_edit_count"`
-	MainBeforeSHA256 string `json:"main_before_sha256"`
-	MainAfterSHA256  string `json:"main_after_sha256"`
-	DropInSHA256     string `json:"drop_in_sha256,omitempty"`
-	PlanSHA256       string `json:"plan_sha256"`
-	ApplyAvailable   bool   `json:"apply_available"`
+	Schema               int    `json:"schema"`
+	Operation            string `json:"operation"`
+	Role                 string `json:"role"`
+	Owner                string `json:"owner"`
+	Profile              string `json:"profile"`
+	ContextCount         int    `json:"context_count"`
+	LegacyEditCount      int    `json:"legacy_edit_count"`
+	MainBeforeSHA256     string `json:"main_before_sha256"`
+	MainAfterSHA256      string `json:"main_after_sha256"`
+	DropInSHA256         string `json:"drop_in_sha256,omitempty"`
+	PlanSHA256           string `json:"plan_sha256"`
+	SSHHardening         string `json:"ssh_hardening"`
+	SSHSelectionDeclared bool   `json:"ssh_selection_declared"`
+	ApplyAvailable       bool   `json:"apply_available"`
 }
 
 type migrationPlan struct {
+	selection sshselection.Config
 	intent    intent
 	inventory inventorySnapshot
 	main      []byte
@@ -79,6 +83,9 @@ func inspectPlan(root *os.File, uid int) (migrationPlan, error) {
 }
 
 func collectPlanInventory(root *os.File, uid int) (inventorySnapshot, error) {
+	if err := sshselection.RejectEnvironment(); err != nil {
+		return inventorySnapshot{}, err
+	}
 	reader := inventoryReader{root: root, uid: uid,
 		state: inventorySnapshot{files: make(map[string][]byte), nodes: make(map[string]inventoryStamp),
 			entries: make(map[string][]string), links: make(map[string]string)},
@@ -94,6 +101,16 @@ func collectPlanInventory(root *os.File, uid int) (inventorySnapshot, error) {
 	if metadata.mode&07777 != 0600 || int64(metadata.gid) != int64(uid) || len(content) > MaxIntentBytes {
 		return inventorySnapshot{}, fmt.Errorf("SSH intent must be a private root-owned 0600 file within size bounds")
 	}
+	selection, selected, err := reader.readFile(sshselection.Path)
+	if err != nil {
+		return inventorySnapshot{}, err
+	}
+	if selected {
+		metadata := reader.state.nodes[sshselection.Path]
+		if metadata.mode&07777 != 0600 || int64(metadata.gid) != int64(uid) || len(selection) > sshselection.MaxBytes {
+			return inventorySnapshot{}, fmt.Errorf("SSH selection must be a private root-owned 0600 file within size bounds")
+		}
+	}
 	if _, _, err := reader.readFile(DropInPath); err != nil {
 		return inventorySnapshot{}, err
 	}
@@ -107,11 +124,19 @@ func preparePlan(snapshot inventorySnapshot, declaration intent) (migrationPlan,
 	if _, exists := snapshot.files[DropInPath]; exists {
 		return migrationPlan{}, fmt.Errorf("reserved SSH drop-in already exists; verified lifecycle ownership is required")
 	}
+	selection, err := sshselection.ParseModule(snapshot.files[sshselection.Path])
+	if err != nil {
+		return migrationPlan{}, err
+	}
 	main := snapshot.files[MainPath]
-	plan := migrationPlan{intent: declaration, inventory: snapshot,
+	plan := migrationPlan{selection: selection, intent: declaration, inventory: snapshot,
 		summary: PlanSummary{Schema: 1, Operation: "publish", Role: declaration.Role, Owner: declaration.Owner,
 			Profile: declaration.Profile, ContextCount: len(declaration.Contexts), MainBeforeSHA256: digestBytes(main)}}
-	var err error
+	plan.summary.SSHHardening = selection.Hardening
+	plan.summary.SSHSelectionDeclared = selection.Hardening != ""
+	if plan.summary.SSHHardening == "" {
+		plan.summary.SSHHardening = "disabled"
+	}
 	plan.main, err = migrateMain(main, declaration.Legacy)
 	if err != nil {
 		return migrationPlan{}, err
@@ -123,7 +148,7 @@ func preparePlan(snapshot inventorySnapshot, declaration intent) (migrationPlan,
 	}
 	files := make(map[string][]byte, len(snapshot.files))
 	for name, content := range snapshot.files {
-		if name != IntentPath {
+		if isSSHConfiguration(name) {
 			files[name] = content
 		}
 	}
@@ -153,6 +178,10 @@ func preparePlan(snapshot inventorySnapshot, declaration intent) (migrationPlan,
 	return plan, nil
 }
 
+func isSSHConfiguration(name string) bool {
+	return name != IntentPath && name != sshselection.Path
+}
+
 func digestBytes(content []byte) string { return fmt.Sprintf("%x", sha256.Sum256(content)) }
 
 func hashPart(h hash.Hash, value []byte) {
@@ -167,7 +196,7 @@ func hashPart(h hash.Hash, value []byte) {
 // Both capture and any eventual apply must freshly attest the same inputs.
 func planDigest(plan migrationPlan) string {
 	h := sha256.New()
-	hashPart(h, []byte("SYSWARDEN-SSH-MIGRATION-PLAN-V2"))
+	hashPart(h, []byte("SYSWARDEN-SSH-MIGRATION-PLAN-V3"))
 	hashPart(h, []byte(plan.summary.Operation))
 	hashPart(h, plan.main)
 	hashPart(h, plan.candidate.Bytes())

@@ -45,7 +45,7 @@ func checkSSHPublicationIsolation(plan migrationPlan, transaction string) error 
 	}
 	contents := make([][]byte, 0, len(plan.inventory.files)+2)
 	for name, content := range plan.inventory.files {
-		if name != IntentPath {
+		if isSSHConfiguration(name) {
 			contents = append(contents, content)
 		}
 	}

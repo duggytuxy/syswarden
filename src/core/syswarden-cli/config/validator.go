@@ -88,6 +88,9 @@ func validateConfig(config *ModularConfig) error {
 	if err := validateGeoIPCountryList("network.geo.allowed_countries", config.Network.Geo.AllowedCountries); err != nil {
 		return err
 	}
+	if err := config.SSH.Validate(); err != nil {
+		return err
+	}
 	if err := validate.Struct(config); err != nil {
 		return err
 	}

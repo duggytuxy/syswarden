@@ -83,6 +83,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
     target labeling and explicit rollback. Independent
     [port observation](SSH_PORT_OBSERVATION.md) parses the standard configuration
     without requiring hardening intent or claiming active listeners.
+    [Explicit SSH selection](SSH_SELECTION.md) binds the separate TOML choice
+    into the migration plan without inheriting historical OS/CIS consent.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

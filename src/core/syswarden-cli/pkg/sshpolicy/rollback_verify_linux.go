@@ -21,7 +21,7 @@ func sshRollbackParserCall(ctx context.Context, run sshParserRun, guard func() e
 func verifySSHRollbackCandidates(ctx context.Context, plan migrationPlan, run sshParserRun, guard func() error) error {
 	files := make(map[string][]byte, len(plan.inventory.files))
 	for name, data := range plan.inventory.files {
-		if name != IntentPath {
+		if isSSHConfiguration(name) {
 			files[name] = data
 		}
 	}
@@ -89,7 +89,7 @@ func verifySSHRestored(ctx context.Context, journal *sshJournal, plan migrationP
 	}
 	files := make(map[string][]byte, len(plan.inventory.files))
 	for name, data := range plan.inventory.files {
-		if name != IntentPath {
+		if isSSHConfiguration(name) {
 			files[name] = data
 		}
 	}
