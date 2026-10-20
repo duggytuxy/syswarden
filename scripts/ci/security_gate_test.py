@@ -681,7 +681,7 @@ class ActFixtureTests(unittest.TestCase):
         self.assertIn("--eventpath .github/act/push.json", entries)
         self.assertIn("--concurrent-jobs 1", entries)
 
-    def test_trivy_install_is_checksum_pinned_and_skips_nested_setup(self) -> None:
+    def test_trivy_install_is_checksum_pinned_without_nested_setup(self) -> None:
         workflow = (
             self.repository / ".github" / "workflows" / "security-audit.yml"
         ).read_text(encoding="utf-8")
@@ -695,33 +695,26 @@ class ActFixtureTests(unittest.TestCase):
             "v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz",
             workflow,
         )
-        self.assertEqual(workflow.count("skip-setup-trivy: true"), 2)
+        self.assertNotIn("uses: aquasecurity/trivy-action@", workflow)
+        self.assertIn("trivy fs --format spdx-json --output syswarden-sbom.spdx.json .", workflow)
+        self.assertIn("trivy fs --scanners vuln --format sarif --output trivy-results.sarif", workflow)
+        self.assertIn("--exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH .", workflow)
         self.assertNotIn("token-setup-trivy:", workflow)
 
-    def test_public_markdown_uses_pinned_markdownlint(self) -> None:
+    def test_public_markdown_uses_verified_bundle_and_pinned_runtime(self) -> None:
         workflow = (
             self.repository / ".github" / "workflows" / "security-audit.yml"
         ).read_text(encoding="utf-8")
         plumber = (self.repository / ".plumber.yaml").read_text(encoding="utf-8")
         self.assertIn(
-            "DavidAnson/markdownlint-cli2-action@"
-            "fa0cd0f1a052f54da593c83860f2292982f5d142 # v23.2.0",
+            "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0",
             workflow,
         )
-        self.assertIn("config: .markdownlint.json", workflow)
-        self.assertIn("globs: README.md", workflow)
-        trusted_actions = plumber.split("trustedGithubActions:", 1)[1].split(
-            "\n\n", 1
-        )[0]
-        trusted_entries = [
-            line.strip()[2:].split(" #", 1)[0].strip()
-            for line in trusted_actions.splitlines()
-            if line.strip().startswith("- ")
-        ]
-        self.assertEqual(
-            trusted_entries.count("DavidAnson/markdownlint-cli2-action"), 1
-        )
-        self.assertNotIn("DavidAnson/*", trusted_entries)
+        self.assertIn("node-version: '24.19.0'", workflow)
+        self.assertIn("package-manager-cache: false", workflow)
+        self.assertIn("run: bash scripts/ci/lint_public_markdown.sh", workflow)
+        self.assertNotIn("DavidAnson/markdownlint-cli2-action", plumber)
+        self.assertNotIn("aquasecurity/trivy-action", plumber)
 
     def test_github_bubblewrap_policy_is_pinned_and_fail_closed(self) -> None:
         workflow = (

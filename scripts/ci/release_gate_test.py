@@ -1118,7 +1118,7 @@ class ReleaseGateTests(unittest.TestCase):
         archive = self.make_compliance_archive(
             [(release_gate.PLUMBER_REPORT_NAME, over_limit)]
         )
-        with self.assertRaisesRegex(release_gate.ReleaseGateError, "768-KiB"):
+        with self.assertRaisesRegex(release_gate.ReleaseGateError, "1-MiB"):
             release_gate.validate_compliance_archive(archive)
 
     def test_bound_plumber_report_matches_commit_and_exact_workflows(self) -> None:

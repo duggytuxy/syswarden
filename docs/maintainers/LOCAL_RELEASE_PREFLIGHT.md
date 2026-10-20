@@ -237,6 +237,9 @@ Pass `--eventpath "${SW_EVENT}"` explicitly to every Act command. Never rely on
 the event path from `.actrc` for candidate evidence. Never bind the maintainer's
 primary worktree; only the disposable clean clone is an allowed Act workspace.
 
+See [Plumber control coverage](PLUMBER_CONTROLS.md) for scanner pins, enabled
+controls, publication boundaries and release-report size limits.
+
 ## Mandatory local pre-push gate
 
 Run the following groups before every push that can affect a release PR.
