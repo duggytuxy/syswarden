@@ -285,7 +285,7 @@ func verifyPublishedSSH(ctx context.Context, journal *sshJournal, plan migration
 	expected sshStoredInventory, run sshParserRun, parserCheck func() error) error {
 	files := make(map[string][]byte, len(plan.inventory.files))
 	for name, data := range plan.inventory.files {
-		if name != IntentPath {
+		if isSSHConfiguration(name) {
 			files[name] = data
 		}
 	}

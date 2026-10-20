@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"syswarden-cli/pkg/sshselection"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/viper"
@@ -31,6 +32,9 @@ var deprecatedModularKeys = map[string]string{ // #nosec G101 -- keys name retir
 // ValidateModularConfig validates descriptor-rooted file reads without applying environment overrides, rewriting compatibility state, or changing the process-global configuration.
 func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	report := ValidationReport{}
+	if err := sshselection.RejectEnvironment(); err != nil {
+		return report, err
+	}
 	if err := rejectOperatorPolicyEnvironment(); err != nil {
 		return report, err
 	}
@@ -147,6 +151,9 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 // schema and policy validation used by the runtime loader. All files are read
 // through descriptor-rooted paths and module precedence is deterministic.
 func GetValidatedModularValue(configDir, key string) (string, bool, error) {
+	if err := sshselection.RejectEnvironment(); err != nil {
+		return "", false, err
+	}
 	if err := rejectOperatorPolicyEnvironment(); err != nil {
 		return "", false, err
 	}
@@ -260,6 +267,11 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 }
 
 func parseTOMLDocument(content []byte, relative string) (map[string]any, error) {
+	if relative == sshselection.ModulePath {
+		if _, err := sshselection.ParseModule(content); err != nil {
+			return nil, err
+		}
+	}
 	var document map[string]any
 	if err := toml.Unmarshal(content, &document); err != nil {
 		return nil, fmt.Errorf("parse %s as TOML: %w", relative, err)
@@ -272,6 +284,9 @@ func parseTOMLDocument(content []byte, relative string) (map[string]any, error) 
 		if version < 0 || version > int64(CurrentSchemaVersion) {
 			return nil, fmt.Errorf("%s has unsupported schema_version %d", relative, version)
 		}
+	}
+	if err := sshselection.ValidateDocument(relative, document); err != nil {
+		return nil, err
 	}
 	if err := validateOperatorPolicyDocument(relative, document); err != nil {
 		return nil, err

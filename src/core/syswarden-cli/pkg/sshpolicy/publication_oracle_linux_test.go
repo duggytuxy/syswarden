@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syswarden-cli/pkg/sshselection"
 	"testing"
 	"time"
 )
@@ -74,6 +75,7 @@ func testOpenSSHPublicationOracle(t *testing.T, transaction bool) {
 				declaration.Contexts = append(declaration.Contexts, access)
 			}
 			f.intent(declaration)
+			f.write(sshselection.Path, "[ssh]\nhardening = \""+declaration.Profile+"\"\n")
 			if err := os.MkdirAll(f.path(sshStateParent), 0700); err != nil {
 				t.Fatal(err)
 			}
