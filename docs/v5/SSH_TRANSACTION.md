@@ -104,6 +104,32 @@ No SSH file, daemon or listener is modified. Aborted evidence prevents later
 publication and stays retained until a separately verified lifecycle retirement;
 it does not make the journal reusable or establish operational access.
 
+## Verified retirement of an aborted preparation
+
+An internal retirement adapter now permits a new attempt after an explicitly
+aborted preparation. It accepts the original approved plan, parser digest and
+owned storage instance. It first verifies the unchanged complete SSH inventory,
+original main inode, declared access contexts and absence of policy/staging
+names with the installed parser. This path only accepts preparation-only aborts;
+it refuses published, partially published, restored or ambiguous journals.
+
+The original journal directory and its independent ownership receipt are moved
+into private retention under `/var/lib/syswarden/`. Their inodes, file bytes,
+permissions, extended attributes and single-link custody are retained. A bounded
+canonical intent binds the exact three journal records before either rename.
+Both moves prohibit replacement. A separate completion record and parent sync
+are required before provisioning can accept this retired history. Interrupted
+moves can resume only after the same inputs and custody are verified again.
+Unknown files, changed records, conflicting destinations and incomplete
+retirement block provisioning. No file is deleted and no SSH service is touched.
+
+The retained directory, owner receipt, intent and completion record use the
+`.ssh-policy-aborted-<instance>` prefix. They are private recovery evidence,
+not active SSH configuration. They must remain isolated from all `Include`
+patterns. A later transaction receives a new storage instance and transaction
+identity; a retained journal never becomes active again. This adapter does not
+retire already published policies or establish successful daemon activation.
+
 ## Validation and remaining work
 
 Temporary-filesystem tests cover publication and explicit restoration, external
@@ -113,7 +139,10 @@ approval. Preparation-abort tests cover lost anonymous inodes, repeated recovery
 uncertain sync, changed configuration and selection, mixed history, and changes
 during parser checks. The installed OpenSSH oracle exercises the whole
 transaction for forwarding, CIS and historical CIS migration, with direct,
-ProxyJump and Ansible context declarations, including abort before publication.
+ProxyJump and Ansible context declarations, including abort before publication, verified private retirement, a new
+independently owned transaction, and its restoration. Retirement tests also
+interrupt every directory sync and both renames, exercise lost acknowledgements,
+and reject replaced records, conflicting paths, changed input and busy locks.
 It runs parser modes only and never opens a listener.
 
 The separate read-only label oracle checks the installed SELinux helper without
@@ -121,7 +150,8 @@ changing enforcement. These tests do not prove that root can apply the target
 label on every supported native host.
 
 Production opt-in wiring, already-owned updates, activation and independent
-access checks, public recovery orchestration, and transaction retirement remain
+access checks, public recovery orchestration, and published/restored transaction
+retirement remain
 required. Run native uninstall, package remove and purge separately once the
 coherent adapter is available, including administrator edits, reload and reboot.
 Preserve BunkerWeb's independent API, temporary-ban ownership, expiry and HA.
