@@ -103,12 +103,24 @@ func ObserveSystemdProcess() (ProcessSummary, error) {
 	return observeSystemdProcess(nil)
 }
 
-func observeSystemdProcess(wrap func(context.Context, *sshProcessBinding) sshProcessLease) (summary ProcessSummary, err error) {
+func observeSystemdProcess(wrap func(context.Context, *sshProcessBinding) sshProcessLease) (ProcessSummary, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return observeSystemdProcessContext(ctx, wrap)
+}
+
+func observeSystemdProcessContext(ctx context.Context, wrap func(context.Context, *sshProcessBinding) sshProcessLease) (summary ProcessSummary, err error) {
 	defer func() {
 		if err != nil {
 			summary = ProcessSummary{}
 		}
 	}()
+	if ctx == nil {
+		return summary, ErrInventoryUnsafe
+	}
+	if err := ctx.Err(); err != nil {
+		return summary, err
+	}
 	if os.Geteuid() != 0 {
 		return summary, fmt.Errorf("SSH process observation requires root")
 	}
@@ -141,8 +153,6 @@ func observeSystemdProcess(wrap func(context.Context, *sshProcessBinding) sshPro
 	snapshot := func(ctx context.Context) (sshSystemdSnapshot, error) {
 		return observeSSHSystemdSnapshot(ctx, tool.digest, tool.run, guard)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	bind := func(pid int, group string) (sshProcessLease, error) {
 		lease, bindErr := bindSSHProcess(pid, 0, group, daemon.state, daemon.digest)
 		if bindErr != nil {

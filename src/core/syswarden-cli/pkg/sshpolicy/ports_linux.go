@@ -57,14 +57,32 @@ func InspectPorts() (PortSummary, error) {
 }
 
 func inspectPorts(ctx context.Context, snapshot inventorySnapshot, digest string, run sshParserRun, recheck func() error) (PortSummary, error) {
-	if ctx == nil || run == nil || recheck == nil || !lowerDigest.MatchString(digest) {
-		return PortSummary{}, ErrInventoryUnsafe
-	}
-	image, err := newParserImage(snapshot.files)
+	values, err := inspectSSHEffective(ctx, snapshot, digest, run, recheck)
 	if err != nil {
 		return PortSummary{}, err
 	}
-	defer image.Close()
+	configured, listeners, err := effectivePorts(values)
+	if err != nil {
+		return PortSummary{}, err
+	}
+	return PortSummary{Schema: 1, ConfiguredPorts: configured, ListenPorts: listeners,
+		ParserSHA256: digest, ParserVerified: true}, nil
+}
+
+func inspectSSHEffective(ctx context.Context, snapshot inventorySnapshot, digest string, run sshParserRun, recheck func() error) (values sshEffective, err error) {
+	if ctx == nil || run == nil || recheck == nil || !lowerDigest.MatchString(digest) {
+		return nil, ErrInventoryUnsafe
+	}
+	image, err := newParserImage(snapshot.files)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = errors.Join(err, image.Close())
+		if err != nil {
+			values = nil
+		}
+	}()
 	invoke := func(image *parserImage, mode string) ([]byte, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -81,30 +99,25 @@ func inspectPorts(ctx context.Context, snapshot inventorySnapshot, digest string
 	var effective []sshEffective
 	for _, graph := range []*parserImage{nil, image} {
 		if _, err := invoke(graph, "syntax"); err != nil {
-			return PortSummary{}, fmt.Errorf("SSH port inspection syntax verification failed: %w", err)
+			return nil, fmt.Errorf("SSH port inspection syntax verification failed: %w", err)
 		}
 		output, err := invoke(graph, "effective")
 		if err != nil {
-			return PortSummary{}, fmt.Errorf("SSH port inspection parser failed: %w", err)
+			return nil, fmt.Errorf("SSH port inspection parser failed: %w", err)
 		}
 		values, err := parseEffective(output)
 		if err != nil {
-			return PortSummary{}, err
+			return nil, err
 		}
 		effective = append(effective, values)
 	}
 	if err := compareEffective(effective[0], effective[1], nil); err != nil {
-		return PortSummary{}, fmt.Errorf("SSH port inspection sealed baseline differs: %w", err)
-	}
-	configured, listeners, err := effectivePorts(effective[0])
-	if err != nil {
-		return PortSummary{}, err
+		return nil, fmt.Errorf("SSH port inspection sealed baseline differs: %w", err)
 	}
 	if err := errors.Join(ctx.Err(), recheck()); err != nil {
-		return PortSummary{}, err
+		return nil, err
 	}
-	return PortSummary{Schema: 1, ConfiguredPorts: configured, ListenPorts: listeners,
-		ParserSHA256: digest, ParserVerified: true}, nil
+	return effective[0], nil
 }
 
 // OpenSSH can expand one Port to IPv4 and IPv6 listeners, or use an explicit

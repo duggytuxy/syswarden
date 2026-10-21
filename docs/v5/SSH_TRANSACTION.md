@@ -234,3 +234,7 @@ listeners and fresh independent access remain separate integration gates.
 The [listener observer](SSH_LISTENER_OBSERVATION.md) now binds sampled TCP
 listeners to that process. Policy correspondence, configuration consumption and
 independent access still need proof before an activation outcome can be accepted.
+
+[Endpoint correspondence](SSH_ENDPOINT_CORRESPONDENCE.md) adds comparison with
+the protected standard graph's parsed addresses and network namespace. Matching
+endpoints alone still cannot establish loaded hardening policy or fresh access.
