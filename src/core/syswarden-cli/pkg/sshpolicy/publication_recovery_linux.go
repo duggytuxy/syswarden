@@ -42,7 +42,7 @@ func inspectSSHPublication(journal *sshJournal) (sshPublicationPosition, error) 
 // observation. Rollback uses its retained start inventory, never a guessed
 // reconstruction of the current filesystem.
 func matchSSHPublication(journal *sshJournal, prepared sshPreparation, current sshStoredInventory) (sshPublicationPosition, error) {
-	if err := journal.requireNoPreparationAbort(); err != nil {
+	if err := errors.Join(journal.requireNoPreparationAbort(), journal.requireNoSSHActivation()); err != nil {
 		return sshPublicationPosition{}, err
 	}
 	data, err := json.Marshal(prepared)

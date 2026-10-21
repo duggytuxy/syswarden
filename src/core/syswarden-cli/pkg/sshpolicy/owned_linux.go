@@ -69,11 +69,19 @@ type sshOwnedPublication struct {
 // Exact directory membership refuses incomplete, mixed and unknown histories.
 // A copied valid record cannot replace a record during parser verification.
 func observeSSHOwnedRecords(journal *sshJournal) (map[string]string, error) {
+	return observeSSHOwnedRecordSet(journal, false)
+}
+
+func observeSSHOwnedRecordSet(journal *sshJournal, activation bool) (map[string]string, error) {
 	if err := journal.recheck(); err != nil {
 		return nil, err
 	}
-	names, err := sshDirectoryNames(journal.directory, 8)
-	if err != nil || len(names) != 8 {
+	count := 8
+	if activation {
+		count++
+	}
+	names, err := sshDirectoryNames(journal.directory, count)
+	if err != nil || len(names) != count {
 		return nil, errors.Join(ErrInventoryUnsafe, err)
 	}
 	expected := map[string]bool{sshMarkerName: true, sshPreparedRecord: true}
@@ -81,7 +89,10 @@ func observeSSHOwnedRecords(journal *sshJournal) (map[string]string, error) {
 		expected[sshPublicationName(step, false)] = true
 		expected[sshPublicationName(step, true)] = true
 	}
-	records := make(map[string]string, 8)
+	if activation {
+		expected[sshActivationIntentName] = true
+	}
+	records := make(map[string]string, count)
 	for _, name := range names {
 		if !expected[name] {
 			return nil, ErrInventoryUnsafe

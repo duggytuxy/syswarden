@@ -230,7 +230,7 @@ func (journal *sshJournal) read() (sshPreparation, error) {
 }
 
 func sshRecordName(name string) bool {
-	if name == sshPreparedRecord || name == sshRollbackStartName || name == sshPreparationAbortName {
+	if name == sshPreparedRecord || name == sshRollbackStartName || name == sshPreparationAbortName || name == sshActivationIntentName {
 		return true
 	}
 	for step := 1; step <= 3; step++ {
@@ -309,29 +309,36 @@ func (journal *sshJournal) write(record sshPreparation) error {
 }
 
 func (journal *sshJournal) writeRecord(name string, data []byte) error {
+	_, err := journal.writeRecordImage(name, data)
+	return err
+}
+
+// Return the image from the original retained descriptor. A later reader must
+// not adopt a byte-identical replacement as evidence of this write's durability.
+func (journal *sshJournal) writeRecordImage(name string, data []byte) (sshFileImage, error) {
 	if journal == nil || journal.retained != nil || !sshRecordName(name) {
-		return ErrInventoryUnsafe
+		return sshFileImage{}, ErrInventoryUnsafe
 	}
 	if err := journal.recheck(); err != nil {
-		return err
+		return sshFileImage{}, err
 	}
 	uid := journal.uid
 	if uid < 0 || uid > math.MaxUint32 {
-		return ErrInventoryUnsafe
+		return sshFileImage{}, ErrInventoryUnsafe
 	}
 	if len(data) == 0 || len(data) > maxSSHJournalBytes {
-		return ErrInventoryBounds
+		return sshFileImage{}, ErrInventoryBounds
 	}
 	file, err := openSSHAnonymous(journal.directory, journal.uid)
 	if err != nil {
-		return err
+		return sshFileImage{}, err
 	}
 	attrs, err := readSSHAttributes(int(file.Fd()))
 	if err != nil {
-		return errors.Join(err, file.Close())
+		return sshFileImage{}, errors.Join(err, file.Close())
 	}
 	if err := validateSSHAttributes(attrs, true); err != nil {
-		return errors.Join(err, file.Close())
+		return sshFileImage{}, errors.Join(err, file.Close())
 	}
 	// Keep only the kernel-assigned label for this new private journal inode.
 	// Do not transplant a directory's label or inherit discretionary ACLs.
@@ -341,26 +348,26 @@ func (journal *sshJournal) writeRecord(name string, data []byte) error {
 	}
 	stage, err := finishSSHAnonymous(file, data, 0600, uint32(uid), wanted, uid)
 	if err != nil {
-		return err
+		return sshFileImage{}, err
 	}
 	defer stage.Close()
 	if err := journal.recheck(); err != nil {
-		return err
+		return sshFileImage{}, err
 	}
 	// The proc path identifies only our retained unnamed descriptor. linkat
 	// cannot overwrite an existing record, including an unrecognized one.
 	if err := unix.Linkat(unix.AT_FDCWD, fmt.Sprintf("/proc/self/fd/%d", stage.file.Fd()),
 		int(journal.directory.Fd()), name, unix.AT_SYMLINK_FOLLOW); err != nil {
-		return err
+		return sshFileImage{}, err
 	}
 	if err := journal.syncDirectory(journal.directory); err != nil {
 		journal.poisoned = true
-		return fmt.Errorf("SSH journal durability is uncertain; retain the record for recovery: %w", err)
+		return sshFileImage{}, fmt.Errorf("SSH journal durability is uncertain; retain the record for recovery: %w", err)
 	}
 	got, err := journal.readRecord(name)
 	if err != nil || !bytes.Equal(got, data) {
 		journal.poisoned = true
-		return errors.Join(ErrInventoryChanged, err)
+		return sshFileImage{}, errors.Join(ErrInventoryChanged, err)
 	}
 	var named, retained unix.Stat_t
 	err = errors.Join(unix.Fstatat(int(journal.directory.Fd()), name, &named, unix.AT_SYMLINK_NOFOLLOW),
@@ -368,7 +375,12 @@ func (journal *sshJournal) writeRecord(name string, data []byte) error {
 	if err != nil || stamp(named) != stamp(retained) || retained.Dev != stage.image.state.dev ||
 		retained.Ino != stage.image.state.ino || retained.Nlink != 1 {
 		journal.poisoned = true
-		return errors.Join(ErrInventoryChanged, err)
+		return sshFileImage{}, errors.Join(ErrInventoryChanged, err)
 	}
-	return nil
+	image, err := readSSHImage(stage.file, uid, 1, maxSSHJournalBytes)
+	if err != nil || image.state != stamp(named) {
+		journal.poisoned = true
+		return sshFileImage{}, errors.Join(ErrInventoryChanged, err)
+	}
+	return image, nil
 }

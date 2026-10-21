@@ -110,6 +110,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     empty distribution option variables, additionally binds
     exact manager arguments to the observed invocation, refusing unqualified
     overrides and dynamic selection without claiming loaded-policy proof.
+    The [durable activation boundary](SSH_ACTIVATION_BOUNDARY.md) records
+    uncertainty before a future runtime request and prevents file-only recovery
+    from treating an attempted activation as an untouched daemon.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

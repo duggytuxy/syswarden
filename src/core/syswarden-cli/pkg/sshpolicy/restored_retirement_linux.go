@@ -95,7 +95,7 @@ func decodeSSHRestoredRetirement(data []byte, uid int) (sshRestoredRetirement, e
 }
 
 func restoredSSHRecordName(name string) bool {
-	return name == sshMarkerName || (sshRecordName(name) && name != sshPreparationAbortName)
+	return name == sshMarkerName || (sshRecordName(name) && name != sshPreparationAbortName && name != sshActivationIntentName)
 }
 
 func observeSSHRestoredFiles(directory *os.File, uid int) (map[string]string, sshPreparation, error) {
