@@ -478,8 +478,8 @@ try {
     $env:GOTMPDIR = $GoTemporaryDirectory
 
     $GoVersion = (& go env GOVERSION 2>&1 | Out-String).Trim()
-    if (($LASTEXITCODE -ne 0) -or ($GoVersion -ne 'go1.26.9')) {
-        throw 'Native release builds require exactly Go 1.26.9.'
+    if (($LASTEXITCODE -ne 0) -or ($GoVersion -ne 'go1.26.10')) {
+        throw 'Native release builds require exactly Go 1.26.10.'
     }
 
     foreach ($Component in $Components) {
