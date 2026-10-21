@@ -104,6 +104,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
     [Endpoint correspondence](SSH_ENDPOINT_CORRESPONDENCE.md) compares those
     sockets with the protected standard graph's parsed endpoints, without
     claiming configuration consumption or authenticated access.
+    [Owned endpoint observation](SSH_OWNED_ENDPOINTS.md) joins publication and
+    listener verification under one retained ownership guard and journal lock.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

@@ -209,7 +209,9 @@ Restored-journal tests additionally cover each partial publication boundary,
 retained candidate tampering, incomplete rollback, read-only history mutation
 attempts, stale authorization and a second independently approved publication
 and restoration with the installed parser.
-It runs parser modes only and never opens a listener.
+The installed SSH executable runs parser modes only. The owned-endpoint oracle
+also opens its own ephemeral loopback socket to check correspondence, without
+starting an SSH listener or establishing authenticated access.
 
 The separate read-only label oracle checks the installed SELinux helper without
 changing enforcement. These tests do not prove that root can apply the target
@@ -238,3 +240,8 @@ independent access still need proof before an activation outcome can be accepted
 [Endpoint correspondence](SSH_ENDPOINT_CORRESPONDENCE.md) adds comparison with
 the protected standard graph's parsed addresses and network namespace. Matching
 endpoints alone still cannot establish loaded hardening policy or fresh access.
+
+[Owned endpoint observation](SSH_OWNED_ENDPOINTS.md) now performs the publication
+and endpoint checks under the same journal lock and ownership lifetime. Changes
+to intent, selection, recovery inodes or journal records invalidate the combined
+result. It still does not activate SSH or prove consumed authentication policy.
