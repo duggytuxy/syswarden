@@ -99,7 +99,11 @@ func observeSSHSystemdProcess(ctx context.Context, snapshot func(context.Context
 // ObserveSystemdProcess executes only fixed manager queries and bounded procfs
 // reads. No signal, namespace transition, configuration write or login occurs.
 // Inactive/socket-only services and unsupported process visibility are refused.
-func ObserveSystemdProcess() (summary ProcessSummary, err error) {
+func ObserveSystemdProcess() (ProcessSummary, error) {
+	return observeSystemdProcess(nil)
+}
+
+func observeSystemdProcess(wrap func(context.Context, *sshProcessBinding) sshProcessLease) (summary ProcessSummary, err error) {
 	defer func() {
 		if err != nil {
 			summary = ProcessSummary{}
@@ -137,14 +141,21 @@ func ObserveSystemdProcess() (summary ProcessSummary, err error) {
 	snapshot := func(ctx context.Context) (sshSystemdSnapshot, error) {
 		return observeSSHSystemdSnapshot(ctx, tool.digest, tool.run, guard)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	bind := func(pid int, group string) (sshProcessLease, error) {
 		lease, bindErr := bindSSHProcess(pid, 0, group, daemon.state, daemon.digest)
 		if bindErr != nil {
 			return nil, bindErr
 		}
+		if wrap != nil {
+			wrapped := wrap(ctx, lease)
+			if wrapped == nil {
+				return nil, errors.Join(ErrInventoryUnsafe, lease.Close())
+			}
+			return wrapped, nil
+		}
 		return lease, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	return observeSSHSystemdProcess(ctx, snapshot, bind, guard)
 }

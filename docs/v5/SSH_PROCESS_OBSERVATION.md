@@ -48,6 +48,10 @@ namespace identifiers and procfs contents are not exposed in the summary.
 `access_verified` remain false. The embedded manager summary retains its own
 original limits. Any failed read, drift or lease-close error returns no summary.
 
+The separate [listener observer](SSH_LISTENER_OBSERVATION.md) adds kernel socket
+observations within this process lifetime boundary. It retains the distinction
+between observed listening sockets, approved configuration and verified access.
+
 These observations are not an atomic kernel snapshot. They cannot detect every
 transient change or a same-process re-exec of identical code between samples.
 They do not attest shared libraries, loaded code, configuration consumption,
