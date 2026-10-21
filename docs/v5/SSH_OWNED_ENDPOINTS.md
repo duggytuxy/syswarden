@@ -22,7 +22,7 @@ replace this proof, and existing generated settings cannot supply consent.
 The active standard SSH graph is then collected and compared with its sealed
 parser image. Parsed addresses and ports must match the actual listener objects
 inside the existing process, namespace and service-manager observation boundary.
-The production path also verifies [static startup selection](SSH_STARTUP_SELECTION.md)
+The production path also verifies [startup selection](SSH_STARTUP_SELECTION.md)
 against the same observed invocation before and after holding the process lease.
 The complete owned inventory and exact journal record identities remain guarded
 around parsing and listener observation, including failed calls and the final
@@ -43,7 +43,9 @@ It cannot be stored and replayed as authority for a later activation.
 Agreement means that the verified published graph's parsed endpoints match the
 observed sockets. A daemon could still use older authentication settings with
 the same endpoints. Unsupported startup arguments are now refused, but a
-static manager declaration does not prove historical policy consumption.
+manager declaration does not prove historical policy consumption. Explicitly
+empty option variables can be qualified from protected sources; this never
+permits dropping a nonempty administrator option or inferring an unset value.
 Configuration consumption, activation and independent access therefore remain
 unproven. The existing false runtime/access flags retain their meanings.
 Repeated checks are not atomic snapshots and do not defend against a hostile

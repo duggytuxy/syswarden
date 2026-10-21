@@ -9,13 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"unicode/utf8"
 )
 
-// StartupSummary describes the manager's static command for the observed
+// StartupSummary describes the manager's qualified command for the observed
 // invocation. It is not evidence of configuration consumption or activation.
 // Raw arguments, timestamps and process identifiers remain private.
 type StartupSummary struct {
+	EnvironmentSHA256     string `json:"environment_sha256,omitempty"`
 	Schema                int    `json:"schema"`
 	CommandSHA256         string `json:"command_sha256"`
 	DeclarationVerified   bool   `json:"declaration_verified"`
@@ -148,6 +150,10 @@ func verifySSHStartup(command sshStartupCommand, snapshot sshSystemdSnapshot, ex
 }
 
 func observeSSHStartup(ctx context.Context, snapshot sshSystemdSnapshot, executable string, query sshStartupQuery, guard func() error) (StartupSummary, error) {
+	return observeSSHStartupEnvironment(ctx, snapshot, executable, query, guard, nil)
+}
+
+func observeSSHStartupEnvironment(ctx context.Context, snapshot sshSystemdSnapshot, executable string, query sshStartupQuery, guard func() error, capture sshEnvironmentCapture) (StartupSummary, error) {
 	if ctx == nil || query == nil || guard == nil {
 		return StartupSummary{}, ErrInventoryUnsafe
 	}
@@ -166,5 +172,37 @@ func observeSSHStartup(ctx context.Context, snapshot sshSystemdSnapshot, executa
 	if err != nil {
 		return StartupSummary{}, fmt.Errorf("SSH startup property is invalid: %w", err)
 	}
-	return verifySSHStartup(command, snapshot, executable)
+	original := command
+	var environment sshEnvironmentResult
+	needsEnvironment := false
+	for _, arg := range command.args {
+		needsEnvironment = needsEnvironment || strings.Contains(arg, "$")
+	}
+	if needsEnvironment {
+		if capture == nil {
+			return StartupSummary{}, ErrInventoryUnsafe
+		}
+		environment, err = capture(ctx, unit)
+		if err = errors.Join(err, ctx.Err(), guard()); err != nil {
+			return StartupSummary{}, err
+		}
+		command, err = resolveSSHStartupEnvironment(command, environment)
+		if err != nil {
+			return StartupSummary{}, err
+		}
+	}
+	summary, err := verifySSHStartup(command, snapshot, executable)
+	if err != nil {
+		return StartupSummary{}, err
+	}
+	if needsEnvironment {
+		// Bind the original declaration as well as its protected explicit inputs.
+		wire, err := json.Marshal([]any{original.path, original.args, original.flags, original.started, original.monotonic, original.pid, environment.digest})
+		if err != nil {
+			return StartupSummary{}, err
+		}
+		summary.CommandSHA256 = digestBytes(wire)
+		summary.EnvironmentSHA256 = environment.digest
+	}
+	return summary, nil
 }

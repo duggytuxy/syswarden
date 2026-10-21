@@ -200,13 +200,28 @@ func planDigest(plan migrationPlan) string {
 	hashPart(h, []byte(plan.summary.Operation))
 	hashPart(h, plan.main)
 	hashPart(h, plan.candidate.Bytes())
-	for _, name := range sortedKeys(plan.inventory.files) {
+	hashSSHInventory(h, plan.inventory)
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func sortedKeys[T any](values map[string]T) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// Hash the complete protected inventory without exporting private file data.
+func hashSSHInventory(h hash.Hash, inventory inventorySnapshot) {
+	for _, name := range sortedKeys(inventory.files) {
 		hashPart(h, []byte("file"))
 		hashPart(h, []byte(name))
-		hashPart(h, plan.inventory.files[name])
+		hashPart(h, inventory.files[name])
 	}
-	for _, name := range sortedKeys(plan.inventory.nodes) {
-		node := plan.inventory.nodes[name]
+	for _, name := range sortedKeys(inventory.nodes) {
+		node := inventory.nodes[name]
 		hashPart(h, []byte("node"))
 		hashPart(h, []byte(name))
 		exists := uint64(0)
@@ -223,36 +238,26 @@ func planDigest(plan migrationPlan) string {
 			hashPart(h, []byte(strconv.FormatInt(value, 10)))
 		}
 	}
-	for _, name := range sortedKeys(plan.inventory.entries) {
+	for _, name := range sortedKeys(inventory.entries) {
 		hashPart(h, []byte("directory"))
 		hashPart(h, []byte(name))
-		for _, entry := range plan.inventory.entries[name] {
+		for _, entry := range inventory.entries[name] {
 			hashPart(h, []byte(entry))
 		}
 		hashPart(h, nil)
 	}
-	for _, name := range sortedKeys(plan.inventory.links) {
+	for _, name := range sortedKeys(inventory.links) {
 		hashPart(h, []byte("alias"))
 		hashPart(h, []byte(name))
-		hashPart(h, []byte(plan.inventory.links[name]))
+		hashPart(h, []byte(inventory.links[name]))
 	}
-	for _, name := range sortedKeys(plan.inventory.attributes) {
+	for _, name := range sortedKeys(inventory.attributes) {
 		hashPart(h, []byte("attributes"))
 		hashPart(h, []byte(name))
-		for _, key := range sortedKeys(plan.inventory.attributes[name]) {
+		for _, key := range sortedKeys(inventory.attributes[name]) {
 			hashPart(h, []byte(key))
-			hashPart(h, plan.inventory.attributes[name][key])
+			hashPart(h, inventory.attributes[name][key])
 		}
 		hashPart(h, nil)
 	}
-	return fmt.Sprintf("%x", h.Sum(nil))
-}
-
-func sortedKeys[T any](values map[string]T) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }

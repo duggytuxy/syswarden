@@ -246,8 +246,10 @@ and endpoint checks under the same journal lock and ownership lifetime. Changes
 to intent, selection, recovery inodes or journal records invalidate the combined
 result. It still does not activate SSH or prove consumed authentication policy.
 
-[Static startup selection](SSH_STARTUP_SELECTION.md) now brackets the production
+[Startup selection](SSH_STARTUP_SELECTION.md) now brackets the production
 endpoint process lease with typed manager command checks. Alternate files,
 unsupported overrides and changing invocation data invalidate the observation.
-Environment-derived startup, active socket policy and causal configuration
-consumption still require qualification before activation can be accepted.
+Explicitly empty standalone `$OPTIONS` and `$SSHD_OPTS` are now qualified through
+protected ordered sources and repeated typed manager observations. Nonempty or
+unqualified options, active socket policy and causal configuration consumption
+still require qualification before activation can be accepted.
