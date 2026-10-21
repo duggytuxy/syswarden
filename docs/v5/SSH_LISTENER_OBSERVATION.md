@@ -87,6 +87,11 @@ minimal package defaults and the separate native uninstall/remove/purge paths
 remain qualification gates. This component is not a migration-ready package
 or final v5.00.0 IVVQ acceptance.
 
+The separate [endpoint comparison](SSH_ENDPOINT_CORRESPONDENCE.md) binds
+these private observations to the protected standard graph's expected addresses
+and the process network namespace. It preserves the independent configuration
+consumption and access gates.
+
 ## Primary references
 
 - [Kernel descriptor duplication and permission checks](https://man7.org/linux/man-pages/man2/pidfd_getfd.2.html).

@@ -101,6 +101,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     protected executable, credentials, namespaces and manager cgroup.
     [Listener observation](SSH_LISTENER_OBSERVATION.md) inspects TCP sockets
     held by that process, without claiming policy correspondence or access.
+    [Endpoint correspondence](SSH_ENDPOINT_CORRESPONDENCE.md) compares those
+    sockets with the protected standard graph's parsed endpoints, without
+    claiming configuration consumption or authenticated access.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.
