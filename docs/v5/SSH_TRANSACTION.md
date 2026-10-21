@@ -230,3 +230,7 @@ live process and protected executable with stable service-manager observations.
 It does not authorize this transaction to activate a policy or establish that
 the daemon consumed the published configuration. Configuration consumption,
 listeners and fresh independent access remain separate integration gates.
+
+The [listener observer](SSH_LISTENER_OBSERVATION.md) now binds sampled TCP
+listeners to that process. Policy correspondence, configuration consumption and
+independent access still need proof before an activation outcome can be accepted.

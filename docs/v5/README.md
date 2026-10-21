@@ -98,8 +98,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     Internal [service-manager observation](SSH_SERVICE_OBSERVATION.md) resolves
     systemd aliases and stable service/socket topology through bounded read-only
     queries. [Process observation](SSH_PROCESS_OBSERVATION.md) binds a live pidfd,
-    protected executable, credentials, namespaces and manager cgroup without
-    claiming loaded configuration, active listeners or authenticated access.
+    protected executable, credentials, namespaces and manager cgroup.
+    [Listener observation](SSH_LISTENER_OBSERVATION.md) inspects TCP sockets
+    held by that process, without claiming policy correspondence or access.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.
