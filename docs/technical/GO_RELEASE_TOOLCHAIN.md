@@ -1,27 +1,28 @@
 # Go Release Toolchain Security
 
-Applies to: published v4.10.4 after signed native testing, protected Patch IVV
-and independent public asset verification. The
-[publication record](../releases/v4.10.4/README.md) defines the accepted scope.
+Applies to: current development builds and active CI/release workflows.
+The published v4.10.4 release remains bound to its original Go 1.26.9 compiler
+and [publication record](../releases/v4.10.4/README.md). This policy update does
+not republish that release or establish v5.00.0 acceptance.
 
-v4.10.4 requires exactly Go 1.26.9 for production builds, package
-provenance checks and active release workflows. Go published this security
-update on October 8, 2026. The merged-main vulnerability scan rejected the
-previous Go 1.26.6 build before native package signing.
+Current builds require exactly Go 1.26.10 for package provenance checks and
+active release workflows. Go published this security update on October 19,
+2026. The vulnerability database added GO-2026-6809 on October 21, and the
+development vulnerability scan rejected the previous Go 1.26.9 compiler.
 
-The reported reachable standard-library findings were GO-2026-6603,
-GO-2026-6604, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610,
-GO-2026-6611, GO-2026-6612, GO-2026-6613 and GO-2026-6617. The scan must pass
-against the current Go vulnerability database after rebuilding with the
-corrected toolchain. A prior successful scan is not a waiver for a new finding.
+GO-2026-6809 (CVE-2026-111943) adds an explicit rejection of compromised
+intermediate certificates in `crypto/x509`. The current vulnerability scan
+reports a reachable `Certificate.Verify` path. Rebuild with the corrected
+compiler and require the scan to pass against the current vulnerability
+database. A prior successful scan is not a waiver for a new finding.
 
 ## Official compiler identity
 
-For Linux AMD64, the official archive is `go1.26.9.linux-amd64.tar.gz`:
+For Linux AMD64, the official archive is `go1.26.10.linux-amd64.tar.gz`:
 
-- Size: 66,935,201 bytes.
-- SHA-256: `42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d`.
-- Version output: `go version go1.26.9 linux/amd64`.
+- Size: 66,936,659 bytes.
+- SHA-256: `ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5`.
+- Version output: `go version go1.26.10 linux/amd64`.
 
 Verify the archive against the [official download metadata](https://go.dev/dl/?mode=json)
 before local execution. The build scripts refuse an implicit toolchain
@@ -33,8 +34,10 @@ provenance gate rejects binaries built by a different compiler.
 The security update changes the compiled product even when application source
 is unchanged. Rebuild all native package variants, repeat the local pre-push
 gate, require successful checks on the reviewed merge, and regenerate native
-signatures and the candidate updater manifest. Perform native IVV with those
-exact signed artifacts before protected publication.
+signatures and the candidate updater manifest when preparing a release.
+The v5.00.0 major transition requires IVVQ with those exact signed artifacts;
+intermediate minor and patch releases require IVV. Component checks alone do
+not establish either acceptance boundary.
 
 Keep original failed logs and earlier artifact digests. Do not relabel old
 packages as corrected, replace a published asset, suppress the vulnerability
@@ -49,6 +52,10 @@ They describe historical measurements. They cannot authorize current builds
 or a downgrade of the security update. Their original signatures, hashes and
 test inputs must remain unchanged.
 
-Sources: [Go release history](https://go.dev/doc/devel/release#go1.26.9),
+The published v4.10.4 records retain their Go 1.26.9 identities, including the
+October 8 security correction and original artifact digests. Do not modify
+historical evidence to make it appear built with the current compiler.
+
+Sources: [Go release history](https://go.dev/doc/devel/release#go1.26.10),
 [Go vulnerability database](https://vuln.go.dev/), and the
-[GO-2026-6617 advisory](https://pkg.go.dev/vuln/GO-2026-6617).
+[GO-2026-6809 advisory](https://pkg.go.dev/vuln/GO-2026-6809).
