@@ -5,6 +5,7 @@ package sshpolicy
 import (
 	"bytes"
 	"context"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"syswarden-cli/pkg/sshselection"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestOpenSSHPublicationOracle(t *testing.T) {
@@ -38,9 +41,13 @@ func TestOpenSSHOwnedPublicationOracle(t *testing.T) {
 	testOpenSSHPublicationOracle(t, "owned")
 }
 
+func TestOpenSSHOwnedEndpointOracle(t *testing.T) {
+	testOpenSSHPublicationOracle(t, "owned-endpoints")
+}
+
 func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 	t.Helper()
-	transaction := operation == "transaction" || operation == "retire-restored" || operation == "owned"
+	transaction := operation == "transaction" || operation == "retire-restored" || operation == "owned" || operation == "owned-endpoints"
 	if os.Getenv("SYSWARDEN_SSH_ORACLE_TEST") != "1" {
 		t.Skip("set SYSWARDEN_SSH_ORACLE_TEST=1 for the installed OpenSSH parser oracle")
 	}
@@ -69,6 +76,16 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 	for _, profile := range []string{"forwarding", "cis", "legacy-cis"} {
 		t.Run(profile, func(t *testing.T) {
 			content := includeDropIns + "HostKey " + key + "\nPort 2222\nUsePAM no\nPasswordAuthentication no\nAuthenticationMethods publickey\nInclude /etc/ssh/access.conf\n"
+			var listenerFD int
+			var listenerInode uint64
+			if operation == "owned-endpoints" {
+				listenerFD, listenerInode = sshTestTCPListener(t, unix.AF_INET)
+				socket, listening, err := inspectSSHSocket(listenerFD, listenerInode)
+				if err != nil || !listening {
+					t.Fatal(err)
+				}
+				content += "AddressFamily inet\nListenAddress " + netip.AddrPortFrom(socket.Address, socket.Port).String() + "\n"
+			}
 			if profile == "legacy-cis" {
 				content = "AllowTcpForwarding no\n" + strings.Join(legacyCISBlock, "\n") + "\n" + content
 			}
@@ -236,6 +253,10 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 						t.Fatal("installed parser could not revalidate the owned publication", result, err)
 					}
 				}
+			}
+			if operation == "owned-endpoints" {
+				checkOwnedEndpointOracle(t, ctx, journal, plan, daemon, run,
+					func() error { return daemon.recheck(root, 0) }, listenerFD, listenerInode)
 			}
 			if transaction {
 				if err := journal.Close(); err != nil {

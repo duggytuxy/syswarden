@@ -159,6 +159,14 @@ func (owned *sshOwnedPublication) recheck() error {
 // activation or a retained recovery image into an accepted runtime policy.
 func verifySSHOwnedPublication(ctx context.Context, journal *sshJournal, approved, parser string,
 	run sshParserRun, parserCheck func() error) (OwnedSummary, error) {
+	return withSSHOwnedObservation(ctx, journal, approved, parser, run, parserCheck, nil)
+}
+
+// Keep dependent observations inside the same verified ownership lifetime.
+// The private callback receives a fresh guard, never a serialized authority.
+func withSSHOwnedObservation(ctx context.Context, journal *sshJournal, approved, parser string,
+	run sshParserRun, parserCheck func() error,
+	observe func(context.Context, *sshOwnedPublication, func() error) error) (OwnedSummary, error) {
 	if ctx == nil || run == nil || parserCheck == nil {
 		return OwnedSummary{}, ErrInventoryUnsafe
 	}
@@ -184,6 +192,11 @@ func verifySSHOwnedPublication(ctx context.Context, journal *sshJournal, approve
 	}
 	if err := guard(); err != nil {
 		return OwnedSummary{}, err
+	}
+	if observe != nil {
+		if err := errors.Join(observe(ctx, owned, guard), guard()); err != nil {
+			return OwnedSummary{}, err
+		}
 	}
 	return OwnedSummary{
 		Schema: 1, PlanSHA256: approved, ParserSHA256: parser, Transaction: owned.prepared.Transaction,

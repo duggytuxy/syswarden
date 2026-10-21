@@ -81,6 +81,11 @@ fresh native packages select the standard list only; SSH, CIS and OS hardening
 need explicit independent TOML choices. This command neither changes package
 defaults nor turns historical generated settings into consent.
 
+The internal [owned endpoint adapter](SSH_OWNED_ENDPOINTS.md) retains this
+verification's journal lock and ownership guards while comparing parsed
+endpoints with observed listeners. It does not change this command or promote
+matching endpoints into activation or authentication proof.
+
 ## Validation
 
 Temporary-filesystem tests exercise repeated observations, unchanged inode and
