@@ -69,9 +69,9 @@ func observeSSHConfiguredListeners(ctx context.Context, expected []netip.AddrPor
 		return ListenerSummary{}, ErrInventoryUnsafe
 	}
 	capture := &sshListenerCapture{}
-	process, err := observeSystemdProcessContext(ctx, func(ctx context.Context, process *sshProcessBinding) sshProcessLease {
+	process, err := observeSystemdProcessStartupContext(ctx, func(ctx context.Context, process *sshProcessBinding) sshProcessLease {
 		return configuredSSHListenerLease(ctx, process, expected, guard, capture)
-	})
+	}, true, guard)
 	if err != nil {
 		return ListenerSummary{}, err
 	}
@@ -101,7 +101,8 @@ func configuredSSHListenerLease(ctx context.Context, process *sshProcessBinding,
 
 // ObserveSystemdEndpoints uses only fixed protected configuration and installed
 // parser paths. It never publishes configuration, activates SSH or sends traffic.
-// Alternate service arguments and socket-unit policy still need separate proof.
+// Static service arguments are checked against the observed invocation.
+// Dynamic arguments and active socket-unit policy require separate qualification.
 func ObserveSystemdEndpoints() (summary EndpointSummary, err error) {
 	defer func() {
 		if err != nil {
