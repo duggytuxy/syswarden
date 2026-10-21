@@ -253,3 +253,12 @@ Explicitly empty standalone `$OPTIONS` and `$SSHD_OPTS` are now qualified throug
 protected ordered sources and repeated typed manager observations. Nonempty or
 unqualified options, active socket policy and causal configuration consumption
 still require qualification before activation can be accepted.
+
+## Durable boundary before a runtime request
+
+The internal [activation boundary](SSH_ACTIVATION_BOUNDARY.md) revalidates the
+owned publication and records an immutable intent before a future live adapter
+can dispatch a request. Once present, that intent blocks file-only rollback,
+recovery and retirement. An error or a successful request return cannot establish
+consumed policy or fresh authenticated access. The production activation and
+runtime-aware recovery adapter remains required before exposing this path.

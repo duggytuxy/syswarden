@@ -144,7 +144,7 @@ func publishSSHConfiguration(ctx context.Context, journal *sshJournal, plan migr
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := journal.recheck(); err != nil {
+		if err := journal.requireNoSSHActivation(); err != nil {
 			return err
 		}
 		current, err := stableSSHPublication(journal.root, journal.uid, stage)
@@ -190,7 +190,7 @@ func publishSSHConfiguration(ctx context.Context, journal *sshJournal, plan migr
 }
 
 func (journal *sshJournal) requireNoPublicationRecords() error {
-	if err := journal.requireNoPreparationAbort(); err != nil {
+	if err := errors.Join(journal.requireNoPreparationAbort(), journal.requireNoSSHActivation()); err != nil {
 		return err
 	}
 	for step := 1; step <= 3; step++ {
@@ -224,7 +224,7 @@ func executeSSHPublication(ctx context.Context, journal *sshJournal, phase sshPu
 	if err != nil || !reflect.DeepEqual(current, phase.Before) {
 		return sshStoredInventory{}, errors.Join(ErrInventoryChanged, err)
 	}
-	if err := errors.Join(ctx.Err(), journal.recheck(), parserCheck()); err != nil {
+	if err := errors.Join(ctx.Err(), journal.requireNoSSHActivation(), parserCheck()); err != nil {
 		return sshStoredInventory{}, err
 	}
 	// The held directory was opened before the final complete inventory.
@@ -303,7 +303,7 @@ func verifyPublishedSSH(ctx context.Context, journal *sshJournal, plan migration
 		if err != nil || !reflect.DeepEqual(current, expected) {
 			return errors.Join(ErrInventoryChanged, err)
 		}
-		return errors.Join(ctx.Err(), journal.recheck(), parserCheck())
+		return errors.Join(ctx.Err(), journal.requireNoSSHActivation(), parserCheck())
 	}
 	invoke := func(input *parserImage, mode, access string) ([]byte, error) {
 		if err := guard(); err != nil {

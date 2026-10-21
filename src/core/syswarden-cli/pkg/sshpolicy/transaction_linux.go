@@ -235,6 +235,9 @@ func recoverSSHTransaction(ctx context.Context, root *os.File, uid int, approved
 		return result, fmt.Errorf("SSH recovery requires the original approved plan and installed parser identity")
 	}
 	result.Transaction, result.RecoveryRequired = record.Transaction, true
+	if err := journal.requireNoSSHActivation(); err != nil {
+		return result, err
+	}
 	if _, readErr := journal.readRecord(sshPublicationName(1, false)); errors.Is(readErr, os.ErrNotExist) {
 		if err := abortSSHPreparation(ctx, journal, record, run, checkParser); err != nil {
 			return result, err

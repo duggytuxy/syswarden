@@ -21,6 +21,9 @@ func rollbackSSHConfiguration(ctx context.Context, journal *sshJournal, approved
 	if ctx == nil || journal == nil || journal.retained != nil || run == nil || parserCheck == nil || ops.sync == nil || ops.rename == nil || !lowerDigest.MatchString(approved) {
 		return ErrInventoryUnsafe
 	}
+	if err := journal.requireNoSSHActivation(); err != nil {
+		return err
+	}
 	prepared, err := journal.read()
 	if err != nil {
 		return err
@@ -132,7 +135,7 @@ func rollbackSSHConfiguration(ctx context.Context, journal *sshJournal, approved
 
 func sshRollbackGuard(ctx context.Context, journal *sshJournal, transaction string, expected sshStoredInventory, parserCheck func() error) func() error {
 	return func() error {
-		if err := errors.Join(ctx.Err(), journal.recheck(), parserCheck()); err != nil {
+		if err := errors.Join(ctx.Err(), journal.requireNoSSHActivation(), parserCheck()); err != nil {
 			return err
 		}
 		current, err := stableSSHRollback(journal, transaction)
