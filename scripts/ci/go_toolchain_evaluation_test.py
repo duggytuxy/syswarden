@@ -238,7 +238,7 @@ class GoToolchainEvaluationTests(unittest.TestCase):
         )
         block = next(block for block in self.run_blocks if "head -n 1 go.work" in block)
         with tempfile.TemporaryDirectory() as directory:
-            for version, expected in (("1.26.6", 0), ("1.26.9", 1), ("1.27.1", 1)):
+            for version, expected in (("1.26.6", 0), ("1.26.9", 1), ("1.26.10", 1), ("1.27.1", 1)):
                 with self.subTest(version=version):
                     (Path(directory) / "go.work").write_text(f"go {version}\n")
                     result = subprocess.run(
