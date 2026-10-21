@@ -180,6 +180,17 @@ durability, activate SSH, prove a new login or permit another apply to reuse
 the occupied journal. This supports later activation and owned update work
 without treating a matching filename or generated comment as ownership.
 
+## Observe service-manager topology before activation
+
+The internal [systemd observer](SSH_SERVICE_OBSERVATION.md) pins the manager
+helper and protected local endpoint, resolves fixed SSH service/socket aliases
+and compares two bounded property samples. It refuses ambiguous active units,
+instanced activation, pending jobs, unsupported states and observation drift.
+An inactive vendor instanced socket is identified without selecting it.
+The observer neither changes a unit nor establishes process, listener, policy
+consumption or administrator-access proof. OpenRC and offline roots still need
+separate adapters, and the production installer does not invoke this component.
+
 ## Validation and remaining work
 
 Temporary-filesystem tests cover publication and explicit restoration, external

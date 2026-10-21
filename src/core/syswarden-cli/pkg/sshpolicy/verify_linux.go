@@ -205,7 +205,7 @@ func readSSHD(directory *os.File, uid int) (*os.File, inventoryStamp, string, er
 }
 
 func readSSHExecutable(directory *os.File, name string, uid int) (*os.File, inventoryStamp, string, error) {
-	if directory == nil || (name != "sshd" && name != "matchpathcon") {
+	if directory == nil || (name != "sshd" && name != "matchpathcon" && name != "systemctl") {
 		return nil, inventoryStamp{}, "", ErrInventoryUnsafe
 	}
 	var before, opened, after unix.Stat_t
