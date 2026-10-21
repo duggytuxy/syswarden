@@ -222,3 +222,11 @@ handling in complete removal. Run native uninstall, package remove and purge
 separately once the coherent adapter is available, including administrator edits,
 reload and reboot.
 Preserve BunkerWeb's independent API, temporary-ban ownership, expiry and HA.
+
+## Process identity before activation
+
+The internal [process observer](SSH_PROCESS_OBSERVATION.md) brackets a pinned
+live process and protected executable with stable service-manager observations.
+It does not authorize this transaction to activate a policy or establish that
+the daemon consumed the published configuration. Configuration consumption,
+listeners and fresh independent access remain separate integration gates.

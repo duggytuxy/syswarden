@@ -40,8 +40,10 @@ Raw output is not returned with errors.
 
 Loaded aliases must independently resolve to one identical canonical service
 and at most one identical canonical socket. Service process identifiers and
-invocation identities must be internally consistent. A non-instanced socket
-must target that service and have a reciprocal relationship. Two distinct
+invocation identities must be internally consistent. An active service also
+requires a bounded canonical cgroup path; inactive services must have none.
+A non-instanced socket must target that service and have a reciprocal
+relationship. Two distinct
 services or sockets are ambiguous and refused.
 
 An inactive vendor `Accept=yes` socket is recorded as instanced without making
@@ -65,7 +67,9 @@ the executable/configuration consumed by that process, actual listening
 addresses, namespace identity or a fresh administrator login. Unit fragment
 and drop-in path strings are bound into the digest, not read or trusted as
 file ownership evidence. Later activation must revalidate these observations
-and independently verify the process, configuration and access path.
+and independently verify the process, configuration and access path. The
+separate [process observer](SSH_PROCESS_OBSERVATION.md) now binds a live process
+and executable; loaded configuration, listeners and access remain unverified.
 
 The [minimal native installation contract](https://github.com/duggytuxy/syswarden/issues/422)
 is unchanged: fresh packages select the standard list only, and SSH/CIS/OS

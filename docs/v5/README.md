@@ -97,7 +97,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     policy with the installed parser, and reports no activation or access claim.
     Internal [service-manager observation](SSH_SERVICE_OBSERVATION.md) resolves
     systemd aliases and stable service/socket topology through bounded read-only
-    queries. It does not attest a daemon's loaded policy or authenticate access.
+    queries. [Process observation](SSH_PROCESS_OBSERVATION.md) binds a live pidfd,
+    protected executable, credentials, namespaces and manager cgroup without
+    claiming loaded configuration, active listeners or authenticated access.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

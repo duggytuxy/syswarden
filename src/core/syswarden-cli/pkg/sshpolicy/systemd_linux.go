@@ -16,7 +16,7 @@ import (
 )
 
 const sshSystemdCommon = "Id,Names,LoadState,ActiveState,SubState,UnitFileState,NeedDaemonReload,Job,InvocationID,FragmentPath,DropInPaths,ControlPID"
-const sshSystemdService = sshSystemdCommon + ",MainPID,ExecMainStartTimestampMonotonic,TriggeredBy"
+const sshSystemdService = sshSystemdCommon + ",MainPID,ExecMainStartTimestampMonotonic,TriggeredBy,ControlGroup"
 const sshSystemdSocket = sshSystemdCommon + ",Triggers,Accept"
 const maxSSHSystemdOutput = 64 << 10
 
@@ -123,6 +123,9 @@ func parseSSHSystemdUnit(requested string, wire []byte) (sshSystemdUnit, error) 
 		return nil, fmt.Errorf("SSH manager unit is not in a supported stable state")
 	}
 	if suffix == "service" {
+		if (active && !validSSHControlGroup(u["ControlGroup"])) || (!active && u["ControlGroup"] != "") {
+			return nil, fmt.Errorf("SSH manager service cgroup is unavailable or inconsistent")
+		}
 		pid, pidErr := sshSystemdUint(u["MainPID"], 32)
 		started, startErr := sshSystemdUint(u["ExecMainStartTimestampMonotonic"], 64)
 		if pidErr != nil || startErr != nil || (active && (pid <= 1 || started == 0 || u["SubState"] != "running")) || (!active && pid != 0) {
@@ -241,9 +244,19 @@ func classifySSHSystemd(units map[string]sshSystemdUnit, digest string) (Systemd
 	return result, nil
 }
 
+type sshSystemdSnapshot struct {
+	summary SystemdSummary
+	units   map[string]sshSystemdUnit
+}
+
 func observeSSHSystemd(ctx context.Context, digest string, run sshSystemdRun, recheck func() error) (SystemdSummary, error) {
+	snapshot, err := observeSSHSystemdSnapshot(ctx, digest, run, recheck)
+	return snapshot.summary, err
+}
+
+func observeSSHSystemdSnapshot(ctx context.Context, digest string, run sshSystemdRun, recheck func() error) (sshSystemdSnapshot, error) {
 	if ctx == nil || run == nil || recheck == nil || !lowerDigest.MatchString(digest) {
-		return SystemdSummary{}, ErrInventoryUnsafe
+		return sshSystemdSnapshot{}, ErrInventoryUnsafe
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -252,28 +265,32 @@ func observeSSHSystemd(ctx context.Context, digest string, run sshSystemdRun, re
 		units := make(map[string]sshSystemdUnit, 4)
 		for _, name := range []string{"ssh.service", "sshd.service", "ssh.socket", "sshd.socket"} {
 			if err := errors.Join(ctx.Err(), recheck()); err != nil {
-				return SystemdSummary{}, err
+				return sshSystemdSnapshot{}, err
 			}
 			wire, runErr := run(ctx, name)
 			if err := errors.Join(ctx.Err(), recheck(), runErr); err != nil {
-				return SystemdSummary{}, fmt.Errorf("SSH manager query failed or changed: %w", err)
+				return sshSystemdSnapshot{}, fmt.Errorf("SSH manager query failed or changed: %w", err)
 			}
 			u, err := parseSSHSystemdUnit(name, wire)
 			if err != nil {
-				return SystemdSummary{}, err
+				return sshSystemdSnapshot{}, err
 			}
 			units[name] = u
 		}
 		if _, err := classifySSHSystemd(units, digest); err != nil {
-			return SystemdSummary{}, err
+			return sshSystemdSnapshot{}, err
 		}
 		if previous != nil && !reflect.DeepEqual(previous, units) {
-			return SystemdSummary{}, ErrInventoryChanged
+			return sshSystemdSnapshot{}, ErrInventoryChanged
 		}
 		previous = units
 	}
 	if err := errors.Join(ctx.Err(), recheck()); err != nil {
-		return SystemdSummary{}, err
+		return sshSystemdSnapshot{}, err
 	}
-	return classifySSHSystemd(previous, digest)
+	summary, err := classifySSHSystemd(previous, digest)
+	if err != nil {
+		return sshSystemdSnapshot{}, err
+	}
+	return sshSystemdSnapshot{summary: summary, units: previous}, nil
 }

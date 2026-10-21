@@ -36,6 +36,7 @@ func sshUnitFixture(name string, loaded, active bool) sshSystemdUnit {
 		u["InvocationID"] = strings.Repeat("a", 32)
 		if strings.HasSuffix(name, ".service") {
 			u["MainPID"], u["ExecMainStartTimestampMonotonic"] = "100", "123456"
+			u["ControlGroup"] = "/system.slice/" + name
 		} else {
 			u["SubState"] = "listening"
 		}
@@ -133,7 +134,7 @@ func TestSSHSystemdRejectsMalformedProperties(t *testing.T) {
 		"Id": "other.service", "Names": "ssh.service ssh.service", "LoadState": "masked", "ActiveState": "reloading", "SubState": "exited",
 		"MainPID": "0", "ControlPID": "200", "ExecMainStartTimestampMonotonic": "0", "NeedDaemonReload": "yes",
 		"Job": "17", "InvocationID": strings.Repeat("0", 32), "FragmentPath": "relative", "UnitFileState": "",
-		"TriggeredBy": "other.socket", "unknown": "anything",
+		"TriggeredBy": "other.socket", "ControlGroup": "/", "unknown": "anything",
 	} {
 		t.Run(key, func(t *testing.T) {
 			u := maps.Clone(valid)
@@ -156,6 +157,11 @@ func TestSSHSystemdRejectsMalformedProperties(t *testing.T) {
 		if _, err := parseSSHSystemdUnit("ssh.service", sshUnitWire(u)); err == nil {
 			t.Fatal("accepted noncanonical PID")
 		}
+	}
+	inactive := sshUnitFixture("ssh.service", true, false)
+	inactive["ControlGroup"] = "/system.slice/ssh.service"
+	if _, err := parseSSHSystemdUnit("ssh.service", sshUnitWire(inactive)); err == nil {
+		t.Fatal("accepted an inactive service with a residual cgroup")
 	}
 	if _, err := parseSSHSystemdUnit("ssh.service;reboot", []byte(wire)); err == nil {
 		t.Fatal("accepted caller-selected unit")
