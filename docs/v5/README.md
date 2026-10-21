@@ -106,7 +106,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
     claiming configuration consumption or authenticated access.
     [Owned endpoint observation](SSH_OWNED_ENDPOINTS.md) joins publication and
     listener verification under one retained ownership guard and journal lock.
-    [Static startup selection](SSH_STARTUP_SELECTION.md) additionally binds
+    [Startup selection](SSH_STARTUP_SELECTION.md), including protected explicitly
+    empty distribution option variables, additionally binds
     exact manager arguments to the observed invocation, refusing unqualified
     overrides and dynamic selection without claiming loaded-policy proof.
     Production activation, lifecycle integration, the minimal package profile

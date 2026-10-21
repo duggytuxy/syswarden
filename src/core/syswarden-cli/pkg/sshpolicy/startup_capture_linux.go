@@ -65,6 +65,18 @@ func (tool *sshBusctl) command(ctx context.Context, unit string) (*exec.Cmd, err
 		command = exec.CommandContext(ctx, "/proc/self/fd/3", "--address=unix:path=/run/dbus/system_bus_socket", "--no-pager", "--json=short", "--timeout=5", "--auto-start=no", "--allow-interactive-authorization=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/unit/ssh_2eservice", "org.freedesktop.systemd1.Service", "ExecStartEx")
 	case "sshd.service":
 		command = exec.CommandContext(ctx, "/proc/self/fd/3", "--address=unix:path=/run/dbus/system_bus_socket", "--no-pager", "--json=short", "--timeout=5", "--auto-start=no", "--allow-interactive-authorization=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/unit/sshd_2eservice", "org.freedesktop.systemd1.Service", "ExecStartEx")
+	case "ssh.service/environment":
+		command = exec.CommandContext(ctx, "/proc/self/fd/3", "--address=unix:path=/run/dbus/system_bus_socket", "--no-pager", "--json=short", "--timeout=5", "--auto-start=no", "--allow-interactive-authorization=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/unit/ssh_2eservice", "org.freedesktop.systemd1.Service", "Environment")
+	case "ssh.service/environment-files":
+		command = exec.CommandContext(ctx, "/proc/self/fd/3", "--address=unix:path=/run/dbus/system_bus_socket", "--no-pager", "--json=short", "--timeout=5", "--auto-start=no", "--allow-interactive-authorization=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/unit/ssh_2eservice", "org.freedesktop.systemd1.Service", "EnvironmentFiles")
+	case "ssh.service/pam-name":
+		command = exec.CommandContext(ctx, "/proc/self/fd/3", "--address=unix:path=/run/dbus/system_bus_socket", "--no-pager", "--json=short", "--timeout=5", "--auto-start=no", "--allow-interactive-authorization=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/unit/ssh_2eservice", "org.freedesktop.systemd1.Service", "PAMName")
+	case "sshd.service/environment":
+		command = exec.CommandContext(ctx, "/proc/self/fd/3", "--address=unix:path=/run/dbus/system_bus_socket", "--no-pager", "--json=short", "--timeout=5", "--auto-start=no", "--allow-interactive-authorization=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/unit/sshd_2eservice", "org.freedesktop.systemd1.Service", "Environment")
+	case "sshd.service/environment-files":
+		command = exec.CommandContext(ctx, "/proc/self/fd/3", "--address=unix:path=/run/dbus/system_bus_socket", "--no-pager", "--json=short", "--timeout=5", "--auto-start=no", "--allow-interactive-authorization=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/unit/sshd_2eservice", "org.freedesktop.systemd1.Service", "EnvironmentFiles")
+	case "sshd.service/pam-name":
+		command = exec.CommandContext(ctx, "/proc/self/fd/3", "--address=unix:path=/run/dbus/system_bus_socket", "--no-pager", "--json=short", "--timeout=5", "--auto-start=no", "--allow-interactive-authorization=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/unit/sshd_2eservice", "org.freedesktop.systemd1.Service", "PAMName")
 	case "manager-pid":
 		command = exec.CommandContext(ctx, "/proc/self/fd/3", "--address=unix:path=/run/dbus/system_bus_socket", "--no-pager", "--json=short", "--timeout=5", "--auto-start=no", "--allow-interactive-authorization=no", "call", "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetConnectionUnixProcessID", "s", "org.freedesktop.systemd1")
 	case "manager-uid":
@@ -83,7 +95,7 @@ func (tool *sshBusctl) command(ctx context.Context, unit string) (*exec.Cmd, err
 // The broker identifies the well-known manager as root PID 1 on both sides of
 // the property read. These queries cannot activate a service or set a property.
 func querySSHStartupBus(ctx context.Context, unit string, execute sshStartupQuery) ([]byte, error) {
-	if ctx == nil || execute == nil || (unit != "ssh.service" && unit != "sshd.service") {
+	if ctx == nil || execute == nil || !validSSHStartupQuery(unit) {
 		return nil, ErrInventoryUnsafe
 	}
 	identity := func() error {
@@ -171,4 +183,13 @@ func readSSHSystemBusEndpoint(root *os.File, uid int) (snapshot inventorySnapsho
 	}
 	reader.state.nodes["/run/dbus/system_bus_socket"] = stamp(st)
 	return reader.state, nil
+}
+
+func validSSHStartupQuery(key string) bool {
+	switch key {
+	case "ssh.service", "sshd.service", "ssh.service/environment", "sshd.service/environment", "ssh.service/environment-files", "sshd.service/environment-files", "ssh.service/pam-name", "sshd.service/pam-name":
+		return true
+	default:
+		return false
+	}
 }

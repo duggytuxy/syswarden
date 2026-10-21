@@ -224,7 +224,10 @@ func observeSystemdProcessStartupContext(ctx context.Context, wrap func(context.
 	var startup func(context.Context, sshSystemdSnapshot) (StartupSummary, error)
 	if requireStartup {
 		startup = func(ctx context.Context, snapshot sshSystemdSnapshot) (StartupSummary, error) {
-			return observeSSHStartup(ctx, snapshot, daemon.parent+"/sshd", bus.run, guard)
+			capture := func(ctx context.Context, unit string) (sshEnvironmentResult, error) {
+				return captureSSHStartupEnvironment(ctx, unit, root, 0, bus.run, guard)
+			}
+			return observeSSHStartupEnvironment(ctx, snapshot, daemon.parent+"/sshd", bus.run, guard, capture)
 		}
 	}
 	return observeSSHSystemdProcessStartup(ctx, snapshot, bind, guard, startup)

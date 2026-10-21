@@ -1,9 +1,10 @@
-# Bind static SSH startup selection to the observed invocation
+# Bind SSH startup selection to the observed invocation
 
 Status: internal v5.00.0 integration component. Refs #235, #337 and #422.
 
 The production endpoint observer, including the owned-publication composition,
 now checks the manager's typed startup declaration before binding a process.
+It also qualifies a bounded case of explicitly empty distribution option variables.
 It repeats that check while retaining the process lease and ownership guards.
 A matching listener cannot compensate for an unsupported startup declaration.
 
@@ -26,8 +27,9 @@ The complete declaration must remain identical across the process observation.
 This restriction matters because [OpenSSH command-line options](https://man.openbsd.org/sshd.8)
 can override file settings, and a reload reuses the original startup options.
 An alternate `-f`, `-o`, port/family override, wrapper, execution prefix, joined
-or duplicate option, or unresolved variable such as `$OPTIONS` is refused.
-Argument arrays are never flattened, expanded or executed by SysWarden.
+or duplicate option, or unqualified variable is refused. Argument arrays are
+never flattened or executed by SysWarden. Only the explicitly empty standalone
+variables described below can be removed from the verification copy.
 
 Active socket activation, instanced sockets and executable path aliases not
 independently qualified by this adapter are refused. The basic manager/process
@@ -37,11 +39,53 @@ They identify cases that still require explicit integration and native evidence.
 The adapter never rewrites a vendor unit or clears an administrator option to
 make the check pass.
 
+## Explicitly empty distribution option variables
+
+Some service declarations use `-D $OPTIONS` or `-D $SSHD_OPTS` even when the
+operator has not supplied extra options. This adapter now recognizes those two
+standalone tokens when their final value is explicitly assigned to the empty
+string. It reads typed `Environment`, `EnvironmentFiles` and `PAMName` properties
+from the same authenticated manager transport. The recognized environment files
+are `/etc/default/ssh` and `/etc/sysconfig/sshd`, in the manager's declared order.
+
+Unit assignments are applied first, followed by assignments from each declared
+file. A later file assignment wins. A missing optional file does not erase an
+earlier value; a missing required file fails. An undefined variable is not taken
+as evidence of an empty value, because global or inherited inputs could set it.
+Explicit later assignments override those earlier inputs. Nonempty service
+`PAMName` is refused because PAM could supply additional values. This restriction
+concerns systemd's service launch context, not OpenSSH's separate `UsePAM` option.
+`UnsetEnvironment` is not used to infer an empty command-line option.
+
+The [systemd execution environment](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html)
+defines source precedence. Its
+[command-line substitution rules](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)
+distinguish a standalone `$NAME` from `${NAME}`: the latter still yields one
+argument when empty. Braced, embedded, duplicate or other variables are refused.
+Whitespace-only and nonempty option values are also refused. The adapter never
+drops an administrator option or edits a source to make verification pass.
+
+The file reader accepts a conservative single-line assignment subset: ASCII
+variable names, plain values or whole single/double-quoted values, blank lines,
+and full-line comments. Continuations, escapes, multiline quoting, malformed
+assignments and unsupported paths are refused. This is deliberately not a
+replacement for systemd's complete environment parser and never invokes a shell.
+A supported filename alone is not evidence of ownership. All files and ancestors
+must pass the protected inventory checks, including root ownership, permissions,
+single-link custody and absence of arbitrary symlinks.
+
+The properties, source bytes, metadata, attributes and negative lookups are
+sampled again around capture and again across the retained process observation.
+Changed inputs invalidate the complete result even if the effective options
+would still be empty. Only a digest is included in the summary; values and raw
+source content are not exposed. Static declarations without variables keep their
+existing path and do not acquire an invented environment attestation.
+
 ## Protected read-only transport
 
 The root adapter pins `/usr/bin/busctl` as a protected, single-link Linux AMD64
-executable and verifies its identity and digest around queries. It uses only a
-fixed `get-property` request for `ssh.service` or `sshd.service` over the protected
+executable and verifies its identity and digest around queries. It uses only
+fixed `get-property` requests for `ssh.service` or `sshd.service` over the protected
 local system-bus endpoint. The broker must identify the manager as root PID 1
 before and after each property read. The broker socket and its protected
 ancestors are rechecked together with the manager private endpoint used by
@@ -61,8 +105,8 @@ A verified declaration is still not proof of the daemon's loaded policy. It
 does not attest the full execution environment, historical configuration bytes,
 compiled defaults, authentication success or causally verified activation. The
 configuration, activation and access proof flags therefore remain false.
-Environment-derived options, supported socket startup, alias resolution and
-OpenRC need their own qualified adapters before broader native support can be
+Nonempty or unqualified environment-derived options, supported socket startup,
+alias resolution and OpenRC need qualified adapters before broader support can be
 claimed. No fallback silently weakens these requirements.
 
 No new CLI, installer call, service action or dependency installation is added.
@@ -78,7 +122,9 @@ remains independent, including source ownership, expiry and HA. Linux AMD64 only
 
 ## Validation boundaries
 
-Tests cover typed argument preservation, override refusal, invocation changes,
+Tests cover explicit empty option values, source precedence, malformed and
+ambiguous assignments, source replacement, negative lookup changes, bound
+manager properties, typed argument preservation, override refusal, invocation changes,
 unsupported socket topology, cancellation, transport and binary replacement,
 late errors and absence of partial success. The installed manager oracle reads
 its real typed property and manager credentials over the same fixed system-bus
