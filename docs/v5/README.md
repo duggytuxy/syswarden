@@ -114,8 +114,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     uncertainty before a runtime request and prevents file-only recovery
     from treating an attempted activation as an untouched daemon. Its private
     systemd target now retains the protected helpers and live pidfd through a
-    single bounded SIGHUP request, without enabling an installer or CLI caller
-    or claiming that the daemon consumed the policy.
+    single bounded SIGHUP request and verifies stable replacement of every
+    expected listener generation. It does not enable an installer or CLI caller
+    or claim that the daemon consumed the policy or accepted a fresh login.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

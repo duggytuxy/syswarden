@@ -109,7 +109,7 @@ func TestSSHActivationTargetOneShotGuardAndCancellation(t *testing.T) {
 						cancel()
 					}
 					return nil
-				}, closeFn: func() error {
+				}, after: func(context.Context, func() error) error { return nil }, closeFn: func() error {
 					closes++
 					if scenario == "close-error" {
 						return ErrInventoryChanged
@@ -152,7 +152,7 @@ func TestSSHActivationTargetOneShotGuardAndCancellation(t *testing.T) {
 			if (closeErr != nil) != (scenario == "close-error") || closes != 1 || l.identity() != "" || l.Close() != nil || closes != 1 || calls != before {
 				t.Fatal("close lost ownership or replayed")
 			}
-			if ok && (checks != 1 || guards != 3) {
+			if ok && (checks != 1 || guards != 4) {
 				t.Fatal("missing pre/post guards")
 			}
 		})
@@ -163,7 +163,7 @@ func TestSSHActivationTargetSerializesConcurrentRequestsAndClose(t *testing.T) {
 	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	calls, closes := 0, 0
 	l := &sshActivationTarget{ctx: context.Background(), target: strings.Repeat("e", 64), verify: func(context.Context) error { return nil },
-		send: func() error { calls++; close(entered); <-release; return nil }, closeFn: func() error { closes++; return nil }}
+		send: func() error { calls++; close(entered); <-release; return nil }, after: func(context.Context, func() error) error { return nil }, closeFn: func() error { closes++; return nil }}
 	go func() { finished <- l.request(context.Background(), func() error { return nil }) }()
 	select {
 	case <-entered:
@@ -204,7 +204,7 @@ func TestSSHActivationTargetUsesPostIntentGuardAndRetainsFence(t *testing.T) {
 						t.Fatal("send before durable intent", err)
 					}
 					return nil
-				}, closeFn: func() error { closes++; return nil }}, nil
+				}, after: func(context.Context, func() error) error { return nil }, closeFn: func() error { closes++; return nil }}, nil
 		})
 	if err != nil || calls != 1 || closes != 1 || !result.IntentDurable || !result.RequestReturned || !result.RecoveryRequired || !journal.poisoned {
 		t.Fatal("lost activation boundary", result, err)
