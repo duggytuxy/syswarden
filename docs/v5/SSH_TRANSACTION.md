@@ -257,8 +257,10 @@ still require qualification before activation can be accepted.
 ## Durable boundary before a runtime request
 
 The internal [activation boundary](SSH_ACTIVATION_BOUNDARY.md) revalidates the
-owned publication and records an immutable intent before a future live adapter
+owned publication and records an immutable intent before its private live adapter
 can dispatch a request. Once present, that intent blocks file-only rollback,
 recovery and retirement. An error or a successful request return cannot establish
-consumed policy or fresh authenticated access. The production activation and
-runtime-aware recovery adapter remains required before exposing this path.
+consumed policy or fresh authenticated access. The private systemd adapter retains
+the protected helpers and original process handle through one guarded SIGHUP
+request. Causal acknowledgement, independent access and runtime-aware recovery
+remain required before exposing this path to the CLI or installer.
