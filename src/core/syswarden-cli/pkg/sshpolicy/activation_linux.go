@@ -15,7 +15,7 @@ import (
 const sshActivationIntentName = "activation-intent.json"
 
 // This private boundary records uncertainty before handing control to a live
-// activation adapter. No production adapter or CLI entry is enabled here.
+// activation adapter. No CLI or installer entry is enabled here.
 // Returned status is not proof of policy consumption or authenticated access.
 type sshActivationResult struct {
 	Transaction      string
@@ -35,7 +35,7 @@ type sshActivationIntent struct {
 	Target      string `json:"target_sha256"`
 }
 
-// A future production binder must hold the verified manager/process resources
+// A production binder must hold the verified manager/process resources
 // through Close, qualify the exact operation and recheck them immediately before
 // dispatch. A saved observation or caller-supplied summary cannot be a binder.
 // request must honor ctx and the policy guard; its return is not an activation

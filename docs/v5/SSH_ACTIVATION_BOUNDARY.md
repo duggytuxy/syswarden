@@ -1,7 +1,8 @@
 # Durable boundary for an SSH activation attempt
 
 Status: internal v5.00.0 component. Refs #235, #337 and #422.
-No production activation adapter, CLI command or installer call is enabled.
+A private systemd target adapter exists. No CLI command or installer call is
+enabled, and no complete activation or migration is accepted by this component.
 
 ## Why publication recovery needs a separate boundary
 
@@ -30,11 +31,26 @@ final graphs and all declared access contexts. The runtime binder is reached
 only after these checks. It receives the original bounded context and a fresh
 configuration guard, not a serialized authority.
 
-A future production binder must retain the verified manager/process resources,
-qualify the exact operation, and recheck its target immediately before dispatch.
-Its identity is a digest of that bound target. This component supplies only the
-private lease interface and fixture implementations for testing. It does not
-supply a signal sender or service-manager mutation command.
+The private systemd binder retains the protected root, parser, systemctl and
+busctl executable descriptors, endpoint identities, and original live process
+lease. The existing read-only observers reuse the resource owner and still close
+all resources before returning a summary. An observation summary cannot authorize
+activation. Only a root-only binder selecting fixed live paths constructs the
+systemd activation target; it does not accept a serialized target or caller PID.
+
+That target qualifies the exact operation as a single `SIGHUP` sent through the
+original pidfd. It rechecks the stable manager invocation, qualified typed startup
+declaration, executable, process identity, namespaces, root and control group.
+Active socket configurations, unqualified startup options and changing state
+remain refused. Its identity digest binds the operation and those observations.
+
+The [Linux pidfd signal interface](https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html)
+keeps an exited process's handle from addressing a recycled numeric PID. There
+is no numeric-PID fallback, shell command, process-group signal, service-manager
+mutation or automatic retry. A mutex serializes dispatch with closure so the
+local pidfd cannot be closed and recycled during that request. The lease is
+consumed even when dispatch fails. This protects the selected process identity;
+it does not protect against hostile root or prove what OpenSSH subsequently read.
 
 The intent binds the transaction, original approval, parser, preparation record,
 complete published inventory, original record identities and target digest.
@@ -42,8 +58,11 @@ It contains no configuration contents, accounts, endpoints or authentication
 material. Existing protected storage writes the intent without replacement and
 synchronizes it before the request becomes eligible. Configuration, parser,
 journal membership, original records and the new intent inode remain guarded.
-The request must honor that guard and the shared deadline. Production binding
-and deadline enforcement still need qualification when their adapter is added.
+The private adapter replaces the pre-intent policy guard with the request's
+post-intent guard. Its retained runtime checks do not invoke the obsolete guard.
+The original bounded lifetime and request cancellation both apply. Partial
+acquisition releases resources; closure attempts every owned descriptor and
+propagates errors. Native end-to-end activation still needs qualification.
 
 An error during persistence prevents dispatch. From the write attempt onward,
 the result requires recovery because a failed write may still have left visible
@@ -75,7 +94,12 @@ explicit consent, target and parser drift, uncertain directory synchronization,
 late cancellation, request and close errors, byte-identical record replacement,
 replay refusal and reopening. They verify that configuration files remain intact
 and that publication recovery, rollback and retirement reject the activation
-fence. Request leases are test doubles; these checks do not reload a real SSH
+fence. Retained-resource tests cover partial acquisition, changed or prematurely
+closed helpers, stale manager/startup/process state, cancellation, concurrent
+requests and closure, and one-shot dispatch. A native syscall test sends SIGHUP
+only to a disposable copy of the test binary and verifies refusal after its exit
+and closure. It does not signal an installed SSH service. Higher-level dispatch
+tests use controlled target callbacks. These checks do not reload a real SSH
 daemon or establish native migration acceptance.
 
 Production activation, configuration consumption, independent fresh access,

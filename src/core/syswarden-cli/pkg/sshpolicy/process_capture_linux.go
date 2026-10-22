@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"time"
@@ -41,52 +42,83 @@ func observeSSHSystemdProcess(ctx context.Context, snapshot func(context.Context
 
 func observeSSHSystemdProcessStartup(ctx context.Context, snapshot func(context.Context) (sshSystemdSnapshot, error),
 	bind func(int, string) (sshProcessLease, error), guard func() error,
-	startup func(context.Context, sshSystemdSnapshot) (StartupSummary, error)) (summary ProcessSummary, err error) {
-	defer func() {
-		if err != nil {
-			summary = ProcessSummary{}
-		}
-	}()
+	startup func(context.Context, sshSystemdSnapshot) (StartupSummary, error)) (ProcessSummary, error) {
+	held, err := retainSSHSystemdProcess(ctx, snapshot, bind, guard, startup)
+	if err != nil {
+		return ProcessSummary{}, err
+	}
+	summary := held.summary
+	if err := held.Close(); err != nil {
+		return ProcessSummary{}, err
+	}
+	return summary, nil
+}
+
+// The private owner retains the original process lease. Public observations
+// still close it before returning and never grant activation authority.
+type sshRetainedProcess struct {
+	lease   sshProcessLease
+	summary ProcessSummary
+	manager sshSystemdSnapshot
+	process sshProcessIdentity
+}
+
+func (held *sshRetainedProcess) Close() error {
+	if held == nil || held.lease == nil {
+		return nil
+	}
+	lease := held.lease
+	held.lease = nil
+	return lease.Close()
+}
+
+func retainSSHSystemdProcess(ctx context.Context, snapshot func(context.Context) (sshSystemdSnapshot, error),
+	bind func(int, string) (sshProcessLease, error), guard func() error,
+	startup func(context.Context, sshSystemdSnapshot) (StartupSummary, error)) (_ *sshRetainedProcess, err error) {
 	if ctx == nil || snapshot == nil || bind == nil || guard == nil {
-		return summary, ErrInventoryUnsafe
+		return nil, ErrInventoryUnsafe
 	}
 	if err = errors.Join(ctx.Err(), guard()); err != nil {
-		return summary, err
+		return nil, err
 	}
 	before, err := snapshot(ctx)
 	if err != nil {
-		return summary, err
+		return nil, err
 	}
 	if !before.summary.ManagerObserved || !before.summary.ServiceActive || before.summary.SocketInstanced {
-		return summary, fmt.Errorf("SSH process observation requires an active supported service")
+		return nil, fmt.Errorf("SSH process observation requires an active supported service")
 	}
 	var command *StartupSummary
 	if startup != nil {
 		observed, startErr := startup(ctx, before)
 		if startErr != nil || !observed.DeclarationVerified || !lowerDigest.MatchString(observed.CommandSHA256) {
-			return summary, errors.Join(ErrInventoryUnsafe, startErr)
+			return nil, errors.Join(ErrInventoryUnsafe, startErr)
 		}
 		command = &observed
 	}
 	u := before.units[before.summary.Service]
 	pid, err := sshSystemdUint(u["MainPID"], 32)
 	if err != nil || pid <= 1 || pid > 1<<31-1 || !validSSHControlGroup(u["ControlGroup"]) {
-		return summary, ErrInventoryUnsafe
+		return nil, ErrInventoryUnsafe
 	}
 	lease, err := bind(int(pid), u["ControlGroup"])
 	if err != nil || lease == nil {
 		if lease != nil {
 			err = errors.Join(err, lease.Close())
 		}
-		return summary, errors.Join(ErrInventoryUnsafe, err)
+		return nil, errors.Join(ErrInventoryUnsafe, err)
 	}
-	defer func() { err = errors.Join(err, lease.Close()) }()
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, lease.Close())
+		}
+	}()
 	first, err := lease.observe()
 	if err != nil {
-		return summary, err
+		return nil, err
 	}
 	if err = errors.Join(ctx.Err(), guard()); err != nil {
-		return summary, err
+		return nil, err
 	}
 	after, snapshotErr := snapshot(ctx)
 	var startupErr error
@@ -99,24 +131,31 @@ func observeSSHSystemdProcessStartup(ctx context.Context, snapshot func(context.
 	}
 	second, processErr := lease.observe()
 	if err = errors.Join(snapshotErr, startupErr, processErr, ctx.Err(), guard()); err != nil {
-		return summary, err
+		return nil, err
 	}
 	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(first, second) || first.PID != int(pid) ||
 		first.StartTicks == 0 || !lowerDigest.MatchString(first.ExecutableSHA256) || len(first.Namespaces) != 4 ||
 		first.Root.Inode == 0 || first.ControlGroupHash != digestBytes([]byte(u["ControlGroup"])) {
-		return summary, ErrInventoryChanged
+		return nil, ErrInventoryChanged
 	}
 	for _, name := range []string{"pid", "net", "user", "mnt"} {
 		if first.Namespaces[name].Inode == 0 {
-			return summary, ErrInventoryUnsafe
+			return nil, ErrInventoryUnsafe
 		}
 	}
 	wire, err := json.Marshal(first)
 	if err != nil {
-		return summary, err
+		return nil, err
 	}
-	return ProcessSummary{Startup: command, Schema: 1, Manager: before.summary, IdentitySHA256: digestBytes(wire),
-		ExecutableSHA256: first.ExecutableSHA256, ProcessObserved: true, ExecutableVerified: true}, nil
+	summary := ProcessSummary{Startup: command, Schema: 1, Manager: before.summary, IdentitySHA256: digestBytes(wire),
+		ExecutableSHA256: first.ExecutableSHA256, ProcessObserved: true, ExecutableVerified: true}
+	// Retained expectations must not alias a provider's reusable maps.
+	before.units = maps.Clone(before.units)
+	for name, unit := range before.units {
+		before.units[name] = maps.Clone(unit)
+	}
+	first.Namespaces = maps.Clone(first.Namespaces)
+	return &sshRetainedProcess{lease: lease, summary: summary, manager: before, process: first}, nil
 }
 
 // ObserveSystemdProcess executes only fixed manager queries and bounded procfs
@@ -151,64 +190,24 @@ func observeSystemdProcessStartupContext(ctx context.Context, wrap func(context.
 	if os.Geteuid() != 0 {
 		return summary, fmt.Errorf("SSH process observation requires root")
 	}
-	root, err := os.Open("/")
+	resources, err := openSSHProcessResources(ctx, requireStartup)
 	if err != nil {
 		return summary, err
 	}
-	defer func() { err = errors.Join(err, root.Close()) }()
-	tool, err := openSSHSystemctl(root, 0)
-	if err != nil {
-		return summary, err
-	}
-	defer func() { err = errors.Join(err, tool.file.Close()) }()
-	daemon, err := openSSHD(root, 0)
-	if err != nil {
-		return summary, err
-	}
-	defer func() { err = errors.Join(err, daemon.file.Close()) }()
-	endpoint, err := readSSHSystemdEndpoint(root, 0)
-	if err != nil {
-		return summary, err
-	}
-	var bus *sshBusctl
-	var busEndpoint inventorySnapshot
-	if requireStartup {
-		bus, err = openSSHBusctl(root, 0)
-		if err != nil {
-			return summary, err
-		}
-		defer func() { err = errors.Join(err, bus.file.Close()) }()
-		busEndpoint, err = readSSHSystemBusEndpoint(root, 0)
-		if err != nil {
-			return summary, err
-		}
-	}
+	defer func() { err = errors.Join(err, resources.Close()) }()
 	guard := func() error {
 		if configurationGuard != nil {
 			if err := configurationGuard(); err != nil {
 				return err
 			}
 		}
-		if bus != nil {
-			current, err := readSSHSystemBusEndpoint(root, 0)
-			if err != nil || !reflect.DeepEqual(busEndpoint, current) {
-				return errors.Join(ErrInventoryChanged, err)
-			}
-			if err := bus.recheck(root, 0); err != nil {
-				return err
-			}
-		}
-		current, endpointErr := readSSHSystemdEndpoint(root, 0)
-		if endpointErr != nil || !reflect.DeepEqual(endpoint, current) {
-			return errors.Join(ErrInventoryChanged, endpointErr)
-		}
-		return errors.Join(tool.recheck(root, 0), daemon.recheck(root, 0))
+		return resources.recheck()
 	}
 	snapshot := func(ctx context.Context) (sshSystemdSnapshot, error) {
-		return observeSSHSystemdSnapshot(ctx, tool.digest, tool.run, guard)
+		return observeSSHSystemdSnapshot(ctx, resources.tool.digest, resources.tool.run, guard)
 	}
 	bind := func(pid int, group string) (sshProcessLease, error) {
-		lease, bindErr := bindSSHProcess(pid, 0, group, daemon.state, daemon.digest)
+		lease, bindErr := bindSSHProcess(pid, 0, group, resources.daemon.state, resources.daemon.digest)
 		if bindErr != nil {
 			return nil, bindErr
 		}
@@ -224,10 +223,7 @@ func observeSystemdProcessStartupContext(ctx context.Context, wrap func(context.
 	var startup func(context.Context, sshSystemdSnapshot) (StartupSummary, error)
 	if requireStartup {
 		startup = func(ctx context.Context, snapshot sshSystemdSnapshot) (StartupSummary, error) {
-			capture := func(ctx context.Context, unit string) (sshEnvironmentResult, error) {
-				return captureSSHStartupEnvironment(ctx, unit, root, 0, bus.run, guard)
-			}
-			return observeSSHStartupEnvironment(ctx, snapshot, daemon.parent+"/sshd", bus.run, guard, capture)
+			return resources.startup(ctx, snapshot, guard)
 		}
 	}
 	return observeSSHSystemdProcessStartup(ctx, snapshot, bind, guard, startup)
