@@ -185,6 +185,13 @@ func duplicateSSHSocket(pidfd, remoteFD int, inode uint64) (_ sshListenerSocket,
 
 func collectSSHListeners(ctx context.Context, list func(context.Context) (map[int]uint64, error),
 	probe func(int, uint64) (sshListenerSocket, bool, error)) ([]sshListenerSocket, error) {
+	return collectSSHListenerState(ctx, list, probe, false)
+}
+
+// Only the bounded reload observer permits a stable empty interval. An empty
+// sample is pending, never listener readiness or successful activation.
+func collectSSHListenerState(ctx context.Context, list func(context.Context) (map[int]uint64, error),
+	probe func(int, uint64) (sshListenerSocket, bool, error), allowEmpty bool) ([]sshListenerSocket, error) {
 	if ctx == nil || list == nil || probe == nil {
 		return nil, ErrInventoryUnsafe
 	}
@@ -194,7 +201,7 @@ func collectSSHListeners(ctx context.Context, list func(context.Context) (map[in
 		return nil, err
 	}
 	before, err := list(ctx)
-	if err != nil || len(before) == 0 || len(before) > maxSSHProcessSockets {
+	if err != nil || (!allowEmpty && len(before) == 0) || len(before) > maxSSHProcessSockets {
 		return nil, errors.Join(ErrInventoryBounds, err)
 	}
 	var descriptors []int
@@ -222,24 +229,28 @@ func collectSSHListeners(ctx context.Context, list func(context.Context) (map[in
 		}
 	}
 	after, err := list(ctx)
-	if err = errors.Join(err, ctx.Err()); err != nil || !reflect.DeepEqual(before, after) || len(result) == 0 {
+	if err = errors.Join(err, ctx.Err()); err != nil || !reflect.DeepEqual(before, after) || (!allowEmpty && len(result) == 0) {
 		return nil, errors.Join(ErrInventoryChanged, err)
 	}
 	return result, nil
 }
 
 func (b *sshProcessBinding) listeners(ctx context.Context) ([]sshListenerSocket, error) {
+	return b.listenerState(ctx, false)
+}
+
+func (b *sshProcessBinding) listenerState(ctx context.Context, allowEmpty bool) ([]sshListenerSocket, error) {
 	if b == nil || b.proc == nil || b.pidfd < 0 {
 		return nil, ErrInventoryClosed
 	}
-	return collectSSHListeners(ctx, func(ctx context.Context) (map[int]uint64, error) {
+	return collectSSHListenerState(ctx, func(ctx context.Context) (map[int]uint64, error) {
 		if err := b.alive(); err != nil {
 			return nil, err
 		}
 		return sshSocketFDs(ctx, b.proc)
 	}, func(fd int, inode uint64) (sshListenerSocket, bool, error) {
 		return duplicateSSHSocket(b.pidfd, fd, inode)
-	})
+	}, allowEmpty)
 }
 
 func sshListenerKey(s sshListenerSocket) string {

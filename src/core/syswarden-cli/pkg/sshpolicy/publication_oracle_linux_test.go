@@ -75,6 +75,10 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 	}
 	for _, profile := range []string{"forwarding", "cis", "legacy-cis"} {
 		t.Run(profile, func(t *testing.T) {
+			// Each independent scenario owns its deadline. Earlier profiles
+			// must not consume the next profile's parser verification budget.
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
 			content := includeDropIns + "HostKey " + key + "\nPort 2222\nUsePAM no\nPasswordAuthentication no\nAuthenticationMethods publickey\nInclude /etc/ssh/access.conf\n"
 			var listenerFD int
 			var listenerInode uint64

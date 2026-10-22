@@ -58,18 +58,54 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	if !ok || process == nil || held.summary.Startup == nil || !held.summary.Startup.DeclarationVerified {
 		return nil, ErrInventoryUnsafe
 	}
-	target, err := sshActivationDigest([]any{"systemd-pidfd-sighup-v1", held.summary})
+	check := func(ctx context.Context) error {
+		return held.recheck(ctx, snapshot, resources.recheck, startup)
+	}
+	// Expectations come from the protected current graph and pinned parser.
+	// They are not supplied by the caller or inferred from current listeners.
+	inventory, err := collectInventory(resources.root, 0)
 	if err != nil {
 		return nil, err
 	}
-	check := func(ctx context.Context) error {
-		return held.recheck(ctx, snapshot, resources.recheck, startup)
+	values, err := inspectSSHEffective(ctx, inventory, resources.daemon.digest, resources.daemon.run, guard)
+	if err != nil {
+		return nil, err
+	}
+	expected, err := sshExpectedEndpoints(values)
+	if err != nil {
+		return nil, err
+	}
+	namespace, err := sshNamespaceCookie(process.namespaces["net"])
+	if err != nil {
+		return nil, err
+	}
+	read := func(ctx context.Context) ([]sshListenerSocket, error) {
+		if err := check(ctx); err != nil {
+			return nil, err
+		}
+		sockets, err := process.listenerState(ctx, true)
+		if err := errors.Join(err, check(ctx)); err != nil {
+			return nil, err
+		}
+		return sockets, nil
+	}
+	listeners, err := prepareSSHListenerReload(ctx, expected, namespace, read)
+	if err != nil {
+		return nil, err
+	}
+	target, err := sshActivationDigest([]any{"systemd-pidfd-sighup-listeners-v2", held.summary, expected, namespace, listeners.before})
+	if err != nil {
+		return nil, err
 	}
 	// pidfd_send_signal cannot retarget a recycled numeric PID. Only SIGHUP
 	// to the retained thread-group leader is allowed, with no shell, manager
 	// mutation, child signal, numeric-PID fallback or automatic retry.
 	send := func() error { return sendSSHProcessReload(process) }
-	return &sshActivationTarget{ctx: ctx, target: target, verify: check, send: send, closeFn: cleanup}, nil
+	verify := func(ctx context.Context) error { return listeners.check(ctx) }
+	after := func(ctx context.Context, guard func() error) error {
+		return listeners.wait(ctx, guard, pauseSSHListenerObservation)
+	}
+	return &sshActivationTarget{ctx: ctx, target: target, verify: verify, send: send, after: after, closeFn: cleanup}, nil
 }
 
 func sendSSHProcessReload(process *sshProcessBinding) error {
@@ -88,6 +124,7 @@ type sshActivationTarget struct {
 	target            string
 	verify            func(context.Context) error
 	send              func() error
+	after             func(context.Context, func() error) error
 	closeFn           func() error
 	attempted, closed bool
 }
@@ -114,7 +151,7 @@ func (l *sshActivationTarget) check() error {
 }
 
 func (l *sshActivationTarget) checkLocked(ctx context.Context) error {
-	if l.closed || l.attempted || ctx == nil || l.ctx == nil || l.verify == nil || l.send == nil || l.closeFn == nil || !lowerDigest.MatchString(l.target) {
+	if l.closed || l.attempted || ctx == nil || l.ctx == nil || l.verify == nil || l.send == nil || l.after == nil || l.closeFn == nil || !lowerDigest.MatchString(l.target) {
 		return ErrInventoryClosed
 	}
 	if err := errors.Join(ctx.Err(), l.ctx.Err()); err != nil {
@@ -151,10 +188,13 @@ func (l *sshActivationTarget) request(parent context.Context, policyGuard func()
 	if err := errors.Join(parent.Err(), ctx.Err(), policyGuard()); err != nil {
 		return err
 	}
-	err := l.send()
-	// The process may already be re-executing. Do not mistake a stable old
-	// observation, or the syscall's return, for causal activation proof.
-	return errors.Join(err, parent.Err(), ctx.Err(), policyGuard())
+	if err := errors.Join(l.send(), parent.Err(), ctx.Err(), policyGuard()); err != nil {
+		return err
+	}
+	// Wait for a replaced stable listener generation under the post-intent
+	// guard. This is still neither consumed-policy nor authenticated-access
+	// proof, and the dispatcher always retains its recovery fence.
+	return errors.Join(l.after(ctx, policyGuard), parent.Err(), ctx.Err(), policyGuard())
 }
 
 func (l *sshActivationTarget) Close() error {
@@ -171,7 +211,7 @@ func (l *sshActivationTarget) Close() error {
 		return ErrInventoryUnsafe
 	}
 	err := l.closeFn()
-	l.verify, l.send, l.closeFn = nil, nil, nil
+	l.verify, l.send, l.after, l.closeFn = nil, nil, nil, nil
 	return err
 }
 

@@ -64,6 +64,39 @@ The original bounded lifetime and request cancellation both apply. Partial
 acquisition releases resources; closure attempts every owned descriptor and
 propagates errors. Native end-to-end activation still needs qualification.
 
+## Listener replacement after the request
+
+The private adapter now parses expected endpoints from the guarded current SSH
+graph using the pinned installed parser. Before dispatch, it requires two stable
+observations of all expected listening sockets in the held network namespace.
+The target digest binds that baseline and the expected endpoints. A change
+before dispatch refuses the request.
+
+After the one signal, a bounded observer requires two consecutive identical
+samples in which every expected listener has a new kernel socket cookie.
+Descriptor numbers and inode numbers alone are not generation evidence.
+Duplicate descriptors for one socket do not count as multiple listeners. A
+cookie reused with conflicting metadata, an unexpected endpoint, a namespace
+change or an unreadable observation is refused. The same retained process,
+manager invocation, startup selection, executable and configuration guard apply
+around the observations. There is no signal retry.
+
+A stable empty interval and an otherwise valid sample still containing old
+sockets remain pending. Neither establishes readiness. The observer waits at
+most 15 seconds and 150 samples, with cancellation inherited from the original
+request. Two new samples must be separated by a cancellable delay. Every
+duplicated socket descriptor is closed inside its observation, before a delay,
+manager query or signal; retaining it could prevent the daemon from rebinding.
+The existing public read-only listener observer continues to refuse empty sets.
+
+This detects an unchanged listener generation after a reported successful
+signal. It is not an acknowledgement that OpenSSH consumed the entire intended
+policy, and it does not prove authenticated access. The
+[OpenSSH listener implementation](https://github.com/openssh/openssh-portable/blob/master/sshd.c)
+closes listeners during its reload path, but a replacement observation alone
+cannot establish why that change occurred. The durable activation intent and
+recovery requirement remain in force even after this observation succeeds.
+
 An error during persistence prevents dispatch. From the write attempt onward,
 the result requires recovery because a failed write may still have left visible
 intent. Failure, cancellation, target drift and record replacement after
@@ -99,8 +132,12 @@ closed helpers, stale manager/startup/process state, cancellation, concurrent
 requests and closure, and one-shot dispatch. A native syscall test sends SIGHUP
 only to a disposable copy of the test binary and verifies refusal after its exit
 and closure. It does not signal an installed SSH service. Higher-level dispatch
-tests use controlled target callbacks. These checks do not reload a real SSH
-daemon or establish native migration acceptance.
+tests use controlled target callbacks. Listener replacement tests cover stale,
+partial and changing generations, gaps, identity conflicts, endpoint drift,
+observation failures, cancellation and the retained recovery fence. A native
+TCP socket test closes and rebinds an isolated loopback listener and checks its
+kernel cookie; it does not reload an installed daemon. These checks do not reload
+a real SSH daemon or establish native migration acceptance.
 
 Production activation, configuration consumption, independent fresh access,
 already-owned updates and the three separate uninstall/remove/purge paths still
