@@ -11,7 +11,7 @@ func newSSHPolicyCommand(inspect func() (sshpolicy.PlanSummary, error), verify f
 	command := &cobra.Command{
 		Use:   "ssh-policy",
 		Short: "Inspect the dedicated SSH policy migration",
-		Long:  "Inspect configured SSH ports independently of hardening intent, or verify a declared candidate or an independently owned publication with the installed parser. These development commands are read-only; migration application is not available yet.",
+		Long:  "Inspect configured SSH ports, verify candidates and owned publications, or assess an interrupted activation with the installed parser and current systemd endpoints. These development commands are read-only; migration application is not available yet.",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
@@ -63,6 +63,7 @@ func newSSHPolicyCommand(inspect func() (sshpolicy.PlanSummary, error), verify f
 func init() {
 	command := newSSHPolicyCommand(sshpolicy.InspectPlan, sshpolicy.VerifyPlan, sshpolicy.InspectPorts)
 	command.AddCommand(newSSHOwnedCommand(sshpolicy.VerifyOwned))
+	command.AddCommand(newSSHActivationAssessmentCommand(sshpolicy.AssessSystemdActivation))
 	rootCmd.AddCommand(command)
 }
 
@@ -87,6 +88,27 @@ func newSSHOwnedCommand(verify func(string) (sshpolicy.OwnedSummary, error)) *co
 	return command
 }
 
+func newSSHActivationAssessmentCommand(assess func(string) (sshpolicy.ActivationAssessment, error)) *cobra.Command {
+	var approved string
+	command := &cobra.Command{
+		Use:   "assess-activation",
+		Short: "Inspect an interrupted SSH activation without recovering or retrying it",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			summary, err := assess(approved)
+			if err != nil {
+				return err
+			}
+			encoder := json.NewEncoder(cmd.OutOrStdout())
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(summary)
+		},
+	}
+	command.Flags().StringVar(&approved, "plan-sha256", "", "Original independently approved migration plan SHA-256")
+	_ = command.MarkFlagRequired("plan-sha256")
+	return command
+}
+
 func readOnlySSHPolicyCommand(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return false
@@ -94,5 +116,5 @@ func readOnlySSHPolicyCommand(cmd *cobra.Command) bool {
 	path := cmd.CommandPath()
 	return path == "syswarden ssh-policy" || path == "syswarden ssh-policy plan" ||
 		path == "syswarden ssh-policy verify" || path == "syswarden ssh-policy ports" ||
-		path == "syswarden ssh-policy verify-owned"
+		path == "syswarden ssh-policy verify-owned" || path == "syswarden ssh-policy assess-activation"
 }

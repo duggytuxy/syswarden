@@ -223,7 +223,21 @@ func TestSSHOwnedEndpointProductionRequiresIndependentApproval(t *testing.T) {
 func checkOwnedEndpointOracle(t *testing.T, ctx context.Context, journal *sshJournal, plan migrationPlan,
 	daemon *pinnedSSHD, run sshParserRun, check func() error, fd int, inode uint64) {
 	t.Helper()
-	observe := func(ctx context.Context, expected []netip.AddrPort, guard func() error) (ListenerSummary, error) {
+	observe := ownedEndpointOracleObserver(t, daemon, fd, inode)
+	for range 2 {
+		got, err := observeSSHOwnedEndpoints(ctx, journal, plan.summary.PlanSHA256, daemon.digest,
+			run, check, observe)
+		if err != nil || !got.Publication.OwnershipVerified || got.Publication.ContextsVerified != 3 ||
+			!got.Endpoints.ConfiguredEndpointsMatched || got.Endpoints.ConfigurationVerified ||
+			got.Publication.RuntimeActivated || got.Endpoints.RuntimeActivated || got.Endpoints.AccessVerified {
+			t.Fatal("owned native parser/socket composition failed", got, err)
+		}
+	}
+}
+
+func ownedEndpointOracleObserver(t *testing.T, daemon *pinnedSSHD, fd int, inode uint64) sshEndpointObserver {
+	t.Helper()
+	return func(ctx context.Context, expected []netip.AddrPort, guard func() error) (ListenerSummary, error) {
 		if err := errors.Join(ctx.Err(), guard()); err != nil {
 			return ListenerSummary{}, err
 		}
@@ -243,14 +257,5 @@ func checkOwnedEndpointOracle(t *testing.T, ctx context.Context, journal *sshJou
 		// summary is a fixture. This oracle does not start or qualify SSH.
 		return ListenerSummary{TCPListenersObserved: true, ListenerCount: 1, SocketsSHA256: digestBytes(wire),
 			Process: ProcessSummary{ProcessObserved: true, ExecutableVerified: true, ExecutableSHA256: daemon.digest}}, nil
-	}
-	for range 2 {
-		got, err := observeSSHOwnedEndpoints(ctx, journal, plan.summary.PlanSHA256, daemon.digest,
-			run, check, observe)
-		if err != nil || !got.Publication.OwnershipVerified || got.Publication.ContextsVerified != 3 ||
-			!got.Endpoints.ConfiguredEndpointsMatched || got.Endpoints.ConfigurationVerified ||
-			got.Publication.RuntimeActivated || got.Endpoints.RuntimeActivated || got.Endpoints.AccessVerified {
-			t.Fatal("owned native parser/socket composition failed", got, err)
-		}
 	}
 }

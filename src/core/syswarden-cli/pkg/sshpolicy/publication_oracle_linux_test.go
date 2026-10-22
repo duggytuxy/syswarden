@@ -45,9 +45,13 @@ func TestOpenSSHOwnedEndpointOracle(t *testing.T) {
 	testOpenSSHPublicationOracle(t, "owned-endpoints")
 }
 
+func TestOpenSSHActivationAssessmentOracle(t *testing.T) {
+	testOpenSSHPublicationOracle(t, "activation-assessment")
+}
+
 func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 	t.Helper()
-	transaction := operation == "transaction" || operation == "retire-restored" || operation == "owned" || operation == "owned-endpoints"
+	transaction := operation == "transaction" || operation == "retire-restored" || operation == "owned" || operation == "owned-endpoints" || operation == "activation-assessment"
 	if os.Getenv("SYSWARDEN_SSH_ORACLE_TEST") != "1" {
 		t.Skip("set SYSWARDEN_SSH_ORACLE_TEST=1 for the installed OpenSSH parser oracle")
 	}
@@ -82,7 +86,7 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 			content := includeDropIns + "HostKey " + key + "\nPort 2222\nUsePAM no\nPasswordAuthentication no\nAuthenticationMethods publickey\nInclude /etc/ssh/access.conf\n"
 			var listenerFD int
 			var listenerInode uint64
-			if operation == "owned-endpoints" {
+			if operation == "owned-endpoints" || operation == "activation-assessment" {
 				listenerFD, listenerInode = sshTestTCPListener(t, unix.AF_INET)
 				socket, listening, err := inspectSSHSocket(listenerFD, listenerInode)
 				if err != nil || !listening {
@@ -248,6 +252,32 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 				t.Fatal(err)
 			}
 			journal = fixtureJournal(t, f)
+			if operation == "activation-assessment" {
+				check := func() error { return daemon.recheck(root, 0) }
+				calls, closed := 0, 0
+				result, err := attemptSSHActivation(ctx, journal, plan.summary.PlanSHA256, daemon.digest,
+					run, check, activationTestBinder(t, journal, &calls, &closed))
+				if err != nil || !result.RecoveryRequired || calls != 1 || closed != 1 {
+					t.Fatal(result, err)
+				}
+				if err := journal.Close(); err != nil {
+					t.Fatal(err)
+				}
+				journal = fixtureJournal(t, f)
+				for range 2 {
+					assessment, err := assessSSHActivation(ctx, journal, plan.summary.PlanSHA256, daemon.digest,
+						run, check, ownedEndpointOracleObserver(t, daemon, listenerFD, listenerInode))
+					if err != nil || !assessment.RecoveryRequired || !assessment.IntentObserved ||
+						!assessment.Endpoints.ConfiguredEndpointsMatched || assessment.Publication.ContextsVerified != 3 ||
+						assessment.Publication.RuntimeActivated || assessment.Publication.AccessVerified {
+						t.Fatal("installed parser activation assessment failed", assessment, err)
+					}
+				}
+				if err := rollbackSSHConfiguration(ctx, journal, plan.summary.PlanSHA256, run, check, sshPublicationDefaults()); err == nil {
+					t.Fatal("assessment cleared the runtime recovery fence")
+				}
+				return
+			}
 			if operation == "owned" {
 				for range 2 {
 					result, err := verifySSHOwnedPublication(ctx, journal, plan.summary.PlanSHA256, daemon.digest,
