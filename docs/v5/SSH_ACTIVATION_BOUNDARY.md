@@ -116,7 +116,11 @@ adding an activation record does not silently broaden that proof.
 A newly opened, runtime-aware recovery path must eventually establish the actual
 service state, safely select the approved policy, perform bounded activation and
 verify independent authenticated access before accepting recovery. That path is
-not implemented by this component. Deleting the intent to bypass it is not a
+not implemented by this component. A separate read-only
+[activation assessment](SSH_ACTIVATION_ASSESSMENT.md) now validates the complete
+recorded intent and publication before observing current systemd endpoints. It
+always retains the recovery requirement and does not dispatch or resolve the
+attempt. Deleting the intent to bypass the fence is not a
 supported recovery procedure. Administrator changes and all recovery evidence
 must be preserved when state is ambiguous.
 

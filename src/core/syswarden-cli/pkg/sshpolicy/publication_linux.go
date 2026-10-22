@@ -286,6 +286,23 @@ func inventoryNode(n sshStoredStamp) inventoryStamp {
 
 func verifyPublishedSSH(ctx context.Context, journal *sshJournal, plan migrationPlan, stage string,
 	expected sshStoredInventory, run sshParserRun, parserCheck func() error) error {
+	guard := func() error {
+		current, err := stableSSHPublication(journal.root, journal.uid, stage)
+		if err != nil || !reflect.DeepEqual(current, expected) {
+			return errors.Join(ErrInventoryChanged, err)
+		}
+		return errors.Join(ctx.Err(), journal.requireNoSSHActivation(), parserCheck())
+	}
+	return verifySSHCurrentPublication(ctx, plan, run, guard)
+}
+
+// The caller retains the appropriate publication or activation-history guard.
+// Parsing the live graph proves current file correspondence, never what an
+// already running daemon consumed. No runtime operation occurs here.
+func verifySSHCurrentPublication(ctx context.Context, plan migrationPlan, run sshParserRun, guard func() error) error {
+	if ctx == nil || run == nil || guard == nil {
+		return ErrInventoryUnsafe
+	}
 	files := make(map[string][]byte, len(plan.inventory.files))
 	for name, data := range plan.inventory.files {
 		if isSSHConfiguration(name) {
@@ -298,13 +315,6 @@ func verifyPublishedSSH(ctx context.Context, journal *sshJournal, plan migration
 		return err
 	}
 	defer image.Close()
-	guard := func() error {
-		current, err := stableSSHPublication(journal.root, journal.uid, stage)
-		if err != nil || !reflect.DeepEqual(current, expected) {
-			return errors.Join(ErrInventoryChanged, err)
-		}
-		return errors.Join(ctx.Err(), journal.requireNoSSHActivation(), parserCheck())
-	}
 	invoke := func(input *parserImage, mode, access string) ([]byte, error) {
 		if err := guard(); err != nil {
 			return nil, err

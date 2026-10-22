@@ -45,6 +45,14 @@ func matchSSHPublication(journal *sshJournal, prepared sshPreparation, current s
 	if err := errors.Join(journal.requireNoPreparationAbort(), journal.requireNoSSHActivation()); err != nil {
 		return sshPublicationPosition{}, err
 	}
+	return matchSSHRecordedPublication(journal, prepared, current)
+}
+
+// Read-only history matching is shared with interrupted-activation assessment.
+// This helper never authorizes publication or rollback. Mutation callers must
+// retain matchSSHPublication's activation fence; the assessment requires its
+// own exact nine-record history and keeps the runtime uncertainty unresolved.
+func matchSSHRecordedPublication(journal *sshJournal, prepared sshPreparation, current sshStoredInventory) (sshPublicationPosition, error) {
 	data, err := json.Marshal(prepared)
 	if err != nil {
 		return sshPublicationPosition{}, err

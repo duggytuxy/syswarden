@@ -240,3 +240,66 @@ func TestSSHPolicyOwnedRefusalHasNoPartialJSON(t *testing.T) {
 		t.Fatal("lost refusal or returned partial owned verification")
 	}
 }
+
+func TestSSHPolicyActivationAssessmentBoundary(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	for _, args := range [][]string{
+		{"assess-activation", "--plan-sha256", digest},
+		{"assess-activation"},
+		{"assess-activation", "--plan-sha256", digest, "extra"},
+		{"assess-activation", "--plan-sha256", digest, "--apply"},
+		{"assess-activation", "--plan-sha256", digest, "--recover"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			previous := config.GlobalConfig
+			config.GlobalConfig = &config.Config{SSHPort: "4400"}
+			t.Cleanup(func() { config.GlobalConfig = previous })
+			calls := 0
+			command := newSSHPolicyCommand(nil, nil, nil)
+			command.AddCommand(newSSHActivationAssessmentCommand(func(approved string) (sshpolicy.ActivationAssessment, error) {
+				calls++
+				if approved != digest {
+					t.Fatal("lost original plan identity")
+				}
+				return sshpolicy.ActivationAssessment{Schema: 1, IntentObserved: true, RecoveryRequired: true}, nil
+			}))
+			root := &cobra.Command{Use: "syswarden", SilenceErrors: true, SilenceUsage: true}
+			root.AddCommand(command)
+			var output bytes.Buffer
+			root.SetOut(&output)
+			root.SetErr(&output)
+			root.SetArgs(append([]string{"ssh-policy"}, args...))
+			err := root.Execute()
+			if len(args) != 3 {
+				if err == nil || calls != 0 {
+					t.Fatal("unsupported input reached verification")
+				}
+				return
+			}
+			if err != nil || calls != 1 || config.GlobalConfig.SSHPort != "4400" ||
+				!strings.Contains(output.String(), `"runtime_activated": false`) ||
+				!strings.Contains(output.String(), `"access_verified": false`) {
+				t.Fatal("verification failed or claimed runtime acceptance", err, output.String())
+			}
+			owned, _, err := root.Find([]string{"ssh-policy", "assess-activation"})
+			if err != nil || commandRequiresAutomaticConfigLoad(owned) || commandRequiresEarlyFirewallRecovery(owned) ||
+				!commandAllowedDuringRemoval(owned) || enforceValidatedConfiguration(owned) != nil {
+				t.Fatal("owned verification entered mutating preparation")
+			}
+		})
+	}
+}
+
+func TestSSHPolicyActivationAssessmentRefusalHasNoPartialJSON(t *testing.T) {
+	want := errors.New("fixture owned verification refused")
+	command := newSSHActivationAssessmentCommand(func(string) (sshpolicy.ActivationAssessment, error) {
+		return sshpolicy.ActivationAssessment{IntentObserved: true}, want
+	})
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetArgs([]string{"--plan-sha256", strings.Repeat("a", 64)})
+	command.SilenceErrors, command.SilenceUsage = true, true
+	if err := command.Execute(); !errors.Is(err, want) || output.Len() != 0 {
+		t.Fatal("lost refusal or returned partial owned verification")
+	}
+}

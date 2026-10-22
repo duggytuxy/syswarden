@@ -117,6 +117,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     single bounded SIGHUP request and verifies stable replacement of every
     expected listener generation. It does not enable an installer or CLI caller
     or claim that the daemon consumed the policy or accepted a fresh login.
+    The read-only [activation assessment](SSH_ACTIVATION_ASSESSMENT.md) reopens
+    interrupted history and verifies current configuration and endpoints while
+    retaining the recovery requirement and refusing replay or evidence deletion.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.
