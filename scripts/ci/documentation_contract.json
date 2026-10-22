@@ -792,6 +792,13 @@
       "before": null,
       "after": "added",
       "reason": "Verify an existing independently owned SSH publication using its original approved plan digest, complete publication history, explicit TOML selection and installed parser; no configuration mutation, activation, recovery or journal reuse is authorized."
+    },
+    {
+      "path": "syswarden ssh-policy assess-activation",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Inspect an interrupted SSH activation using the independently approved original plan, exact protected intent and publication records, installed parser and current systemd endpoints. This read-only development command preserves the recovery requirement and does not retry activation, mutate files, prove consumed policy or authenticate access."
     }
   ],
   "package_platform_contract": {
