@@ -50,6 +50,7 @@ For both the forwarding and CIS candidates:
    after that reload.
 
 The private [fresh access transport](SSH_FRESH_ACCESS_PROBE.md) is also exercised
+through the [approved request batch](SSH_PROTECTED_ACCESS_REQUEST.md)
 twice on each route after candidate reload. Its challenge and SSH session hashes
 must change between calls, with separately authenticated bastion sessions. The
 fixture supplies synthetic bindings; this does not validate controller enrollment

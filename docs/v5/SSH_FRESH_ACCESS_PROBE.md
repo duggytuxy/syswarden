@@ -66,6 +66,12 @@ reports `RecoveryRequired`. Errors return an empty observation. Neither result
 clears the activation journal, writes a completion marker, proves consumption of
 the full policy or attests fresh access from an independently enrolled host.
 
+The [protected request integration](SSH_PROTECTED_ACCESS_REQUEST.md) adds an
+optional complete-request digest to the challenge binding. Its target-side
+preparer uses protected activation history and public pins only; controller-side
+execution requires separate exact request approval and all credentials before
+any network activity. This does not enroll a controller or complete activation.
+
 ## Verification and integration gates
 
 Adversarial protocol fixtures cover incorrect host/client keys, absent

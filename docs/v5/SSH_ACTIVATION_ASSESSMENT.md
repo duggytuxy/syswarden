@@ -100,3 +100,13 @@ packages must use only the standard list, optional SSH/CIS/OS protection must
 require explicit TOML choices, and upgrades must preserve administrator settings
 and existing protection. BunkerWeb's independent contract is unchanged.
 Linux AMD64 only; these checks are intermediate v5.00.0 IVVQ evidence.
+
+## Private access-request continuation
+
+A [private request preparer](SSH_PROTECTED_ACCESS_REQUEST.md) now runs inside the
+same locked assessment and original inode guards. It derives all declared
+contexts with explicitly supplied public key pins and performs a final guarded
+recheck before returning canonical private bytes. The existing public
+`assess-activation` command remains read-only and emits no request or credentials.
+Independent controller execution and receipt acceptance do not follow
+automatically from a successful assessment.
