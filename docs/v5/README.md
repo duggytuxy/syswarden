@@ -123,6 +123,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     The [disposable runtime and access oracle](SSH_RUNTIME_ACCESS_ORACLE.md)
     exercises fresh direct and ProxyJump authentication, policy reload and
     existing-session negative controls with isolated loopback daemons.
+    The private [fresh SSH transport](SSH_FRESH_ACCESS_PROBE.md) binds new
+    pinned-key direct/ProxyJump authentication to explicit inputs, while keeping
+    recovery required and independent controller integration open.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

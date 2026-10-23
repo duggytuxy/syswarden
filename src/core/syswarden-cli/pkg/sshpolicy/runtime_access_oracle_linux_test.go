@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 )
 
@@ -70,6 +71,7 @@ func TestOpenSSHRuntimeAccessOracle(t *testing.T) {
 			}
 			f.expectForward(target, backend, true)
 			f.reload(target)
+			f.expectFreshTransport(target, jump)
 			oldChannel()
 			f.expectForward(target, backend, false)
 			f.expectAccess("target", true)
@@ -398,6 +400,47 @@ func (f *sshRuntimeFixture) holdForward(daemon *sshRuntimeDaemon, backend string
 		received, err := reader.ReadString('\n')
 		if err != nil || received != expected {
 			f.t.Fatalf("existing fixture channel: %v: %q", err, received)
+		}
+	}
+}
+
+// Exercise the production transport primitive against installed OpenSSH after
+// the fixture reload. These synthetic bindings are not a protected journal or
+// controller enrollment, and cannot make the migration production-ready.
+func (f *sshRuntimeFixture) expectFreshTransport(target, jump *sshRuntimeDaemon) {
+	f.t.Helper()
+	identity := f.read("client")
+	peer := func(daemon *sshRuntimeDaemon) sshAccessPeer {
+		key, _, _, _, err := ssh.ParseAuthorizedKey(f.read(daemon.name + "-host.pub"))
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		return sshAccessPeer{daemon.address, f.user, key.Marshal(), identity}
+	}
+	port, err := strconv.ParseUint(target.port, 10, 16)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	binding := sshAccessBinding{strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64),
+		accessContext{"administrator", "direct", f.user, "controller.example", "127.0.0.1", "127.0.0.1", uint16(port)}}
+	guard := func() error { return nil }
+	for _, route := range []string{"direct", "proxyjump"} {
+		binding.Access.Route = route
+		var bastion *sshAccessPeer
+		if route == "proxyjump" {
+			value := peer(jump)
+			bastion = &value
+		}
+		first, err := probeSSHFreshAccess(f.ctx, binding, peer(target), bastion, guard)
+		if err != nil || !first.RecoveryRequired {
+			f.t.Fatalf("native %s probe failed: %v", route, err)
+		}
+		second, err := probeSSHFreshAccess(f.ctx, binding, peer(target), bastion, guard)
+		if err != nil || first.BindingSHA256 != second.BindingSHA256 || first.ChallengeSHA256 == second.ChallengeSHA256 || first.SessionSHA256 == second.SessionSHA256 {
+			f.t.Fatalf("native %s probe reused authentication: %v", route, err)
+		}
+		if route == "proxyjump" && (first.JumpSessionSHA256 == "" || first.JumpSessionSHA256 == second.JumpSessionSHA256) {
+			f.t.Fatal("bastion authentication was reused")
 		}
 	}
 }

@@ -440,3 +440,13 @@ These explicitly requested native tests remain separate from production
 activation, independent controller access, complete runtime recovery, native
 package lifecycle and final v5.00.0 IVVQ acceptance. Ordinary hosted unit-test
 success does not establish that an opt-in runtime oracle executed.
+
+The private [fresh SSH transport](SSH_FRESH_ACCESS_PROBE.md) requires actual
+selected-key signatures on every newly established target/bastion connection,
+fresh bound challenges, exact bounded responses and closed connections on
+failure or cancellation. Test `none` authentication, wrong pins and credentials,
+replay, tuple drift, forwarding refusal, stalled handshakes/sessions and changed
+caller guards. Enable its disposable OpenSSH integration explicitly. Successful
+transport observations retain recovery-required status and do not substitute
+for protected controller authority, policy-consumption proof or native lifecycle
+qualification.
