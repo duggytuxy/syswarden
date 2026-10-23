@@ -459,3 +459,13 @@ or credential before connecting to the first, bind the complete independent
 request approval, freeze input buffers and discard partial observations on late
 failure or revocation. Native request execution remains an explicit fixture
 check; durable receipt acceptance and target-state continuity are separate gates.
+
+The [signed controller observation path](SSH_CONTROLLER_RECEIPTS.md) must bind
+independent challenge approval, pinned authority, exact validity windows and
+all ordered route observations. Test malformed signed payloads, wrong keys,
+cross-challenge reuse, partial/reordered contexts, duplicate sessions, expiry,
+clock rollback and late cancellation/revocation. Target-side appraisal must
+retain the original lock and recheck protected policy, selection, records,
+parser and endpoints without changing recovery fences. Enable the signed native
+OpenSSH oracle explicitly. Read-only signature appraisal does not consume a
+durable replay token or establish causal policy consumption.

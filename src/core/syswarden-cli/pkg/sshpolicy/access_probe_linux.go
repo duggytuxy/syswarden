@@ -193,12 +193,7 @@ func probeSSHFreshAccess(parent context.Context, binding sshAccessBinding, targe
 		}
 		jump, jumpID, jumpSigner = &copy, &identity, signer
 	}
-	bindingDigest, err := sshActivationDigest(struct {
-		Domain  string
-		Binding sshAccessBinding
-		Target  sshAccessIdentity
-		Jump    *sshAccessIdentity
-	}{"syswarden-fresh-ssh-access-v1", binding, targetID, jumpID})
+	bindingDigest, err := sshAccessBindingDigest(binding, targetID, jumpID)
 	if err != nil {
 		return result, err
 	}
@@ -369,3 +364,14 @@ func verifySSHAccessResponse(output []byte, challenge string, access accessConte
 // Compile-time assertions keep the signature-counting wrapper in the algorithm
 // negotiation path instead of silently falling back to the embedded signer.
 var _ ssh.MultiAlgorithmSigner = (*sshAccessSigner)(nil)
+
+// Shared by the transport and independent receipt verification. Keep the exact
+// encoding stable so verification reconstructs the same pinned route binding.
+func sshAccessBindingDigest(binding sshAccessBinding, target sshAccessIdentity, jump *sshAccessIdentity) (string, error) {
+	return sshActivationDigest(struct {
+		Domain  string
+		Binding sshAccessBinding
+		Target  sshAccessIdentity
+		Jump    *sshAccessIdentity
+	}{"syswarden-fresh-ssh-access-v1", binding, target, jump})
+}

@@ -102,3 +102,12 @@ Issue #422 is unchanged: fresh native installation must select the standard list
 only, with independent explicit TOML choices for SSH, CIS, OS hardening and
 optional modules. Production installer wiring remains incomplete. Administrator
 upgrade settings, BunkerWeb independence and Linux AMD64 scope are preserved.
+
+## Signed controller continuation
+
+The [controller receipt component](SSH_CONTROLLER_RECEIPTS.md) adds a separately
+approved expiring challenge, an explicit controller signing key and strict
+verification of complete signed observations. Target-side read-only appraisal
+regenerates this request under the same protected assessment guards. Receipt
+persistence, enrollment, single-use acceptance and causal policy-consumption
+proof remain separate gates; successful appraisal retains recovery required.

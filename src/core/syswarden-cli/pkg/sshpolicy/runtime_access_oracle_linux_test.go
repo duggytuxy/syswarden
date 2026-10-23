@@ -445,10 +445,29 @@ func (f *sshRuntimeFixture) expectFreshTransport(target, jump *sshRuntimeDaemon)
 			f.t.Fatal(err)
 		}
 		probe := func() (sshAccessObservation, error) {
-			batch, err := probeSSHActivationAccessRequest(f.ctx, wire, digestBytes(wire), []sshAccessCredentials{credentials}, guard)
+			public, private := receiptController(f.t)
+			challenge, err := newSSHAccessChallenge(wire, digestBytes(wire), public, time.Now(), time.Minute)
 			if err != nil {
 				return sshAccessObservation{}, err
 			}
+			signedWire, err := probeSSHAccessChallenge(f.ctx, wire, challenge, digestBytes(challenge), private, []sshAccessCredentials{credentials}, time.Now, guard)
+			if err != nil {
+				return sshAccessObservation{}, err
+			}
+			input := sshAccessReceiptInput{wire, challenge, signedWire, digestBytes(challenge), public}
+			assessment, err := verifySSHAccessReceipt(input, time.Now())
+			if err != nil || !assessment.RecoveryRequired {
+				return sshAccessObservation{}, errors.Join(ErrInventoryUnsafe, err)
+			}
+			var signed sshAccessSignedReceipt
+			var receipt sshAccessReceipt
+			if err := json.Unmarshal(signedWire, &signed); err != nil {
+				return sshAccessObservation{}, err
+			}
+			if err := json.Unmarshal(signed.Payload, &receipt); err != nil {
+				return sshAccessObservation{}, err
+			}
+			batch := receipt.Batch
 			if !batch.RecoveryRequired || len(batch.Observations) != 1 {
 				return sshAccessObservation{}, ErrInventoryUnsafe
 			}
