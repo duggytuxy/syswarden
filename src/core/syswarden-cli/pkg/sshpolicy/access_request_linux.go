@@ -125,42 +125,51 @@ func prepareSSHActivationAccessRequest(ctx context.Context, journal *sshJournal,
 	var wire []byte
 	_, err := withSSHActivationAssessment(ctx, journal, approved, parser, run, parserCheck, observe,
 		func(_ context.Context, a *sshActivationAssessment, summary ActivationAssessment, guard func() error) error {
-			contexts := a.owned.plan.intent.Contexts
-			if len(pins) != len(contexts) {
-				return ErrInventoryUnsafe
-			}
-			byID := make(map[string]sshAccessRoutePins, len(pins))
-			for _, pin := range pins {
-				if _, exists := byID[pin.ContextID]; exists || !contextID.MatchString(pin.ContextID) {
-					return ErrInventoryUnsafe
-				}
-				byID[pin.ContextID] = pin
-			}
-			assessment, err := sshActivationDigest(summary)
+			var err error
+			wire, err = makeSSHActivationAccessRequest(a, summary, pins)
 			if err != nil {
 				return err
-			}
-			request := sshAccessRequest{Schema: 1, Domain: sshAccessRequestDomain, Transaction: a.owned.prepared.Transaction,
-				Plan: approved, Intent: digestBytes(a.intent.data), Target: a.target, Assessment: assessment}
-			for _, access := range contexts {
-				pin, exists := byID[access.ID]
-				if !exists {
-					return ErrInventoryUnsafe
-				}
-				route, err := copySSHAccessRoute(sshAccessRequestRoute{access, pin.Target, pin.Jump})
-				if err != nil {
-					return err
-				}
-				request.Routes = append(request.Routes, route)
-			}
-			wire, err = json.Marshal(request)
-			if err != nil || len(wire) > maxSSHAccessRequestBytes {
-				return errors.Join(ErrInventoryUnsafe, err)
 			}
 			return guard()
 		})
 	if err != nil {
 		return nil, err
+	}
+	return wire, nil
+}
+
+func makeSSHActivationAccessRequest(a *sshActivationAssessment, summary ActivationAssessment, pins []sshAccessRoutePins) ([]byte, error) {
+	contexts := a.owned.plan.intent.Contexts
+	if len(pins) != len(contexts) {
+		return nil, ErrInventoryUnsafe
+	}
+	byID := make(map[string]sshAccessRoutePins, len(pins))
+	for _, pin := range pins {
+		if _, exists := byID[pin.ContextID]; exists || !contextID.MatchString(pin.ContextID) {
+			return nil, ErrInventoryUnsafe
+		}
+		byID[pin.ContextID] = pin
+	}
+	assessment, err := sshActivationDigest(summary)
+	if err != nil {
+		return nil, err
+	}
+	request := sshAccessRequest{Schema: 1, Domain: sshAccessRequestDomain, Transaction: a.owned.prepared.Transaction,
+		Plan: a.owned.prepared.PlanSHA256, Intent: digestBytes(a.intent.data), Target: a.target, Assessment: assessment}
+	for _, access := range contexts {
+		pin, exists := byID[access.ID]
+		if !exists {
+			return nil, ErrInventoryUnsafe
+		}
+		route, err := copySSHAccessRoute(sshAccessRequestRoute{access, pin.Target, pin.Jump})
+		if err != nil {
+			return nil, err
+		}
+		request.Routes = append(request.Routes, route)
+	}
+	wire, err := json.Marshal(request)
+	if err != nil || len(wire) > maxSSHAccessRequestBytes {
+		return nil, errors.Join(ErrInventoryUnsafe, err)
 	}
 	return wire, nil
 }

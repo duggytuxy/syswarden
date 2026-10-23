@@ -107,3 +107,11 @@ choices. Upgrades preserve administrator configuration and existing protection.
 Production minimal-profile installer wiring is still incomplete. This oracle
 does not alter defaults or bypass approval and recovery fences. BunkerWeb's
 independent contract is unchanged; the product scope remains Linux AMD64 only.
+
+## Signed observation path
+
+The oracle now runs the [signed controller path](SSH_CONTROLLER_RECEIPTS.md)
+using a newly generated fixture controller key and approved challenge. It
+verifies the exact signed batch before comparing fresh target/bastion sessions.
+The signed result retains recovery required. These fixture approvals do not
+establish production enrollment, durable receipt acceptance or native migration.

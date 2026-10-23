@@ -389,3 +389,9 @@ and native v5.00.0 IVVQ acceptance remain open.
 node populations to the existing codec and percentage projection. Exact basis,
 manifest, partition and current report checks prevent cross-population reuse.
 Authenticated producers, consumer wiring and native IVVQ remain open.
+
+The SSH sequence also includes [signed controller observations and protected
+read-only appraisal](SSH_CONTROLLER_RECEIPTS.md). Expiring independent challenge
+approval and pinned controller signatures precede exact target-state rechecks;
+durable receipt acceptance, causal runtime proof and migration readiness remain
+open.
