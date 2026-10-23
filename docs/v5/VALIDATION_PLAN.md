@@ -469,3 +469,14 @@ retain the original lock and recheck protected policy, selection, records,
 parser and endpoints without changing recovery fences. Enable the signed native
 OpenSSH oracle explicitly. Read-only signature appraisal does not consume a
 durable replay token or establish causal policy consumption.
+
+The [one-time SSH evidence writer](SSH_ACCESS_EVIDENCE.md) must retain exact
+private request/challenge/receipt bytes with original history identity, and
+reject occupied slots after reopening in another process. Test directory-sync
+failure, same-byte inode replacement, hard links, unsafe modes, unknown entries,
+late policy/history drift and final callback cancellation, revocation or expiry.
+No invalid input may reach the write. Distinguish acknowledged durability from
+visible uncertain evidence and require recovery in both cases. Preserve original
+configuration, activation fences and all unrelated state. Fault injection and
+process reopening do not establish physical power-loss durability or complete
+native migration/removal acceptance.

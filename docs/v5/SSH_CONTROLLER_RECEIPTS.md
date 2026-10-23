@@ -67,7 +67,8 @@ Success returns only digests, a context count and `RecoveryRequired`. It writes
 no receipt, repairs no durability, consumes no replay token and changes no
 activation or recovery fence. Repeated appraisal inside the validity window is
 a read-only diagnostic. A receipt from a different challenge is refused, but
-persistent single-use enforcement is still required before activation acceptance.
+a separate [one-time evidence writer](SSH_ACCESS_EVIDENCE.md) can retain the
+observation without granting activation acceptance.
 
 The endpoint comparison describes current observations. It does not establish
 continuous process identity throughout remote execution or prove that the daemon
@@ -88,7 +89,7 @@ now signs and verifies observations after forwarding and CIS reloads on direct
 and single-bastion routes. Controller keys and approvals in that fixture are
 synthetic. Native oracle success is not independent production enrollment.
 
-Protected challenge delivery and enrollment, durable one-time receipt acceptance,
+Protected challenge delivery and enrollment, durable challenge issuance,
 causal consumed-policy acknowledgement, runtime-aware recovery, owned updates
 and separate native uninstall/remove/purge remain open. No migration-ready
 package or final v5.00.0 IVVQ acceptance is claimed.
