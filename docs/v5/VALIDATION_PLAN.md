@@ -480,3 +480,13 @@ visible uncertain evidence and require recovery in both cases. Preserve original
 configuration, activation fences and all unrelated state. Fault injection and
 process reopening do not establish physical power-loss durability or complete
 native migration/removal acceptance.
+
+The [retained SSH evidence observer](SSH_RECORDED_ACCESS_OBSERVATION.md) must
+require independent original-plan, record/challenge and controller approval.
+Test expired and uncertain records without promoting visibility to durability,
+current endpoint/pin mismatch without inventing fresh access, and refusal of
+signed foreign contexts or inconsistent protected history. Freeze caller inputs,
+retain exact inode guards and lock ownership, and reject final-callback drift,
+revocation, cancellation or clock rollback. Historical inspection must never
+sync, connect, retry, clear a slot or bypass runtime-aware recovery. Fuzz bounded
+canonical decoding with both valid signed and malformed seeds.

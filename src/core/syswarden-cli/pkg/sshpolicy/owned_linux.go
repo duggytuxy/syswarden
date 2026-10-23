@@ -76,8 +76,8 @@ func observeSSHOwnedRecordSet(journal *sshJournal, activation bool) (map[string]
 	return observeSSHRecordMembership(journal, activation, false)
 }
 
-// Only the in-flight evidence writer accepts the one additional record. Ordinary
-// reopen, appraisal, activation and file-only recovery keep their closed sets.
+// Only the evidence writer and explicit read-only observer accept the extra
+// record. Ordinary appraisal, activation and recovery keep their closed sets.
 func observeSSHRecordMembership(journal *sshJournal, activation, evidence bool) (map[string]string, error) {
 	if evidence && !activation {
 		return nil, ErrInventoryUnsafe
