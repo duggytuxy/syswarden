@@ -101,6 +101,14 @@ func inspectSSHActivationHistory(journal *sshJournal, approved, parser string) (
 
 func assessSSHActivation(ctx context.Context, journal *sshJournal, approved, parser string,
 	run sshParserRun, parserCheck func() error, observe sshEndpointObserver) (ActivationAssessment, error) {
+	return withSSHActivationAssessment(ctx, journal, approved, parser, run, parserCheck, observe, nil)
+}
+
+// The private action runs inside the original journal lock and inode guards.
+// It may derive a request but cannot turn an observation into activation proof.
+func withSSHActivationAssessment(ctx context.Context, journal *sshJournal, approved, parser string,
+	run sshParserRun, parserCheck func() error, observe sshEndpointObserver,
+	action func(context.Context, *sshActivationAssessment, ActivationAssessment, func() error) error) (ActivationAssessment, error) {
 	if ctx == nil || run == nil || parserCheck == nil || observe == nil {
 		return ActivationAssessment{}, ErrInventoryUnsafe
 	}
@@ -137,12 +145,21 @@ func assessSSHActivation(ctx context.Context, journal *sshJournal, approved, par
 		endpoints.Listeners.Process.Manager.RuntimeActivated || endpoints.Listeners.Process.Manager.AccessVerified {
 		return ActivationAssessment{}, ErrInventoryUnsafe
 	}
-	return ActivationAssessment{Schema: 1, IntentSHA256: digestBytes(a.intent.data), TargetSHA256: a.target,
+	summary := ActivationAssessment{Schema: 1, IntentSHA256: digestBytes(a.intent.data), TargetSHA256: a.target,
 		IntentObserved: true, RecoveryRequired: true, Endpoints: endpoints, Publication: OwnedSummary{
 			Schema: 1, PlanSHA256: approved, ParserSHA256: parser, Transaction: a.owned.prepared.Transaction,
 			Profile: a.owned.plan.intent.Profile, ContextsVerified: len(a.owned.plan.intent.Contexts),
 			OwnershipVerified: true, PublicationObserved: true, ParserVerified: true,
-		}}, nil
+		}}
+	if action != nil {
+		if err := action(ctx, a, summary, guard); err != nil {
+			return ActivationAssessment{}, err
+		}
+	}
+	if err := guard(); err != nil {
+		return ActivationAssessment{}, err
+	}
+	return summary, nil
 }
 
 // AssessSystemdActivation reopens a protected journal at fixed live paths and

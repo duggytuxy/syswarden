@@ -450,3 +450,12 @@ caller guards. Enable its disposable OpenSSH integration explicitly. Successful
 transport observations retain recovery-required status and do not substitute
 for protected controller authority, policy-consumption proof or native lifecycle
 qualification.
+
+The [protected access-request integration](SSH_PROTECTED_ACCESS_REQUEST.md) must
+retain the original assessment lock and all inode guards while deriving every
+approved context. Assert public-key-only target preparation and unchanged
+configuration/history. Controller execution must reject an invalid final route
+or credential before connecting to the first, bind the complete independent
+request approval, freeze input buffers and discard partial observations on late
+failure or revocation. Native request execution remains an explicit fixture
+check; durable receipt acceptance and target-state continuity are separate gates.

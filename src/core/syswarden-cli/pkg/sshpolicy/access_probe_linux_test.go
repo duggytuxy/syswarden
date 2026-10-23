@@ -71,7 +71,7 @@ func newSSHProbeFixture(t *testing.T, mode string, forwarding ...string) *sshPro
 	}
 	f := &sshProbeFixture{
 		stalled: make(chan struct{}),
-		binding: sshAccessBinding{strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64),
+		binding: sshAccessBinding{strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64), "",
 			accessContext{"administrator", "direct", "administrator", "controller.example", "127.0.0.1", "127.0.0.1", endpoint.Port()}},
 		peer: sshAccessPeer{listener.Addr().String(), "administrator", host.PublicKey().Marshal(), encodedClient},
 	}
@@ -286,7 +286,7 @@ func TestSSHFreshAccessNativeProtocol(t *testing.T) {
 
 func TestSSHFreshAccessRejectsUnboundInputBeforeNetwork(t *testing.T) {
 	f := newSSHProbeFixture(t, "success")
-	for _, scenario := range []string{"transaction", "plan", "intent", "target", "context", "address", "user", "route", "missing-jump", "unexpected-jump", "host-key", "invalid-host-key", "oversized-host-key", "client-key", "invalid-private-key", "oversized-private-key", "nil-context", "nil-guard", "cancelled", "guard"} {
+	for _, scenario := range []string{"transaction", "plan", "intent", "target", "request", "context", "address", "user", "route", "missing-jump", "unexpected-jump", "host-key", "invalid-host-key", "oversized-host-key", "client-key", "invalid-private-key", "oversized-private-key", "nil-context", "nil-guard", "cancelled", "guard"} {
 		t.Run(scenario, func(t *testing.T) {
 			binding, peer := f.binding, f.peer
 			var jump *sshAccessPeer
@@ -302,6 +302,8 @@ func TestSSHFreshAccessRejectsUnboundInputBeforeNetwork(t *testing.T) {
 				binding.Intent = strings.Repeat("A", 64)
 			case "target":
 				binding.Target = "bad"
+			case "request":
+				binding.Request = "bad"
 			case "context":
 				binding.Access.ID = ""
 			case "address":

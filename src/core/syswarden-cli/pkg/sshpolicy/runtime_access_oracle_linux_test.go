@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -421,7 +422,7 @@ func (f *sshRuntimeFixture) expectFreshTransport(target, jump *sshRuntimeDaemon)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	binding := sshAccessBinding{strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64),
+	binding := sshAccessBinding{strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64), "",
 		accessContext{"administrator", "direct", f.user, "controller.example", "127.0.0.1", "127.0.0.1", uint16(port)}}
 	guard := func() error { return nil }
 	for _, route := range []string{"direct", "proxyjump"} {
@@ -431,11 +432,33 @@ func (f *sshRuntimeFixture) expectFreshTransport(target, jump *sshRuntimeDaemon)
 			value := peer(jump)
 			bastion = &value
 		}
-		first, err := probeSSHFreshAccess(f.ctx, binding, peer(target), bastion, guard)
+		requestRoute := sshAccessRequestRoute{Access: binding.Access, Target: accessRequestPin(f.t, peer(target))}
+		credentials := sshAccessCredentials{ContextID: binding.Access.ID, Target: identity}
+		if bastion != nil {
+			pin := accessRequestPin(f.t, *bastion)
+			requestRoute.Jump = &pin
+			credentials.Jump = identity
+		}
+		request := sshAccessRequest{1, sshAccessRequestDomain, binding.Transaction, binding.Plan, binding.Intent, binding.Target, strings.Repeat("e", 64), []sshAccessRequestRoute{requestRoute}}
+		wire, err := json.Marshal(request)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		probe := func() (sshAccessObservation, error) {
+			batch, err := probeSSHActivationAccessRequest(f.ctx, wire, digestBytes(wire), []sshAccessCredentials{credentials}, guard)
+			if err != nil {
+				return sshAccessObservation{}, err
+			}
+			if !batch.RecoveryRequired || len(batch.Observations) != 1 {
+				return sshAccessObservation{}, ErrInventoryUnsafe
+			}
+			return batch.Observations[0], nil
+		}
+		first, err := probe()
 		if err != nil || !first.RecoveryRequired {
 			f.t.Fatalf("native %s probe failed: %v", route, err)
 		}
-		second, err := probeSSHFreshAccess(f.ctx, binding, peer(target), bastion, guard)
+		second, err := probe()
 		if err != nil || first.BindingSHA256 != second.BindingSHA256 || first.ChallengeSHA256 == second.ChallengeSHA256 || first.SessionSHA256 == second.SessionSHA256 {
 			f.t.Fatalf("native %s probe reused authentication: %v", route, err)
 		}

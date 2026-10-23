@@ -27,6 +27,7 @@ type sshAccessBinding struct {
 	Plan        string
 	Intent      string
 	Target      string
+	Request     string // Optional independently approved complete request digest.
 	Access      accessContext
 }
 
@@ -158,6 +159,9 @@ func probeSSHFreshAccess(parent context.Context, binding sshAccessBinding, targe
 		if !lowerDigest.MatchString(digest) {
 			return result, ErrInventoryUnsafe
 		}
+	}
+	if binding.Request != "" && !lowerDigest.MatchString(binding.Request) {
+		return result, ErrInventoryUnsafe
 	}
 	declaration := intent{Schema: 1, Role: "target", Owner: "syswarden", Profile: "forwarding", Contexts: []accessContext{binding.Access}}
 	if err := declaration.validate(); err != nil {

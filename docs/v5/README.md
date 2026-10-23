@@ -126,6 +126,10 @@ server campaign, paid resource or public v5 release is authorized by this text.
     The private [fresh SSH transport](SSH_FRESH_ACCESS_PROBE.md) binds new
     pinned-key direct/ProxyJump authentication to explicit inputs, while keeping
     recovery required and independent controller integration open.
+    [Protected access requests](SSH_PROTECTED_ACCESS_REQUEST.md) now derive the
+    complete public-key-pinned context set from guarded activation history and
+    execute independently approved batches with controller-held private keys.
+    Receipt acceptance and current target-state proof remain open.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.
