@@ -129,7 +129,11 @@ server campaign, paid resource or public v5 release is authorized by this text.
     [Protected access requests](SSH_PROTECTED_ACCESS_REQUEST.md) now derive the
     complete public-key-pinned context set from guarded activation history and
     execute independently approved batches with controller-held private keys.
-    Receipt acceptance and current target-state proof remain open.
+    [Signed controller observations](SSH_CONTROLLER_RECEIPTS.md) bind independently
+    approved challenges to complete route results and current protected appraisal.
+    [One-time evidence recording](SSH_ACCESS_EVIDENCE.md) retains exact private
+    observations and blocks reuse while preserving the recovery requirement.
+    Causal policy-consumption proof and runtime-aware recovery remain open.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

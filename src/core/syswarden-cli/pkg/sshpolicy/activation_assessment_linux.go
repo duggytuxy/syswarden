@@ -28,12 +28,16 @@ type ActivationAssessment struct {
 }
 
 type sshActivationAssessment struct {
-	owned  *sshOwnedPublication
-	intent sshFileImage
-	target string
+	owned    *sshOwnedPublication
+	intent   sshFileImage
+	target   string
+	evidence *sshFileImage // set only from this call's acknowledged immutable write
 }
 
 func (a *sshActivationAssessment) recheck() error {
+	if a.evidence != nil {
+		return recheckSSHAccessEvidence(a)
+	}
 	return recheckSSHActivation(a.owned, a.intent)
 }
 
@@ -95,7 +99,7 @@ func inspectSSHActivationHistory(journal *sshJournal, approved, parser string) (
 	if err != nil || intent != expected {
 		return nil, errors.Join(ErrInventoryChanged, err)
 	}
-	assessment := &sshActivationAssessment{owned, image, intent.Target}
+	assessment := &sshActivationAssessment{owned: owned, intent: image, target: intent.Target}
 	return assessment, assessment.recheck()
 }
 
@@ -105,7 +109,7 @@ func assessSSHActivation(ctx context.Context, journal *sshJournal, approved, par
 }
 
 // The private action runs inside the original journal lock and inode guards.
-// It may derive a request but cannot turn an observation into activation proof.
+// It may derive a request or record evidence, never establish activation proof.
 func withSSHActivationAssessment(ctx context.Context, journal *sshJournal, approved, parser string,
 	run sshParserRun, parserCheck func() error, observe sshEndpointObserver,
 	action func(context.Context, *sshActivationAssessment, ActivationAssessment, func() error) error) (ActivationAssessment, error) {

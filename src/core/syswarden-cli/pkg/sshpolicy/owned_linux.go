@@ -73,11 +73,23 @@ func observeSSHOwnedRecords(journal *sshJournal) (map[string]string, error) {
 }
 
 func observeSSHOwnedRecordSet(journal *sshJournal, activation bool) (map[string]string, error) {
+	return observeSSHRecordMembership(journal, activation, false)
+}
+
+// Only the in-flight evidence writer accepts the one additional record. Ordinary
+// reopen, appraisal, activation and file-only recovery keep their closed sets.
+func observeSSHRecordMembership(journal *sshJournal, activation, evidence bool) (map[string]string, error) {
+	if evidence && !activation {
+		return nil, ErrInventoryUnsafe
+	}
 	if err := journal.recheck(); err != nil {
 		return nil, err
 	}
 	count := 8
 	if activation {
+		count++
+	}
+	if evidence {
 		count++
 	}
 	names, err := sshDirectoryNames(journal.directory, count)
@@ -91,6 +103,9 @@ func observeSSHOwnedRecordSet(journal *sshJournal, activation bool) (map[string]
 	}
 	if activation {
 		expected[sshActivationIntentName] = true
+	}
+	if evidence {
+		expected[sshAccessEvidenceName] = true
 	}
 	records := make(map[string]string, count)
 	for _, name := range names {

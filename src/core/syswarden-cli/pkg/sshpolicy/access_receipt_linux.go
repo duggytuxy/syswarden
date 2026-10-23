@@ -248,6 +248,15 @@ func verifySSHAccessReceipt(input sshAccessReceiptInput, now time.Time) (sshAcce
 func assessSSHActivationAccessReceipt(ctx context.Context, journal *sshJournal, approved, parser string,
 	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, pins []sshAccessRoutePins,
 	input sshAccessReceiptInput, clock func() time.Time, authorize func() error) (result sshAccessReceiptAssessment, err error) {
+	return withSSHActivationAccessReceipt(ctx, journal, approved, parser, run, parserCheck, observe, pins, input, clock, authorize, nil)
+}
+
+// The optional private action runs after exact current-request appraisal, inside
+// the original lock and final guards. It receives only frozen public input.
+func withSSHActivationAccessReceipt(ctx context.Context, journal *sshJournal, approved, parser string,
+	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, pins []sshAccessRoutePins,
+	input sshAccessReceiptInput, clock func() time.Time, authorize func() error,
+	action func(*sshActivationAssessment, sshAccessReceiptInput, time.Time, func() error) error) (result sshAccessReceiptAssessment, err error) {
 	if ctx == nil || clock == nil || authorize == nil {
 		return result, ErrInventoryUnsafe
 	}
@@ -294,6 +303,9 @@ func assessSSHActivationAccessReceipt(ctx context.Context, journal *sshJournal, 
 				return err
 			}
 			result, err = verifySSHAccessReceipt(input, last)
+			if err == nil && action != nil {
+				err = action(a, input, last, recheck)
+			}
 			return err
 		})
 	return result, err
