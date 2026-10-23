@@ -120,6 +120,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     The read-only [activation assessment](SSH_ACTIVATION_ASSESSMENT.md) reopens
     interrupted history and verifies current configuration and endpoints while
     retaining the recovery requirement and refusing replay or evidence deletion.
+    The [disposable runtime and access oracle](SSH_RUNTIME_ACCESS_ORACLE.md)
+    exercises fresh direct and ProxyJump authentication, policy reload and
+    existing-session negative controls with isolated loopback daemons.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

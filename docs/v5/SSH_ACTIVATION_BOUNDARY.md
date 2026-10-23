@@ -153,3 +153,12 @@ independent explicit TOML choices for SSH/CIS/OS and optional modules, and
 preservation of administrator settings and existing protection on upgrade.
 This change does not wire those production defaults. BunkerWeb's independent
 API, source ownership, expiry and HA remain unchanged. Linux AMD64 only.
+
+## Disposable runtime evidence
+
+The [native runtime and access oracle](SSH_RUNTIME_ACCESS_ORACLE.md) separately
+checks real OpenSSH forwarding behavior and fresh direct/ProxyJump authentication
+around fixture publication, reload and restoration. An existing authenticated
+channel is retained as a negative control. This opt-in fixture does not invoke
+the production binder or clear its durable recovery fence, and cannot establish
+complete policy consumption, native migration or package readiness.
