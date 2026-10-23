@@ -431,3 +431,12 @@ retirement independent of public certificate expiry. Test one-hour rotation
 boundaries, source/schema widening refusal, late faults, complete 500-member
 synthetic lookups and deterministic permutation. Protected history, durable
 revocation, TLS, issuance and native capacity/IVVQ remain separate evidence.
+
+The [disposable SSH runtime oracle](SSH_RUNTIME_ACCESS_ORACLE.md) requires fresh
+pinned-key authentication on direct and ProxyJump paths for forwarding and CIS
+candidates. Publication without reload, an existing authenticated channel,
+missing target authorization and disk-only restoration are negative controls.
+These explicitly requested native tests remain separate from production
+activation, independent controller access, complete runtime recovery, native
+package lifecycle and final v5.00.0 IVVQ acceptance. Ordinary hosted unit-test
+success does not establish that an opt-in runtime oracle executed.
