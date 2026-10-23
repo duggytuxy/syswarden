@@ -12,6 +12,7 @@ import (
 
 const sshAccessEvidenceName = "access-evidence.json"
 const sshAccessEvidenceDomain = "syswarden-ssh-access-evidence-v1"
+const maxSSHAccessEvidenceBytes = 512 << 10
 
 // Exact private request/challenge/receipt bytes are retained. Controller trust
 // comes from the independently supplied key, never from this local record.
@@ -43,8 +44,8 @@ type sshAccessEvidenceResult struct {
 	RecoveryRequired bool
 }
 
-// The extra record must be exactly this writer's inode and bytes. Reopened
-// histories cannot enter this guard or adopt an existing record as a new write.
+// Bind the exact pinned evidence inode and original history. The read-only
+// observer may pin an existing image, without adopting it as a new write.
 func recheckSSHAccessEvidence(a *sshActivationAssessment) error {
 	current, err := stableSSHPublication(a.owned.journal.root, a.owned.journal.uid, a.owned.stage)
 	if err != nil || !reflect.DeepEqual(current, a.owned.inventory) {
@@ -81,7 +82,7 @@ func recordSSHActivationAccessEvidence(ctx context.Context, journal *sshJournal,
 				approved, parser, digestBytes(a.intent.data), a.target, history, digestBytes(frozen.Controller),
 				assessed.Unix(), frozen.Request, frozen.Challenge, frozen.Receipt, true}
 			wire, err := json.Marshal(record)
-			if err != nil || len(wire) > maxSSHJournalBytes {
+			if err != nil || len(wire) > maxSSHAccessEvidenceBytes {
 				return errors.Join(ErrInventoryUnsafe, err)
 			}
 			if err := guard(); err != nil {

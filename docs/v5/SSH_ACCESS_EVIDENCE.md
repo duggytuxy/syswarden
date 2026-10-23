@@ -13,7 +13,8 @@ appraisal. It regenerates the complete current request and requires exact byte
 equality. The original journal lock remains held through final verification.
 No target-side network authentication or daemon reload is performed.
 
-A single fixed `access-evidence.json` record retains the exact request, challenge
+A single fixed `access-evidence.json` record, bounded to 512 KiB, retains the
+exact request, challenge
 and signed receipt bytes, with the controller public-key digest, original plan,
 parser, transaction, activation intent, target and original publication-record
 fingerprint. `assessed_at` records the successful appraisal time, not a claim of
@@ -53,8 +54,10 @@ of the entire protected history.
 The stored observation is not activation acceptance. `RecoveryRequired` remains
 true, and no loaded-policy, runtime-complete or reusable access authority is
 returned. The existing activation fence continues to prohibit file-only
-rollback. Recorded histories deliberately require a future explicit runtime-aware
-recovery/inspection path; deleting the record to resume migration is unsupported.
+rollback. A separate [read-only observer](SSH_RECORDED_ACCESS_OBSERVATION.md) can inspect
+independently approved recorded histories, including uncertain writes, without
+repairing durability or granting a new operation. Runtime-aware recovery still
+requires integration; deleting the record to resume migration is unsupported.
 
 ## Verification and remaining work
 

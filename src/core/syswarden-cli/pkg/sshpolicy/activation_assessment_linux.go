@@ -31,7 +31,7 @@ type sshActivationAssessment struct {
 	owned    *sshOwnedPublication
 	intent   sshFileImage
 	target   string
-	evidence *sshFileImage // set only from this call's acknowledged immutable write
+	evidence *sshFileImage // exact image pinned by the writer or read-only evidence observer
 }
 
 func (a *sshActivationAssessment) recheck() error {
@@ -41,13 +41,18 @@ func (a *sshActivationAssessment) recheck() error {
 	return recheckSSHActivation(a.owned, a.intent)
 }
 
-func inspectSSHActivationHistory(journal *sshJournal, approved, parser string) (*sshActivationAssessment, error) {
+// An optional evidence image extends only this private observer's closed set.
+// It never establishes that the original writer acknowledged durability.
+func inspectSSHActivationEvidenceHistory(journal *sshJournal, approved, parser string, evidence *sshFileImage) (*sshActivationAssessment, error) {
 	if journal == nil || journal.retained != nil || !lowerDigest.MatchString(approved) || !lowerDigest.MatchString(parser) {
 		return nil, ErrInventoryUnsafe
 	}
-	records, err := observeSSHOwnedRecordSet(journal, true)
+	records, err := observeSSHRecordMembership(journal, true, evidence != nil)
 	if err != nil {
 		return nil, err
+	}
+	if evidence != nil && records[sshAccessEvidenceName] != sshImageDigest(*evidence) {
+		return nil, ErrInventoryChanged
 	}
 	image, err := readSSHPrivateChild(journal.directory, sshActivationIntentName, journal.uid, 2048)
 	if err != nil || sshImageDigest(image) != records[sshActivationIntentName] {
@@ -94,12 +99,13 @@ func inspectSSHActivationHistory(journal *sshJournal, approved, parser string) (
 	}
 	original := maps.Clone(records)
 	delete(original, sshActivationIntentName)
+	delete(original, sshAccessEvidenceName)
 	owned := &sshOwnedPublication{journal, prepared, plan, stage, current, original}
 	expected, err := makeSSHActivationIntent(owned, intent.Target)
 	if err != nil || intent != expected {
 		return nil, errors.Join(ErrInventoryChanged, err)
 	}
-	assessment := &sshActivationAssessment{owned: owned, intent: image, target: intent.Target}
+	assessment := &sshActivationAssessment{owned: owned, intent: image, target: intent.Target, evidence: evidence}
 	return assessment, assessment.recheck()
 }
 
@@ -113,6 +119,14 @@ func assessSSHActivation(ctx context.Context, journal *sshJournal, approved, par
 func withSSHActivationAssessment(ctx context.Context, journal *sshJournal, approved, parser string,
 	run sshParserRun, parserCheck func() error, observe sshEndpointObserver,
 	action func(context.Context, *sshActivationAssessment, ActivationAssessment, func() error) error) (ActivationAssessment, error) {
+	return withSSHActivationEvidenceAssessment(ctx, journal, approved, parser, run, parserCheck, observe, nil, action)
+}
+
+// The reader supplies an independently approved pinned image. Existing callers
+// use nil and still refuse any occupied evidence slot on reopen.
+func withSSHActivationEvidenceAssessment(ctx context.Context, journal *sshJournal, approved, parser string,
+	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, evidence *sshFileImage,
+	action func(context.Context, *sshActivationAssessment, ActivationAssessment, func() error) error) (ActivationAssessment, error) {
 	if ctx == nil || run == nil || parserCheck == nil || observe == nil {
 		return ActivationAssessment{}, ErrInventoryUnsafe
 	}
@@ -121,7 +135,7 @@ func withSSHActivationAssessment(ctx context.Context, journal *sshJournal, appro
 	if err := errors.Join(ctx.Err(), parserCheck()); err != nil {
 		return ActivationAssessment{}, err
 	}
-	a, err := inspectSSHActivationHistory(journal, approved, parser)
+	a, err := inspectSSHActivationEvidenceHistory(journal, approved, parser, evidence)
 	if err != nil {
 		return ActivationAssessment{}, err
 	}

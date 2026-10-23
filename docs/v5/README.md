@@ -133,6 +133,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     approved challenges to complete route results and current protected appraisal.
     [One-time evidence recording](SSH_ACCESS_EVIDENCE.md) retains exact private
     observations and blocks reuse while preserving the recovery requirement.
+    Its [read-only observer](SSH_RECORDED_ACCESS_OBSERVATION.md) separates
+    historical signatures, current correspondence and expiry without repairing
+    uncertain writes or reopening the occupied slot.
     Causal policy-consumption proof and runtime-aware recovery remain open.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
