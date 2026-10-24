@@ -215,7 +215,7 @@ func TestBaseDependencyCancellationDoesNotStartNativeManager(t *testing.T) {
 			t.Fatal(manager, err)
 		}
 	}
-	if err := runBaseDependencyCommand(nil, "/usr/bin/apt-get", false); err == nil {
+	if err := runBaseDependencyCommand(nil, "/usr/bin/apt-get", false); err == nil { //nolint:staticcheck // SA1012: Deliberate invalid input verifies rejection before a native package manager can start.
 		t.Fatal("nil context accepted")
 	}
 }

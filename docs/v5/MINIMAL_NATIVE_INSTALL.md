@@ -257,3 +257,11 @@ Debian cron provider. Approval is bound to the selected spool and exact record
 inventory. Unrelated records remain byte-for-byte unchanged, and the original
 inode is retained privately. A custom provider or unresolved producer remains a
 refusal. Full native uninstall, remove and purge qualification remains required.
+
+The current complete native APK probes still refuse firewall retirement: the
+shared nftables persistence observer attests a systemd loader and does not yet
+attest the Alpine OpenRC loader. The recovery copy and exact cron retirement do
+not remove this blocker. Do not install systemd as a workaround, bypass the
+observer, stop the shared nftables service or flush its rules. OpenRC loader
+configuration and its effective entry points require their own bounded
+observation before native removal can be qualified.
