@@ -214,3 +214,16 @@ behavior, optional activation, complete SSH migration and recovery, and separate
 standalone uninstall, native remove and native purge qualification. Required
 platform dependencies and unrelated administrator protection must survive every
 applicable path.
+
+The full native removal laboratory seeds a complete historical modular policy
+before its administrator sentinels. The historical `fresh` event labels in those
+scenarios mean first package installation into that preconfigured fixture; they
+do not prove the new standard-list-only defaults. A custom user module without
+the other policy modules is an incomplete configuration and must be refused.
+
+An APK removal script's nonzero exit is not a transaction veto. Native removal
+can continue deleting the package payload after a preparation refusal. The
+consolidated implementation must preserve an attributable recovery route for
+that case and independently verify remaining protection, package registration,
+payload and runtime state. A successful manager exit cannot establish successful
+SysWarden removal. These paths remain acceptance blockers until qualified.

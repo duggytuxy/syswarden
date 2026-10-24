@@ -2057,6 +2057,39 @@ def build_historical_transition_containerfile(
     return f"FROM {common_image}\n{transition_bootstrap}"
 
 
+def complete_removal_configuration_seed() -> str:
+    """Prepare a complete historical policy before adding operator sentinels.
+
+    Removal scenarios exercise preservation of preconfigured installations.
+    They do not establish standard-list-only fresh installation acceptance.
+    An incomplete custom module must never rely on installer default repair.
+    """
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "src/core/syswarden-cli/config/historical_defaults_v4104.json"
+    ).read_bytes()
+    if hashlib.sha256(fixture).hexdigest() != (
+        "4a249386079b44d1bdac4fc0288dc818938762e67126fb20dd5d3c3d7221faaa"
+    ):
+        raise LifecycleLabError("historical removal configuration fixture changed")
+    templates = json.loads(fixture)
+    lines = [
+        "seed_complete_removal_configuration() {",
+        "    [ ! -e /etc/syswarden/config ] && [ ! -L /etc/syswarden/config ] || return 1",
+        "    (umask 027; mkdir -p /etc/syswarden/config/modules) || return 1",
+    ]
+    for relative, content in templates.items():
+        destination = shlex.quote("/etc/syswarden/config/" + relative)
+        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        lines.extend((
+            f"    printf '%s' {shlex.quote(encoded)} | base64 -d > {destination} || return 1",
+            f"    chmod 0640 {destination} || return 1",
+            f"    [ \"$(sha256sum {destination} | awk '{{ print $1 }}')\" = {digest} ] || return 1",
+        ))
+    return "\n".join((*lines, "}"))
+
+
 LIFECYCLE_SCRIPT = r'''#!/bin/sh
 # ShellCheck cannot infer function calls passed through run_step.
 # shellcheck disable=SC2317
@@ -4397,6 +4430,8 @@ attest_preinstall_networkless_config_after_previous() {
     return 1
 }
 
+# __COMPLETE_REMOVAL_CONFIGURATION_SEED__
+
 write_seeded_operator_token() {
     seeded_operator_token="$1"
     {
@@ -6413,6 +6448,7 @@ scenario_upgrade_rollback_restart_two() {
 
 scenario_remove() {
     prepare_expected_payloads || return
+    seed_complete_removal_configuration || return
     seed_state || return
     if [ "${PACKAGE_FAMILY}" = deb ]; then
         seed_deb_removal_log || return
@@ -6481,6 +6517,7 @@ scenario_remove() {
 
 scenario_purge() {
     prepare_expected_payloads || return
+    seed_complete_removal_configuration || return
     seed_state || return
     if [ "${PACKAGE_FAMILY}" = deb ]; then
         seed_deb_removal_log || return
@@ -6542,6 +6579,10 @@ if [ "${FAILURES}" -ne 0 ]; then
 fi
 exit 0
 '''
+
+LIFECYCLE_SCRIPT = LIFECYCLE_SCRIPT.replace(
+    "# __COMPLETE_REMOVAL_CONFIGURATION_SEED__", complete_removal_configuration_seed()
+)
 
 
 def parse_events(path: Path) -> list[dict[str, str]]:
