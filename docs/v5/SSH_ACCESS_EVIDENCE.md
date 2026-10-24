@@ -79,5 +79,6 @@ uninstall/remove/purge and complete migration qualification remain open.
 There is no migration-ready package or final v5.00.0 IVVQ acceptance.
 Issue #422 still requires standard-list-only fresh native installation and
 independent TOML choices for SSH, CIS, OS hardening and optional modules.
-Production minimal-profile installer wiring remains incomplete. Preserve
+The source installer uses the minimal profile; [package dependency transitions
+and native qualification](MINIMAL_NATIVE_INSTALL.md) remain incomplete. Preserve
 administrator upgrades, BunkerWeb independence and Linux AMD64 scope.

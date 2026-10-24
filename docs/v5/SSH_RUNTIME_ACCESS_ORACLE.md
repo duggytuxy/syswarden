@@ -104,7 +104,8 @@ open. A migration-ready package is not yet available.
 Issue #422 remains mandatory: fresh native packages use only the standard list;
 SSH, CIS, OS hardening and optional modules require independent explicit TOML
 choices. Upgrades preserve administrator configuration and existing protection.
-Production minimal-profile installer wiring is still incomplete. This oracle
+The source installer uses the minimal profile, while [native dependency
+transitions and package qualification](MINIMAL_NATIVE_INSTALL.md) remain open. This oracle
 does not alter defaults or bypass approval and recovery fences. BunkerWeb's
 independent contract is unchanged; the product scope remains Linux AMD64 only.
 

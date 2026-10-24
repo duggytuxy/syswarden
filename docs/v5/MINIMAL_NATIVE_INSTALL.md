@@ -23,6 +23,25 @@ Upgrades preserve administrator configuration, selected protection and existing
 dependencies. A missing new TOML switch in a historical configuration is not
 permission to disable its former behavior or remove a package.
 
+## Consolidated implementation status
+
+Source integration and native package acceptance are distinct. The current
+consolidated implementation has the following boundaries:
+
+| Area | Implemented source behavior | Remaining acceptance |
+| --- | --- | --- |
+| Fresh configuration | `standard-v1` templates select list 1, list-only policy and disabled optional modules. Environment variables cannot grant fresh-profile module consent. | Qualify the complete fresh native package on every supported platform after dependency metadata is reduced safely. |
+| Installation and reload | Existing SSH, CIS and OS policy is preserved. Optional module prerequisites are checked without installing missing optional packages implicitly. | Complete the native lifecycle matrix and independent administrator-policy preservation checks. |
+| Native dependencies | Managed updaters prepare historical dependency retention; v5 signed manifests require the new transition contract. Mandatory Alpine prerequisites remain required. | Direct native and unsigned-era updater transitions remain unqualified. Package metadata still declares historical optional tools and must not be reduced before that preservation path is accepted. |
+| Dedicated SSH migration | Protected planning, publication, observation, original restoration and target-side access issuance exist. The activation/restoration binder refuses a different daemon mount view. | Complete supported daemon-build/default-path qualification, guarded policy consumption, independent controller handoff, recovery acceptance and owned lifecycle before exposing forward migration. |
+
+The source installer selecting minimal defaults does not mean the generated
+DEB, RPM or APK is already a minimal, migration-ready package. In particular,
+disabled VPN or CIS behavior does not remove their currently retained historical
+package requirements. Keep issue #422 and consolidated PR452 open until both the
+package dependency boundary and the runtime migration/lifecycle gates pass.
+A green generic build or isolated SSH oracle does not replace those gates.
+
 ## Incomplete configuration recovery
 
 Installation and repair must not replace lost policy with the fresh standard

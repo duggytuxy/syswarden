@@ -100,7 +100,9 @@ migration-ready package or final v5.00.0 IVVQ acceptance.
 
 Issue #422 is unchanged: fresh native installation must select the standard list
 only, with independent explicit TOML choices for SSH, CIS, OS hardening and
-optional modules. Production installer wiring remains incomplete. Administrator
+optional modules. The source installer now uses that profile and preserves host
+hardening; [native dependency transitions and package qualification](MINIMAL_NATIVE_INSTALL.md)
+remain incomplete. Administrator
 upgrade settings, BunkerWeb independence and Linux AMD64 scope are preserved.
 
 ## Signed controller continuation

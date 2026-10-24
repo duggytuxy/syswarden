@@ -99,5 +99,6 @@ package or final v5.00.0 IVVQ acceptance is claimed.
 
 Issue #422 still requires standard-list-only fresh native installation and
 independent explicit TOML selection of SSH, CIS, OS hardening and optional modules.
-Production minimal-profile installer wiring remains incomplete. Administrator
+The source installer uses the minimal profile; [native dependency transitions
+and package qualification](MINIMAL_NATIVE_INSTALL.md) remain incomplete. Administrator
 upgrade settings, BunkerWeb independence and Linux AMD64 scope are unchanged.
