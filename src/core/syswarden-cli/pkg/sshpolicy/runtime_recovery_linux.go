@@ -184,8 +184,9 @@ func validateSSHRuntimeRecovery(journal *sshJournal, intent sshRuntimeRecoveryIn
 	return prepared, plan, nil
 }
 
-// Internal integration boundary. No production CLI or installer enables this
-// operation yet. Empty recoveryApproval means inspection only. Application
+// Internal engine reached by the root-only original-restoration adapter.
+// No installer or forward activation is enabled. Empty recoveryApproval means
+// inspection only. Application
 // requires its separate digest, never just the original migration approval.
 // A partial inverse can resume only with exactly the same history and target.
 // A reload intent always prohibits replay, even if dispatch may not have run.

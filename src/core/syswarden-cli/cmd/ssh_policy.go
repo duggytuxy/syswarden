@@ -11,7 +11,7 @@ func newSSHPolicyCommand(inspect func() (sshpolicy.PlanSummary, error), verify f
 	command := &cobra.Command{
 		Use:   "ssh-policy",
 		Short: "Inspect the dedicated SSH policy migration",
-		Long:  "Inspect configured SSH ports, verify candidates and owned publications, or assess an interrupted activation with the installed parser and current systemd endpoints. These development commands are read-only; migration application is not available yet.",
+		Long:  "Inspect SSH policy and interrupted activation, or explicitly restore retained original configuration with a separately approved recovery plan. Forward migration application and completed recovery acceptance are not available yet.",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
@@ -64,6 +64,7 @@ func init() {
 	command := newSSHPolicyCommand(sshpolicy.InspectPlan, sshpolicy.VerifyPlan, sshpolicy.InspectPorts)
 	command.AddCommand(newSSHOwnedCommand(sshpolicy.VerifyOwned))
 	command.AddCommand(newSSHActivationAssessmentCommand(sshpolicy.AssessSystemdActivation))
+	command.AddCommand(newSSHRestoreOriginalCommand(sshpolicy.InspectSystemdRecovery, sshpolicy.RestoreOriginalSystemd))
 	rootCmd.AddCommand(command)
 }
 
@@ -112,6 +113,10 @@ func newSSHActivationAssessmentCommand(assess func(string) (sshpolicy.Activation
 func readOnlySSHPolicyCommand(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return false
+	}
+	if sshRestoreOriginalCommand(cmd) {
+		apply, err := cmd.Flags().GetBool("apply")
+		return err == nil && !apply
 	}
 	path := cmd.CommandPath()
 	return path == "syswarden ssh-policy" || path == "syswarden ssh-policy plan" ||

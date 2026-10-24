@@ -12,8 +12,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// This private adapter has no CLI or installer caller. The dispatcher must
-// durably record intent before request. A successful send never acknowledges
+// This private adapter serves explicit original restoration, but no forward
+// activation CLI or installer caller. Every dispatcher must durably record
+// intent before request. A successful send never acknowledges
 // consumed policy, independent access or a completed migration.
 func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) (_ sshActivationLease, err error) {
 	if parent == nil || policyGuard == nil {

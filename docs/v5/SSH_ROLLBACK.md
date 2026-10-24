@@ -1,9 +1,11 @@
 # Verified SSH configuration rollback
 
 Status: internal v5.00.0 development component. Refs #235 and #337.
-The public SSH policy commands remain read-only. Installation, CIS hardening and
-service activation do not invoke this helper yet. This is not a complete package
-migration or final IVVQ acceptance.
+The public planning and observation commands remain read-only. Installation,
+CIS hardening and service activation do not invoke this file-only helper yet.
+The separate [original-restoration command](SSH_OPERATOR_RECOVERY.md) handles
+an attributable activation attempt through its own runtime boundary. Neither
+path establishes complete package migration or final IVVQ acceptance.
 
 ## Recovery boundary
 

@@ -763,7 +763,7 @@
       "field": "command",
       "before": null,
       "after": "added",
-      "reason": "Add a read-only development entry point for protected SSH migration planning. No application or service mutation is exposed."
+      "reason": "Add a protected SSH development command group for read-only planning and observation, plus separately approved original-configuration restoration. Forward migration and completed recovery remain unavailable."
     },
     {
       "path": "syswarden ssh-policy plan",
@@ -799,6 +799,13 @@
       "before": null,
       "after": "added",
       "reason": "Inspect an interrupted SSH activation using the independently approved original plan, exact protected intent and publication records, installed parser and current systemd endpoints. This read-only development command preserves the recovery requirement and does not retry activation, mutate files, prove consumed policy or authenticate access."
+    },
+    {
+      "path": "syswarden ssh-policy restore-original",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Expose fixed-path root-only recovery inspection and separately approved original-inode restoration with one retained-target systemd reload request. Preserve runtime/access uncertainty and partial error facts; bypass automatic configuration/firewall repair without bypassing the removal barrier for application. No forward migration or completed recovery is authorized."
     }
   ],
   "package_platform_contract": {

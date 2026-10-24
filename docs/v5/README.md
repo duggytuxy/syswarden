@@ -131,8 +131,8 @@ public record. Final publication remains subject to the v5.00.0 IVVQ contract.
     from treating an attempted activation as an untouched daemon. Its private
     systemd target now retains the protected helpers and live pidfd through a
     single bounded SIGHUP request and verifies stable replacement of every
-    expected listener generation. It does not enable an installer or CLI caller
-    or claim that the daemon consumed the policy or accepted a fresh login.
+    expected listener generation. It does not enable forward activation from an
+    installer or CLI caller, or claim that the daemon consumed the policy or accepted a fresh login.
     The read-only [activation assessment](SSH_ACTIVATION_ASSESSMENT.md) reopens
     interrupted history and verifies current configuration and endpoints while
     retaining the recovery requirement and refusing replay or evidence deletion.
@@ -155,8 +155,11 @@ public record. Final publication remains subject to the v5.00.0 IVVQ contract.
     A separately approved [runtime recovery coordinator](SSH_RUNTIME_RECOVERY.md)
     restores original inodes and requests one restoring reload while retaining
     runtime/access uncertainty. Interrupted inverse transitions can resume;
-    a restoring-reload intent prohibits replay. Causal policy-consumption proof
-    and operational recovery completion remain open.
+    a restoring-reload intent prohibits replay. The root-only
+    [operator restoration command](SSH_OPERATOR_RECOVERY.md) exposes inspection
+    and separately approved application without global configuration loading or
+    firewall recovery, and keeps application behind the removal barrier.
+    Causal policy-consumption proof and operational recovery completion remain open.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

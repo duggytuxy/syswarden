@@ -1,9 +1,11 @@
 # Restoring SSH configuration after an activation attempt
 
 Development integration for v5.00.0. Refs #235, #337 and #422.
-This internal coordinator restores the original retained configuration and
-issues one separately recorded restoring reload. Production CLI/installer
-activation and migration-ready packages remain unavailable.
+The coordinator restores the original retained configuration and issues one
+separately recorded restoring reload. An explicit root-only
+[operator recovery command](SSH_OPERATOR_RECOVERY.md) now connects it to fixed
+live systemd paths. Forward migration activation, installer wiring, completed
+recovery acceptance and migration-ready packages remain unavailable.
 
 ## Independent approval and live process
 
