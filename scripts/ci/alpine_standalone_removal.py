@@ -142,6 +142,16 @@ def inspect_payload(data: bytes) -> tuple[str, dict[str, bytes]]:
     if values.get("pkgname") != "syswarden" or values.get("arch") != "x86_64":
         raise lab.LifecycleLabError("candidate is not a SysWarden Linux AMD64 APK")
     version = values.get("pkgver", "").removesuffix("-r0")
+    # The APK packager normalizes a two-digit minor to its numeric form.
+    # Convert only this known spelling, retaining the source version bounds.
+    match = re.fullmatch(r"([1-9][0-9]*)\.([0-9]{1,2})\.(0|[1-9][0-9]*)", version)
+    if match is None:
+        raise lab.LifecycleLabError("candidate APK version is outside the supported source contract")
+    major, minor, patch = (int(part) for part in match.groups())
+    canonical = f"{major}.{minor:02d}.{patch}"
+    if version not in (canonical, f"{major}.{minor}.{patch}"):
+        raise lab.LifecycleLabError("candidate APK version has an ambiguous numeric spelling")
+    version = canonical
     if lab.parse_syswarden_version(version) < (5, 0, 0):
         raise lab.LifecycleLabError("standalone profile requires candidate version 5.00.0 or later")
     for name in ("syswarden-cli", "syswarden-core", "syswarden-tui"):
@@ -155,11 +165,11 @@ def inspect_payload(data: bytes) -> tuple[str, dict[str, bytes]]:
         ("standaloneSignaturesSHA256", "signatures.json"),
     ):
         digest = hashlib.sha256(selected[f"opt/syswarden/{relative}"]).hexdigest()
-        binding = f"syswarden-cli/pkg/system.{variable}={digest}".encode()
-        if binding not in cli:
-            raise lab.LifecycleLabError(f"candidate CLI lacks exact companion build binding: {variable}")
-    # The actual uninstall additionally validates the compiled values, payload
-    # bytes and identities. Build metadata alone cannot establish this check.
+        if digest.encode() not in cli:
+            raise lab.LifecycleLabError(f"candidate CLI lacks the companion digest value: {variable}")
+    # Stripped Go builds may omit linker flags and variable names. Literal
+    # presence is only a prefilter, not binding authority. The real uninstall
+    # must validate its compiled variables against the exact staged payload.
     return version, selected
 
 
@@ -235,6 +245,20 @@ def validate_inputs(args: argparse.Namespace) -> None:
         raise lab.LifecycleLabError("timeout must be between 30 and 1800 seconds")
 
 
+def validate_prepared_image(images: object, expected: str) -> None:
+    if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict):
+        raise lab.LifecycleLabError("prepared image inspection must describe exactly one image")
+    image = images[0]
+    # Podman inspect returns a bare digest on some supported versions, while
+    # its iidfile includes the algorithm. Both must name the same exact image.
+    identity = image.get("Id")
+    if (identity not in (expected, expected.removeprefix("sha256:"))
+            or image.get("Architecture") != "amd64" or image.get("Os") != "linux"
+            or not isinstance(image.get("Config"), dict)
+            or image["Config"].get("Cmd") != ["/sbin/openrc-init"]):
+        raise lab.LifecycleLabError("image is not the exact prepared Linux AMD64 OpenRC image")
+
+
 def run(args: argparse.Namespace, runner: lab.CommandRunner | None = None) -> dict[str, object]:
     validate_inputs(args)
     args.output.mkdir(mode=0o700)
@@ -252,10 +276,7 @@ def run(args: argparse.Namespace, runner: lab.CommandRunner | None = None) -> di
         inspected = runner.run((args.podman, "image", "inspect", args.image), timeout=30)
         lab.require_success(inspected, "inspect existing prepared image")
         images = json.loads(inspected.stdout)
-        if (len(images) != 1 or images[0].get("Id") != args.image
-                or images[0].get("Architecture") != "amd64" or images[0].get("Os") != "linux"
-                or images[0].get("Config", {}).get("Cmd") != ["/sbin/openrc-init"]):
-            raise lab.LifecycleLabError("image is not the exact prepared Linux AMD64 OpenRC image")
+        validate_prepared_image(images, args.image)
         candidate_root, previous_root, result_root = (args.output / part for part in ("candidate", "empty-previous", "results"))
         for directory in (candidate_root, previous_root, result_root):
             directory.mkdir(mode=0o700)

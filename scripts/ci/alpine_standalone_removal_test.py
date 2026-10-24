@@ -37,6 +37,10 @@ def candidate_bytes(mutation="none"):
     contents = io.BytesIO()
     with tarfile.open(fileobj=contents, mode="w:gz") as archive:
         metadata = b"pkgname = syswarden\npkgver = 5.00.0-r0\narch = x86_64\n"
+        if mutation == "normalized-version":
+            metadata = metadata.replace(b"5.00.0-r0", b"5.0.0")
+        elif mutation == "malformed-version":
+            metadata = metadata.replace(b"5.00.0-r0", b"5.000.0")
         entries = [(".PKGINFO", metadata, 0o644), *[(name, data, standalone.PAYLOAD_MODES[name]) for name, data in payloads.items()]]
         if mutation == "duplicate":
             entries.append(entries[1])
@@ -60,11 +64,23 @@ def candidate_bytes(mutation="none"):
 
 
 class StandaloneRemovalTests(unittest.TestCase):
+    def test_podman_inspect_identity_requires_exact_image_with_optional_algorithm(self):
+        expected = "sha256:" + "a" * 64
+        image = {"Id": expected, "Architecture": "amd64", "Os": "linux", "Config": {"Cmd": ["/sbin/openrc-init"]}}
+        standalone.validate_prepared_image([image], expected)
+        standalone.validate_prepared_image([{**image, "Id": expected.removeprefix("sha256:")}], expected)
+        for changed in (None, {}, [], [image, image], [{**image, "Id": "b" * 64}],
+                        [{**image, "Id": "a" * 12}], [{**image, "Config": None}],
+                        [{**image, "Config": {"Cmd": ["/bin/sh"]}}], [{**image, "Os": "other"}]):
+            with self.subTest(changed=changed), self.assertRaises(lab.LifecycleLabError):
+                standalone.validate_prepared_image(changed, expected)
+
     def test_payload_requires_exact_identity_bindings_and_architecture(self):
         version, payloads = standalone.inspect_payload(candidate_bytes())
         self.assertEqual(version, "5.00.0")
         self.assertEqual(set(payloads), set(standalone.PAYLOAD_MODES))
-        for mutation in ("unbound", "modified-companion", "arm", "duplicate", "missing", "mode", "owner", "hardlink"):
+        self.assertEqual(standalone.inspect_payload(candidate_bytes("normalized-version"))[0], "5.00.0")
+        for mutation in ("unbound", "modified-companion", "arm", "duplicate", "missing", "mode", "owner", "hardlink", "malformed-version"):
             with self.subTest(mutation=mutation), self.assertRaises(lab.LifecycleLabError):
                 standalone.inspect_payload(candidate_bytes(mutation))
 

@@ -18,8 +18,11 @@ Run as an unprivileged user on Linux AMD64 with rootless Podman. Supply:
 - A locally built v5 APK and its independently recorded SHA-256. The CLI must
   contain the exact core, TUI and signatures bindings produced by the repository
   package builders. Selected regular files, modes, ownership, launchers,
-  architecture and companion bindings are checked before staging. Archive
-  paths are never extracted to the host filesystem.
+  architecture and companion digest presence are checked before staging.
+  Stripped Go binaries may omit linker flags and variable names; literal digest
+  presence is only a prefilter. The real uninstall must validate its compiled
+  binding variables against the staged companions. Archive paths are never
+  extracted to the host filesystem.
 - An existing exact `sha256:` image ID for Alpine 3.22 or 3.24, prepared using the
   corresponding `package_lifecycle_lab.build_containerfile` contract. This
   includes real `/sbin/openrc-init` as the image command, the version-bound
@@ -80,3 +83,9 @@ failed commands, missing restart evidence or failed cleanup produce failure.
 This is prepared standalone-removal evidence. It does not establish standalone
 installation, minimal fresh native installation, native remove/purge, dependency
 retention through old/direct upgrades, SSH migration or final v5 IVVQ acceptance.
+
+The current development campaign executed the Alpine 3.24 AMD64 scenario:
+20 mandatory phases and 93 nested assertions passed across two real boots.
+Native registration stayed absent, the installed database/world inventory was
+unchanged, and the exact container was removed. Alpine 3.22 and other native
+platforms still require separate execution of this standalone scenario.

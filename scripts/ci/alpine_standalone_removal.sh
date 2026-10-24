@@ -2,6 +2,9 @@
 # runner after the common lifecycle function definitions, never shipped.
 [ "${SCENARIO}" = standalone-uninstall ] || exit 93
 [ "${PACKAGE_FAMILY}" = apk ] || exit 93
+# Create this fixture's synthetic historical roots with the private modes that
+# package preparation normally supplies. Do not chmod existing operator data.
+umask 027
 
 # Reuse reviewed preservation assertions, without changing the native runner's
 # profile or event contract. No package installation or erasure is permitted.
