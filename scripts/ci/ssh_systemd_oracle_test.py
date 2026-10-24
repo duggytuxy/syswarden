@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 try:
@@ -94,6 +95,65 @@ class OracleBoundaryTests(unittest.TestCase):
             with patch.object(oracle.os, "fstat", side_effect=[original, changed]):
                 with self.assertRaisesRegex(ValueError, "changed"):
                     oracle.checked_binary(binary, hashlib.sha256(b"x" * 65).hexdigest())
+
+    def test_binary_read_atime_is_not_mutation(self):
+        data = bytearray(64)
+        data[:7], data[18:20] = b"\x7fELF\x02\x01\x01", b"\x3e\x00"
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "binary"
+            binary.write_bytes(data)
+            before = binary.stat()
+            fields = {name: getattr(before, name) for name in (
+                "st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+                "st_size", "st_atime_ns", "st_mtime_ns", "st_ctime_ns")}
+            after = SimpleNamespace(**(fields | {"st_atime_ns": before.st_atime_ns + 1}))
+            digest = hashlib.sha256(data).hexdigest()
+            with patch.object(oracle.os, "fstat", side_effect=[before, after]):
+                self.assertEqual(oracle.checked_binary(binary, digest), data)
+            for field in fields.keys() - {"st_atime_ns"}:
+                changed = SimpleNamespace(**(fields | {field: fields[field] + 1}))
+                with self.subTest(field=field), patch.object(oracle.os, "fstat", side_effect=[before, changed]):
+                    with self.assertRaisesRegex(ValueError, "changed"):
+                        oracle.checked_binary(binary, digest)
+
+    def test_scenarios_require_exact_names(self):
+        self.assertEqual(oracle.oracle_case("activation"), ("TestSSHIsolatedSystemdActivationOracle", []))
+        for profile in ("forwarding", "cis", "legacy-cis"):
+            name, environment = oracle.oracle_case("recovery-" + profile)
+            self.assertEqual(name, "TestSSHIsolatedSystemdRecoveryOracle")
+            self.assertEqual(environment, ["SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE=" + profile, "SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP=0"])
+        self.assertEqual(oracle.oracle_case("recovery-noop")[1], ["SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE=forwarding", "SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP=1"])
+        for value in ("", "recovery", "other", "activation.*", "recovery-forwarding\n"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                oracle.oracle_case(value)
+
+    def test_recovery_watchdog_still_attempts_private_export(self):
+        responses = [subprocess.TimeoutExpired(["fixture"], 200), subprocess.CompletedProcess([], 0, "private journal", "")]
+        with patch.object(oracle.Recorder, "run", side_effect=responses) as run:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                oracle.run_oracle_commands(run, ["podman", "exec", "owned-fixture"], "TestFixture", [], True)
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("-test.run=^TestSSHIsolatedSystemdJournalExport$", run.call_args_list[1].args[0])
+        self.assertEqual(run.call_args_list[1].kwargs["timeout"], 15)
+        with patch.object(oracle.Recorder, "run", side_effect=[subprocess.TimeoutExpired(["fixture"], 200)]) as run:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                oracle.run_oracle_commands(run, [], "TestFixture", [], False)
+        self.assertEqual(run.call_count, 1)
+
+    def test_native_pass_and_private_failure_output(self):
+        name = "TestSSHIsolatedSystemdRecoveryOracle"
+        passed = "--- PASS: " + name + " (1.25s)\n"
+        oracle.require_native_pass(subprocess.CompletedProcess([], 0, passed, ""), name)
+        cases = [(1, "private-journal-sentinel", "private-journal-sentinel"),
+                 (0, "", ""), (0, passed * 2, ""),
+                 (0, passed + "    --- SKIP: child (0.00s)\n", ""),
+                 (0, passed + "    --- FAIL: child (0.00s)\n", ""),
+                 (0, passed.replace(name, name + "Other"), "")]
+        for code, stdout, stderr in cases:
+            with self.subTest(code=code, stdout=stdout):
+                with self.assertRaises(RuntimeError) as caught:
+                    oracle.require_native_pass(subprocess.CompletedProcess([], code, stdout, stderr), name)
+                self.assertNotIn("private-journal-sentinel", str(caught.exception))
 
     def test_image_identity_and_entrypoint(self):
         oracle.validate_image(image_fixture(), IMAGE)

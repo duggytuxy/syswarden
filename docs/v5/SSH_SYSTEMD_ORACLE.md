@@ -30,6 +30,66 @@ removal contracts. The controlled forwarding probe is not a production authority
 for general policy-consumption acknowledgement. A successful fresh connection
 alone cannot authorize migration completion.
 
+## Integrated recovery scenarios
+
+The same runner accepts `--scenario recovery-forwarding`, `recovery-cis`,
+`recovery-legacy-cis` and `recovery-noop`. Each invocation requires a new output
+folder and creates a new disposable container. The default `activation` scenario
+retains the independent signal/listener negative controls described above.
+
+Recovery scenarios use the real pinned OpenSSH parser, transaction journal,
+publication engine and production activation binder. They then call the actual
+fixed-path `InspectSystemdRecovery`, `RestoreOriginalSystemd` and
+`AssessSystemdRecovery` adapters. An independently disabled SSH TOML choice must
+refuse publication before creating a journal or drop-in. The original migration
+approval must not authorize the separate restoration. Repeated read-only
+inspection must return the same recovery approval without changing history.
+
+The forwarding and CIS cases verify unchanged running behavior after publication,
+prohibited forwarding after activation, then restored forwarding after original
+restoration. The legacy CIS case explicitly attributes exact historical main-file
+lines and retains its original forwarding prohibition after restoration. A
+separate administrator `Match` block is included in both parsed contexts.
+Restoration must recover the original main inode, bytes, permissions, ownership,
+attributes and modification time. The expected rename-related ctime change is
+not confused with lost ownership. Candidate main and drop-in inodes remain
+attributable recovery data outside active configuration. All original journal
+records remain unchanged and exactly six inverse/reload records are added.
+
+`recovery-noop` changes only the test lease's signal callback to a successful
+no-op. The real listener observer must reject that request, while the original
+files have already been restored. Fresh pinned authentication still succeeds,
+but forwarding remains prohibited by the stale daemon policy. Read-only
+assessment and repeated restoration cannot turn that uncertainty into acceptance
+or replay the reload. Process and kernel listener identities must remain
+unchanged across assessment and rejected replay. All scenarios keep `RecoveryRequired` true; none grants
+production policy-consumption or independent access authority.
+
+### Label preparation boundary
+
+The recovery fixture prepares its candidate with an explicit test-only label
+resolver. It observes the actual `security.selinux` attribute on a temporary
+private file in the destination directory, clones only that attribute, rechecks
+the original main label during publication and verifies the published drop-in's
+attributes. Main-file attributes still pass through the real retained-inode
+transaction and recovery checks. No label is stripped or concealed, no SELinux
+filesystem is masked, and no host label or enforcement state is changed.
+
+This prepares attributable recovery input; it does not qualify the production
+label resolver or establish that the observed label is the policy-correct label
+for the destination pathname. The unmodified production publication entry point
+continues to refuse an unmounted SELinux state directory or visible labels with
+unavailable policy. A Fedora-hosted container with either condition is therefore
+not qualified for production publication by this fixture. SELinux enforcing
+publication still requires its separate native qualification.
+
+Synthetic journal records are exported as base64-encoded JSON in the private
+runner log before container removal. A second bounded read is attempted even
+when the main test watchdog bypasses Go cleanup. If the container or evidence
+reader is unavailable, export can remain incomplete and the run cannot pass. The export
+is bounded to the fixture journal and does not copy private keys or unrelated
+files. Keep those logs private even though the fixture identities are generated.
+
 ## Runtime observations
 
 An inactive vendor socket can be unloaded between independent manager queries.
@@ -77,6 +137,8 @@ python3 scripts/ci/ssh_systemd_oracle.py --run-native \
 
 The runner refuses root execution on the host. It checks the AMD64 binary,
 image entry point and exact isolation settings before starting the container.
+Binary stability checks bind identity, mode, ownership, size and nanosecond
+mutation timestamps; the access-time change caused by reading is permitted.
 Only the copied test binary and setup script are mounted read-only. Container
 PID 1 receives namespace-local system administration capability for systemd;
 setup and test execution drop that capability. The fixture retains namespace-local

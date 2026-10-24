@@ -93,3 +93,16 @@ Complete production activation, post-reload recovery completion, owned policy
 updates, native SSH lifecycle, minimal native package transitions and final
 v5.00.0 IVVQ remain open. BunkerWeb independence and Linux AMD64 scope are
 unchanged. All remaining #422 work stays in the consolidated implementation.
+
+## Production recovery adapter oracle
+
+The [isolated systemd oracle](SSH_SYSTEMD_ORACLE.md#integrated-recovery-scenarios)
+connects the real parser/publication engine to the production activation binder
+and fixed-path inspection, restoration and post-reload assessment adapters. It
+checks forwarding, CIS and explicitly attributed legacy CIS profiles, exact
+retained inodes, independent TOML selection, distinct recovery approval and a
+no-op reload that preserves stale daemon policy despite fresh authentication.
+The fixture prepares labels explicitly for recovery input; it does not qualify
+production SELinux policy lookup. All success and failure scenarios retain the
+recovery fence. These observations do not complete migration, independent access
+authority or the native package lifecycle.
