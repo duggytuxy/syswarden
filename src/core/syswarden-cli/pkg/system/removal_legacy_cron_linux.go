@@ -269,7 +269,7 @@ func applyLegacyCronRetirement(spoolPath, backupParentPath, expected string, uid
 	if err != nil || digest != expected {
 		return plan, "", fmt.Errorf("root cron changed since review; inspect a new plan")
 	}
-	parent, err := openExistingPinnedServiceDirectory(backupParentPath)
+	parent, err := openOrCreateRetirementBackupParent(backupParentPath)
 	if err != nil {
 		return plan, "", err
 	}

@@ -270,3 +270,24 @@ func TestLegacyCronProviderRequiresVerifiedNativeRuntime(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyCronRecoveryCreatesOnlyApprovedMissingBackupParent(t *testing.T) {
+	spool, backups, _, digest := legacyCronFixture(t)
+	if err := os.Remove(backups); err != nil {
+		t.Fatal(err)
+	}
+	noop := func() error { return nil }
+	if _, _, err := applyLegacyCronRetirement(spool, backups, strings.Repeat("0", 64), systemTestUID(t), noop, noop, unix.Renameat2); err == nil {
+		t.Fatal("unreviewed plan accepted")
+	}
+	if _, err := os.Lstat(backups); !os.IsNotExist(err) {
+		t.Fatal("unapproved plan created backup storage", err)
+	}
+	if _, _, err := applyLegacyCronRetirement(spool, backups, digest, systemTestUID(t), noop, noop, unix.Renameat2); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(backups)
+	if err != nil || info.Mode() != os.ModeDir|0700 {
+		t.Fatal("missing parent not created privately", err)
+	}
+}

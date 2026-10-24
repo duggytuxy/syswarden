@@ -37,19 +37,6 @@ func PreserveAPKRemovalPayload() (string, error) {
 			return "", err
 		}
 	}
-	// Alpine need not already have /var/backups. Create only this one child
-	// under the attested root-owned /var, never recursively follow a path.
-	parent, err := openExistingPinnedServiceDirectory("/var")
-	if err != nil {
-		return "", err
-	}
-	defer parent.close()
-	if err := parent.root.Mkdir("backups", 0700); err != nil && !errors.Is(err, os.ErrExist) {
-		return "", err
-	}
-	if err := parent.sync(); err != nil {
-		return "", err
-	}
 	return preserveAPKPayload("/opt/syswarden", "/var/backups", expected, nil)
 }
 
@@ -63,7 +50,7 @@ func preserveAPKPayload(sourcePath, backupParentPath string, expected map[string
 	if err != nil {
 		return "", err
 	}
-	parent, err := openExistingPinnedServiceDirectory(backupParentPath)
+	parent, err := openOrCreateRetirementBackupParent(backupParentPath)
 	if err != nil {
 		return "", err
 	}
