@@ -275,3 +275,33 @@ func TestSSHProcessRejectsNonProcfsAndUnboundedInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestSSHProcessActivationMountViewIsRetained(t *testing.T) {
+	state, digest, group := sshProcessOracleExpectation(t)
+	b, err := bindSSHProcessForActivation(os.Getpid(), os.Geteuid(), group, state, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if !b.requireSameMount || b.verifier == nil {
+		t.Fatal("activation did not retain its local mount verifier")
+	}
+	if _, err := b.observe(); err != nil {
+		t.Fatal(err)
+	}
+	// Loss of the verifier cannot silently downgrade a mutation lease to the
+	// more permissive read-only observer, even with the target still alive.
+	if err := b.verifier.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.observe(); err == nil {
+		t.Fatal("closed mount verifier authorized an activation observation")
+	}
+	b.verifier = nil
+	if _, err := b.observe(); err == nil {
+		t.Fatal("missing mount verifier authorized an activation observation")
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -103,6 +104,7 @@ func TestSSHIsolatedSystemdActivationOracle(t *testing.T) {
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("main fixture policy changed", err)
 	}
+	isolatedSSHPrivateMountRefusal(t, before, backend.Addr().String())
 	t.Log("production systemd binder: no-op refused, real reload and restoration observed; no migration completion claimed")
 }
 
@@ -182,4 +184,89 @@ func isolatedSSHForwardProbe(t *testing.T, backend string, allowed bool) {
 			t.Fatal("expected explicit forwarding policy refusal", err)
 		}
 	}
+}
+
+// An ordinary unit bind mount can keep the same root and executable while
+// exposing a different main configuration. Only this disposable fixture owns
+// the unit restart; product code must refuse before producing a signal lease.
+func isolatedSSHPrivateMountRefusal(t *testing.T, original []byte, backend string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	const saved = "/run/syswarden-ssh-native-oracle/private-sshd_config"
+	const unitDirectory = "/run/systemd/system/ssh.service.d"
+	const unitOverride = unitDirectory + "/90-oracle-private-view.conf"
+	private := bytes.Replace(original, []byte("Include /etc/ssh/sshd_config.d/*.conf\n"), nil, 1)
+	if bytes.Equal(private, original) {
+		t.Fatal("fixture include is missing")
+	}
+	if err := os.WriteFile(saved, private, 0600); err != nil { // #nosec G703 -- Constant destination in a guarded disposable container; synthetic configuration affects content only, never the path.
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(DropInPath, []byte("AllowTcpForwarding no\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(unitDirectory, 0755); err != nil { // #nosec G301 -- Fixed disposable systemd fixture directory, matching public unit-directory permissions.
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitOverride, []byte("[Service]\nBindReadOnlyPaths="+saved+":"+MainPath+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	commands := []*exec.Cmd{
+		exec.CommandContext(ctx, "/usr/bin/systemctl", "daemon-reload"),
+		exec.CommandContext(ctx, "/usr/bin/systemctl", "restart", "ssh.service"),
+	}
+	for _, command := range commands {
+		command.Env = []string{"LANG=C", "LC_ALL=C", "PATH=/usr/bin:/bin", "SYSTEMD_PAGER=cat"}
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("private fixture setup failed: %v: %s", err, output)
+		}
+	}
+	// Type=simple reports restart before sshd has created its listener. Wait
+	// only for fixture readiness; authentication below remains independent.
+	ready := false
+	for attempt := 0; attempt < 50; attempt++ {
+		dialer := net.Dialer{Timeout: 100 * time.Millisecond}
+		conn, err := dialer.DialContext(ctx, "tcp4", "127.0.0.1:22222")
+		if err == nil {
+			_ = conn.Close()
+			ready = true
+			break
+		}
+		if err := pauseSSHListenerObservation(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !ready {
+		t.Fatal("private fixture listener did not become ready")
+	}
+	isolatedSSHForwardProbe(t, backend, true)
+	before, err := ObserveSystemdListeners()
+	if err != nil || !before.Process.ProcessObserved {
+		t.Fatal("read-only observation refused a stable private mount", err)
+	}
+	inventory, err := OpenInventory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inventory.Close()
+	lease, err := bindSSHSystemdActivation(ctx, inventory.Recheck)
+	if lease != nil {
+		_ = lease.Close()
+		t.Fatal("private mount obtained an activation lease")
+	}
+	if err == nil || !strings.Contains(err.Error(), "SSH activation requires the verifier mount namespace") {
+		t.Fatal("private mount did not stop at the mount-view boundary", err)
+	}
+	after, err := ObserveSystemdListeners()
+	if err != nil || before.Process.IdentitySHA256 != after.Process.IdentitySHA256 || before.SocketsSHA256 != after.SocketsSHA256 {
+		t.Fatal("rejected private mount changed the process or listeners", err)
+	}
+	isolatedSSHForwardProbe(t, backend, true)
+	for _, name := range []string{sshJournalDirectory, IntentPath} {
+		if _, err := os.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("private mount refusal created product history", name, err)
+		}
+	}
+	t.Log("private mount: observation preserved, activation refused before signaling; fixture forwarding unchanged")
 }

@@ -51,7 +51,7 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	}
 	held, err = retainSSHSystemdProcess(ctx, snapshot,
 		func(pid int, group string) (sshProcessLease, error) {
-			return bindSSHProcess(pid, 0, group, resources.daemon.state, resources.daemon.digest)
+			return bindSSHProcessForActivation(pid, 0, group, resources.daemon.state, resources.daemon.digest)
 		}, guard, startup)
 	if err != nil {
 		return nil, err

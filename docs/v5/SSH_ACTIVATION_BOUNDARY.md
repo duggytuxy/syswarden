@@ -43,6 +43,17 @@ systemd activation target; it does not accept a serialized target or caller PID.
 That target qualifies the exact operation as a single `SIGHUP` sent through the
 original pidfd. It rechecks the stable manager invocation, qualified typed startup
 declaration, executable, process identity, namespaces, root and control group.
+Activation and original restoration additionally require the daemon to share the
+verifier's mount namespace. A stable private mount namespace may expose a
+different configuration through `BindReadOnlyPaths` even when the root inode,
+executable, endpoints and login behavior match. Such a service is refused before
+an activation lease, durable dispatch intent or signal can be produced. Both the
+target namespace and the verifier's held procfs namespace reference are rechecked
+throughout the lease. This does not remove or weaken administrator unit hardening;
+qualification of alternate daemon-visible graphs remains separate work. Read-only
+process/listener observations may still describe those services without granting
+activation authority.
+
 Active socket configurations, unqualified startup options and changing state
 remain refused. Its identity digest binds the operation and those observations.
 
@@ -138,7 +149,14 @@ memory handle, and no timeout success is synthesized.
 
 This observation strengthens the runtime evidence without acknowledging every
 policy directive or fresh administrator access. The durable activation fence
-remains. Isolated tests exercise a real same-PID exec, no-op and early-exec
+remains. Future consumption acceptance must also qualify the daemon build's
+configuration semantics: a startup without explicit `-f` uses its compiled
+configuration path, while the verifier selects `/etc/ssh/sshd_config` explicitly.
+An executable hash establishes continuity, not that compiled default. A separate
+qualification must bind that path and the supported OpenSSH parsing/reload
+semantics. A concurrent legitimate reload can also overlap with this request;
+any eventual consumption claim must describe the guarded interval, not exclusive
+causation by this particular signal. Isolated tests exercise a real same-PID exec, no-op and early-exec
 refusals, cancellation, guard/access failures, process exit and descriptor
 closure. They do not qualify arbitrary shared-address-space daemons.
 
