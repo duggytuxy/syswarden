@@ -1,7 +1,8 @@
 # Signed SSH controller observations and protected appraisal
 
 Status: private v5.00.0 component. Refs #235, #337 and #422.
-No production CLI, enrollment, installer or activation-completion path is enabled.
+No production CLI, installer or activation-completion path is enabled. Fixed-path
+target enrollment and issuance are described in [the access exchange](SSH_ACCESS_ISSUANCE.md).
 
 ## Independent challenge and controller identity
 
@@ -16,8 +17,10 @@ The complete challenge requires independent approval. The expected challenge
 and controller public key are supplied separately from the returned receipt.
 A key embedded in received data cannot establish authority. Generating a nonce
 or computing a digest does not enroll a controller or approve execution.
-Protected delivery, membership, key rotation and revocation administration still
-need production wiring; the authorization guard must consult that authority.
+The [target enrollment reader](SSH_ACCESS_ISSUANCE.md) now supplies protected
+plan-specific public keys and pins, with replacement, expiry and revocation
+checks. Protected controller-side delivery and membership administration remain
+open; the authorization guard must consult independently established authority.
 
 Controller signing keys remain on the controller. An exact Ed25519 software
 private key is copied and its seed/public halves must agree. Its owned encoded
@@ -89,8 +92,8 @@ now signs and verifies observations after forwarding and CIS reloads on direct
 and single-bastion routes. Controller keys and approvals in that fixture are
 synthetic. Native oracle success is not independent production enrollment.
 
-Protected challenge delivery and enrollment, durable challenge issuance,
-causal consumed-policy acknowledgement, runtime-aware recovery, owned updates
+Protected controller-side delivery and enrollment, causal consumed-policy
+acknowledgement, complete runtime recovery acceptance, owned updates
 and separate native uninstall/remove/purge remain open. No migration-ready
 package or final v5.00.0 IVVQ acceptance is claimed.
 

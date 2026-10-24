@@ -123,6 +123,7 @@ class OracleBoundaryTests(unittest.TestCase):
             self.assertEqual(name, "TestSSHIsolatedSystemdRecoveryOracle")
             self.assertEqual(environment, ["SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE=" + profile, "SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP=0"])
         self.assertEqual(oracle.oracle_case("recovery-noop")[1], ["SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE=forwarding", "SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP=1"])
+        self.assertEqual(oracle.oracle_case("access-exchange")[1], ["SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE=forwarding", "SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP=0", "SYSWARDEN_SSH_ISOLATED_ACCESS_EXCHANGE=1"])
         for value in ("", "recovery", "other", "activation.*", "recovery-forwarding\n"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 oracle.oracle_case(value)

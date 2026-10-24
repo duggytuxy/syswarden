@@ -1,7 +1,9 @@
 # Read-only observation of retained SSH access evidence
 
 Status: private v5.00.0 component. Refs #235, #337 and #422.
-No production command, enrollment or installer path is enabled.
+No production command or installer path is enabled by this observer. The
+separate [target enrollment and issuance adapters](SSH_ACCESS_ISSUANCE.md) remain
+subject to independent approvals.
 
 ## Independent authority and bounded history
 
@@ -29,7 +31,9 @@ is refused.
 ## Separate historical and current observations
 
 Under the original journal lock, the observer accepts exactly the complete
-publication history, activation intent and one pinned evidence image. Original
+publication history, activation intent and one pinned evidence image. Issued
+evidence also requires the exact referenced issuance image, without treating
+its historical presence as current authority. Original
 record identities, the plan, parser, current configuration and independent TOML
 selection are checked again. Retained routes must match every original protected
 access context in order. A valid controller signature cannot replace that plan.
@@ -81,8 +85,8 @@ A bounded fuzzer includes a valid signed canonical seed and invalid inputs.
 The explicitly enabled native OpenSSH regression oracle remains separate from
 production enrollment, physical crash durability and full migration acceptance.
 
-Protected controller enrollment/delivery, durable challenge issuance, causal
-policy-consumption acknowledgement, runtime-aware mutation/recovery, owned
+Protected controller-side enrollment/delivery, causal policy-consumption
+acknowledgement, complete runtime recovery acceptance, owned
 updates and separate native uninstall/remove/purge remain open. There is no
 migration-ready package or final v5.00.0 IVVQ acceptance. Issue #422 production
 installer wiring remains open: standard-list-only fresh packages, independent

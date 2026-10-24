@@ -106,3 +106,12 @@ The fixture prepares labels explicitly for recovery input; it does not qualify
 production SELinux policy lookup. All success and failure scenarios retain the
 recovery fence. These observations do not complete migration, independent access
 authority or the native package lifecycle.
+
+## Issued access history
+
+[Protected access issuance](SSH_ACCESS_ISSUANCE.md) adds one optional fixed
+record. Original restoration preserves it opaquely alongside any receipt, even
+when expired, malformed or associated with a revoked controller. Its image is
+bound by the independent restoration approval. The closed history can contain
+17 entries after the six inverse/reload records. Controller availability never
+authorizes restoration and is not required to inspect or apply this recovery.

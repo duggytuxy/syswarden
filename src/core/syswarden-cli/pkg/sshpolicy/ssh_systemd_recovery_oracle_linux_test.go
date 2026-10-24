@@ -30,8 +30,9 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	}
 	requireSSHIsolatedSystemdFixture(t)
 	noop := os.Getenv("SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP") == "1"
+	exchange := os.Getenv("SYSWARDEN_SSH_ISOLATED_ACCESS_EXCHANGE") == "1"
 	profile := os.Getenv("SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE")
-	if (profile != "forwarding" && profile != "cis" && profile != "legacy-cis") || (noop && profile != "forwarding") {
+	if (profile != "forwarding" && profile != "cis" && profile != "legacy-cis") || ((noop || exchange) && profile != "forwarding") || (noop && exchange) {
 		t.Fatal("explicit qualified recovery fixture profile required")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Second)
@@ -62,6 +63,9 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	declaration.Contexts = []accessContext{
 		{"administrator", "direct", "root", "localhost", "127.0.0.1", "127.0.0.1", 22222},
 		{"unrelated", "direct", "oracle-unrelated", "localhost", "127.0.0.1", "127.0.0.1", 22222},
+	}
+	if exchange {
+		declaration.Contexts = declaration.Contexts[:1]
 	}
 	original, err := os.ReadFile(MainPath)
 	if err != nil {
@@ -115,11 +119,23 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	if err := os.WriteFile(sshselection.Path, []byte("[ssh]\nhardening = \""+declaration.Profile+"\"\n"), 0600); err != nil { // #nosec G703 -- Constant destination in a guarded disposable container; the allowlisted profile changes TOML content, never the pathname.
 		t.Fatal(err)
 	}
+	if exchange {
+		if _, err := os.Lstat(sshAccessAuthorityPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("unexpected fixture authority", err)
+		}
+		if err := os.WriteFile(sshAccessAuthorityPath, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	before := isolatedSSHMainImage(t)
 	label := isolatedSSHFixtureLabel(t)
 	plan, err := InspectPlan()
 	if err != nil {
 		t.Fatal(err)
+	}
+	var accessFixture *isolatedAccessEnrollment
+	if exchange {
+		accessFixture = isolatedSSHEnrollAccess(t, plan.PlanSHA256)
 	}
 	published, err := isolatedSSHPublish(t, ctx, plan.PlanSHA256, label)
 	if err != nil || !published.Published || published.RecoveryRequired || published.Verification.RuntimeActivated {
@@ -146,6 +162,9 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 		t.Fatal("production activation boundary failed", activation, activationErr, closeErr)
 	}
 	probe(false)
+	if exchange {
+		isolatedSSHExerciseAccessExchange(t, ctx, plan.PlanSHA256, accessFixture)
+	}
 	history := isolatedSSHRecoveryHistory(t, ctx)
 	inspection, err := InspectSystemdRecovery(ctx, plan.PlanSHA256)
 	if err != nil || !lowerDigest.MatchString(inspection.RecoverySHA256) || !inspection.RecoveryRequired ||
@@ -396,7 +415,7 @@ func isolatedSSHExportRecoveryHistory(t *testing.T) {
 	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
-	if err != nil || len(entries) > 16 {
+	if err != nil || len(entries) > 17 {
 		t.Error("cannot export bounded fixture journal", err)
 		return
 	}

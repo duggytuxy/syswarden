@@ -57,13 +57,13 @@ func observeSSHRuntimeRecoveryRecords(journal *sshJournal) (map[string]string, e
 	if err := journal.recheck(); err != nil {
 		return nil, err
 	}
-	names, err := sshDirectoryNames(journal.directory, 16)
+	names, err := sshDirectoryNames(journal.directory, 17)
 	if err != nil {
 		return nil, err
 	}
 	records := make(map[string]string, len(names))
 	allowed := map[string]bool{sshMarkerName: true, sshPreparedRecord: true,
-		sshActivationIntentName: true, sshAccessEvidenceName: true,
+		sshActivationIntentName: true, sshAccessEvidenceName: true, sshAccessIssuanceName: true,
 		sshRuntimeRecoveryName: true, sshRuntimeRecoveryReloadName: true}
 	for step := 1; step <= 3; step++ {
 		allowed[sshPublicationName(step, false)], allowed[sshPublicationName(step, true)] = true, true
@@ -109,6 +109,9 @@ func validateSSHRuntimeRecovery(journal *sshJournal, intent sshRuntimeRecoveryIn
 	}
 	if _, exists := intent.Records[sshAccessEvidenceName]; exists {
 		expected[sshAccessEvidenceName] = true
+	}
+	if _, exists := intent.Records[sshAccessIssuanceName]; exists {
+		expected[sshAccessIssuanceName] = true
 	}
 	if len(intent.Records) != len(expected) {
 		return fail(ErrInventoryUnsafe)
@@ -172,6 +175,7 @@ func validateSSHRuntimeRecovery(journal *sshJournal, intent sshRuntimeRecoveryIn
 	originalRecords := maps.Clone(intent.Records)
 	delete(originalRecords, sshActivationIntentName)
 	delete(originalRecords, sshAccessEvidenceName)
+	delete(originalRecords, sshAccessIssuanceName)
 	owned := &sshOwnedPublication{journal, prepared, plan, stage, baseline, originalRecords}
 	wanted, err := makeSSHActivationIntent(owned, activation.Target)
 	if err != nil || wanted != activation {
@@ -220,7 +224,15 @@ func recoverSSHActivatedConfiguration(ctx context.Context, journal *sshJournal, 
 			}
 			evidence = &image // Preserve it; it cannot authorize recovery or access.
 		}
-		a, err := inspectSSHActivationEvidenceHistory(journal, original, parser, evidence)
+		var issuance *sshFileImage
+		if _, exists := records[sshAccessIssuanceName]; exists {
+			image, err := readSSHPrivateChild(journal.directory, sshAccessIssuanceName, journal.uid, maxSSHAccessIssuanceBytes)
+			if err != nil {
+				return result, err
+			}
+			issuance = &image // Preserve opaque history even after expiry or revocation.
+		}
+		a, err := inspectSSHActivationAccessHistory(journal, original, parser, evidence, issuance)
 		if err != nil {
 			return result, err
 		}

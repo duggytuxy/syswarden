@@ -17,7 +17,8 @@ A single fixed `access-evidence.json` record, bounded to 512 KiB, retains the
 exact request, challenge
 and signed receipt bytes, with the controller public-key digest, original plan,
 parser, transaction, activation intent, target and original publication-record
-fingerprint. `assessed_at` records the successful appraisal time, not a claim of
+fingerprint. Issued observations additionally bind the exact issuance image as
+described in [protected challenge issuance](SSH_ACCESS_ISSUANCE.md). `assessed_at` records the successful appraisal time, not a claim of
 write completion or policy consumption. No private key is stored. The request
 contains private operational information; this root-owned record must remain
 private and must not be uploaded to public reports or CI artifacts.
@@ -56,8 +57,9 @@ true, and no loaded-policy, runtime-complete or reusable access authority is
 returned. The existing activation fence continues to prohibit file-only
 rollback. A separate [read-only observer](SSH_RECORDED_ACCESS_OBSERVATION.md) can inspect
 independently approved recorded histories, including uncertain writes, without
-repairing durability or granting a new operation. Runtime-aware recovery still
-requires integration; deleting the record to resume migration is unsupported.
+repairing durability or granting a new operation. [Runtime-aware original restoration](SSH_RUNTIME_RECOVERY.md) preserves these
+records. Completed recovery acceptance remains open; deleting a record to resume
+migration is unsupported.
 
 ## Verification and remaining work
 
@@ -71,8 +73,8 @@ clock rollback and caller buffer changes. Invalid inputs never reach the write.
 These checks do not simulate physical power loss or prove storage hardware
 honors synchronization.
 
-Protected enrollment/delivery and durable challenge issuance, causal policy
-consumption, runtime-aware recovery, owned updates, separate native
+Protected controller-side enrollment/delivery, causal policy consumption,
+complete runtime recovery acceptance, owned updates, separate native
 uninstall/remove/purge and complete migration qualification remain open.
 There is no migration-ready package or final v5.00.0 IVVQ acceptance.
 Issue #422 still requires standard-list-only fresh native installation and

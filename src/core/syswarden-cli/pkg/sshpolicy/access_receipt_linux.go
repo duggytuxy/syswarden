@@ -257,6 +257,13 @@ func withSSHActivationAccessReceipt(ctx context.Context, journal *sshJournal, ap
 	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, pins []sshAccessRoutePins,
 	input sshAccessReceiptInput, clock func() time.Time, authorize func() error,
 	action func(*sshActivationAssessment, sshAccessReceiptInput, time.Time, func() error) error) (result sshAccessReceiptAssessment, err error) {
+	return withSSHIssuedAccessReceipt(ctx, journal, approved, parser, run, parserCheck, observe, pins, input, clock, authorize, nil, action)
+}
+
+func withSSHIssuedAccessReceipt(ctx context.Context, journal *sshJournal, approved, parser string,
+	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, pins []sshAccessRoutePins,
+	input sshAccessReceiptInput, clock func() time.Time, authorize func() error, issuance *sshFileImage,
+	action func(*sshActivationAssessment, sshAccessReceiptInput, time.Time, func() error) error) (result sshAccessReceiptAssessment, err error) {
 	if ctx == nil || clock == nil || authorize == nil {
 		return result, ErrInventoryUnsafe
 	}
@@ -292,8 +299,8 @@ func withSSHActivationAccessReceipt(ctx context.Context, journal *sshJournal, ap
 	}
 	// The final shared guard calls authorization before checking protected files.
 	// No authorization callback runs after those final inode checks.
-	_, err = withSSHActivationAssessment(ctx, journal, approved, parser, run,
-		func() error { return errors.Join(guard(), parserCheck(), ctx.Err()) }, observe,
+	_, err = withSSHActivationAccessAssessment(ctx, journal, approved, parser, run,
+		func() error { return errors.Join(guard(), parserCheck(), ctx.Err()) }, observe, nil, issuance,
 		func(_ context.Context, a *sshActivationAssessment, summary ActivationAssessment, recheck func() error) error {
 			current, err := makeSSHActivationAccessRequest(a, summary, pins)
 			if err != nil || !bytes.Equal(current, input.Request) {

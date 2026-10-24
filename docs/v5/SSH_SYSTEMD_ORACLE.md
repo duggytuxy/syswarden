@@ -168,3 +168,19 @@ Fresh native packages still require standard-list-only defaults. SSH/CIS/OS and
 other optional modules require independent explicit TOML choices. Administrator
 upgrade state, mandatory Alpine prerequisites and BunkerWeb independence remain
 part of the separate, incomplete #422 migration qualification.
+
+## Fixed-path target access exchange
+
+The `access-exchange` scenario extends the forwarding recovery case with a
+single explicitly declared direct administrator context. It independently writes
+a synthetic private controller enrollment, then calls the actual root-only
+request, issuance and receipt adapters after activation. Real OpenSSH
+authentication produces a signed fixture receipt. Issuance and receipt replay
+are refused. Revoking the enrollment blocks a new request, while the subsequent
+original restoration must still succeed and retain both access records.
+
+The fixture controller executes in the same disposable container and process,
+using generated test credentials. This validates target composition and actual
+transport, not independent-host controller trust, operational key provisioning
+or full migration acceptance. Its private export accepts the resulting maximum
+17-entry recovery history; no controller or SSH private key is exported.

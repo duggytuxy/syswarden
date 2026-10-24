@@ -161,6 +161,8 @@ def oracle_case(scenario: str) -> tuple[str, list[str]]:
         return "TestSSHIsolatedSystemdActivationOracle", []
     if scenario == "recovery-noop":
         return "TestSSHIsolatedSystemdRecoveryOracle", ["SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE=forwarding", "SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP=1"]
+    if scenario == "access-exchange":
+        return "TestSSHIsolatedSystemdRecoveryOracle", ["SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE=forwarding", "SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP=0", "SYSWARDEN_SSH_ISOLATED_ACCESS_EXCHANGE=1"]
     profiles = {"recovery-forwarding": "forwarding", "recovery-cis": "cis", "recovery-legacy-cis": "legacy-cis"}
     if scenario not in profiles:
         raise ValueError("unqualified native SSH scenario")
@@ -251,7 +253,7 @@ def main() -> int:
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--binary-sha256", required=True)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--scenario", choices=("activation", "recovery-forwarding", "recovery-cis", "recovery-legacy-cis", "recovery-noop"), default="activation")
+    parser.add_argument("--scenario", choices=("activation", "recovery-forwarding", "recovery-cis", "recovery-legacy-cis", "recovery-noop", "access-exchange"), default="activation")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if (
