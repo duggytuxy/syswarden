@@ -35,12 +35,21 @@ type qualificationFixture struct {
 
 func newQualificationFixture(t *testing.T) qualificationFixture {
 	t.Helper()
+	return newVersionedQualificationFixture(t, testQualificationCandidate)
+}
+
+func newVersionedQualificationFixture(t *testing.T, version string) qualificationFixture {
+	t.Helper()
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := []byte("authenticated v4.10.0 qualification package")
-	manifest := testUpdateManifest(t, testQualificationCandidate, payload)
+	payload := []byte("authenticated " + version + " qualification package")
+	manifest := testUpdateManifest(t, version, payload)
+	packageName, err := packageFilename(version, packageFormatDEB, "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
 	bundle := filepath.Join(t.TempDir(), "bundle")
 	if err := os.Mkdir(bundle, 0700); err != nil {
 		t.Fatal(err)
@@ -49,7 +58,7 @@ func newQualificationFixture(t *testing.T) qualificationFixture {
 	files := map[string][]byte{
 		updateManifestAssetName:          manifestBytes,
 		updateManifestSignatureAssetName: testSignManifest(privateKey, manifestBytes),
-		"syswarden_4.10.0_amd64.deb":     payload,
+		packageName:                      payload,
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(bundle, name), content, 0600); err != nil {

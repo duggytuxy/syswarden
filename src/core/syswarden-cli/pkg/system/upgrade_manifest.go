@@ -17,18 +17,20 @@ import (
 )
 
 const (
-	updateManifestSchema             = "syswarden-update-manifest/v1"
-	updateManifestAssetName          = "syswarden-update-manifest-v1.json"
-	updateManifestSignatureAssetName = updateManifestAssetName + ".sig"
-	maxReleaseAPIBytes               = 1 << 20
-	maxManifestBytes                 = 64 << 10
-	maxSignatureAssetBytes           = 256
-	maxPackageBytes                  = 1 << 30
-	packageFormatDEB                 = "deb"
-	packageFormatRPM                 = "rpm"
-	packageFormatAPK                 = "apk"
-	aptDPkgLockTimeoutOption         = "DPkg::Lock::Timeout=300"
-	releaseTrustRootsSchema          = "syswarden-release-trust-roots/v1"
+	updateManifestSchema              = "syswarden-update-manifest/v1"
+	updateManifestRetentionSchema     = "syswarden-update-manifest/v2"
+	nativeDependencyRetentionContract = "syswarden-native-dependency-retention/v1"
+	updateManifestAssetName           = "syswarden-update-manifest-v1.json"
+	updateManifestSignatureAssetName  = updateManifestAssetName + ".sig"
+	maxReleaseAPIBytes                = 1 << 20
+	maxManifestBytes                  = 64 << 10
+	maxSignatureAssetBytes            = 256
+	maxPackageBytes                   = 1 << 30
+	packageFormatDEB                  = "deb"
+	packageFormatRPM                  = "rpm"
+	packageFormatAPK                  = "apk"
+	aptDPkgLockTimeoutOption          = "DPkg::Lock::Timeout=300"
+	releaseTrustRootsSchema           = "syswarden-release-trust-roots/v1"
 )
 
 //go:embed release_trust_roots.json
@@ -45,10 +47,11 @@ type releaseTrustRoot struct {
 }
 
 type updateManifest struct {
-	Schema    string           `json:"schema"`
-	KeyID     string           `json:"key_id"`
-	Version   string           `json:"version"`
-	Artifacts []updateArtifact `json:"artifacts"`
+	Schema           string           `json:"schema"`
+	KeyID            string           `json:"key_id"`
+	Version          string           `json:"version"`
+	NativeTransition string           `json:"native_transition,omitempty"`
+	Artifacts        []updateArtifact `json:"artifacts"`
 }
 
 type updateArtifact struct {
@@ -277,15 +280,37 @@ func parseCanonicalSignature(data []byte) ([]byte, error) {
 	return decoded, nil
 }
 
+// manifestSchemaForVersion makes the dependency-retaining updater a requirement
+// for v5 and later. Legacy verifiers reject v2 before downloading package bytes.
+// The fixed asset locator is retained so an old updater sees an explicit refusal.
+func manifestSchemaForVersion(version string) (string, error) {
+	parsed, err := parseReleaseVersion(version)
+	if err != nil {
+		return "", fmt.Errorf("invalid manifest version: %w", err)
+	}
+	if parsed.major >= 5 {
+		return updateManifestRetentionSchema, nil
+	}
+	return updateManifestSchema, nil
+}
+
 func (manifest *updateManifest) validate() error {
-	if manifest.Schema != updateManifestSchema {
-		return fmt.Errorf("unsupported update manifest schema %q", manifest.Schema)
+	expectedSchema, err := manifestSchemaForVersion(manifest.Version)
+	if err != nil {
+		return err
+	}
+	if manifest.Schema != expectedSchema {
+		return fmt.Errorf("update manifest schema %q is not %q required for %s", manifest.Schema, expectedSchema, manifest.Version)
+	}
+	wantTransition := ""
+	if expectedSchema == updateManifestRetentionSchema {
+		wantTransition = nativeDependencyRetentionContract
+	}
+	if manifest.NativeTransition != wantTransition {
+		return errors.New("update manifest native transition contract does not match its version")
 	}
 	if !validKeyID(manifest.KeyID) {
 		return fmt.Errorf("invalid manifest key ID %q", manifest.KeyID)
-	}
-	if _, err := parseReleaseVersion(manifest.Version); err != nil {
-		return fmt.Errorf("invalid manifest version: %w", err)
 	}
 	expected := expectedManifestIdentities()
 	if len(manifest.Artifacts) != len(expected) {

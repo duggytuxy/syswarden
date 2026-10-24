@@ -296,11 +296,20 @@ func testUpdateManifest(t *testing.T, version string, payload []byte) updateMani
 			SHA256:       digest,
 		})
 	}
+	schema, err := manifestSchemaForVersion(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := ""
+	if schema == updateManifestRetentionSchema {
+		transition = nativeDependencyRetentionContract
+	}
 	return updateManifest{
-		Schema:    updateManifestSchema,
-		KeyID:     testReleaseKeyID,
-		Version:   version,
-		Artifacts: artifacts,
+		NativeTransition: transition,
+		Schema:           schema,
+		KeyID:            testReleaseKeyID,
+		Version:          version,
+		Artifacts:        artifacts,
 	}
 }
 

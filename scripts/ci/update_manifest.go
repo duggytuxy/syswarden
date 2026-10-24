@@ -27,19 +27,21 @@ import (
 )
 
 const (
-	manifestSchema       = "syswarden-update-manifest/v1"
-	trustRootsSchema     = "syswarden-release-trust-roots/v1"
-	manifestName         = "syswarden-update-manifest-v1.json"
-	signatureName        = manifestName + ".sig"
-	packageChecksumName  = "SHA256SUMS.txt"
-	privateKeyEnv        = "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"
-	firstSignedVersion   = "v4.02.9"
-	maxManifestBytes     = 64 << 10
-	maxSignatureBytes    = 256
-	maxTrustRootsBytes   = 64 << 10
-	maxChecksumBytes     = 64 << 10
-	maxPackageBytes      = 1 << 30
-	trustRootsRepository = "src/core/syswarden-cli/pkg/system/release_trust_roots.json"
+	manifestSchema          = "syswarden-update-manifest/v1"
+	retentionManifestSchema = "syswarden-update-manifest/v2"
+	nativeRetentionContract = "syswarden-native-dependency-retention/v1"
+	trustRootsSchema        = "syswarden-release-trust-roots/v1"
+	manifestName            = "syswarden-update-manifest-v1.json"
+	signatureName           = manifestName + ".sig"
+	packageChecksumName     = "SHA256SUMS.txt"
+	privateKeyEnv           = "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"
+	firstSignedVersion      = "v4.02.9"
+	maxManifestBytes        = 64 << 10
+	maxSignatureBytes       = 256
+	maxTrustRootsBytes      = 64 << 10
+	maxChecksumBytes        = 64 << 10
+	maxPackageBytes         = 1 << 30
+	trustRootsRepository    = "src/core/syswarden-cli/pkg/system/release_trust_roots.json"
 )
 
 type trustRootSet struct {
@@ -53,10 +55,11 @@ type trustRoot struct {
 }
 
 type manifest struct {
-	Schema    string     `json:"schema"`
-	KeyID     string     `json:"key_id"`
-	Version   string     `json:"version"`
-	Artifacts []artifact `json:"artifacts"`
+	Schema           string     `json:"schema"`
+	KeyID            string     `json:"key_id"`
+	Version          string     `json:"version"`
+	NativeTransition string     `json:"native_transition,omitempty"`
+	Artifacts        []artifact `json:"artifacts"`
 }
 
 type artifact struct {
@@ -479,8 +482,28 @@ func loadPackages(directory, tag string, allowAdditionalFiles bool) (map[string]
 	return records, nil
 }
 
+// The v2 contract requires a dependency-retaining updater. Keep the asset
+// locator stable so historical clients refuse the new schema before installation.
+func manifestSchemaForVersion(tag string) (string, error) {
+	version, err := parseVersion(tag)
+	if err != nil {
+		return "", err
+	}
+	if version.major >= 5 {
+		return retentionManifestSchema, nil
+	}
+	return manifestSchema, nil
+}
+
 func buildManifest(tag, keyID string, packages map[string]packageRecord) (*manifest, error) {
-	result := &manifest{Schema: manifestSchema, KeyID: keyID, Version: tag}
+	schema, err := manifestSchemaForVersion(tag)
+	if err != nil {
+		return nil, err
+	}
+	result := &manifest{Schema: schema, KeyID: keyID, Version: tag}
+	if schema == retentionManifestSchema {
+		result.NativeTransition = nativeRetentionContract
+	}
 	for _, identity := range manifestIdentities {
 		name, err := packageFilename(tag, identity.format, identity.architecture)
 		if err != nil {
@@ -503,8 +526,19 @@ func buildManifest(tag, keyID string, packages map[string]packageRecord) (*manif
 }
 
 func validateManifestStructure(candidate *manifest, tag string) error {
-	if candidate.Schema != manifestSchema {
-		return fmt.Errorf("unsupported update manifest schema %q", candidate.Schema)
+	expectedSchema, err := manifestSchemaForVersion(candidate.Version)
+	if err != nil {
+		return err
+	}
+	if candidate.Schema != expectedSchema {
+		return fmt.Errorf("update manifest schema %q is not %q required for %s", candidate.Schema, expectedSchema, candidate.Version)
+	}
+	wantTransition := ""
+	if expectedSchema == retentionManifestSchema {
+		wantTransition = nativeRetentionContract
+	}
+	if candidate.NativeTransition != wantTransition {
+		return errors.New("update manifest native transition contract does not match its version")
 	}
 	if !validKeyID(candidate.KeyID) {
 		return fmt.Errorf("invalid update manifest key ID %q", candidate.KeyID)

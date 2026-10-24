@@ -157,6 +157,36 @@ bounded retention path before historical dependency metadata can be reduced.
 A package-manager zero exit and absence of immediate dependency removal are not
 sufficient evidence of preservation across a later maintenance operation.
 
+## Signed updater compatibility boundary
+
+The manifest producer selects its contract from the target release version.
+Targets before v5 keep `syswarden-update-manifest/v1` without a transition field.
+Targets starting at v5 require `syswarden-update-manifest/v2` and the exact
+`native_transition` value `syswarden-native-dependency-retention/v1`. Current
+online and offline verifiers reject missing, unknown or version-inconsistent
+contracts. This requirement cannot be disabled by an installer argument.
+
+The discovery filenames remain `syswarden-update-manifest-v1.json` and its `.sig`
+companion. Their names are stable locators; the authenticated document's `schema`
+controls interpretation. Signature, trusted key, canonical encoding, target
+version, complete AMD64 package inventory, size and checksum checks still apply.
+Existing canonical v4 manifests and their signatures remain byte-compatible.
+
+Historical signed updaters recognize only the original contract. They refuse the
+new schema or field before requesting package bytes or invoking the installer.
+This prevents that signed-update path from silently bypassing dependency retention.
+The marker requires a capable updater; it is not evidence that retention ran or
+succeeded. The current native preparation must still succeed before replacement,
+including native signature verification and platform-specific restrictions.
+
+This boundary does not cover unsigned-era updaters that never read a manifest,
+direct APT/dpkg, DNF/RPM or APK transactions, or concurrent administrator package
+operations. Do not bypass the refusal with an unprepared direct installation or
+weaken signature checks. Those transitions still need an independently verified,
+pre-transaction preservation path. A compatibility refusal is not a successful
+migration, and it does not authorize reducing historical package dependencies or
+publishing a migration-ready v5 package.
+
 ## APK update retention
 
 The managed production and offline qualification updaters inspect protected

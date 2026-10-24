@@ -29,6 +29,11 @@ type manifestFixture struct {
 
 func makeManifestFixture(t *testing.T) manifestFixture {
 	t.Helper()
+	return makeVersionedManifestFixture(t, firstSignedVersion)
+}
+
+func makeVersionedManifestFixture(t *testing.T, version string) manifestFixture {
+	t.Helper()
 	root := t.TempDir()
 	repository := filepath.Join(root, "repository")
 	trustPath := filepath.Join(repository, filepath.FromSlash(trustRootsRepository))
@@ -44,7 +49,7 @@ func makeManifestFixture(t *testing.T) manifestFixture {
 	if err := os.Mkdir(packageDirectory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	names, err := packageNames(firstSignedVersion)
+	names, err := packageNames(version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +70,11 @@ func makeManifestFixture(t *testing.T) manifestFixture {
 		t.Fatal(err)
 	}
 	privateKey := ed25519.NewKeyFromSeed(seed)
-	records, err := loadPackages(packageDirectory, firstSignedVersion, false)
+	records, err := loadPackages(packageDirectory, version, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := buildManifest(firstSignedVersion, testKeyID, records)
+	candidate, err := buildManifest(version, testKeyID, records)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,6 +141,37 @@ func TestVerifyAcceptsDeterministicSignedManifest(t *testing.T) {
 		if item.OS != "linux" || (item.Format != "deb" && item.Format != "rpm" && item.Format != "apk") {
 			t.Fatalf("non-Linux manifest artifact = %#v", item)
 		}
+	}
+}
+
+func TestVersionedManifestPreventsLegacyTransitionAcceptance(t *testing.T) {
+	for _, tc := range []struct{ version, schema string }{
+		{"v4.10.4", "syswarden-update-manifest/v1"},
+		{"v5.00.0", "syswarden-update-manifest/v2"},
+		{"v5.00.1", "syswarden-update-manifest/v2"},
+		{"v5.01.0", "syswarden-update-manifest/v2"},
+		{"v6.00.0", "syswarden-update-manifest/v2"},
+	} {
+		t.Run(tc.version, func(t *testing.T) {
+			fixture := makeVersionedManifestFixture(t, tc.version)
+			candidate := fixture.parsed(t)
+			if candidate.Schema != tc.schema {
+				t.Fatalf("schema = %q, want %q", candidate.Schema, tc.schema)
+			}
+			if err := verify(fixture.repository, tc.version, fixture.packages, fixture.manifest, fixture.signature); err != nil {
+				t.Fatal(err)
+			}
+			for _, schema := range []string{"", "syswarden-update-manifest/v1", "syswarden-update-manifest/v2", "syswarden-update-manifest/v3"} {
+				if schema == tc.schema {
+					continue
+				}
+				candidate.Schema = schema
+				fixture.resign(t, candidate)
+				if err := verify(fixture.repository, tc.version, fixture.packages, fixture.manifest, fixture.signature); err == nil {
+					t.Fatalf("accepted signed %q schema for %s", schema, tc.version)
+				}
+			}
+		})
 	}
 }
 
@@ -300,4 +336,44 @@ func TestGenerateFailsClosedOnMissingTrustSecretSymlinkAndCollision(t *testing.T
 			t.Fatal("non-empty output directory was accepted")
 		}
 	})
+}
+
+// These identities were captured from the unchanged v4.10.4 producer using
+// makeManifestFixture's existing deterministic public test key and payloads.
+func TestVersionedManifestPreservesLegacyCanonicalBytes(t *testing.T) {
+	fixture := makeManifestFixture(t)
+	data, err := os.ReadFile(fixture.manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	if hex.EncodeToString(digest[:]) != "f314ac0eb859c4bc3a23d3d4d09ce059c4f87323834cb75c5d122fd1ef73d352" {
+		t.Fatal("legacy canonical manifest bytes changed")
+	}
+	signature, err := os.ReadFile(fixture.signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(signature) != "m86FX3KauEnRQxCixLTiqT0ClM5TIGnMeCaWTyTz1ctN8alFCg/LcbuMt3gTWQ0XhJUWZLRqvTih6ZAUBrmyAg==\n" {
+		t.Fatal("legacy deterministic signature bytes changed")
+	}
+}
+
+func TestVersionedManifestRejectsMissingOrUnsupportedRetention(t *testing.T) {
+	for _, version := range []string{"v4.10.4", "v5.00.0"} {
+		for _, transition := range []string{"", "unknown", "syswarden-native-dependency-retention/v1"} {
+			if (version == "v4.10.4" && transition == "") || (version == "v5.00.0" && transition == nativeRetentionContract) {
+				continue
+			}
+			t.Run(version+"/"+transition, func(t *testing.T) {
+				fixture := makeVersionedManifestFixture(t, version)
+				candidate := fixture.parsed(t)
+				candidate.NativeTransition = transition
+				fixture.resign(t, candidate)
+				if err := verify(fixture.repository, version, fixture.packages, fixture.manifest, fixture.signature); err == nil {
+					t.Fatal("accepted incompatible signed retention contract")
+				}
+			})
+		}
+	}
 }
