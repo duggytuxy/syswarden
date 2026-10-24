@@ -121,7 +121,11 @@ not implemented by this component. A separate read-only
 recorded intent and publication before observing current systemd endpoints. It
 always retains the recovery requirement and does not dispatch or resolve the
 attempt. Deleting the intent to bypass the fence is not a
-supported recovery procedure. Administrator changes and all recovery evidence
+supported recovery procedure. A separate internal
+[runtime recovery coordinator](SSH_RUNTIME_RECOVERY.md) now performs explicitly
+approved original-inode restoration and one restoring reload, including resume
+before dispatch. It retains recovery-required status until the remaining runtime
+and access acceptance is integrated. Administrator changes and all recovery evidence
 must be preserved when state is ambiguous.
 
 ## Validation and remaining integration

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syswarden-cli/pkg/sshselection"
 	"testing"
@@ -49,9 +50,13 @@ func TestOpenSSHActivationAssessmentOracle(t *testing.T) {
 	testOpenSSHPublicationOracle(t, "activation-assessment")
 }
 
+func TestOpenSSHRuntimeRecoveryParserOracle(t *testing.T) {
+	testOpenSSHPublicationOracle(t, "runtime-recovery")
+}
+
 func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 	t.Helper()
-	transaction := operation == "transaction" || operation == "retire-restored" || operation == "owned" || operation == "owned-endpoints" || operation == "activation-assessment"
+	transaction := operation == "transaction" || operation == "retire-restored" || operation == "owned" || operation == "owned-endpoints" || operation == "activation-assessment" || operation == "runtime-recovery"
 	if os.Getenv("SYSWARDEN_SSH_ORACLE_TEST") != "1" {
 		t.Skip("set SYSWARDEN_SSH_ORACLE_TEST=1 for the installed OpenSSH parser oracle")
 	}
@@ -252,6 +257,33 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 				t.Fatal(err)
 			}
 			journal = fixtureJournal(t, f)
+			if operation == "runtime-recovery" {
+				check := func() error { return daemon.recheck(root, 0) }
+				calls, closed := 0, 0
+				activation, err := attemptSSHActivation(ctx, journal, plan.summary.PlanSHA256, daemon.digest,
+					run, check, activationTestBinder(t, journal, &calls, &closed))
+				if err != nil || !activation.RecoveryRequired || calls != 1 {
+					t.Fatal("cannot establish fixture activation", activation, err)
+				}
+				if err := journal.Close(); err != nil {
+					t.Fatal(err)
+				}
+				journal = fixtureJournal(t, f)
+				deps := transactionFixtureDependencies(f)
+				deps.parserDigest, deps.run, deps.checkParser = daemon.digest, run, check
+				bind := runtimeRecoveryBinder(t, journal, &calls, &closed)
+				approved := runtimeRecoveryPlan(t, journal, plan, deps, bind)
+				result, err := recoverSSHActivatedConfiguration(ctx, journal, plan.summary.PlanSHA256, daemon.digest, approved,
+					run, check, bind, sshPublicationDefaults())
+				if err != nil || !result.ConfigurationRestored || !result.RequestReturned || !result.RecoveryRequired || calls != 2 {
+					t.Fatal("installed parser recovery failed", result, err)
+				}
+				after := fixtureMainImage(t, f)
+				if after.state.ino != before.state.ino || !bytes.Equal(after.data, before.data) || !reflect.DeepEqual(after.attrs, before.attrs) {
+					t.Fatal("runtime recovery lost original main inode or metadata")
+				}
+				return
+			}
 			if operation == "activation-assessment" {
 				check := func() error { return daemon.recheck(root, 0) }
 				calls, closed := 0, 0

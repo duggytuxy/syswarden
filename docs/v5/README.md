@@ -152,7 +152,11 @@ public record. Final publication remains subject to the v5.00.0 IVVQ contract.
     Its [read-only observer](SSH_RECORDED_ACCESS_OBSERVATION.md) separates
     historical signatures, current correspondence and expiry without repairing
     uncertain writes or reopening the occupied slot.
-    Causal policy-consumption proof and runtime-aware recovery remain open.
+    A separately approved [runtime recovery coordinator](SSH_RUNTIME_RECOVERY.md)
+    restores original inodes and requests one restoring reload while retaining
+    runtime/access uncertainty. Interrupted inverse transitions can resume;
+    a restoring-reload intent prohibits replay. Causal policy-consumption proof
+    and operational recovery completion remain open.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.

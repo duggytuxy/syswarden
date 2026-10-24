@@ -230,7 +230,7 @@ func (journal *sshJournal) read() (sshPreparation, error) {
 }
 
 func sshRecordName(name string) bool {
-	if name == sshPreparedRecord || name == sshRollbackStartName || name == sshPreparationAbortName || name == sshActivationIntentName || name == sshAccessEvidenceName {
+	if name == sshPreparedRecord || name == sshRollbackStartName || name == sshPreparationAbortName || name == sshActivationIntentName || name == sshAccessEvidenceName || name == sshRuntimeRecoveryName || name == sshRuntimeRecoveryReloadName {
 		return true
 	}
 	for step := 1; step <= 3; step++ {
@@ -239,7 +239,8 @@ func sshRecordName(name string) bool {
 		}
 	}
 	for step := 1; step <= 2; step++ {
-		if name == sshRollbackName(step, false) || name == sshRollbackName(step, true) {
+		if name == sshRollbackName(step, false) || name == sshRollbackName(step, true) ||
+			name == sshRuntimeRecoveryPhase(step, false) || name == sshRuntimeRecoveryPhase(step, true) {
 			return true
 		}
 	}
