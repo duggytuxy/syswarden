@@ -6,7 +6,8 @@ This is component evidence for v5.00.0 IVVQ, not migration acceptance.
 ## Purpose and limits
 
 The test uses the production systemd activation binder, protected process
-descriptors, pidfd signal dispatch and listener-generation observer. A disposable
+descriptors, pidfd signal dispatch, listener-generation observer and prior
+address-space retirement check. A disposable
 Debian 13 container runs real systemd, D-Bus and OpenSSH. It generates its own
 host and client keys, authenticates fresh connections with the host key pinned,
 and probes TCP forwarding through loopback. No host SSH keys, services,
@@ -17,7 +18,8 @@ The ordered checks require:
 1. Fresh authentication and forwarding with the original fixture policy.
 2. Continued forwarding after writing the dedicated drop-in without reloading.
 3. Refusal of a no-op signal dispatch because no listener replacement occurs.
-4. A real production reload, observed listener replacement and refusal of replay.
+4. A real production reload, observed listener replacement and prior address-space
+   retirement on the surviving process, followed by refusal of replay.
 5. Fresh authentication with forwarding explicitly prohibited by the new policy.
 6. Continued prohibition after restoring files without reloading.
 7. A second production reload, fresh authentication and restored forwarding.

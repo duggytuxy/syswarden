@@ -23,9 +23,10 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	var resources *sshProcessResources
 	var held *sshRetainedProcess
+	var execution *sshExecReload
 	cleanup := func() error {
 		cancel()
-		return errors.Join(held.Close(), resources.Close())
+		return errors.Join(execution.Close(), held.Close(), resources.Close())
 	}
 	defer func() {
 		if err != nil {
@@ -94,7 +95,17 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	if err != nil {
 		return nil, err
 	}
-	target, err := sshActivationDigest([]any{"systemd-pidfd-sighup-listeners-v2", held.summary, expected, namespace, listeners.before})
+	memory, err := pinSSHExecMemory(process.proc, process.uid)
+	if err != nil {
+		return nil, err
+	}
+	execution = &sshExecReload{before: memory, open: func() (*sshExecMemory, error) {
+		return pinSSHExecMemory(process.proc, process.uid)
+	}}
+	if err := errors.Join(check(ctx), guard(), execution.beforeRequest()); err != nil {
+		return nil, err
+	}
+	target, err := sshActivationDigest([]any{"systemd-pidfd-sighup-exec-listeners-v3", held.summary, expected, namespace, listeners.before})
 	if err != nil {
 		return nil, err
 	}
@@ -102,11 +113,19 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	// to the retained thread-group leader is allowed, with no shell, manager
 	// mutation, child signal, numeric-PID fallback or automatic retry.
 	send := func() error { return sendSSHProcessReload(process) }
-	verify := func(ctx context.Context) error { return listeners.check(ctx) }
+	verify := func(ctx context.Context) error { return errors.Join(listeners.check(ctx), execution.beforeRequest()) }
 	after := func(ctx context.Context, guard func() error) error {
-		return listeners.wait(ctx, guard, pauseSSHListenerObservation)
+		if err := listeners.wait(ctx, guard, pauseSSHListenerObservation); err != nil {
+			return err
+		}
+		if err := execution.observe(ctx, func() error { return errors.Join(check(ctx), guard()) }); err != nil {
+			return err
+		}
+		return errors.Join(listeners.wait(ctx, func() error {
+			return errors.Join(guard(), execution.checkAfter())
+		}, pauseSSHListenerObservation), execution.checkAfter())
 	}
-	return &sshActivationTarget{ctx: ctx, target: target, verify: verify, send: send, after: after, closeFn: cleanup}, nil
+	return &sshActivationTarget{ctx: ctx, target: target, verify: verify, preSend: execution.beforeRequest, send: send, after: after, closeFn: cleanup}, nil
 }
 
 func sendSSHProcessReload(process *sshProcessBinding) error {
@@ -124,7 +143,7 @@ type sshActivationTarget struct {
 	ctx               context.Context
 	target            string
 	verify            func(context.Context) error
-	send              func() error
+	preSend, send     func() error
 	after             func(context.Context, func() error) error
 	closeFn           func() error
 	attempted, closed bool
@@ -189,6 +208,17 @@ func (l *sshActivationTarget) request(parent context.Context, policyGuard func()
 	if err := errors.Join(parent.Err(), ctx.Err(), policyGuard()); err != nil {
 		return err
 	}
+	// The production pre-send probe may wait inside the kernel. Recheck both
+	// request and binder cancellation directly after it returns, before signal.
+	// Fixed test targets without a memory observer may omit this private hook.
+	if l.preSend != nil {
+		if err := l.preSend(); err != nil {
+			return err
+		}
+	}
+	if err := errors.Join(parent.Err(), ctx.Err(), l.ctx.Err()); err != nil {
+		return err
+	}
 	if err := errors.Join(l.send(), parent.Err(), ctx.Err(), policyGuard()); err != nil {
 		return err
 	}
@@ -212,7 +242,7 @@ func (l *sshActivationTarget) Close() error {
 		return ErrInventoryUnsafe
 	}
 	err := l.closeFn()
-	l.verify, l.send, l.after, l.closeFn = nil, nil, nil, nil
+	l.verify, l.preSend, l.send, l.after, l.closeFn = nil, nil, nil, nil, nil
 	return err
 }
 

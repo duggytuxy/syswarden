@@ -99,6 +99,49 @@ closes listeners during its reload path, but a replacement observation alone
 cannot establish why that change occurred. The durable activation intent and
 recovery requirement remain in force even after this observation succeeds.
 
+## Address-space retirement after the request
+
+Listener replacement is now accompanied by a separate Linux address-space
+observation. Before dispatch the adapter opens the fixed `mem` entry beneath
+its retained process directory, read-only, with `openat2` restrictions against
+symlinks, escapes and mount crossings. Unsupported lookup or access is a refusal;
+there is no fallback or capability change. The descriptor must identify a
+root-owned procfs regular file with the expected mode, link count and size.
+
+One byte is requested only at address zero and immediately cleared. No memory
+contents, configurable address, dump or process attachment is exposed. An initial
+zero-byte `EIO` establishes a live referenced address space with an inaccessible
+probe address. After listener replacement, that same descriptor must return EOF.
+The still-held pidfd, executable, startup, manager and policy guards must continue
+to pass. An exited process therefore cannot establish a successful reload.
+A newly opened descriptor must again produce the initial result, and both
+observations are checked before return and when releasing the activation lease.
+Any failure retains the recovery requirement.
+
+The [Linux procfs implementation](https://github.com/torvalds/linux/blob/v6.12/fs/proc/base.c)
+retains the opened address space across an exec; it does not retarget that file
+to the process's next address space. This supports retirement evidence on the
+surviving, independently bound process. It is not an exact exec counter or proof
+of the current address-space identity: another `CLONE_VM` user can keep a space
+alive. Such sharing can delay retirement and cause refusal; a live replacement
+handle alone does not exclude another exec with a surviving sharer. There is no
+claim of protection against a hostile kernel, privileged writer or modified
+cooperating daemon. OpenSSH's documented
+[SIGHUP behavior](https://man.openbsd.org/sshd.8) and its qualified binary remain
+part of the supported startup contract.
+
+The byte count and operation sequence are bounded. Synchronous procfs open/read
+calls can wait for kernel execution or mapping locks, so the surrounding context
+deadline is not a hard preemption guarantee during a kernel stall. A cancelled
+request is refused at the next check. No background goroutine abandons a live
+memory handle, and no timeout success is synthesized.
+
+This observation strengthens the runtime evidence without acknowledging every
+policy directive or fresh administrator access. The durable activation fence
+remains. Isolated tests exercise a real same-PID exec, no-op and early-exec
+refusals, cancellation, guard/access failures, process exit and descriptor
+closure. They do not qualify arbitrary shared-address-space daemons.
+
 An error during persistence prevents dispatch. From the write attempt onward,
 the result requires recovery because a failed write may still have left visible
 intent. Failure, cancellation, target drift and record replacement after

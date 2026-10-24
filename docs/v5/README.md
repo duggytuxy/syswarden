@@ -131,7 +131,8 @@ public record. Final publication remains subject to the v5.00.0 IVVQ contract.
     from treating an attempted activation as an untouched daemon. Its private
     systemd target now retains the protected helpers and live pidfd through a
     single bounded SIGHUP request and verifies stable replacement of every
-    expected listener generation. It does not enable forward activation from an
+    expected listener generation together with retirement of the prior address
+    space on the surviving process. It does not enable forward activation from an
     installer or CLI caller, or claim that the daemon consumed the policy or accepted a fresh login.
     The read-only [activation assessment](SSH_ACTIVATION_ASSESSMENT.md) reopens
     interrupted history and verifies current configuration and endpoints while
