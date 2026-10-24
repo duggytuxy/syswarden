@@ -65,6 +65,12 @@ retire the transaction, adopt historical access receipts or claim completed
 migration. Fresh restored-policy access evidence and causal policy-consumption
 qualification remain required before operational acceptance.
 
+A separate [read-only restoration assessment](SSH_RESTORATION_ASSESSMENT.md)
+reopens the complete inverse history after the restoring-reload intent. It
+checks the original graph, parser and current endpoints without repairing or
+replaying the request. A visible intent, including one left before a failed
+directory sync or dispatch, never becomes a successful runtime acknowledgement.
+
 ## Validation boundary
 
 Filesystem tests cover original inode and evidence preservation, independent

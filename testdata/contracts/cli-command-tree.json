@@ -1363,6 +1363,48 @@
     }
   },
   {
+    "path": "syswarden ssh-policy assess-restoration",
+    "use": "assess-restoration",
+    "short": "Inspect restored SSH configuration and current endpoints without replaying reload",
+    "long": "Read existing original-restoration history using the original plan and separately approved recovery digests. Verify the retained original configuration, installed parser and current systemd endpoints without modifying or repairing state. A reload intent is not proof of signal delivery, consumed policy or authenticated access. Recovery remains required.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for assess-restoration"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Original independently approved migration plan SHA-256"
+      },
+      {
+        "name": "recovery-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Original separately approved restore-original plan SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy assess-restoration\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy assess-restoration\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy assess-restoration\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy assess-restoration\""
+    }
+  },
+  {
     "path": "syswarden ssh-policy plan",
     "use": "plan",
     "short": "Print a read-only SSH policy plan without configuration contents",

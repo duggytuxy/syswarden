@@ -806,6 +806,13 @@
       "before": null,
       "after": "added",
       "reason": "Expose fixed-path root-only recovery inspection and separately approved original-inode restoration with one retained-target systemd reload request. Preserve runtime/access uncertainty and partial error facts; bypass automatic configuration/firewall repair without bypassing the removal barrier for application. No forward migration or completed recovery is authorized."
+    },
+    {
+      "path": "syswarden ssh-policy assess-restoration",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Inspect complete original-restoration history with the original and independently approved recovery digests, pinned parser and current endpoints. This read-only command preserves uncertainty after a visible reload intent, does not repair durability or replay dispatch, and does not establish consumed policy, authenticated access or completed recovery."
     }
   ],
   "package_platform_contract": {

@@ -65,11 +65,14 @@ identity, ambiguous ownership, administrator drift or unsupported state refuses
 further mutation. A missing or unsupported systemd SSH daemon cannot use this
 path. OpenRC SSH recovery remains unavailable.
 
-Any restoring-reload record blocks subsequent inspection and application,
-including after an uncertain write or dispatch. Do not delete or alter it.
+Any restoring-reload record blocks subsequent `restore-original` inspection
+and application, including after an uncertain write or dispatch. Do not delete
+or alter it. The separate read-only
+[restoration assessment](SSH_RESTORATION_ASSESSMENT.md) accepts a complete
+restoration history and preserves its runtime and access uncertainty.
 The older `assess-activation` command does not accept this expanded recovery
 history and is not the next step after restoration. Post-reload recovery
-assessment/completion, protected independent fresh access evidence, consumed
+completion, protected independent fresh access evidence, consumed
 policy qualification and lifecycle retirement remain under integration.
 
 The native service-manager, upgrade and removal matrix and final v5.00.0 IVVQ

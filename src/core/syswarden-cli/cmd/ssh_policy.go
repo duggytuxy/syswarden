@@ -65,6 +65,7 @@ func init() {
 	command.AddCommand(newSSHOwnedCommand(sshpolicy.VerifyOwned))
 	command.AddCommand(newSSHActivationAssessmentCommand(sshpolicy.AssessSystemdActivation))
 	command.AddCommand(newSSHRestoreOriginalCommand(sshpolicy.InspectSystemdRecovery, sshpolicy.RestoreOriginalSystemd))
+	command.AddCommand(newSSHRestorationAssessmentCommand(sshpolicy.AssessSystemdRecovery))
 	rootCmd.AddCommand(command)
 }
 
@@ -121,5 +122,6 @@ func readOnlySSHPolicyCommand(cmd *cobra.Command) bool {
 	path := cmd.CommandPath()
 	return path == "syswarden ssh-policy" || path == "syswarden ssh-policy plan" ||
 		path == "syswarden ssh-policy verify" || path == "syswarden ssh-policy ports" ||
-		path == "syswarden ssh-policy verify-owned" || path == "syswarden ssh-policy assess-activation"
+		path == "syswarden ssh-policy verify-owned" || path == "syswarden ssh-policy assess-activation" ||
+		path == "syswarden ssh-policy assess-restoration"
 }

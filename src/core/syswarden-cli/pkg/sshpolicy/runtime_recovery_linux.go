@@ -371,12 +371,7 @@ func recoverSSHActivatedConfiguration(ctx context.Context, journal *sshJournal, 
 	}
 	// This immutable boundary is separate from the file recovery intent. Its
 	// presence prohibits signal replay even after an unacknowledged write.
-	if err := write(sshRuntimeRecoveryReloadName, struct {
-		Schema   int    `json:"schema"`
-		Recovery string `json:"recovery_sha256"`
-		Restored string `json:"restored_sha256"`
-		Target   string `json:"target_sha256"`
-	}{1, recoveryDigest, restored, intent.Target}); err != nil {
+	if err := write(sshRuntimeRecoveryReloadName, sshRuntimeRecoveryReload{1, recoveryDigest, restored, intent.Target}); err != nil {
 		return result, err
 	}
 	// request owns the runtime checks through signal dispatch and observation.

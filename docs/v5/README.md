@@ -159,6 +159,9 @@ public record. Final publication remains subject to the v5.00.0 IVVQ contract.
     [operator restoration command](SSH_OPERATOR_RECOVERY.md) exposes inspection
     and separately approved application without global configuration loading or
     firewall recovery, and keeps application behind the removal barrier.
+    The [restoration assessment](SSH_RESTORATION_ASSESSMENT.md) checks complete
+    inverse history, the restored graph and current endpoints after reload
+    intent without repairing records, repeating a request or accepting recovery.
     Causal policy-consumption proof and operational recovery completion remain open.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
@@ -425,3 +428,9 @@ read-only appraisal](SSH_CONTROLLER_RECEIPTS.md). Expiring independent challenge
 approval and pinned controller signatures precede exact target-state rechecks;
 durable receipt acceptance, causal runtime proof and migration readiness remain
 open.
+
+The explicit [prepared Alpine standalone-removal scenario](ALPINE_STANDALONE_REMOVAL.md)
+separately exercises `syswarden uninstall` without native package registration.
+It requires preserved independent protection, exact private recovery inventory
+and a real OpenRC restart. It does not replace native remove/purge or fresh
+installation qualification.

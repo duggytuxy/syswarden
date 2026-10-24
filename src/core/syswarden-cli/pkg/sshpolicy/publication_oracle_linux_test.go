@@ -91,7 +91,7 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 			content := includeDropIns + "HostKey " + key + "\nPort 2222\nUsePAM no\nPasswordAuthentication no\nAuthenticationMethods publickey\nInclude /etc/ssh/access.conf\n"
 			var listenerFD int
 			var listenerInode uint64
-			if operation == "owned-endpoints" || operation == "activation-assessment" {
+			if operation == "owned-endpoints" || operation == "activation-assessment" || operation == "runtime-recovery" {
 				listenerFD, listenerInode = sshTestTCPListener(t, unix.AF_INET)
 				socket, listening, err := inspectSSHSocket(listenerFD, listenerInode)
 				if err != nil || !listening {
@@ -281,6 +281,16 @@ func testOpenSSHPublicationOracle(t *testing.T, operation string) {
 				after := fixtureMainImage(t, f)
 				if after.state.ino != before.state.ino || !bytes.Equal(after.data, before.data) || !reflect.DeepEqual(after.attrs, before.attrs) {
 					t.Fatal("runtime recovery lost original main inode or metadata")
+				}
+				if err := journal.Close(); err != nil {
+					t.Fatal(err)
+				}
+				journal = fixtureJournal(t, f)
+				assessment, err := assessSSHRuntimeRecovery(ctx, journal, plan.summary.PlanSHA256, approved, daemon.digest,
+					run, check, ownedEndpointOracleObserver(t, daemon, listenerFD, listenerInode))
+				if err != nil || !assessment.ConfigurationRestored || !assessment.ParserVerified || !assessment.ReloadIntentObserved ||
+					!assessment.Endpoints.ConfiguredEndpointsMatched || !assessment.RecoveryRequired || assessment.RuntimeActivated || assessment.AccessVerified {
+					t.Fatal("installed parser restoration assessment failed", assessment, err)
 				}
 				return
 			}
