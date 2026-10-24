@@ -467,6 +467,8 @@ install -m 0644 \
     "${SOURCE_ROOT}/LICENSE" \
     staging-apk/usr/share/doc/syswarden/LICENSE.txt
 
+install -D -m 0755 "${SOURCE_ROOT}/scripts/ci/package_apk_recovery_hook.sh" \
+    ./staging-apk/etc/apk/commit_hooks.d/syswarden-recovery
 # Permissions
 chmod 750 staging/opt/syswarden/bin/*
 chmod 640 staging/opt/syswarden/signatures.json
@@ -498,6 +500,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging-apk \
     --service-manager openrc \
+    --apk-recovery-contract "${SOURCE_ROOT}/scripts/ci/package_apk_recovery_contract.json" \
+    --apk-recovery-source "${SOURCE_ROOT}/scripts/ci/package_apk_recovery_hook.sh" \
     --completion-contract "${SOURCE_ROOT}/scripts/ci/package_completion_contract.json" \
     --geoip-data-license-contract \
     "${SOURCE_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
@@ -1170,6 +1174,10 @@ contents:
     dst: "/opt"
   - src: "./staging-apk/usr"
     dst: "/usr"
+  - src: "./staging-apk/etc/apk/commit_hooks.d/syswarden-recovery"
+    dst: "/etc/apk/commit_hooks.d/syswarden-recovery"
+    file_info:
+      mode: 0755
 scripts:
   preinstall: "./preinst.sh"
   postinstall: "./postinst.sh"

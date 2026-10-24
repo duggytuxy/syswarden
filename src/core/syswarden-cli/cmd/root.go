@@ -19,6 +19,10 @@ var rootCmd = &cobra.Command{
 	Short: "SYSWARDEN Security Orchestrator",
 	Long:  "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if cmd == preparePackageRemovalCmd && retainAPKPayload {
+			// APK pre-commit must never load policy or recover firewall state.
+			return nil
+		}
 		if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "uninstall" {
 			if err := preflightUninstall(); err != nil {
 				return err

@@ -734,9 +734,13 @@ jobs:
             --source \
             "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
             --contract scripts/ci/package_systemd_wireguard_ordering_contract.json
+          install -D -m 0755 "${EXACT_SOURCE_ROOT}/scripts/ci/package_apk_recovery_hook.sh" \
+            "${STAGING_APK_AMD64}/etc/apk/commit_hooks.d/syswarden-recovery"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_APK_AMD64}" \
             --service-manager openrc \
+            --apk-recovery-contract scripts/ci/package_apk_recovery_contract.json \
+            --apk-recovery-source "${EXACT_SOURCE_ROOT}/scripts/ci/package_apk_recovery_hook.sh" \
             --completion-contract scripts/ci/package_completion_contract.json \
             --geoip-data-license-contract \
             scripts/ci/package_geoip_data_license_contract.json \
@@ -1339,6 +1343,10 @@ jobs:
               dst: "/opt"
             - src: "${STAGING_APK_AMD64}/usr"
               dst: "/usr"
+            - src: "${STAGING_APK_AMD64}/etc/apk/commit_hooks.d/syswarden-recovery"
+              dst: "/etc/apk/commit_hooks.d/syswarden-recovery"
+              file_info:
+                mode: 0755
           scripts:
             preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"
             postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"

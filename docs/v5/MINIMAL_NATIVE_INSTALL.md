@@ -227,3 +227,33 @@ consolidated implementation must preserve an attributable recovery route for
 that case and independently verify remaining protection, package registration,
 payload and runtime state. A successful manager exit cannot establish successful
 SysWarden removal. These paths remain acceptance blockers until qualified.
+
+## APK recovery before native erasure
+
+APK package removal scripts do not provide a reliable transaction veto. A refused
+`pre-deinstall` can be followed by payload erasure. The v5 candidate therefore
+ships an APK-owned `pre-commit` hook which preserves an exact private copy of the
+installed CLI, core, TUI and signatures before any subsequent native transaction.
+The copy is bound to the executing CLI and its compiled companion digests, uses
+independent inodes, and is published only after content and metadata checks. An
+existing copy must match exactly and is never overwritten. A failed copy refuses
+the transaction at this earlier boundary. No configuration, service, policy or
+package selection is changed by the copy operation.
+
+The private archive under `/var/backups/syswarden-retired-v1/apk-payload-*` is
+recovery evidence, not active configuration. It is not restored automatically or
+pruned by removal. Unknown files beside the package payload are not copied or
+adopted. An interrupted private staging directory is retained for diagnosis.
+The native package owns the hook and removes it with its payload; the archive
+does not install a persistent producer. A transaction explicitly bypassing APK
+hooks or scripts is outside this recovery guarantee.
+
+This copy alone does not establish complete removal or preserve dependencies
+which the package manager independently removes. Subsequent recovery still
+requires the existing ownership checks, required platform tools, and a separately
+reviewed plan. The historical root-cron recovery recognizes the verified Alpine
+Cronie/OpenRC provider and its `/etc/crontabs/root` spool, independently of the
+Debian cron provider. Approval is bound to the selected spool and exact record
+inventory. Unrelated records remain byte-for-byte unchanged, and the original
+inode is retained privately. A custom provider or unresolved producer remains a
+refusal. Full native uninstall, remove and purge qualification remains required.

@@ -196,3 +196,77 @@ func TestLegacyCronRetirementRefusesChangedPrivateBackupOnRetry(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyCronAlpineRecoveryBindsSpoolAndPreservesAdministratorJobs(t *testing.T) {
+	spool, backups, _, debianDigest := legacyCronFixture(t)
+	directory, err := openPinnedSharedRemovalParent(spool, systemTestUID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.close()
+	plan, _, err := inspectLegacyCronDirectory(directory, systemTestUID(t), alpineLegacyCronSpool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := LegacyCronRetirementPlanSHA256(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Directory != "/etc/crontabs" || plan.Original.Path != "/etc/crontabs/root" || digest == debianDigest {
+		t.Fatal("Alpine plan is not bound to its provider spool")
+	}
+	calls := 0
+	prepare := func() error { calls++; return nil }
+	noop := func() error { return nil }
+	if _, _, err := applyLegacyCronRetirement(spool, backups, debianDigest, systemTestUID(t), prepare, noop, unix.Renameat2, alpineLegacyCronSpool); err == nil || calls != 0 {
+		t.Fatal("Debian approval authorized Alpine mutation", err)
+	}
+	_, backup, err := applyLegacyCronRetirement(spool, backups, digest, systemTestUID(t), prepare, noop, unix.Renameat2, alpineLegacyCronSpool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(readCronFixture(t, spool, "root")) != legacyCronFixtureOperator || string(readCronFixture(t, backup, "root-crontab")) != legacyCronFixtureRecord+legacyCronFixtureOperator {
+		t.Fatal("Alpine recovery changed unrelated jobs or original evidence")
+	}
+	if _, _, err := applyLegacyCronRetirement(spool, backups, digest, systemTestUID(t), prepare, noop, unix.Renameat2, legacyCronSpool); err == nil {
+		t.Fatal("Alpine recovery receipt accepted for another provider")
+	}
+	if _, again, err := applyLegacyCronRetirement(spool, backups, digest, systemTestUID(t), prepare, noop, unix.Renameat2, alpineLegacyCronSpool); err != nil || again != backup {
+		t.Fatal("Alpine recovery did not resume", err)
+	}
+}
+
+func TestLegacyCronProviderRequiresVerifiedNativeRuntime(t *testing.T) {
+	alpine := CronDProviderEvidence{Mode: CronDProviderRuntime, Manager: "openrc", Unit: "cronie", Daemon: "/usr/sbin/crond", Fragment: "/etc/init.d/cronie", DefaultRunlevel: true, Packages: []string{"cronie", "cronie-openrc"}}
+	debian := CronDProviderEvidence{Mode: CronDProviderRuntime, Manager: "systemd", Unit: "cron.service", Daemon: "/usr/sbin/cron", Packages: []string{"cron"}}
+	for _, tc := range []struct {
+		evidence CronDProviderEvidence
+		path     string
+	}{{alpine, alpineLegacyCronSpool}, {debian, legacyCronSpool}} {
+		if path, err := legacyCronSpoolForProvider(tc.evidence); err != nil || path != tc.path {
+			t.Fatal("verified provider rejected", path, err)
+		}
+	}
+	for _, mutation := range []string{"inactive", "busybox", "missing-openrc", "wrong-daemon", "wrong-service", "custom-fragment"} {
+		t.Run(mutation, func(t *testing.T) {
+			evidence := alpine
+			switch mutation {
+			case "inactive":
+				evidence.Mode = "invalid"
+			case "busybox":
+				evidence.Packages = []string{"busybox"}
+			case "missing-openrc":
+				evidence.DefaultRunlevel = false
+			case "wrong-daemon":
+				evidence.Daemon = "/sbin/crond"
+			case "wrong-service":
+				evidence.Unit = "crond"
+			case "custom-fragment":
+				evidence.Fragment = "/etc/init.d/custom"
+			}
+			if _, err := legacyCronSpoolForProvider(evidence); err == nil {
+				t.Fatal("unverified runtime selected a cron spool")
+			}
+		})
+	}
+}
