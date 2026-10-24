@@ -267,3 +267,18 @@ protection. Do not install systemd as a workaround, bypass the observer, stop th
 shared nftables service or flush its rules. Component checks and recovery payload
 retention do not establish complete native uninstall, remove or purge acceptance;
 each complete path still requires its own qualification.
+
+The lifecycle laboratory binds the additional APK hook to the v5 package
+inventory, its exact source digest, a regular file, root ownership and mode
+`0755`. Historical v4 inventories remain unchanged. Missing, duplicated,
+modified or additional payload entries are rejected; successful native package
+erasure does not override this inventory check.
+
+The laboratory also validates the core's local native runtime snapshot when HA
+is disabled. Local evidence cannot claim HA coordination or peer checkpoint
+authority. Snapshot identity, model, counts, claims, canonical addresses and
+nanosecond chronology must agree with the projected lifecycle fields. Complete
+journal windows must account for every journal byte. Legacy telemetry and HA
+retain their distinct contracts. The jq validator refuses sequence numbers above
+its exact integer range, `2^53 - 1`, and noncanonical integer wire spellings
+rather than rounding them into a passing observation.

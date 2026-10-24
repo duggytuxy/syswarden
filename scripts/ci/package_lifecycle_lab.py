@@ -814,6 +814,11 @@ LIVE_TELEMETRY_STATE_ATTRIBUTES = (
 )
 
 BASH_COMPLETION_PATH = "/usr/share/bash-completion/completions/syswarden"
+APK_RECOVERY_HOOK_PATH = "/etc/apk/commit_hooks.d/syswarden-recovery"
+APK_RECOVERY_HOOK_FIRST_VERSION = "5.00.0"
+APK_RECOVERY_HOOK_SHA256 = (
+    "c38eb138669360b3d664cc97c390ef5852964be64bc55991b5f664e586084522"
+)
 RPM_DOCUMENTATION_ROOT = "/usr/share/doc/syswarden"
 GEOIP_DATA_LICENSE_PATH = "/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
 GEOIP_DATA_LICENSE_FIRST_VERSION = "4.04.0"
@@ -2915,6 +2920,28 @@ package_uses_systemd_wireguard_ordering_payload() {
         "${systemd_ordering_artifact_version}"
 }
 
+package_uses_apk_recovery_payload() {
+    case "$1" in
+        candidate) apk_recovery_version="${EXPECTED_CANDIDATE_VERSION}" ;;
+        previous) apk_recovery_version="${EXPECTED_PREVIOUS_VERSION}" ;;
+        *) return 2 ;;
+    esac
+    case "${PACKAGE_FAMILY}" in
+        apk) ;;
+        deb|rpm) return 1 ;;
+        *) return 2 ;;
+    esac
+    printf '%s\n' "${apk_recovery_version}" | \
+        LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)\.[0-9]{2}\.(0|[1-9][0-9]*)$' || return 2
+    apk_recovery_major="${apk_recovery_version%%.*}"
+    apk_recovery_patch="${apk_recovery_version##*.}"
+    [ "${#apk_recovery_major}" -le 10 ] && \
+        [ "${#apk_recovery_patch}" -le 10 ] || return 2
+    [ "${apk_recovery_major}" -le 2147483647 ] && \
+        [ "${apk_recovery_patch}" -le 2147483647 ] || return 2
+    [ "${apk_recovery_major}" -ge 5 ]
+}
+
 validate_manifest_contract() {
     manifest="$1"
     artifact_role="$2"
@@ -2982,6 +3009,17 @@ validate_manifest_contract() {
             /usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf && return 1
     fi
 
+    apk_recovery_payload=0
+    if package_uses_apk_recovery_payload "${artifact_role}"; then
+        apk_recovery_payload=1
+        required_manifest_path "${manifest}" \
+            /etc/apk/commit_hooks.d/syswarden-recovery || return 1
+    else
+        apk_recovery_payload_rc=$?
+        [ "${apk_recovery_payload_rc}" -eq 1 ] || return 1
+        required_manifest_path "${manifest}" \
+            /etc/apk/commit_hooks.d/syswarden-recovery && return 1
+    fi
     case "${PACKAGE_FAMILY}" in
         deb)
             if [ "${legacy_completion_payload}" -eq 1 ]; then
@@ -3003,7 +3041,10 @@ validate_manifest_contract() {
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
             ;;
         apk)
-            if [ "${legacy_completion_payload}" -eq 1 ]; then
+            if [ "${apk_recovery_payload}" -eq 1 ]; then
+                allowed='^/(etc/apk/commit_hooks\.d/syswarden-recovery|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt)$'
+                expected_manifest_count=10
+            elif [ "${legacy_completion_payload}" -eq 1 ]; then
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=6
             elif [ "${geoip_data_license_payload}" -eq 1 ]; then
@@ -3136,6 +3177,16 @@ validate_inventory_contract() {
         [ "${systemd_ordering_payload_rc}" -eq 1 ] || return 1
         grep -Fq \
             '/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf' \
+            "${inventory}" && return 1
+    fi
+    if package_uses_apk_recovery_payload "${artifact_role}"; then
+        inventory_has_exact_entry "${inventory}" \
+            /etc/apk/commit_hooks.d/syswarden-recovery file 755 \
+            c38eb138669360b3d664cc97c390ef5852964be64bc55991b5f664e586084522 || return 1
+    else
+        apk_recovery_payload_rc=$?
+        [ "${apk_recovery_payload_rc}" -eq 1 ] || return 1
+        grep -Fq '/etc/apk/commit_hooks.d/syswarden-recovery' \
             "${inventory}" && return 1
     fi
     if awk -F '\t' '$2 == "missing" || $2 == "unsupported" { found = 1 } END { exit found ? 0 : 1 }' "${inventory}"; then
@@ -5070,7 +5121,7 @@ live_telemetry_schema_valid() {
     live_telemetry_stream_sha256="$({ jq -c --stream 'select(length == 2)' "${live_telemetry_path}" || printf 'stream-error\n'; } | sha256sum | awk '{print $1}')" || return 1
     live_telemetry_normalized_stream_sha256="$({ jq -c . "${live_telemetry_path}" || printf 'parse-error\n'; } | jq -c --stream 'select(length == 2)' | sha256sum | awk '{print $1}')" || return 1
     [ "${live_telemetry_stream_sha256}" = "${live_telemetry_normalized_stream_sha256}" ] || return 1
-    jq -e --arg kpi_contract "${live_telemetry_contract}" '
+    jq -e --arg kpi_contract "${live_telemetry_contract}" --rawfile telemetry_source "${live_telemetry_path}" '
         def integer: type == "number" and (floor == .);
         def optional_string($key):
             (has($key) | not) or (.[$key] | type == "string");
@@ -5136,13 +5187,157 @@ live_telemetry_schema_valid() {
                 (if .peak_window_hits >= .effective_threshold or .threshold_reached then 20 else 0 end)
              end) as $score |
             if $score > 100 then 100 elif $score < 0 then 0 else $score end;
+        # Compare local chronology as seconds and nanoseconds separately. jq
+        # floating-point epochs can otherwise lose a sub-microsecond reversal.
+        def grc_local_timestamp:
+            if canonical_grc_timestamp and . != "0001-01-01T00:00:00Z" and
+               ((contains(".") | not) or test("\\.[0-9]{0,8}[1-9]Z$")) then
+                capture("^(?<whole>[^.]+?)(?:\\.(?<fraction>[0-9]+))?Z$") as $parts |
+                [($parts.whole + "Z" | fromdateiso8601),
+                 ((($parts.fraction // "") + "000000000")[:9] | tonumber)]
+            else error("noncanonical local native timestamp") end;
+        def grc_local_ipv6_text:
+            . as $groups |
+            ([range(0; 8) | . as $start |
+              select($groups[$start] == 0 and ($start == 0 or $groups[$start - 1] != 0)) |
+              {start: $start, length: ([range($start; 9) |
+                  select(. == 8 or $groups[.] != 0)][0] - $start)}] |
+             sort_by([(-.length), .start])[0] // {start: 0, length: 0}) as $run |
+            ($groups | map(. as $group |
+                [($group / 4096 | floor), (($group / 256 | floor) % 16),
+                 (($group / 16 | floor) % 16), ($group % 16)] |
+                map(. as $digit | "0123456789abcdef"[$digit:$digit + 1]) | join("") |
+                sub("^0+"; "") | if . == "" then "0" else . end)) as $words |
+            if $run.length >= 2 then
+                ($words[:$run.start] | join(":")) + "::" +
+                ($words[$run.start + $run.length:] | join(":"))
+            else $words | join(":") end;
+        def grc_local_address:
+            if test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$") then
+                (split(".") | map(tonumber)) as $groups |
+                if all($groups[]; . <= 255) then
+                    {groups: $groups, width: 8, canonical: ($groups | map(tostring) | join("."))}
+                else error("invalid local native IPv4 address") end
+            elif test("^[0-9a-f:]+$") then
+                split("::") as $sides |
+                ($sides[0] | if . == "" then [] else split(":") end) as $left |
+                (if ($sides | length) == 2 then
+                    $sides[1] | if . == "" then [] else split(":") end
+                 else [] end) as $right |
+                if (($sides | length) == 1 and ($left | length) == 8 or
+                    ($sides | length) == 2 and (($left + $right) | length) < 8) and
+                   all(($left + $right)[]; test("^[0-9a-f]{1,4}$")) then
+                    ($left + [range(0; 8 - (($left + $right) | length)) | "0"] + $right |
+                     map(reduce (explode[]) as $digit (0;
+                         . * 16 + (if $digit <= 57 then $digit - 48 else $digit - 87 end)))) as $groups |
+                    if $groups[:5] == [0, 0, 0, 0, 0] and $groups[5] == 65535 then
+                        error("mapped local native IPv6 address")
+                    else {groups: $groups, width: 16, canonical: ($groups | grc_local_ipv6_text)} end
+                else error("invalid local native IPv6 address") end
+            else error("invalid local native address") end;
+        def grc_local_entry_valid:
+            type == "string" and length <= 64 and
+            (split("/") as $parts |
+             ($parts[0] | grc_local_address) as $address |
+             $parts[0] == $address.canonical and
+             (if ($parts | length) == 1 then true
+              elif ($parts | length) == 2 and ($parts[1] | test("^(0|[1-9][0-9]{0,2})$")) then
+                  ($parts[1] | tonumber) as $prefix |
+                  $prefix <= ($address.width * ($address.groups | length)) and
+                  all(range(0; ($address.groups | length)); . as $index |
+                      ($prefix - $index * $address.width |
+                       if . < 0 then 0 elif . > $address.width then $address.width else . end) as $used |
+                      ($address.groups[$index] % pow(2; $address.width - $used)) == 0)
+              else false end));
+        def grc_local_claim_valid($snapshot; $updated; $captured):
+            type == "object" and
+            (keys - ["confirmed_at", "expires_at"]) ==
+                ["cause", "created_at", "entry", "generation", "state", "transition_at"] and
+            (.entry | grc_local_entry_valid) and
+            (.generation | integer and . > 0 and . <= $snapshot.sequence) and
+            optional_string("expires_at") and optional_string("confirmed_at") and
+            ((.created_at | grc_local_timestamp) as $created |
+             (.transition_at | grc_local_timestamp) as $transition |
+             (if (.expires_at // "") == "" then null else .expires_at | grc_local_timestamp end) as $expiry |
+             $created <= $transition and $transition <= $updated and
+             ($expiry == null or $expiry > $created) and
+             (if .state == "active" then
+                  .cause == "verified-ban" and (.confirmed_at // "") == "" and
+                  ($expiry == null or $expiry > $captured)
+              elif .state == "deleted" or .state == "expired" or .state == "tombstoned" then
+                  (.cause == "verified-deletion" or .cause == "native-expiry") and
+                  (.state != "deleted" or .cause == "verified-deletion") and
+                  (.state != "expired" or .cause == "native-expiry") and
+                  (.cause != "native-expiry" or ($expiry != null and $transition >= $expiry)) and
+                  (if .state == "tombstoned" then
+                       (.confirmed_at | grc_local_timestamp) as $confirmed |
+                       $confirmed >= [$transition[0] + 30, $transition[1]] and $confirmed <= $updated
+                   else (.confirmed_at // "") == "" end)
+              else false end));
+        def grc_local_snapshot_valid:
+            . as $snapshot |
+            type == "object" and
+            keys == ["active", "captured_at", "claims", "deleted", "expired", "identity", "model_sha256", "schema_version", "sequence", "tombstoned", "truncated", "updated_at"] and
+            .schema_version == 1 and
+            # Refuse sequence values beyond the exact jq integer range rather
+            # than accepting rounded uint64 generation comparisons.
+            (.sequence | integer and . > 0 and . <= 9007199254740991) and
+            (.identity | type == "string" and test("^[0-9a-f]{64}$")) and
+            (.model_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+            (.truncated | type == "boolean") and
+            (.claims | type == "array" and length <= 1024) and
+            ([.active, .expired, .deleted, .tombstoned] |
+             all(.[]; integer and . >= 0 and . <= 16384) and add <= 16384) and
+            (([.active, .expired, .deleted, .tombstoned] | add) as $total |
+             if .truncated then $total > (.claims | length) else $total == (.claims | length) end) and
+            ((.updated_at | grc_local_timestamp) as $updated |
+             (.captured_at | grc_local_timestamp) as $captured |
+             $captured >= $updated and
+             all(.claims[]; grc_local_claim_valid($snapshot; $updated; $captured))) and
+            ([.claims[].entry] as $entries | $entries == ($entries | unique)) and
+            all(["active", "expired", "deleted", "tombstoned"][]; . as $state |
+                ([$snapshot.claims[] | select(.state == $state)] | length) as $observed |
+                $observed <= $snapshot[$state] and
+                ($snapshot.truncated or $observed == $snapshot[$state]));
+        def grc_local_lifecycle_valid:
+            . as $lifecycle |
+            (keys - ["active_claims", "deleted_claims", "expired_claims", "runtime_snapshot_complete", "runtime_snapshot_truncated", "tombstoned_claims"]) ==
+                ["deletion_records", "expiry_records", "runtime_captured_at", "runtime_local_snapshot", "runtime_model_sha256", "runtime_state_linked", "scope", "tombstone_records"] and
+            .runtime_state_linked == true and
+            ((has("runtime_snapshot_complete") and .runtime_snapshot_complete == true and
+              (has("runtime_snapshot_truncated") | not)) or
+             (has("runtime_snapshot_truncated") and .runtime_snapshot_truncated == true and
+              (has("runtime_snapshot_complete") | not))) and
+            optional_nonnegative_integer("active_claims") and
+            optional_nonnegative_integer("expired_claims") and
+            optional_nonnegative_integer("deleted_claims") and
+            optional_nonnegative_integer("tombstoned_claims") and
+            (.runtime_local_snapshot | grc_local_snapshot_valid) and
+            (.runtime_local_snapshot |
+             .truncated == ($lifecycle.runtime_snapshot_truncated // false) and
+             .model_sha256 == $lifecycle.runtime_model_sha256 and
+             .captured_at == $lifecycle.runtime_captured_at and
+             .active == ($lifecycle.active_claims // 0) and
+             .expired == ($lifecycle.expired_claims // 0) and
+             .deleted == ($lifecycle.deleted_claims // 0) and
+             .tombstoned == ($lifecycle.tombstoned_claims // 0));
+        # Every numeric local lifecycle field is an integer on the wire. Bind
+        # its parsed value back to the whitespace-free source so jq rounding
+        # cannot accept fractional or exponent spellings as Go integer fields.
+        def grc_local_wire_valid:
+            (walk(if type == "number" then . + 0 else . end) | tojson) as $canonical |
+            ($telemetry_source |
+             gsub("(?<quoted>\"(?:[^\"\\\\]|\\\\.)*\")|[ \t\r\n]+"; .quoted // "")) |
+            contains("\"lifecycle\":" + $canonical);
         def grc_lifecycle_valid:
             type == "object" and
             (.deletion_records | integer and . >= 0) and
             (.expiry_records | integer and . >= 0) and
             (.tombstone_records | integer and . >= 0) and
             (.runtime_state_linked | type == "boolean") and
-            (if .runtime_state_linked then
+            (if .scope == "local-native-runtime-snapshot" then
+                 grc_local_lifecycle_valid and grc_local_wire_valid
+             elif .runtime_state_linked then
                 ((keys - ["active_claims", "deleted_claims", "expired_claims", "runtime_peer_checkpoint_sha256", "tombstoned_claims"]) ==
                  ["deletion_records", "expiry_records", "runtime_captured_at", "runtime_checkpoint_at", "runtime_checkpoint_sha256", "runtime_cluster_id", "runtime_coordination", "runtime_epoch", "runtime_model_sha256", "runtime_node_id", "runtime_role", "runtime_snapshot_complete", "runtime_snapshot_truncated", "runtime_state_linked", "scope", "tombstone_records"] or
                  (keys - ["active_claims", "deleted_claims", "expired_claims", "runtime_peer_checkpoint_sha256", "runtime_snapshot_truncated", "tombstoned_claims"]) ==
@@ -5268,6 +5463,8 @@ live_telemetry_schema_valid() {
              keys == ["admitted_events", "excluded_events", "journal_bytes_scanned", "journal_bytes_total", "journal_decode_errors", "records_truncated", "rejected_events"] and
              all(.[]; integer and . >= 0) and
              .journal_bytes_scanned <= .journal_bytes_total) and
+            ((.window.complete | not) or
+             .evidence.journal_bytes_scanned == .evidence.journal_bytes_total) and
             (.lifecycle | grc_lifecycle_valid) and
             (.records | type == "array" and length <= 512 and all(.[]; grc_record_valid)) and
             ((.records | length) == 0 and
@@ -5287,13 +5484,15 @@ live_telemetry_schema_valid() {
                 .evidence.rejected_events == 0 and .evidence.records_truncated == 0 and
                 .catalog.version != "" and
                 .lifecycle.runtime_state_linked and
-                .lifecycle.runtime_peer_checkpoint_sha256 == .lifecycle.runtime_checkpoint_sha256 and
                 all(.records[];
                     .catalog == $grc.catalog and .metric_quality == "attested" and
                     .policy_quality == "attested" and .hit_quality == "measured" and
                     .degraded_hits == 0 and .enforcement_state != "unknown") and
                 .lifecycle.runtime_snapshot_complete == true and
-                .lifecycle.runtime_coordination == "healthy"
+                (.lifecycle.scope == "local-native-runtime-snapshot" or
+                 (.lifecycle.scope == "ha-v2-runtime-snapshot" and
+                  .lifecycle.runtime_coordination == "healthy" and
+                  .lifecycle.runtime_peer_checkpoint_sha256 == .lifecycle.runtime_checkpoint_sha256))
              else true end);
         def feed_required_keys:
             ["accepted_count", "address_family", "attestation", "feed_name", "freshness", "rejected_count", "skipped_count", "source_origins", "state"];
@@ -6732,6 +6931,17 @@ def _uses_systemd_wireguard_ordering_payload(
     )
 
 
+def _uses_apk_recovery_payload(family: str, role: str, version: str) -> bool:
+    if family not in EXPECTED_SCENARIOS:
+        raise LifecycleLabError(f"unsupported inventory family: {family!r}")
+    if role not in {"previous", "candidate"}:
+        raise LifecycleLabError(f"unsupported package artifact role: {role!r}")
+    return family == "apk" and (
+        parse_syswarden_version(version)
+        >= parse_syswarden_version(APK_RECOVERY_HOOK_FIRST_VERSION)
+    )
+
+
 def _owns_systemd_ordering_directory(family: str, version: str) -> bool:
     return family == "rpm" and (
         parse_syswarden_version(version)
@@ -6811,6 +7021,8 @@ def _validate_manager_paths(
                 else APK_PACKAGE_PATHS
             )
         )
+        if _uses_apk_recovery_payload(family, role, version):
+            expected = expected | {APK_RECOVERY_HOOK_PATH}
         if observed != expected:
             raise LifecycleLabError("APK native package inventory is not exact")
         return
@@ -6924,6 +7136,8 @@ def validate_inventory_snapshot(
         file_modes[BASH_COMPLETION_PATH] = "644"
     if systemd_ordering_payload:
         file_modes[SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH] = "644"
+    if _uses_apk_recovery_payload(family, role, version):
+        file_modes[APK_RECOVERY_HOOK_PATH] = "755"
     for path, mode in file_modes.items():
         entry = entries[path]
         if (
@@ -6958,6 +7172,11 @@ def validate_inventory_snapshot(
         if ordering_dropin["value"] != SYSTEMD_WIREGUARD_ORDERING_DROPIN_SHA256:
             raise LifecycleLabError(
                 "systemd WireGuard ordering payload is not the pinned intact source"
+            )
+    if _uses_apk_recovery_payload(family, role, version):
+        if entries[APK_RECOVERY_HOOK_PATH]["value"] != APK_RECOVERY_HOOK_SHA256:
+            raise LifecycleLabError(
+                "APK recovery hook is not the pinned intact source"
             )
     link_targets = {
         "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
