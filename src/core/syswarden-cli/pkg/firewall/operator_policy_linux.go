@@ -36,6 +36,7 @@ type operatorPolicyRuleExpectation struct {
 }
 
 type operatorPolicyVerification struct {
+	listOnly        bool
 	chainName       string
 	dispatchComment string
 	returnComment   string

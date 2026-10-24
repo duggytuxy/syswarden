@@ -1528,7 +1528,7 @@ func attestOfflineQualificationPackageDependenciesWith(
 			args = []string{"--query", "--quiet", dependency}
 		case packageFormatAPK:
 			name = target.installer
-			args = []string{"info", "--exists", dependency}
+			args = []string{"info", "--quiet", "-e", dependency}
 		default:
 			return fmt.Errorf("unsupported package format %q for dependency attestation", target.format)
 		}
@@ -1598,6 +1598,9 @@ func (target packageTarget) qualificationInstallCommand(packagePath string) (str
 			"--cacheonly",
 			"--disablerepo=*",
 			"--setopt=localpkg_gpgcheck=1",
+			"--setopt=install_weak_deps=False",
+			"--setopt=clean_requirements_on_remove=False",
+			"--setopt=obsoletes=False",
 			"install",
 			"-y",
 			packagePath,
@@ -1625,12 +1628,13 @@ func validateQualificationExternalCommand(name string, args []string) error {
 			return nil
 		}
 	case "/usr/bin/dnf", "/usr/bin/yum":
-		if len(args) != 7 {
+		if len(args) != 10 {
 			break
 		}
 		if args[0] == "--noplugins" && args[1] == "--cacheonly" && args[2] == "--disablerepo=*" &&
-			args[3] == "--setopt=localpkg_gpgcheck=1" && args[4] == "install" && args[5] == "-y" &&
-			validSecurePackageArgument(args[6]) {
+			args[3] == "--setopt=localpkg_gpgcheck=1" && args[4] == "--setopt=install_weak_deps=False" &&
+			args[5] == "--setopt=clean_requirements_on_remove=False" && args[6] == "--setopt=obsoletes=False" &&
+			args[7] == "install" && args[8] == "-y" && validSecurePackageArgument(args[9]) {
 			return nil
 		}
 	case "/sbin/apk", "/usr/sbin/apk":
@@ -1670,11 +1674,20 @@ func qualificationActivationEnvironment() []string {
 }
 
 func runQualificationExternalCommand(ctx context.Context, name string, args ...string) error {
-	if err := validateQualificationExternalCommand(name, args); err != nil {
-		return err
+	return runWithNativeDependencyRetention(ctx, name, args, true, preserveNativeDependencyReasons, executeQualificationExternalCommand)
+}
+
+func executeQualificationExternalCommand(ctx context.Context, name string, args ...string) error {
+	if name == "/sbin/apk" || name == "/usr/sbin/apk" {
+		preserved, err := apkPreservedInstallArguments(name, args, productionOpenRCWireGuardDefinitionPaths())
+		if err != nil {
+			return fmt.Errorf("preserve installed APK dependencies before offline update: %w", err)
+		}
+		args = preserved
 	}
-	command := exec.Command(name, args...) // #nosec G204 -- executable and arguments passed the exact allowlist above
+	command := exec.Command(name, args...) // #nosec G204 -- executable and arguments passed the wrapper exact allowlist
 	command.Env = qualificationExternalCommandEnvironment()
+	command.Dir = "/"
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	return runQualificationProcessGroup(ctx, command)
@@ -1860,8 +1873,8 @@ func allowedQualificationQuery(name string, args []string) bool {
 				qualificationRequiredPackage(packageFormatRPM, args[2]))
 	case "/sbin/apk", "/usr/sbin/apk":
 		return same("info", "--verbose", "syswarden") || same("info", "--who-owns", installedSyswardenCLIPath) ||
-			(len(args) == 3 && args[0] == "info" && args[1] == "--exists" &&
-				qualificationRequiredPackage(packageFormatAPK, args[2]))
+			(len(args) == 4 && args[0] == "info" && args[1] == "--quiet" && args[2] == "-e" &&
+				qualificationRequiredPackage(packageFormatAPK, args[3]))
 	default:
 		return false
 	}

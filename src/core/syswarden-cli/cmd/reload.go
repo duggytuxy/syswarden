@@ -33,6 +33,9 @@ var reloadCmd = &cobra.Command{
 		if err := preflightConfiguredFirewallBackend(); err != nil {
 			return fmt.Errorf("firewall backend preflight failed before reload mutation: %w", err)
 		}
+		for _, line := range config.ModulePlan(config.GlobalConfig) {
+			fmt.Println("[PLAN] " + line)
+		}
 		if err := recoverPendingWireGuardForwardingForReload(); err != nil {
 			return fmt.Errorf("WireGuard forwarding persistence recovery failed before reload mutation: %w", err)
 		}
@@ -41,6 +44,9 @@ var reloadCmd = &cobra.Command{
 		}
 		if err := preflightWireGuardForReload(); err != nil {
 			return fmt.Errorf("WireGuard preflight failed before reload mutation: %w", err)
+		}
+		if err := preflightModuleDependencies(); err != nil {
+			return fmt.Errorf("selected module prerequisite failed before reload mutation: %w", err)
 		}
 		if err := ensurePersistentBlocklistPairForReload(); err != nil {
 			return fmt.Errorf("persistent blocklist initialization failed before policy reload: %w", err)

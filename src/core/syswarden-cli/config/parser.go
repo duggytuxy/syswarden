@@ -28,6 +28,13 @@ func loadOldConfig(path string) (loadErr error) {
 	}
 
 	candidate := NewFailSafeConfig()
+	// These subsystems were unconditional in the historical configuration.
+	// Preserve that behavior when reading an actual legacy installation.
+	candidate.FirewallPolicyMode = "host"
+	candidate.OSINTEnabled = true
+	candidate.WAAPEnabled = true
+	candidate.LogBridgeEnabled = true
+	candidate.DetectionEnabled = true
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 
 	for scanner.Scan() {

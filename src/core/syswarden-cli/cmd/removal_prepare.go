@@ -191,12 +191,24 @@ func prepareVerifiedFirewallRemoval() error {
 	return nil
 }
 
+var retainAPKPayload bool
+
+var preserveAPKRemovalPayload = system.PreserveAPKRemovalPayload
+
 var preparePackageRemovalCmd = &cobra.Command{
 	Use:    "prepare-package-removal",
 	Short:  "Publish the removal barrier and verify owned firewall cleanup",
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if retainAPKPayload {
+			path, err := preserveAPKRemovalPayload()
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "[INFO] Verified private APK recovery payload: %s\n", path)
+			return err
+		}
 		if err := prepareVerifiedFirewallRemoval(); err != nil {
 			return err
 		}
@@ -208,5 +220,6 @@ var preparePackageRemovalCmd = &cobra.Command{
 }
 
 func init() {
+	preparePackageRemovalCmd.Flags().BoolVar(&retainAPKPayload, "retain-apk-payload", false, "Preserve exact payload before an APK transaction without changing host policy")
 	rootCmd.AddCommand(preparePackageRemovalCmd)
 }

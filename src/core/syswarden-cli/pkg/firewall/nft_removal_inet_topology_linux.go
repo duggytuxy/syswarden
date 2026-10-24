@@ -383,8 +383,19 @@ func bindNFTInetOperandValues(rule map[string]any, bindings []nftInetOperandBind
 // semantics. It never reads or changes the host and does not establish source,
 // input, population or producer ownership. Those independent attestations and
 // a durable intent plus generation fence remain necessary before retirement.
-func inspectNFTInetTemplateTopology(source, live []byte, input nftInetTemplateInputs) (nftInetTopologyEvidence, error) {
+func inspectNFTInetTemplateTopology(source, live []byte, input nftInetTemplateInputs, policyMode ...string) (nftInetTopologyEvidence, error) {
 	var empty nftInetTopologyEvidence
+	listOnly := len(policyMode) > 0 && policyMode[0] == listPolicyVersion
+	if len(policyMode) > 1 || len(policyMode) > 0 && policyMode[0] != "" && !listOnly {
+		return empty, fmt.Errorf("unknown inet policy mode")
+	}
+	if listOnly {
+		full, err := expandListInetSource(source, input)
+		if err != nil {
+			return empty, err
+		}
+		source = full
+	}
 	evidence, err := inspectNFTInetTemplateSource(source, input)
 	if err != nil {
 		return empty, err
@@ -435,6 +446,9 @@ func inspectNFTInetTemplateTopology(source, live []byte, input nftInetTemplateIn
 				return
 			}
 			if record.Kind != "rule" {
+				if listOnly && record.Kind == "chain" && record.Name == "stateful_protect" {
+					record.Object["policy"] = "accept"
+				}
 				identity := record.Kind + ":" + record.Name
 				if seenObjects[identity] || !reflect.DeepEqual(observed.objects[identity], record.Object) {
 					traceErr = fmt.Errorf("inet declaration differs from the complete official profile")
@@ -444,6 +458,9 @@ func inspectNFTInetTemplateTopology(source, live []byte, input nftInetTemplateIn
 				if record.Kind == "chain" {
 					chain = record.Name
 				}
+				continue
+			}
+			if listOnly && !listPolicyKeepsRule(chain, line) {
 				continue
 			}
 			index := seenRules[chain]

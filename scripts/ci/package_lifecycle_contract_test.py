@@ -156,20 +156,72 @@ class PackageLifecycleContractTests(unittest.TestCase):
     def test_package_service_cleanup_hashes_match_runtime_service_sources(self) -> None:
         source = SERVICE_SOURCE.read_text(encoding="utf-8")
         helper = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
+        joined = helper.replace("\\\n", " ")
         for constant, path, mode in (
             ("systemdCoreService", "/etc/systemd/system/syswarden-core.service", "600"),
             ("systemdFirewallService", "/etc/systemd/system/syswarden-firewall.service", "600"),
             ("openRCCoreService", "/etc/init.d/syswarden-core", "755"),
+            ("historicalV4104OpenRCCoreService", "/etc/init.d/syswarden-core", "755"),
             ("openRCFirewallService", "/etc/init.d/syswarden-firewall", "755"),
+            ("historicalV4104OpenRCFirewallService", "/etc/init.d/syswarden-firewall", "755"),
         ):
             match = re.search(rf"\b{constant}\s*=\s*`(?P<body>.*?)`", source, re.DOTALL)
             self.assertIsNotNone(match, constant)
             digest = hashlib.sha256(match.group("body").encode("utf-8")).hexdigest()
-            self.assertRegex(
-                helper,
-                rf"{re.escape(path)}\s+\\\s+{digest}\s+{mode}\s+\|\| return 1",
-                constant,
+            call = re.search(
+                rf"syswarden_remove_exact_service_file\s+{re.escape(path)}\s+"
+                rf"([0-9a-f]{{64}})\s+{mode}((?:\s+[0-9a-f]{{64}})*)\s+\|\| return 1",
+                joined,
             )
+            self.assertIsNotNone(call, constant)
+            self.assertIn(digest, [call[1], *call[2].split()], constant)
+
+    def test_exact_service_removal_preserves_modified_and_linked_files(self) -> None:
+        source = SERVICE_SOURCE.read_text(encoding="utf-8")
+        helper = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8").replace(
+            '"0:0:${syswarden_service_mode}:1"',
+            f'"{os.getuid()}:{os.getgid()}:${{syswarden_service_mode}}:1"',
+        )
+        for service in ("Core", "Firewall"):
+            bodies = [
+                re.search(rf"\b{name}\s*=\s*`(.*?)`", source, re.DOTALL)[1]
+                for name in (f"openRC{service}Service", f"historicalV4104OpenRC{service}Service")
+            ]
+            hashes = [hashlib.sha256(body.encode()).hexdigest() for body in bodies]
+            for variant in ("current", "historical", "modified", "mode", "symlink", "hardlink", "fifo"):
+                with self.subTest(service=service, variant=variant), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    target = root / "service"
+                    body = bodies[1] if variant == "historical" else bodies[0]
+                    if variant == "modified":
+                        body += "# Administrator configuration\n"
+                    target.write_text(body, encoding="utf-8")
+                    target.chmod(0o700 if variant == "mode" else 0o755)
+                    if variant in ("symlink", "hardlink"):
+                        protected = root / "administrator-service"
+                        target.rename(protected)
+                        if variant == "symlink":
+                            target.symlink_to(protected)
+                        else:
+                            os.link(protected, target)
+                    if variant == "fifo":
+                        target.unlink()
+                        os.mkfifo(target, 0o700)
+                    result = subprocess.run(
+                        ["/bin/sh", "-c", helper + '\nsyswarden_remove_exact_service_file "$1" "$2" 755 "$3"',
+                         "service-removal-fixture", str(target), *hashes],
+                        capture_output=True, text=True, check=False, timeout=10,
+                    )
+                    accepted = variant in ("current", "historical")
+                    self.assertEqual(result.returncode == 0, accepted, result)
+                    if accepted:
+                        self.assertFalse(target.exists())
+                    elif variant == "fifo":
+                        self.assertTrue(stat.S_ISFIFO(target.lstat().st_mode))
+                    else:
+                        self.assertEqual(target.read_text(encoding="utf-8"), body)
+                        if variant in ("symlink", "hardlink"):
+                            self.assertEqual(protected.read_text(encoding="utf-8"), body)
 
     def test_every_package_workflow_run_command_fits_github_limit(self) -> None:
         commands = workflow_run_commands(self.workflow)
@@ -957,9 +1009,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
             vcs_sentinel = exact_source / ".git"
             vcs_sentinel.mkdir(mode=0o500)
             self.assertEqual(list(vcs_sentinel.iterdir()), [])
-            cache = root / "go-cache"
+            cache = Path(os.environ["GOCACHE"]) if os.environ.get("GOCACHE") else root / "go-cache"
             go_temporary = root / "go-tmp"
-            cache.mkdir(mode=0o700)
+            cache.mkdir(mode=0o700, exist_ok=True)
             go_temporary.mkdir(mode=0o700)
             binary = root / "candidate-binary"
             build_environment = {
@@ -6348,41 +6400,37 @@ systemctl() {
         self.assertEqual(self.workflow.count("            - shadow\n"), 1)
         self.assertEqual(local.count("  - shadow\n"), 1)
 
-    def test_rhel_dependency_resolution_does_not_require_epel_for_optional_qr(self) -> None:
+    def test_manual_dependency_resolution_excludes_optional_packages(self) -> None:
         source = DEPENDENCIES_SOURCE.read_text(encoding="utf-8")
-        dnf_branch = source.split('exec.LookPath("dnf")', 1)[1].split(
-            'exec.LookPath("yum")', 1
-        )[0]
-        yum_branch = source.split('exec.LookPath("yum")', 1)[1].split(
-            'exec.LookPath("apk")', 1
-        )[0]
-        for branch in (dnf_branch, yum_branch):
-            self.assertNotIn('"epel-release"', branch)
-            self.assertNotIn('"qrencode",', branch)
-            self.assertIn("operator-approved repository", branch)
+        plan = source.split("func baseDependencyArguments(", 1)[1].split("\nfunc ", 1)[0]
+        for dependency in (
+            "wireguard-tools", "qrencode", "libqrencode-tools", "rsyslog", "rsyslog-uxsock",
+            "wazuh-agent", "checkpolicy", "policycoreutils-python-utils", "epel-release",
+            "unattended-upgrades", "dnf-automatic",
+        ):
+            self.assertNotIn(f'"{dependency}"', plan)
+        for dependency in ("nftables", "cronie", "cronie-openrc", "openrc", "shadow"):
+            self.assertIn(f'"{dependency}"', plan)
+        self.assertIn("operator-approved repositories", source)
 
-    def test_packaged_legacy_dynamic_quarantine_precedes_network_configuration(self) -> None:
+    def test_packaged_legacy_dynamic_quarantine_precedes_network_without_implicit_hardening(self) -> None:
         source = INSTALL_COMMAND_SOURCE.read_text(encoding="utf-8")
-        self.assertIn(
-            "var installDependenciesForInstall = system.InstallDependencies",
-            source,
-        )
-        self.assertIn(
-            "var configureSSHForInstall = system.ConfigureSSH",
-            source,
-        )
+        self.assertIn("var installDependenciesForInstall = system.InstallDependencies", source)
+        for retired in ("configureSSHForInstall", "system.ConfigureSSH", "ApplyCIS", "ApplyOS"):
+            self.assertNotIn(retired, source)
         dependency_check = source.rindex("installDependenciesForInstall()")
         wireguard_recovery = source.index("recoverPendingWireGuardForInstall()")
         wireguard_preflight = source.index("preflightWireGuardForInstall()")
+        module_preflight = source.index("preflightModuleDependencies()")
         package_guard = source.index('os.Getenv("SYSWARDEN_PKG_INSTALL") == "1"')
         quarantine = source.index("preparePackagedLegacyDynamicBanUpgrade()")
-        ssh_configuration = source.index("configureSSHForInstall()")
-        self.assertLess(dependency_check, package_guard)
+        feeds = source.index("prepareNetworkIntelligenceForInstall()")
         self.assertLess(dependency_check, wireguard_recovery)
         self.assertLess(wireguard_recovery, wireguard_preflight)
-        self.assertLess(wireguard_preflight, package_guard)
+        self.assertLess(wireguard_preflight, module_preflight)
+        self.assertLess(module_preflight, package_guard)
         self.assertLess(package_guard, quarantine)
-        self.assertLess(quarantine, ssh_configuration)
+        self.assertLess(quarantine, feeds)
 
     def test_runtime_dependency_sets_match_all_package_generators_and_lab(self) -> None:
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")

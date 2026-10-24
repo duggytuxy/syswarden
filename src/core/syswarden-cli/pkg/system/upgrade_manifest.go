@@ -439,9 +439,13 @@ func (target packageTarget) installArguments(packagePath string) []string {
 		// exact option and value are also enforced by validateExternalCommand;
 		// the updater never removes locks, terminates package-manager processes,
 		// or retries outside its independent installation deadline.
-		return []string{"-o", aptDPkgLockTimeoutOption, "install", "-y", packagePath}
+		return []string{"-o", aptDPkgLockTimeoutOption, "--no-install-recommends", "--no-remove", "install", "-y", packagePath}
 	case packageFormatRPM:
-		return []string{"--setopt=localpkg_gpgcheck=1", "install", "-y", packagePath}
+		// Keep dependency cleanup and weak/obsolete substitutions out of this
+		// transaction. This does not change historical dependency reasons or
+		// protect an unprepared direct native upgrade.
+		return []string{"--setopt=localpkg_gpgcheck=1", "--setopt=install_weak_deps=False",
+			"--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False", "install", "-y", packagePath}
 	case packageFormatAPK:
 		return []string{"add", packagePath}
 	default:

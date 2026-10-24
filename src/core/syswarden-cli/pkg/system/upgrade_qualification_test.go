@@ -1333,11 +1333,11 @@ func TestQualificationInstallCommandsCannotResolveRepositoryDependencies(t *test
 		},
 		{
 			name: "rpm dnf", target: packageTarget{format: packageFormatRPM, installer: "/usr/bin/dnf"}, installer: "/usr/bin/dnf",
-			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "install", "-y", packagePath},
+			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "--setopt=install_weak_deps=False", "--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False", "install", "-y", packagePath},
 		},
 		{
 			name: "rpm yum", target: packageTarget{format: packageFormatRPM, installer: "/usr/bin/yum"}, installer: "/usr/bin/yum",
-			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "install", "-y", packagePath},
+			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "--setopt=install_weak_deps=False", "--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False", "install", "-y", packagePath},
 		},
 		{
 			name: "apk", target: packageTarget{format: packageFormatAPK, installer: "/sbin/apk"}, installer: "/sbin/apk",

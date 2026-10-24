@@ -392,9 +392,9 @@
     {
       "path": "syswarden install",
       "field": "long",
-      "reason": "Expose the host-mutating installation scope.",
+      "reason": "Describe the standard-only fresh installation and the preserved host-hardening boundary.",
       "before": "Executes the fully automated SYSWARDEN installation pipeline.",
-      "after": "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs."
+      "after": "Installs the selected firewall services and feed scheduler. Fresh packages use the standard-list-only profile. SSH, CIS and OS hardening require a separate explicit configuration operation."
     },
     {
       "path": "syswarden manual",
@@ -763,7 +763,7 @@
       "field": "command",
       "before": null,
       "after": "added",
-      "reason": "Add a read-only development entry point for protected SSH migration planning. No application or service mutation is exposed."
+      "reason": "Add a protected SSH development command group for read-only planning and observation, plus separately approved original-configuration restoration. Forward migration and completed recovery remain unavailable."
     },
     {
       "path": "syswarden ssh-policy plan",
@@ -799,6 +799,20 @@
       "before": null,
       "after": "added",
       "reason": "Inspect an interrupted SSH activation using the independently approved original plan, exact protected intent and publication records, installed parser and current systemd endpoints. This read-only development command preserves the recovery requirement and does not retry activation, mutate files, prove consumed policy or authenticate access."
+    },
+    {
+      "path": "syswarden ssh-policy restore-original",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Expose fixed-path root-only recovery inspection and separately approved original-inode restoration with one retained-target systemd reload request. Preserve runtime/access uncertainty and partial error facts; bypass automatic configuration/firewall repair without bypassing the removal barrier for application. No forward migration or completed recovery is authorized."
+    },
+    {
+      "path": "syswarden ssh-policy assess-restoration",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Inspect complete original-restoration history with the original and independently approved recovery digests, pinned parser and current endpoints. This read-only command preserves uncertainty after a visible reload intent, does not repair durability or replay dispatch, and does not establish consumed policy, authenticated access or completed recovery."
     }
   ],
   "package_platform_contract": {

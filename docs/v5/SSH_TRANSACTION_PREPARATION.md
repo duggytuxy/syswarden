@@ -1,10 +1,12 @@
 # SSH transaction storage and anonymous staging
 
 Status: internal development component for v5.00.0. Refs #235 and #337.
-The CLI remains read-only: `ssh-policy plan` and `ssh-policy verify` do not
-create transaction state. Installation, CIS hardening and removal do not call
-the new storage helpers yet. There is no public apply command or complete
-migration package. Final IVVQ acceptance remains open.
+The planning CLI remains read-only: `ssh-policy plan` and `ssh-policy verify`
+do not create transaction state. Installation, CIS hardening and removal do not
+call the new storage helpers yet. There is no public forward-application command
+or complete migration package. Existing activation transactions can use the
+separate [original-restoration command](SSH_OPERATOR_RECOVERY.md), which does not
+provision state or accept complete recovery. Final IVVQ acceptance remains open.
 
 ## Exact metadata before publication
 

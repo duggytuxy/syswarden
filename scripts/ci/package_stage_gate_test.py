@@ -47,6 +47,26 @@ class PackageStageGateTests(unittest.TestCase):
         self.create_stage(package_stage_gate.LINUX_ENTRIES)
         package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
 
+    def test_apk_hook_is_exact_executable_and_alpine_only(self) -> None:
+        self.create_stage(package_stage_gate.APK_LINUX_ENTRIES)
+        hook = self.root / package_stage_gate.APK_RECOVERY_PATH
+        contract = package_stage_gate.load_content_contract(
+            Path(__file__).with_name("package_apk_recovery_contract.json")
+        )
+        hook.write_bytes(Path(__file__).with_name("package_apk_recovery_hook.sh").read_bytes())
+        package_stage_gate.validate(
+            self.root, package_stage_gate.APK_LINUX_ENTRIES,
+            apk_recovery_contract=contract,
+        )
+        with self.assertRaises(package_stage_gate.PackageStageError):
+            package_stage_gate.validate(self.root, package_stage_gate.SYSTEMD_LINUX_ENTRIES)
+        hook.write_bytes(hook.read_bytes().replace(b"pre-commit", b"bad-commit"))
+        with self.assertRaises(package_stage_gate.PackageStageError):
+            package_stage_gate.validate(
+                self.root, package_stage_gate.APK_LINUX_ENTRIES,
+                apk_recovery_contract=contract,
+            )
+
     def test_accepts_exact_systemd_stage_with_ordering_contract(self) -> None:
         self.create_stage(package_stage_gate.SYSTEMD_LINUX_ENTRIES)
         ordering = self.root / package_stage_gate.SYSTEMD_ORDERING_PATH

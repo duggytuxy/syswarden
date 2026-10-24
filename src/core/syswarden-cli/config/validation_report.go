@@ -18,6 +18,7 @@ import (
 )
 
 type ValidationReport struct {
+	ModulePlan     []string
 	SchemaVersion  int
 	Historical     bool
 	UnknownKeys    []string
@@ -125,6 +126,9 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	sort.Strings(report.UnknownKeys)
 	sort.Strings(report.DeprecatedKeys)
 
+	if err := resolveOptionalModules(v); err != nil {
+		return report, err
+	}
 	var candidate ModularConfig
 	if err := v.Unmarshal(&candidate); err != nil {
 		return report, fmt.Errorf("unmarshal modular configuration: %w", err)
@@ -144,6 +148,7 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	if err := validateConfig(&validationCandidate); err != nil {
 		return report, err
 	}
+	report.ModulePlan = ModulePlan(mapModularToLegacy(&validationCandidate))
 	return report, nil
 }
 
@@ -235,6 +240,9 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 		return "", false, err
 	}
 	whitelistWasSet := v.IsSet("network.whitelist_ips")
+	if err := resolveOptionalModules(v); err != nil {
+		return "", false, err
+	}
 	var candidate ModularConfig
 	if err := v.Unmarshal(&candidate); err != nil {
 		return "", false, fmt.Errorf("unmarshal modular configuration: %w", err)
@@ -284,6 +292,9 @@ func parseTOMLDocument(content []byte, relative string) (map[string]any, error) 
 		if version < 0 || version > int64(CurrentSchemaVersion) {
 			return nil, fmt.Errorf("%s has unsupported schema_version %d", relative, version)
 		}
+	}
+	if err := validateOptionalModuleDocument(relative, document); err != nil {
+		return nil, err
 	}
 	if err := sshselection.ValidateDocument(relative, document); err != nil {
 		return nil, err

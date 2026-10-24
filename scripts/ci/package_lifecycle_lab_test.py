@@ -1064,7 +1064,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
             + f'EXPECTED_CANDIDATE_VERSION={candidate_version}\n'
             + f'FORWARD_ONLY_APK_TRANSITION={1 if forward_only_apk else 0}\n'
             + functions
-            + f'\nvalidate_manifest_contract "$1" {role}\n'
+            + f'\nvalidate_manifest_contract "$1" {role} || exit 1\n'
             + (
                 f'validate_inventory_contract "$2" {role}\n'
                 if inventory_lines is not None
@@ -6061,6 +6061,74 @@ printf() {
                 )
                 self.assertNotEqual(missing_completion.returncode, 0)
 
+    def test_v5_apk_recovery_inventory_is_exact_and_version_bound(self) -> None:
+        lab = package_lifecycle_lab
+        hook = lab.APK_RECOVERY_HOOK_PATH
+        root = Path(__file__).resolve().parent
+        contract = json.loads((root / "package_apk_recovery_contract.json").read_text())
+        source = (root / "package_apk_recovery_hook.sh").read_bytes()
+        self.assertEqual(hashlib.sha256(source).hexdigest(), lab.APK_RECOVERY_HOOK_SHA256)
+        self.assertEqual(contract, {"sha256": lab.APK_RECOVERY_HOOK_SHA256, "size": len(source)})
+        hook_entry = {
+            "path": hook, "type": "file", "mode": "755", "uid": 0, "gid": 0,
+            "value": lab.APK_RECOVERY_HOOK_SHA256,
+        }
+
+        def check(paths, entries, role, version, valid):
+            inventory = [
+                "\t".join(str(entry[key]) for key in ("path", "type", "mode", "uid", "gid", "value"))
+                for entry in entries
+            ]
+            result = self.run_embedded_inventory_contract(
+                "apk", paths, inventory, role=role, version=version,
+                candidate_version=version if role == "candidate" else "5.00.1",
+            )
+            self.assertEqual(result.returncode == 0, valid, result.stderr)
+            if valid:
+                lab.validate_inventory_snapshot(
+                    "apk", paths, entries, role=role, version=version,
+                    candidate_version="5.00.1",
+                )
+            else:
+                with self.assertRaises(lab.LifecycleLabError):
+                    lab.validate_inventory_snapshot(
+                        "apk", paths, entries, role=role, version=version,
+                        candidate_version="5.00.1",
+                    )
+
+        for role in ("candidate", "previous"):
+            for version in ("4.10.4", "5.00.0", "5.00.1"):
+                base_paths, base_entries = self.exact_v404x_inventory("apk", "4.10.4", role)
+                paths = sorted([*base_paths, hook])
+                entries = sorted([*base_entries, hook_entry], key=lambda entry: entry["path"])
+                with self.subTest(role=role, version=version):
+                    current = version.startswith("5.")
+                    check(base_paths, base_entries, role, version, not current)
+                    check(paths, entries, role, version, current)
+                    if not current:
+                        continue
+                    for key, value in (
+                        ("type", "symlink"), ("mode", "777"), ("mode", "644"),
+                        ("uid", 1), ("gid", 1), ("value", "a" * 64),
+                        ("value", lab.APK_RECOVERY_HOOK_SHA256.upper()),
+                    ):
+                        with self.subTest(field=key, value=value):
+                            changed = [dict(entry) for entry in entries]
+                            next(entry for entry in changed if entry["path"] == hook)[key] = value
+                            check(paths, changed, role, version, False)
+                    check(sorted([*paths, hook]), sorted([*entries, hook_entry], key=lambda entry: entry["path"]), role, version, False)
+                    extra = {**hook_entry, "path": hook + "-extra"}
+                    check(sorted([*paths, extra["path"]]), sorted([*entries, extra], key=lambda entry: entry["path"]), role, version, False)
+                    # A valid filesystem view must not hide an extra manager path.
+                    check(sorted([*paths, "/etc/shadow"]), entries, role, version, False)
+        for family in ("deb", "rpm"):
+            paths, entries = self.exact_v404x_inventory(family, "5.00.0", "candidate")
+            paths = sorted([*paths, hook])
+            with self.subTest(family=family):
+                with self.assertRaises(lab.LifecycleLabError):
+                    lab._validate_manager_paths(family, paths, role="candidate", version="5.00.0", candidate_version="5.00.0")
+                self.assertNotEqual(self.run_embedded_inventory_contract(family, paths, version="5.00.0", candidate_version="5.00.0").returncode, 0)
+
     def test_v4040_packages_require_exact_license_payloads(self) -> None:
         build_id_paths = {
             "/usr/lib/.build-id",
@@ -9130,7 +9198,12 @@ printf() {
         end = script.index("\nprepare_expected_payloads() {", start)
         emitted = list(
             dict.fromkeys(
-                re.findall(r"\$\{label\}\.([a-z0-9_.-]+)", script[start:end])
+                key
+                for legacy_check in ("root_crontab_legacy_residual", "root_crontab_legacy_retired")
+                for key in re.findall(
+                    r"\$\{label\}\.([a-z0-9_.-]+)",
+                    script[start:end].replace("${legacy_check}", legacy_check),
+                )
             )
         )
         declared = {
@@ -9145,6 +9218,12 @@ printf() {
                 check.removeprefix("remove.remove.")
                 for check in package_lifecycle_lab._generated_cleanup_event_checks(
                     "remove", "remove"
+                )
+            ),
+            *(
+                check.removeprefix("remove.remove.")
+                for check in package_lifecycle_lab._generated_cleanup_event_checks(
+                    "remove", "remove", exact_rsyslog=True, reviewed_apk=True
                 )
             ),
         }
@@ -9282,7 +9361,7 @@ printf() {
             script,
         )
         self.assertIn(
-            "one exact inert legacy record remains as a bounded residual",
+            "legacy cron count matches the version-bound fixture contract",
             script,
         )
         self.assertIn("/etc/cron.d/.syswarden.pending-v1", script)
@@ -10267,7 +10346,7 @@ prepare_package_transition
             line.strip()
             for line in seed.splitlines()
             if line.strip().endswith(
-                "> /var/lib/syswarden/ui/lifecycle-operator.json || return 1"
+                '> "${FIXTURE_DATA}" || return 1'
             )
         )
         sentinel_tokens = shlex.split(sentinel_line)
@@ -10275,7 +10354,7 @@ prepare_package_transition
             sentinel_tokens[-5:],
             [
                 ">",
-                "/var/lib/syswarden/ui/lifecycle-operator.json",
+                "${FIXTURE_DATA}",
                 "||",
                 "return",
                 "1",
@@ -10306,11 +10385,11 @@ prepare_package_transition
         self.assertNotIn("hash_file /var/lib/syswarden/ui/data.json", source)
         self.assertNotIn("STATE_DATA_HASH", source)
         self.assertIn(
-            'STATE_OPERATOR_DATA_HASH="$(hash_file /var/lib/syswarden/ui/lifecycle-operator.json)"',
+            'STATE_OPERATOR_DATA_HASH="$(hash_file "${FIXTURE_DATA}")"',
             seed,
         )
         self.assertIn(
-            'assert_preserved "${label}" operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600',
+            'assert_preserved "${label}" operator_data "${FIXTURE_DATA}" "${STATE_OPERATOR_DATA_HASH}" 600',
             source,
         )
         self.assertIn(
@@ -10442,6 +10521,221 @@ assert_all_state_preserved "$1"
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, f"{label}\t{contract}\n")
+
+    @staticmethod
+    def local_native_lifecycle_fixture() -> dict[str, object]:
+        snapshot = {
+            "schema_version": 1,
+            "identity": "a" * 64,
+            "sequence": 4,
+            "model_sha256": "b" * 64,
+            "updated_at": "2026-09-03T10:02:00Z",
+            "captured_at": "2026-09-03T10:02:00Z",
+            "active": 1,
+            "expired": 1,
+            "deleted": 1,
+            "tombstoned": 1,
+            "truncated": False,
+            "claims": [
+                {
+                    "entry": entry,
+                    "generation": index + 1,
+                    "state": state,
+                    "cause": cause,
+                    "created_at": "2026-09-03T10:00:00Z",
+                    "transition_at": "2026-09-03T10:01:00Z",
+                    **extra,
+                }
+                for index, (entry, state, cause, extra) in enumerate(
+                    (
+                        ("198.51.100.8", "active", "verified-ban", {}),
+                        ("198.51.100.9", "deleted", "verified-deletion", {}),
+                        (
+                            "2001:db8::/64",
+                            "expired",
+                            "native-expiry",
+                            {"expires_at": "2026-09-03T10:00:30Z"},
+                        ),
+                        (
+                            "2001:db8::1",
+                            "tombstoned",
+                            "verified-deletion",
+                            {"confirmed_at": "2026-09-03T10:01:30Z"},
+                        ),
+                    )
+                )
+            ],
+        }
+        return {
+            "scope": "local-native-runtime-snapshot",
+            "deletion_records": 0,
+            "expiry_records": 0,
+            "tombstone_records": 0,
+            "runtime_state_linked": True,
+            "runtime_snapshot_complete": True,
+            "runtime_model_sha256": snapshot["model_sha256"],
+            "runtime_captured_at": snapshot["captured_at"],
+            "active_claims": 1,
+            "expired_claims": 1,
+            "deleted_claims": 1,
+            "tombstoned_claims": 1,
+            "runtime_local_snapshot": snapshot,
+        }
+
+    def test_local_native_lifecycle_schema_rejects_adversarial_drift(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("        def integer:", source.index("live_telemetry_schema_valid() {"))
+        end = source.index("        def grc_record_valid:", start)
+        program = source[start:end] + "\ntry grc_lifecycle_valid catch false"
+        baseline = self.local_native_lifecycle_fixture()
+
+        def accepted(document: dict[str, object]) -> bool:
+            result = subprocess.run(
+                [
+                    "jq", "-e", "--arg", "telemetry_source",
+                    json.dumps({"lifecycle": document}), program,
+                ],
+                input=json.dumps(document),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertIn(result.returncode, (0, 1), result.stderr)
+            return result.returncode == 0
+
+        def changed(path: tuple[object, ...], value: object) -> dict[str, object]:
+            document = json.loads(json.dumps(baseline))
+            target = document
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            return document
+
+        self.assertTrue(accepted(baseline))
+        snapshot_path = ("runtime_local_snapshot",)
+        claim_path = (*snapshot_path, "claims", 0)
+        variants = {
+            "unlinked local authority": changed(("runtime_state_linked",), False),
+            "missing native snapshot": changed(snapshot_path, None),
+            "HA scope with local evidence": changed(("scope",), "ha-v2-runtime-snapshot"),
+            "records-only scope with local evidence": changed(("scope",), "observed-telemetry-records-only"),
+            "model projection mismatch": changed(("runtime_model_sha256",), "c" * 64),
+            "capture projection mismatch": changed(("runtime_captured_at",), "2026-09-03T10:02:01Z"),
+            "count projection mismatch": changed(("active_claims",), 2),
+            "truncation projection mismatch": changed((*snapshot_path, "truncated"), True),
+            "both completeness flags": changed(("runtime_snapshot_truncated",), True),
+            "false completeness flag": changed(("runtime_snapshot_complete",), False),
+            "counter inventory mismatch": changed((*snapshot_path, "active"), 2),
+            "negative count": changed((*snapshot_path, "active"), -1),
+            "count overflow": changed((*snapshot_path, "active"), 16385),
+            "boolean count": changed((*snapshot_path, "active"), True),
+            "wrong schema": changed((*snapshot_path, "schema_version"), 2),
+            "noncanonical identity": changed((*snapshot_path, "identity"), "A" * 64),
+            "invalid model": changed((*snapshot_path, "model_sha256"), "g" * 64),
+            "zero sequence": changed((*snapshot_path, "sequence"), 0),
+            "fractional sequence": changed((*snapshot_path, "sequence"), 1.5),
+            "boolean sequence": changed((*snapshot_path, "sequence"), True),
+            "inexact sequence": changed((*snapshot_path, "sequence"), 9007199254740992),
+            "zero generation": changed((*claim_path, "generation"), 0),
+            "future generation": changed((*claim_path, "generation"), 5),
+            "fractional generation": changed((*claim_path, "generation"), 1.5),
+            "invalid state": changed((*claim_path, "state"), "absent"),
+            "invalid active cause": changed((*claim_path, "cause"), "native-expiry"),
+            "active confirmation": changed((*claim_path, "confirmed_at"), "2026-09-03T10:01:30Z"),
+            "already expired active claim": changed((*claim_path, "expires_at"), "2026-09-03T10:02:00Z"),
+            "expiry before creation": changed((*claim_path, "expires_at"), "2026-09-03T09:59:00Z"),
+            "transition before creation": changed((*claim_path, "transition_at"), "2026-09-03T09:59:00Z"),
+            "transition after head": changed((*claim_path, "transition_at"), "2026-09-03T10:02:00.000000001Z"),
+            "head after capture": changed((*snapshot_path, "updated_at"), "2026-09-03T10:02:00.000000001Z"),
+            "null claims": changed((*snapshot_path, "claims"), None),
+            "excessive claims": changed((*snapshot_path, "claims"), [{}] * 1025),
+            "unknown lifecycle field": changed(("unexpected",), True),
+            "unknown snapshot field": changed((*snapshot_path, "unexpected"), True),
+            "unknown claim field": changed((*claim_path, "unexpected"), True),
+        }
+        for field in (
+            "runtime_cluster_id", "runtime_epoch", "runtime_node_id",
+            "runtime_role", "runtime_coordination", "runtime_checkpoint_sha256",
+            "runtime_peer_checkpoint_sha256", "runtime_checkpoint_at",
+        ):
+            variants[f"mixed authority {field}"] = changed((field,), "")
+        for field in baseline["runtime_local_snapshot"]:
+            document = json.loads(json.dumps(baseline))
+            del document["runtime_local_snapshot"][field]
+            variants[f"missing snapshot field {field}"] = document
+        for field in baseline["runtime_local_snapshot"]["claims"][0]:
+            document = json.loads(json.dumps(baseline))
+            del document["runtime_local_snapshot"]["claims"][0][field]
+            variants[f"missing claim field {field}"] = document
+        for value in (
+            "2026-02-30T10:00:00Z", "2026-09-03T10:00:00.0Z",
+            "2026-09-03T10:00:00.120Z", "2026-09-03T10:00:00+00:00",
+            "0001-01-01T00:00:00Z", "2026-09-03T10:00:00.1234567891Z",
+        ):
+            variants[f"noncanonical timestamp {value}"] = changed(
+                (*claim_path, "created_at"), value
+            )
+        for entry in (
+            "198.51.100.008", "256.51.100.8", "198.51.100.8/24",
+            "198.51.100.0/024", "198.51.100.0/33", "198.51.100.8/32/32",
+            "2001:DB8::1", "2001:0db8::1", "2001:db8:0:0:0:0:0:1",
+            "2001:db8::1/64", "2001:db8::/129", "::ffff:192.0.2.1",
+            "::ffff:c000:201", "fe80::1%eth0", "1::2::3", "2001:db8:",
+            "1:0:2:0:3:0:4::5", "1:0:0:2::3:4:5", "",
+        ):
+            variants[f"invalid claim entry {entry}"] = changed((*claim_path, "entry"), entry)
+        for index, field, value in (
+            (1, "cause", "native-expiry"),
+            (1, "confirmed_at", "2026-09-03T10:01:30Z"),
+            (2, "cause", "verified-deletion"),
+            (2, "expires_at", ""),
+            (2, "expires_at", "2026-09-03T10:01:00.000000001Z"),
+            (3, "cause", "verified-ban"),
+            (3, "confirmed_at", "2026-09-03T10:01:29.999999999Z"),
+            (3, "confirmed_at", "2026-09-03T10:02:00.000000001Z"),
+        ):
+            variants[f"invalid terminal claim {index} {field} {value}"] = changed(
+                (*snapshot_path, "claims", index, field), value
+            )
+        variants["duplicate claim"] = changed(
+            (*snapshot_path, "claims", 1, "entry"), "198.51.100.8"
+        )
+        variants["unsorted claims"] = changed(
+            (*snapshot_path, "claims"),
+            list(reversed(baseline["runtime_local_snapshot"]["claims"])),
+        )
+        for name, document in variants.items():
+            with self.subTest(name=name):
+                self.assertFalse(accepted(document))
+
+        for entry in (
+            "0.0.0.0/0", "198.51.100.8/32", "198.51.100.0/24",
+            "::", "::/0", "::1", "2001:db8::/64",
+            "1::2:0:0:3:4", "1:0:2:3:4:5:6:7", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128",
+        ):
+            with self.subTest(valid_entry=entry):
+                document = changed((*snapshot_path, "claims"), [
+                    {**baseline["runtime_local_snapshot"]["claims"][0], "entry": entry}
+                ])
+                for state in ("deleted", "expired", "tombstoned"):
+                    document["runtime_local_snapshot"][state] = 0
+                    del document[f"{state}_claims"]
+                self.assertTrue(accepted(document))
+
+        empty = changed((*snapshot_path, "claims"), [])
+        for state in ("active", "deleted", "expired", "tombstoned"):
+            empty["runtime_local_snapshot"][state] = 0
+            del empty[f"{state}_claims"]
+        self.assertTrue(accepted(empty))
+        truncated = json.loads(json.dumps(baseline))
+        del truncated["runtime_snapshot_complete"]
+        truncated["runtime_snapshot_truncated"] = True
+        truncated["runtime_local_snapshot"]["truncated"] = True
+        truncated["runtime_local_snapshot"]["claims"].pop()
+        self.assertTrue(accepted(truncated))
+        truncated["runtime_local_snapshot"]["active"] = 0
+        truncated.pop("active_claims")
+        self.assertFalse(accepted(truncated))
 
     def test_live_telemetry_schema_is_exact_and_rejects_adversarial_drift(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -10637,6 +10931,39 @@ assert_all_state_preserved "$1"
         self.assertTrue(accepted(feed_kpi_payload, "kpi-feed-v1"))
         self.assertFalse(accepted(feed_kpi_payload, "kpi-v1"))
         self.assertFalse(accepted(feed_kpi_payload, "legacy"))
+
+        local_feed = json.loads(json.dumps(feed_kpi))
+        local_feed["waf"]["grc_kpi"]["lifecycle"] = self.local_native_lifecycle_fixture()
+        local_payload = json.dumps(local_feed).encode("utf-8")
+        self.assertTrue(accepted(local_payload, "kpi-feed-v1"))
+        self.assertFalse(accepted(local_payload, "kpi-v1"))
+        self.assertFalse(accepted(local_payload, "legacy"))
+        for original, alternate in (
+            (b'"sequence": 4', b'"sequence": 4.0000000000000001'),
+            (b'"sequence": 4', b'"sequence": 4e0'),
+            (b'"generation": 1', b'"generation": 1.0'),
+            (b'"active_claims": 1', b'"active_claims": 1.0000000000000001'),
+        ):
+            with self.subTest(noninteger_local_wire=alternate):
+                self.assertFalse(accepted(local_payload.replace(original, alternate, 1), "kpi-feed-v1"))
+        compact_local = json.dumps(local_feed, separators=(",", ":")).encode("utf-8")
+        self.assertTrue(accepted(compact_local, "kpi-feed-v1"))
+        reordered_local = json.dumps(local_feed, sort_keys=True, indent=2).encode("utf-8")
+        self.assertTrue(accepted(reordered_local, "kpi-feed-v1"))
+        for status in ("complete", "degraded"):
+            partial_window = json.loads(json.dumps(local_feed))
+            partial_window["waf"]["grc_kpi"]["status"] = status
+            partial_window["waf"]["grc_kpi"]["evidence"]["journal_bytes_scanned"] = 4095
+            self.assertFalse(accepted(json.dumps(partial_window).encode("utf-8"), "kpi-feed-v1"))
+        local_feed["waf"]["grc_kpi"]["status"] = "degraded"
+        lifecycle = local_feed["waf"]["grc_kpi"]["lifecycle"]
+        del lifecycle["runtime_snapshot_complete"]
+        lifecycle["runtime_snapshot_truncated"] = True
+        lifecycle["runtime_local_snapshot"]["truncated"] = True
+        lifecycle["runtime_local_snapshot"]["claims"].pop()
+        self.assertTrue(accepted(json.dumps(local_feed).encode("utf-8"), "kpi-feed-v1"))
+        local_feed["waf"]["grc_kpi"]["status"] = "complete"
+        self.assertFalse(accepted(json.dumps(local_feed).encode("utf-8"), "kpi-feed-v1"))
 
         empty_ban_inventory = json.loads(json.dumps(feed_kpi))
         empty_ban_inventory["waf"]["banned_ips"] = []

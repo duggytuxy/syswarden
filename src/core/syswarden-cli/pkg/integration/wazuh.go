@@ -20,7 +20,36 @@ const (
 	wazuhConfigName      = "ossec.conf"
 )
 
-// SetupWazuh registers the node with Wazuh natively and injects SYSWARDEN log parsing
+// PreflightWazuh checks an independently installed agent only when the validated
+// configuration selects this integration. It never installs an agent, adds a
+// repository, enrolls a node, or changes the agent configuration.
+func PreflightWazuh() error {
+	return preflightWazuh(config.GlobalConfig, wazuhConfigDirectory)
+}
+
+func preflightWazuh(c *config.Config, directory string) error {
+	if c == nil {
+		return errors.New("Wazuh selection is unavailable")
+	}
+	if !c.EnableWazuh {
+		return nil
+	}
+	if c.WazuhIP == "" {
+		return errors.New("selected Wazuh integration requires its manager in TOML")
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return fmt.Errorf("selected Wazuh integration requires an administrator-installed agent: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	file, err := openRegularWazuhConfig(root, os.O_RDONLY)
+	if err != nil {
+		return fmt.Errorf("selected Wazuh integration requires a readable regular agent configuration: %w", err)
+	}
+	return file.Close()
+}
+
+// SetupWazuh integrates logs with an administrator-installed Wazuh agent.
 func SetupWazuh() error {
 	fmt.Println("[INFO] Configuring Wazuh Agent Integration...")
 
@@ -29,16 +58,10 @@ func SetupWazuh() error {
 		return nil
 	}
 
+	if err := PreflightWazuh(); err != nil {
+		return err
+	}
 	ip := config.GlobalConfig.WazuhIP
-	if ip == "" {
-		return fmt.Errorf("wazuh IP is missing in configuration")
-	}
-
-	wazuhConf := wazuhConfigDirectory + "/" + wazuhConfigName
-	if _, err := os.Stat(wazuhConf); os.IsNotExist(err) {
-		fmt.Println("[WARNING] Wazuh agent is enabled but ossec.conf was not found. Please install the Wazuh agent first.")
-		return nil
-	}
 
 	root, err := os.OpenRoot(wazuhConfigDirectory)
 	if err != nil {

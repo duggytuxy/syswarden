@@ -56,6 +56,12 @@ func (inspection *nftOperatorBootLoader) verify(ctx context.Context) error {
 	if err := inspection.loader.verify(ctx); err != nil {
 		return err
 	}
+	if observed := inspection.loader.openrc; observed != nil {
+		if !observed.runtime.started || !observed.runtime.enabled {
+			return fmt.Errorf("operator receiver lacks a started, boot-enabled OpenRC nftables loader")
+		}
+		return inspection.loader.verify(ctx)
+	}
 	observed, err := queryNFTPersistenceLoaderProperties(ctx, inspection.loader.host, inspection.loader.manager, nftOperatorBootProperties)
 	if err != nil {
 		return err

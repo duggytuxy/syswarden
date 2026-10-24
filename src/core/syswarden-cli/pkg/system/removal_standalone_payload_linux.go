@@ -73,6 +73,12 @@ func hashStandalonePayload(file *os.File, mode os.FileMode) (removalArtifactIden
 }
 
 func inspectStandalonePayload(directory *pinnedServiceDirectory, expected map[string]string) (retainedDirectorySnapshot, error) {
+	return inspectBoundPayload(directory, expected, false)
+}
+
+// Source-only copies may coexist with administrator files. They never copy or
+// grant retirement authority to anything outside the four compiled bindings.
+func inspectBoundPayload(directory *pinnedServiceDirectory, expected map[string]string, additionalSourceEntries bool) (retainedDirectorySnapshot, error) {
 	result := retainedDirectorySnapshot{files: map[string]removalArtifactIdentity{}, content: map[string][]byte{}}
 	if len(expected) != 4 {
 		return result, fmt.Errorf("standalone payload bindings are incomplete")
@@ -97,7 +103,13 @@ func inspectStandalonePayload(directory *pinnedServiceDirectory, expected map[st
 			names = append(names, entry.Name())
 		}
 		slices.Sort(names)
-		if !slices.Equal(names, want) {
+		if additionalSourceEntries {
+			for _, name := range want {
+				if !slices.Contains(names, name) {
+					return fmt.Errorf("compiled payload is incomplete")
+				}
+			}
+		} else if !slices.Equal(names, want) {
 			return fmt.Errorf("standalone payload contains missing or unrelated entries; preserve the original tree")
 		}
 		return nil
@@ -237,7 +249,8 @@ func retainedStandaloneProcessScanner() (firewallRemovalProcessScanner, error) {
 		return scanner, fmt.Errorf("absent installed CLI has no exact retained executable for finalization")
 	}
 	treePath := filepath.Dir(filepath.Dir(executing))
-	if filepath.Dir(treePath) != parent || !strings.HasPrefix(filepath.Base(treePath), "standalone-payload-") {
+	isAPKCopy := strings.HasPrefix(filepath.Base(treePath), "apk-payload-")
+	if filepath.Dir(treePath) != parent || (!strings.HasPrefix(filepath.Base(treePath), "standalone-payload-") && !isAPKCopy) {
 		return scanner, fmt.Errorf("finalization executable is outside the private retained payload root")
 	}
 	root, err := os.OpenRoot("/")
@@ -263,7 +276,11 @@ func retainedStandaloneProcessScanner() (firewallRemovalProcessScanner, error) {
 	}
 	snapshot, err := inspectStandalonePayload(directory, expected)
 	directory.close()
-	if err != nil || retainedDirectoryBackupName("standalone-payload", snapshot) != filepath.Base(treePath) {
+	expectedName := retainedDirectoryBackupName("standalone-payload", snapshot)
+	if isAPKCopy {
+		expectedName = "apk-payload-" + snapshot.digest
+	}
+	if err != nil || expectedName != filepath.Base(treePath) {
 		return scanner, fmt.Errorf("executing retained payload does not match its exact backup identity")
 	}
 	return bindRetainedStandaloneProcessScanner(scanner, treePath), nil

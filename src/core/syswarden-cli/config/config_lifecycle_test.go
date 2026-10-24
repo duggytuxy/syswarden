@@ -14,7 +14,7 @@ import (
 )
 
 // GlobalConfig remains compatible with existing direct readers because every
-// production ParseConfig call is confined to the single-threaded Cobra startup
+// production configuration publication is confined to the single-threaded Cobra startup
 // and install-preflight lifecycle. Adding a runtime reload call must first
 // replace direct access with an atomic snapshot API.
 func TestGlobalConfigWritersRemainInSingleThreadedLifecycle_SW_CFG_001(t *testing.T) {
@@ -40,11 +40,19 @@ func TestGlobalConfigWritersRemainInSingleThreadedLifecycle_SW_CFG_001(t *testin
 			if !ok {
 				return true
 			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if ok && selector.Sel.Name == "ParseConfig" {
+			name := ""
+			switch function := call.Fun.(type) {
+			case *ast.SelectorExpr:
+				name = function.Sel.Name
+			case *ast.Ident:
+				if parsed.Name.Name == "config" {
+					name = function.Name
+				}
+			}
+			if name == "ParseConfig" || name == "PrepareInstallationConfiguration" {
 				relative, relErr := filepath.Rel(moduleRoot, path)
 				if relErr == nil {
-					callers[filepath.ToSlash(relative)] = struct{}{}
+					callers[filepath.ToSlash(relative)+":"+name] = struct{}{}
 				}
 			}
 			return true
@@ -59,8 +67,12 @@ func TestGlobalConfigWritersRemainInSingleThreadedLifecycle_SW_CFG_001(t *testin
 		callerFiles = append(callerFiles, caller)
 	}
 	sort.Strings(callerFiles)
-	want := []string{"cmd/install.go", "cmd/root.go"}
+	want := []string{
+		"cmd/install.go:PrepareInstallationConfiguration",
+		"cmd/root.go:ParseConfig",
+		"config/minimal_defaults.go:ParseConfig",
+	}
 	if !reflect.DeepEqual(callerFiles, want) {
-		t.Fatalf("production ParseConfig callers = %s, want startup-only callers %s", fmt.Sprint(callerFiles), fmt.Sprint(want))
+		t.Fatalf("production configuration publication callers = %s, want startup-only callers %s", fmt.Sprint(callerFiles), fmt.Sprint(want))
 	}
 }

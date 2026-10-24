@@ -828,7 +828,7 @@
     "path": "syswarden install",
     "use": "install",
     "short": "Install SYSWARDEN and configure security modules",
-    "long": "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs.",
+    "long": "Installs the selected firewall services and feed scheduler. Fresh packages use the standard-list-only profile. SSH, CIS and OS hardening require a separate explicit configuration operation.",
     "flags": [
       {
         "name": "config",
@@ -1301,7 +1301,7 @@
     "path": "syswarden ssh-policy",
     "use": "ssh-policy",
     "short": "Inspect the dedicated SSH policy migration",
-    "long": "Inspect configured SSH ports, verify candidates and owned publications, or assess an interrupted activation with the installed parser and current systemd endpoints. These development commands are read-only; migration application is not available yet.",
+    "long": "Inspect SSH policy and interrupted activation, or explicitly restore retained original configuration with a separately approved recovery plan. Forward migration application and completed recovery acceptance are not available yet.",
     "flags": [
       {
         "name": "config",
@@ -1363,6 +1363,48 @@
     }
   },
   {
+    "path": "syswarden ssh-policy assess-restoration",
+    "use": "assess-restoration",
+    "short": "Inspect restored SSH configuration and current endpoints without replaying reload",
+    "long": "Read existing original-restoration history using the original plan and separately approved recovery digests. Verify the retained original configuration, installed parser and current systemd endpoints without modifying or repairing state. A reload intent is not proof of signal delivery, consumed policy or authenticated access. Recovery remains required.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for assess-restoration"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Original independently approved migration plan SHA-256"
+      },
+      {
+        "name": "recovery-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Original separately approved restore-original plan SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy assess-restoration\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy assess-restoration\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy assess-restoration\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy assess-restoration\""
+    }
+  },
+  {
     "path": "syswarden ssh-policy plan",
     "use": "plan",
     "short": "Print a read-only SSH policy plan without configuration contents",
@@ -1418,6 +1460,55 @@
       "2": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\"",
       "3": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\"",
       "4": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy restore-original",
+    "use": "restore-original",
+    "short": "Inspect or explicitly restore retained SSH configuration after an activation attempt",
+    "long": "Inspect a separately approved restore-original plan without changing files or signalling SSH. Application requires --apply and the exact --recovery-sha256 from inspection. It restores retained original configuration and requests one systemd SSH reload. Recovery remains required until policy consumption and fresh authenticated access are independently verified. This does not enable forward migration or accept a completed recovery.",
+    "flags": [
+      {
+        "name": "apply",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Apply only the separately approved original-configuration restoration"
+      },
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for restore-original"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Original independently approved migration plan SHA-256"
+      },
+      {
+        "name": "recovery-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Exact lowercase SHA-256 of the independently reviewed recovery plan"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy restore-original\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy restore-original\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy restore-original\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy restore-original\""
     }
   },
   {

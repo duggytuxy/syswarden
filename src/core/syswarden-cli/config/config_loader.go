@@ -156,6 +156,9 @@ func loadModularConfig(configDir string) (loadErr error) {
 	}
 	resolveModularSaaSAlias(v, observed)
 
+	if err := resolveOptionalModules(v); err != nil {
+		return err
+	}
 	var modConfig ModularConfig
 	if err := v.Unmarshal(&modConfig); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
@@ -260,6 +263,12 @@ func mapModularToLegacy(m *ModularConfig) *Config {
 	m = &normalized
 	candidate := NewFailSafeConfig()
 
+	candidate.FirewallPolicyMode = m.Network.PolicyMode
+	candidate.InstallProfile = m.Core.InstallProfile
+	candidate.OSINTEnabled = m.Network.Blocklists.OSINTEnabled
+	candidate.WAAPEnabled = m.WAAP.Enabled
+	candidate.LogBridgeEnabled = m.WAAP.LogBridgeEnabled
+	candidate.DetectionEnabled = m.Security.DetectionEnabled
 	candidate.EnterpriseMode = m.Core.EnterpriseMode
 	candidate.EnforcementMode = m.WAAP.EnforcementMode
 	candidate.SSHPort = m.Core.SSHPort

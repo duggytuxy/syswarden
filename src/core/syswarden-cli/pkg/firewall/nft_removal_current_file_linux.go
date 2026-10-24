@@ -38,6 +38,7 @@ func (input *nftPreservedOperatorInputs) validate() error {
 }
 
 type nftCurrentPersistenceInputs struct {
+	PolicyMode         string                      `json:"policy_mode,omitempty"`
 	Base               nftV4028PersistenceInputs   `json:"base"`
 	Populations        []nftCurrentPopulation      `json:"populations"`
 	Operator           *nftPreservedOperatorInputs `json:"operator_preservation,omitempty"`
@@ -143,7 +144,17 @@ func inspectNFTCurrentPersistentFile(source []byte, input nftCurrentPersistenceI
 		}
 		base = normalized
 	}
-	if _, err := inspectNFTGoBasePersistentFile(base, input.Base, "current"); err != nil {
+	if err := validateListPolicyGeneration(input.PolicyMode, input.Base); err != nil {
+		return empty, err
+	}
+	comparisonBase := base
+	if input.PolicyMode == listPolicyVersion {
+		comparisonBase, err = expandListGoBaseSource(base, input.Base)
+		if err != nil {
+			return empty, err
+		}
+	}
+	if _, err := inspectNFTGoBasePersistentFile(comparisonBase, input.Base, "current"); err != nil {
 		return empty, err
 	}
 	specs := nftCurrentPopulationSpecs(input.Base.Inet.Geo, input.Base.Inet.ASN)
@@ -343,9 +354,9 @@ func inspectNFTCurrentRuntimeWithClaims(source, inet, ingress, arp []byte, input
 		}
 		block := evidence.base[table.start:table.end]
 		if index == 0 {
-			_, err = inspectNFTNetdevTemplateTopology(block, terse)
+			_, err = inspectNFTNetdevTemplateTopology(block, terse, input.PolicyMode)
 		} else {
-			_, err = inspectNFTInetTemplateTopology(block, terse, input.Base.Inet)
+			_, err = inspectNFTInetTemplateTopology(block, terse, input.Base.Inet, input.PolicyMode)
 		}
 		if err != nil {
 			return nftCurrentPersistenceEvidence{}, err

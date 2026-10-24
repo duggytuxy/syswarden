@@ -95,6 +95,15 @@ SYSTEMD_LINUX_ENTRIES = {
     SYSTEMD_SOCKET_PATH: ExpectedEntry("file", mode=0o644, nonempty=True),
 }
 
+APK_RECOVERY_PATH = "etc/apk/commit_hooks.d/syswarden-recovery"
+APK_LINUX_ENTRIES = {
+    **LINUX_ENTRIES,
+    "etc": DIRECTORY,
+    "etc/apk": DIRECTORY,
+    "etc/apk/commit_hooks.d": DIRECTORY,
+    APK_RECOVERY_PATH: ExpectedEntry("file", mode=0o755, nonempty=True),
+}
+
 def entry_kind(metadata: os.stat_result) -> str:
     if stat.S_ISDIR(metadata.st_mode):
         return "directory"
@@ -239,6 +248,7 @@ def validate(
     project_license_contract: ContentContract | None = None,
     systemd_ordering_contract: ContentContract | None = None,
     systemd_socket_contract: ContentContract | None = None,
+    apk_recovery_contract: ContentContract | None = None,
 ) -> None:
     actual = inventory(root)
     actual_paths = set(actual)
@@ -309,6 +319,9 @@ def validate(
     if systemd_socket_contract is not None:
         validate_exact_content(root / SYSTEMD_SOCKET_PATH, systemd_socket_contract)
 
+    if apk_recovery_contract is not None:
+        validate_exact_content(root / APK_RECOVERY_PATH, apk_recovery_contract)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -326,6 +339,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--systemd-ordering-source", type=Path)
     parser.add_argument("--systemd-socket-contract", type=Path)
     parser.add_argument("--systemd-socket-source", type=Path)
+    parser.add_argument("--apk-recovery-contract", type=Path)
+    parser.add_argument("--apk-recovery-source", type=Path)
     return parser
 
 
@@ -343,10 +358,13 @@ def main() -> int:
             args.geoip_data_license_source, geoip_data_license_contract
         )
         validate_exact_content(args.project_license_source, project_license_contract)
-        expected = LINUX_ENTRIES
+        expected = APK_LINUX_ENTRIES
+        apk_recovery_contract = None
         systemd_ordering_contract = None
         systemd_socket_contract = None
         if args.service_manager == "systemd":
+            if args.apk_recovery_contract is not None or args.apk_recovery_source is not None:
+                raise PackageStageError("systemd staging must not carry an APK hook")
             if args.systemd_ordering_contract is None or args.systemd_ordering_source is None:
                 raise PackageStageError(
                     "systemd staging requires an ordering content contract and source"
@@ -369,6 +387,11 @@ def main() -> int:
             raise PackageStageError(
                 "OpenRC staging must not carry the systemd ordering contract"
             )
+        if args.service_manager == "openrc":
+            if args.apk_recovery_contract is None or args.apk_recovery_source is None:
+                raise PackageStageError("APK staging requires a recovery content contract and source")
+            apk_recovery_contract = load_content_contract(args.apk_recovery_contract)
+            validate_exact_content(args.apk_recovery_source, apk_recovery_contract)
         validate(
             args.root,
             expected,
@@ -377,6 +400,7 @@ def main() -> int:
             project_license_contract,
             systemd_ordering_contract,
             systemd_socket_contract,
+            apk_recovery_contract,
         )
     except PackageStageError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
