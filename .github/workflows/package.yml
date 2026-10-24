@@ -131,6 +131,7 @@ jobs:
             scripts/ci/package_qualification_matrix_test.py \
             scripts/ci/package_lifecycle_contract_test.py \
             scripts/ci/package_lifecycle_lab_test.py \
+            scripts/ci/package_v5_apk_removal_test.py \
             scripts/ci/package_stage_gate_test.py \
             scripts/ci/performance_evidence_test.py \
             scripts/ci/performance_gate_test.py \

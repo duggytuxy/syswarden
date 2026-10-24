@@ -9198,7 +9198,12 @@ printf() {
         end = script.index("\nprepare_expected_payloads() {", start)
         emitted = list(
             dict.fromkeys(
-                re.findall(r"\$\{label\}\.([a-z0-9_.-]+)", script[start:end])
+                key
+                for legacy_check in ("root_crontab_legacy_residual", "root_crontab_legacy_retired")
+                for key in re.findall(
+                    r"\$\{label\}\.([a-z0-9_.-]+)",
+                    script[start:end].replace("${legacy_check}", legacy_check),
+                )
             )
         )
         declared = {
@@ -9213,6 +9218,12 @@ printf() {
                 check.removeprefix("remove.remove.")
                 for check in package_lifecycle_lab._generated_cleanup_event_checks(
                     "remove", "remove"
+                )
+            ),
+            *(
+                check.removeprefix("remove.remove.")
+                for check in package_lifecycle_lab._generated_cleanup_event_checks(
+                    "remove", "remove", exact_rsyslog=True, reviewed_apk=True
                 )
             ),
         }
@@ -9350,7 +9361,7 @@ printf() {
             script,
         )
         self.assertIn(
-            "one exact inert legacy record remains as a bounded residual",
+            "legacy cron count matches the version-bound fixture contract",
             script,
         )
         self.assertIn("/etc/cron.d/.syswarden.pending-v1", script)
@@ -10335,7 +10346,7 @@ prepare_package_transition
             line.strip()
             for line in seed.splitlines()
             if line.strip().endswith(
-                "> /var/lib/syswarden/ui/lifecycle-operator.json || return 1"
+                '> "${FIXTURE_DATA}" || return 1'
             )
         )
         sentinel_tokens = shlex.split(sentinel_line)
@@ -10343,7 +10354,7 @@ prepare_package_transition
             sentinel_tokens[-5:],
             [
                 ">",
-                "/var/lib/syswarden/ui/lifecycle-operator.json",
+                "${FIXTURE_DATA}",
                 "||",
                 "return",
                 "1",
@@ -10374,11 +10385,11 @@ prepare_package_transition
         self.assertNotIn("hash_file /var/lib/syswarden/ui/data.json", source)
         self.assertNotIn("STATE_DATA_HASH", source)
         self.assertIn(
-            'STATE_OPERATOR_DATA_HASH="$(hash_file /var/lib/syswarden/ui/lifecycle-operator.json)"',
+            'STATE_OPERATOR_DATA_HASH="$(hash_file "${FIXTURE_DATA}")"',
             seed,
         )
         self.assertIn(
-            'assert_preserved "${label}" operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600',
+            'assert_preserved "${label}" operator_data "${FIXTURE_DATA}" "${STATE_OPERATOR_DATA_HASH}" 600',
             source,
         )
         self.assertIn(

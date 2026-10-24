@@ -228,6 +228,39 @@ that case and independently verify remaining protection, package registration,
 payload and runtime state. A successful manager exit cannot establish successful
 SysWarden removal. These paths remain acceptance blockers until qualified.
 
+## Version-bound Alpine removal laboratory
+
+The APK laboratory selects a separate reviewed-recovery profile for candidate
+package versions starting at 5.00.0. Historical package contracts remain unchanged.
+Both `apk del` and `apk del --purge` run in separate disposable containers with
+real OpenRC. The fixture explicitly approves its exact legacy cron retirement,
+private list/UI retention and administrator TOML preservation before removal.
+This approval is part of the controlled test fixture, never automatic product
+consent. The test rejects an unexpected retention inventory or ambiguous digest.
+
+The current profile requires exact generated-completion cleanup, absence of all
+package payloads and active product roots, and an exact inventory of the one
+retained administrator TOML. Independent administrator files must retain their
+bytes, modes and ownership. A separate OpenRC service maintains an unrelated
+nftables rule in its own table. A dropped loopback probe must increment that
+rule's counter before installation, after installation and removal, after its
+own service reload, and after a real container restart with a different PID 1.
+Product rule absence is checked before the restart as well, so a new network
+namespace cannot hide incomplete runtime cleanup.
+
+The restart must also preserve the private recovery data and administrator TOML,
+leave the package unregistered, keep product services and rules absent, and
+retain unrelated cron entries and a running rsyslog daemon. Evidence validation
+requires every ordered check and both boot observations. A successful initial
+removal cannot substitute for the restart or for the other native entry point.
+The retained APK recovery tree must contain exactly the candidate-bound CLI,
+core, TUI and signatures, with private parent permissions, exact file modes,
+ownership and single links. Its CLI must still execute after removal and restart.
+
+This profile exercises a preconfigured historical policy. It does not establish
+clean standard-only installation, standalone `syswarden uninstall`, complete SSH
+migration, another distribution's lifecycle, or final v5.00.0 IVVQ acceptance.
+
 ## APK recovery before native erasure
 
 APK package removal scripts do not provide a reliable transaction veto. A refused
