@@ -12,12 +12,12 @@ func ModulePlan(c *Config) []string {
 	if profile == "" {
 		profile = "historical (preserved)"
 	}
-	lines := []string{"Installation profile: " + profile, "Firewall policy: " + c.FirewallPolicyMode, "Threat list choice: " + c.ListChoice}
+	lines := []string{"Installation profile: " + profile, "Firewall policy: " + c.FirewallPolicyMode, "Threat list choice: " + c.ListChoice, "Managed list sources: Data-Shield only; legacy OSINT selection is inactive."}
 	for _, entry := range []struct {
 		name    string
 		enabled bool
 	}{
-		{"Additional OSINT", c.OSINTEnabled}, {"WAAP", c.WAAPEnabled}, {"WAF log bridge", c.LogBridgeEnabled},
+		{"WAAP", c.WAAPEnabled}, {"WAF log bridge", c.LogBridgeEnabled},
 		{"Local detection", c.DetectionEnabled}, {"GeoIP", c.EnableGeo}, {"ASN", c.EnableASN},
 		{"Layer 2 detection", c.EnableL2}, {"ARP protection", c.ArpProtect}, {"WireGuard", c.EnableWG},
 		{"HA", c.HAEnabled}, {"BunkerWeb integration", c.BunkerWebEnabled}, {"SaaS allowlists", c.AllowSaaSMonitors},

@@ -1,5 +1,9 @@
 # OSINT supplement availability during installation
 
+Historical v4 behavior. The v5 candidate retires this supplement from managed
+lists; see the [v5 source contract](../v5/FEED_SOURCES.md). The historical
+qualification record below does not attest the v5 candidate.
+
 The built-in OSINT supplement accepts only public host addresses present in
 both configured HTTPS sources. Its minimum intersection remains four entries.
 Both responses must independently pass the existing transport, size, format,

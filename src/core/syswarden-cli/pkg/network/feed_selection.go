@@ -13,11 +13,11 @@ type ThreatIntelSelection struct {
 	CustomURLIPv6  string
 	CustomHash     string
 	CustomHashIPv6 string
-	OSINTEnabled   bool
-	LANMode        bool
+	// OSINTEnabled is decoded for historical configuration compatibility only.
+	// It cannot authorize a retired source for managed lists.
+	OSINTEnabled bool
+	LANMode      bool
 }
-
-func selectedOSINT(selection []bool) bool { return len(selection) == 0 || selection[0] }
 
 // ReadSelectedThreatIntelFeed validates the bytes and their source identity in
 // the same protected feed snapshot before allowing firewall consumption.

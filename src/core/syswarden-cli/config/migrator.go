@@ -1105,6 +1105,7 @@ custom_url_ipv6 = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_CUSTOM_URL_IPV
 custom_hash = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_CUSTOM_HASH", "")) + `
 custom_hash_ipv6 = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_CUSTOM_HASH_IPV6", "")) + `
 use_spamhaus = ` + useSpamhaus + `
+# Retained for compatibility; managed lists use Data-Shield only.
 osint_enabled = ` + osint + `
 
 [network.wireguard]
