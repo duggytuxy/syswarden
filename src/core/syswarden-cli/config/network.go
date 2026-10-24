@@ -1,7 +1,7 @@
 package config
 
 type NetworkConfig struct {
-	PolicyMode string `mapstructure:"policy_mode"`
+	PolicyMode     string           `mapstructure:"policy_mode"`
 	WhitelistInfra bool             `mapstructure:"whitelist_infra"`
 	LanSubnets     []string         `mapstructure:"lan_subnets" validate:"canonical_cidr_slice"`
 	WhitelistIPs   []string         `mapstructure:"whitelist_ips" validate:"ip_or_cidr_slice"`

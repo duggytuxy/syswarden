@@ -4,7 +4,7 @@ import "sync"
 
 // Config represents the parsed syswarden-auto.conf file securely mapped to memory
 type Config struct {
-	FirewallPolicyMode string
+	FirewallPolicyMode         string
 	InstallProfile             string
 	OSINTEnabled               bool
 	WAAPEnabled                bool

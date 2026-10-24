@@ -23,6 +23,7 @@ func TestWazuhPrerequisiteSelectionPreservesIndependentAgent(t *testing.T) {
 	}
 	path := filepath.Join(root, wazuhConfigName)
 	original := []byte("<ossec_config><client>operator configuration</client></ossec_config>\n")
+	// #nosec G306 -- Deliberate group-readable administrator configuration fixture in t.TempDir.
 	if err := os.WriteFile(path, original, 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +32,10 @@ func TestWazuhPrerequisiteSelectionPreservesIndependentAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _ := os.Stat(path)
-	data, _ := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- Fixed fixture name under t.TempDir; never an operator-selected path.
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(data) != string(original) || !os.SameFile(before, after) || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
 		t.Fatal("prerequisite inspection changed administrator state")
 	}
