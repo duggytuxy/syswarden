@@ -57,7 +57,7 @@ func preflightUninstallWithProfile(executor firewallManagerExecutor, exists func
 			absentOutput: "package syswarden is not installed\n", presentOutput: "syswarden\n",
 			recovery: "use 'sudo dnf remove syswarden' through the native package manager"},
 		{executable: "apk", databasePaths: []string{"/lib/apk/db/installed"},
-			arguments: []string{"info", "--quiet", "--exists", "syswarden"}, absentOutput: "", presentOutput: "",
+			arguments: []string{"info", "--quiet", "-e", "syswarden"}, absentOutput: "", presentOutput: "",
 			recovery: "use 'sudo apk del syswarden' through the native package manager"},
 	}
 	var claims []standaloneUninstallAuthority

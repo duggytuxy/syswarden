@@ -9,6 +9,20 @@ and prepares [WP02 shared schemas](https://github.com/duggytuxy/syswarden/issues
 It includes the explicitly requested BunkerWeb compatibility boundary. No new
 server campaign, paid resource or public v5 release is authorized by this text.
 
+The [minimal native installation contract](MINIMAL_NATIVE_INSTALL.md) tracks
+issue #422, mandatory platform dependencies and preservation during updates.
+
+## Release change traceability
+
+The v5.00.0 entry in `changelog.md` must reference every GitHub issue that
+contributed to the release, including closed issues. Reconcile the milestone
+inventory with issue references in merged pull requests and commits, so that
+issues outside the current milestone are not silently omitted. Link each issue
+to the verified change it supports, distinguish delivered behavior from deferred
+work, and do not treat issue closure as release acceptance. Keep confidential
+operational feedback, reporter identities and private evidence out of this
+public record. Final publication remains subject to the v5.00.0 IVVQ contract.
+
 ## Review order
 
 1. [Scope, authority and sequencing](SCOPE_AND_AUTHORITY.md).

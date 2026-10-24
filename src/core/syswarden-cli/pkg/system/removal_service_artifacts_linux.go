@@ -612,24 +612,32 @@ func RemovePreparedServiceArtifactsForRemoval() error {
 		}
 	}
 	if IsAlpine() {
+		coreContent, err := selectedOpenRCRemovalContent("/etc/init.d/syswarden-core", 0, 0)
+		if err != nil {
+			return err
+		}
+		firewallContent, err := selectedOpenRCRemovalContent("/etc/init.d/syswarden-firewall", 0, 0)
+		if err != nil {
+			return err
+		}
 		if err := removePreparedServiceEnablement(
 			"/etc/runlevels/default/syswarden-core",
-			"/etc/init.d/syswarden-core", openRCCoreService, 0755,
+			"/etc/init.d/syswarden-core", coreContent, 0755,
 			"/etc/init.d/syswarden-core",
 		); err != nil {
 			return err
 		}
 		if err := removePreparedServiceEnablement(
 			"/etc/runlevels/default/syswarden-firewall",
-			"/etc/init.d/syswarden-firewall", openRCFirewallService, 0755,
+			"/etc/init.d/syswarden-firewall", firewallContent, 0755,
 			"/etc/init.d/syswarden-firewall",
 		); err != nil {
 			return err
 		}
-		if err := removeExactFirewallRemovalFile("/etc/init.d/syswarden-core", openRCCoreService, 0755); err != nil {
+		if err := removeExactFirewallRemovalFile("/etc/init.d/syswarden-core", coreContent, 0755); err != nil {
 			return err
 		}
-		if err := removeExactFirewallRemovalFile("/etc/init.d/syswarden-firewall", openRCFirewallService, 0755); err != nil {
+		if err := removeExactFirewallRemovalFile("/etc/init.d/syswarden-firewall", firewallContent, 0755); err != nil {
 			return err
 		}
 	} else if rhelPackageOwned {

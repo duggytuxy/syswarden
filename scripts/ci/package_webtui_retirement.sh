@@ -243,10 +243,25 @@ syswarden_remove_exact_service_file() {
     syswarden_service_file="$1"
     syswarden_service_hash="$2"
     syswarden_service_mode="$3"
+    shift 3
     [ -e "${syswarden_service_file}" ] || [ -L "${syswarden_service_file}" ] || return 0
     if [ -L "${syswarden_service_file}" ] || [ ! -f "${syswarden_service_file}" ] || \
-       [ "$(stat -c '%u:%g:%a' "${syswarden_service_file}" 2>/dev/null || true)" != "0:0:${syswarden_service_mode}" ] || \
-       [ "$(sha256sum "${syswarden_service_file}" 2>/dev/null | awk '{ print $1 }')" != "${syswarden_service_hash}" ]; then
+       [ "$(stat -c '%u:%g:%a:%h' "${syswarden_service_file}" 2>/dev/null || true)" != "0:0:${syswarden_service_mode}:1" ]; then
+        printf 'Refusing modified SysWarden service file: %s\n' "${syswarden_service_file}" >&2
+        return 1
+    fi
+    syswarden_service_actual_hash="$(sha256sum "${syswarden_service_file}" 2>/dev/null | awk '{ print $1 }')"
+    syswarden_service_hash_allowed=0
+    for syswarden_service_expected_hash in "${syswarden_service_hash}" "$@"; do
+        if [ -n "${syswarden_service_expected_hash}" ] && \
+           [ "${syswarden_service_actual_hash}" = "${syswarden_service_expected_hash}" ]; then
+            syswarden_service_hash_allowed=1
+            break
+        fi
+    done
+    if [ -L "${syswarden_service_file}" ] || [ ! -f "${syswarden_service_file}" ] || \
+       [ "$(stat -c '%u:%g:%a:%h' "${syswarden_service_file}" 2>/dev/null || true)" != "0:0:${syswarden_service_mode}:1" ] || \
+       [ "${syswarden_service_hash_allowed}" -ne 1 ]; then
         printf 'Refusing modified SysWarden service file: %s\n' "${syswarden_service_file}" >&2
         return 1
     fi
@@ -280,10 +295,12 @@ syswarden_remove_exact_product_services() {
                 /etc/runlevels/default/syswarden-firewall /etc/init.d/syswarden-firewall || return 1
             syswarden_remove_exact_service_file \
                 /etc/init.d/syswarden-core \
-                99adff6d6bcb6c5f0fad472e11668d3f8f4e19136c3b3ce473493101db136558 755 || return 1
+                7150c0149f47bd48a0171b168f855fc67551cb73a83fd25e50eb4de1ae77ae6d 755 \
+                99adff6d6bcb6c5f0fad472e11668d3f8f4e19136c3b3ce473493101db136558 || return 1
             syswarden_remove_exact_service_file \
                 /etc/init.d/syswarden-firewall \
-                d8c57c59dae9493523275026acb2a5c599bd4949ff8993add6760e725f89a5ba 755 || return 1
+                28d63eb6456c5dd5c051da77fdcdaa3ab9a5b87a97e1da45239bccfc8d7f3174 755 \
+                d8c57c59dae9493523275026acb2a5c599bd4949ff8993add6760e725f89a5ba || return 1
             ;;
         *) return 1 ;;
     esac

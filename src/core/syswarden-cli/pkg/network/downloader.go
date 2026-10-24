@@ -1786,13 +1786,13 @@ const (
 )
 
 // DownloadFeeds manages an explicit update of GeoIP, ASN, and OSINT feeds.
-func DownloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
-	return downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed, lanMode, useSpamhaus, feedDownloadExplicitUpdate)
+func DownloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus, osintEnabled bool) error {
+	return downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed, lanMode, useSpamhaus, feedDownloadExplicitUpdate, osintEnabled)
 }
 
 // DownloadFeedsForInstall keeps optional Data-Shield quorum unavailability from breaking package configuration.
-func DownloadFeedsForInstall(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
-	return downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed, lanMode, useSpamhaus, feedDownloadPackageInstall)
+func DownloadFeedsForInstall(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus, osintEnabled bool) error {
+	return downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed, lanMode, useSpamhaus, feedDownloadPackageInstall, osintEnabled)
 }
 
 type offlineQualificationFeedEvidence struct {
@@ -1818,7 +1818,7 @@ func osintThreatIntelSources() []string {
 	}
 }
 
-func selectedThreatIntelFeeds(mirrorURL, customURLIPv6, listChoice string, lanMode bool) []selectedThreatIntelFeed {
+func selectedThreatIntelFeeds(mirrorURL, customURLIPv6, listChoice string, lanMode bool, osintSelection ...bool) []selectedThreatIntelFeed {
 	if lanMode || listChoice == "4" {
 		return nil
 	}
@@ -1845,12 +1845,15 @@ func selectedThreatIntelFeeds(mirrorURL, customURLIPv6, listChoice string, lanMo
 		return selected
 	}
 	ipv4.required = true
+	if !selectedOSINT(osintSelection) {
+		return []selectedThreatIntelFeed{ipv4}
+	}
 	return []selectedThreatIntelFeed{ipv4, ipv6}
 }
 
 func unselectedThreatIntelTargets(
 	mirrorURL, customURLIPv6, listChoice string,
-	lanMode bool,
+	lanMode bool, osintSelection ...bool,
 ) []feedFileTarget {
 	ipv4 := feedFileTarget{directory: approvedFeedDirectory, name: "syswarden_threatintel.ipv4"}
 	ipv6 := feedFileTarget{directory: approvedFeedDirectory, name: "syswarden_threatintel.ipv6"}
@@ -1858,6 +1861,9 @@ func unselectedThreatIntelTargets(
 		return []feedFileTarget{ipv4, ipv6}
 	}
 	if listChoice != "3" {
+		if !selectedOSINT(osintSelection) {
+			return []feedFileTarget{ipv6}
+		}
 		return nil
 	}
 	targets := make([]feedFileTarget, 0, 2)
@@ -1935,7 +1941,7 @@ func attestedFeedSourcePairs(evidence offlineQualificationFeedEvidence) ([]strin
 	return origins, identities, nil
 }
 
-func validateManagedThreatIntelEvidence(evidence offlineQualificationFeedEvidence, listChoice string, family int) error {
+func validateManagedThreatIntelEvidence(evidence offlineQualificationFeedEvidence, listChoice string, family int, osintSelection ...bool) error {
 	if evidence.authoritySHA256 != "" {
 		return errors.New("managed feed provenance unexpectedly contains an operator authority digest")
 	}
@@ -1966,6 +1972,9 @@ func validateManagedThreatIntelEvidence(evidence offlineQualificationFeedEvidenc
 			continue
 		}
 		return errors.New("managed feed provenance contains a source outside the selected mode")
+	}
+	if !selectedOSINT(osintSelection) && len(foundOSINT) != 0 {
+		return errors.New("OSINT provenance is not selected by configuration")
 	}
 	allOSINT := len(foundOSINT) == len(osintSources)
 	switch evidence.status.EvidenceQuality {
@@ -2014,9 +2023,10 @@ func validateThreatIntelEvidenceForSelection(
 	listChoice string,
 	family int,
 	customURL, customURLIPv6, customHash, customHashIPv6 string,
+	osintSelection ...bool,
 ) error {
 	if listChoice != "3" {
-		return validateManagedThreatIntelEvidence(evidence, listChoice, family)
+		return validateManagedThreatIntelEvidence(evidence, listChoice, family, osintSelection...)
 	}
 	configuredURL := customURL
 	configuredHash := customHash
@@ -2032,18 +2042,19 @@ func reconcileThreatIntelSelectionWith(
 	lanMode bool,
 	read offlineQualificationFeedReader,
 	remove offlineQualificationFeedRemover,
+	osintSelection ...bool,
 ) ([]string, error) {
 	if read == nil || remove == nil {
 		return nil, errors.New("threat intelligence selection reconciliation is unavailable")
 	}
-	targets := unselectedThreatIntelTargets(mirrorURL, customURLIPv6, listChoice, lanMode)
+	targets := unselectedThreatIntelTargets(mirrorURL, customURLIPv6, listChoice, lanMode, osintSelection...)
 	retired := make([]string, 0, 2)
-	for _, selected := range selectedThreatIntelFeeds(mirrorURL, customURLIPv6, listChoice, lanMode) {
+	for _, selected := range selectedThreatIntelFeeds(mirrorURL, customURLIPv6, listChoice, lanMode, osintSelection...) {
 		_, evidence, err := read(selected.path)
 		if err == nil {
 			if validationErr := validateThreatIntelEvidenceForSelection(
 				evidence, listChoice, selected.family,
-				mirrorURL, customURLIPv6, customHash, customHashIPv6,
+				mirrorURL, customURLIPv6, customHash, customHashIPv6, osintSelection...,
 			); validationErr == nil {
 				continue
 			}
@@ -2079,11 +2090,11 @@ func reconcileThreatIntelSelectionWith(
 // implicit feed download.
 func AttestOfflineQualificationFeeds(
 	mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, geoAllowed string,
-	lanMode bool,
+	lanMode, osintEnabled bool,
 ) error {
 	return attestOfflineQualificationFeedsLifecycleWith(
 		mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, geoAllowed,
-		lanMode, readOfflineQualificationFeed, removeFeedTargets,
+		lanMode, readOfflineQualificationFeed, removeFeedTargets, osintEnabled,
 	)
 }
 
@@ -2092,6 +2103,7 @@ func attestOfflineQualificationFeedsLifecycleWith(
 	lanMode bool,
 	read offlineQualificationFeedReader,
 	remove offlineQualificationFeedRemover,
+	osintSelection ...bool,
 ) error {
 	if remove == nil {
 		return errors.New("offline qualification feed cleanup is unavailable")
@@ -2106,7 +2118,7 @@ func attestOfflineQualificationFeedsLifecycleWith(
 		return err
 	}
 	retired, err := reconcileThreatIntelSelectionWith(
-		mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, lanMode, read, remove,
+		mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, lanMode, read, remove, osintSelection...,
 	)
 	if err != nil {
 		return fmt.Errorf("reconcile offline threat intelligence selection: %w", err)
@@ -2126,7 +2138,7 @@ func attestOfflineQualificationFeedsLifecycleWith(
 		geoCodes,
 		geoAllowed,
 		lanMode,
-		read,
+		read, osintSelection...,
 	)
 }
 
@@ -2134,6 +2146,7 @@ func attestOfflineQualificationFeedsWith(
 	mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, geoAllowed string,
 	lanMode bool,
 	read offlineQualificationFeedReader,
+	osintSelection ...bool,
 ) error {
 	if read == nil {
 		return errors.New("offline qualification feed reader is unavailable")
@@ -2198,7 +2211,7 @@ func attestOfflineQualificationFeedsWith(
 		}
 		if err := validateThreatIntelEvidenceForSelection(
 			evidence, listChoice, selected.family,
-			mirrorURL, customURLIPv6, customHash, customHashIPv6,
+			mirrorURL, customURLIPv6, customHash, customHashIPv6, osintSelection...,
 		); err != nil {
 			return fmt.Errorf("offline feed %s does not match the selected source mode: %w", filepath.Base(selected.path), err)
 		}
@@ -2207,7 +2220,7 @@ func attestOfflineQualificationFeedsWith(
 	return nil
 }
 
-func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool, purpose feedDownloadPurpose) error {
+func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool, purpose feedDownloadPurpose, osintEnabled bool) error {
 	fmt.Println("[INFO] Initializing Network Intelligence Feeds...")
 	if err := validateCustomFeedContract(listChoice, mirrorURL, customURLIPv6, customHash, customHashIPv6); err != nil {
 		return err
@@ -2220,7 +2233,7 @@ func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listCho
 	}
 	if _, err := reconcileThreatIntelSelectionWith(
 		mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, lanMode,
-		readOfflineQualificationFeed, removeFeedTargets,
+		readOfflineQualificationFeed, removeFeedTargets, osintEnabled,
 	); err != nil {
 		return fmt.Errorf("reconcile threat intelligence snapshots with selected mode: %w", err)
 	}
@@ -2347,8 +2360,8 @@ func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listCho
 	}
 
 	// Download OSINT Feeds (CINS Army & Blocklist.de)
-	switch listChoice {
-	case "4", "3":
+	switch {
+	case listChoice == "4", listChoice == "3", !osintEnabled:
 		fmt.Println("Downloading Free OSINT Feeds (CINS & Blocklist.de)... SKIPPED")
 	default:
 		fmt.Printf("Downloading Free OSINT Feeds (CINS & Blocklist.de)... ")

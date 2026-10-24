@@ -88,6 +88,9 @@ func validateConfig(config *ModularConfig) error {
 	if err := validateGeoIPCountryList("network.geo.allowed_countries", config.Network.Geo.AllowedCountries); err != nil {
 		return err
 	}
+	if config.Network.PolicyMode == "lists" && (config.Network.Wireguard.Enabled || config.Security.L2.EnableL2 || config.Security.L2.ARPProtect || config.Network.Geo.Enabled || config.Network.ASN.Enabled || len(config.Security.Honeyports) != 0 || len(config.OperatorPolicy.Rules) != 0) {
+		return fmt.Errorf("selected host firewall modules require explicit network.policy_mode = host")
+	}
 	if err := config.SSH.Validate(); err != nil {
 		return err
 	}

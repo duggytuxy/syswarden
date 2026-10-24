@@ -40,9 +40,26 @@ pidfile="/run/syswarden-core.pid"
 retry="TERM/5/KILL/5"
 
 depend() {
+	after rsyslog
+	need net syswarden-firewall
+}
+`
+
+	historicalV4104OpenRCCoreService = `#!/sbin/openrc-run
+
+name="syswarden-core"
+description="SYSWARDEN WAF and Core Engine"
+command="/opt/syswarden/bin/syswarden-core"
+command_background=true
+pidfile="/run/syswarden-core.pid"
+retry="TERM/5/KILL/5"
+
+depend() {
 	need net rsyslog syswarden-firewall
 }
 `
+	historicalV4104OpenRCCoreServiceLength = 261
+	historicalV4104OpenRCCoreServiceSHA256 = "99adff6d6bcb6c5f0fad472e11668d3f8f4e19136c3b3ce473493101db136558"
 
 	historicalV4028OpenRCCoreService = `#!/sbin/openrc-run
 
@@ -66,6 +83,24 @@ name="syswarden-firewall"
 description="SYSWARDEN Firewall Persistence & Engine Loader"
 
 depend() {
+	after rsyslog
+	need net cronie
+	before syswarden-core
+}
+
+start() {
+	ebegin "Loading SYSWARDEN Firewall Persistence"
+	/opt/syswarden/bin/syswarden-cli reload --no-restart
+	eend $?
+}
+`
+
+	historicalV4104OpenRCFirewallService = `#!/sbin/openrc-run
+
+name="syswarden-firewall"
+description="SYSWARDEN Firewall Persistence & Engine Loader"
+
+depend() {
 	need net rsyslog cronie
 	before syswarden-core
 }
@@ -76,7 +111,9 @@ start() {
 	eend $?
 }
 `
-	historicalV4028OpenRCFirewallService = `#!/sbin/openrc-run
+	historicalV4104OpenRCFirewallServiceLength = 294
+	historicalV4104OpenRCFirewallServiceSHA256 = "d8c57c59dae9493523275026acb2a5c599bd4949ff8993add6760e725f89a5ba"
+	historicalV4028OpenRCFirewallService       = `#!/sbin/openrc-run
 
 name="syswarden-firewall"
 description="SYSWARDEN Firewall Persistence & Engine Loader"
@@ -2048,12 +2085,14 @@ func publishOpenRCServices() error {
 			historicalContent:       historicalV4028OpenRCCoreService,
 			historicalContentLength: historicalV4028OpenRCCoreServiceLength,
 			historicalContentSHA256: historicalV4028OpenRCCoreServiceSHA256,
+			historicalAlternates:    []historicalServiceContent{{historicalV4104OpenRCCoreService, historicalV4104OpenRCCoreServiceLength, historicalV4104OpenRCCoreServiceSHA256}},
 		},
 		{
 			path: filepath.Join(serviceOpenRCUnitDir, "syswarden-firewall"), content: openRCFirewallService, mode: 0755,
 			historicalContent:       historicalV4028OpenRCFirewallService,
 			historicalContentLength: historicalV4028OpenRCFirewallServiceLength,
 			historicalContentSHA256: historicalV4028OpenRCFirewallServiceSHA256,
+			historicalAlternates:    []historicalServiceContent{{historicalV4104OpenRCFirewallService, historicalV4104OpenRCFirewallServiceLength, historicalV4104OpenRCFirewallServiceSHA256}},
 		},
 		{path: filepath.Join(serviceOpenRCRunlevelDir, "syswarden-core"), target: "/etc/init.d/syswarden-core"},
 		{path: filepath.Join(serviceOpenRCRunlevelDir, "syswarden-firewall"), target: "/etc/init.d/syswarden-firewall"},

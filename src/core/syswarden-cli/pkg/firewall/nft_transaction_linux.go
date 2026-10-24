@@ -290,6 +290,7 @@ type nftListSource struct {
 	path            string
 	required        bool
 	attested        bool
+	feedSelection   *network.ThreatIntelSelection
 	asnPolicySHA256 string
 }
 
@@ -393,6 +394,7 @@ func readRootedNFTFile(path string) ([]byte, error) {
 }
 
 var readAttestedNFTFeed = network.ReadAttestedFeedFile
+var readSelectedNFTFeed = network.ReadSelectedThreatIntelFeed
 
 func readNFTListSource(source nftListSource) ([]byte, error) {
 	if source.asnPolicySHA256 != "" {
@@ -404,7 +406,14 @@ func readNFTListSource(source nftListSource) ([]byte, error) {
 	if !source.attested {
 		return readRootedNFTFile(source.path)
 	}
-	content, status, err := readAttestedNFTFeed(source.path)
+	var content []byte
+	var status network.FeedProvenanceStatus
+	var err error
+	if source.feedSelection != nil {
+		content, status, err = readSelectedNFTFeed(source.path, *source.feedSelection)
+	} else {
+		content, status, err = readAttestedNFTFeed(source.path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read attested threat feed: %w", err)
 	}
@@ -2144,6 +2153,9 @@ func verifyNftablesStateWithDynamicBans(ctx context.Context, runner nftCommandRu
 
 	var errs []error
 	if expected.generation != nil {
+		if err := verifyListPolicyRuntimeShape(output, *expected.generation); err != nil {
+			errs = append(errs, err)
+		}
 		if err := verifyStrictAllowForward(document, expected.generation.ForwardStrictAllow, expected.generation.Base); err != nil {
 			errs = append(errs, err)
 		}
@@ -2286,7 +2298,15 @@ func verifyOperatorPolicyNFTState(document nftJSONDocument, expected operatorPol
 	}
 
 	var dispatch *nftJSONRule
-	if len(statefulRules) < 3 {
+	if expected.listOnly {
+		if len(expected.rules) != 0 || len(statefulRules) == 0 {
+			return fmt.Errorf("list-only operator dispatch is inconsistent")
+		}
+		dispatch = statefulRules[len(statefulRules)-1]
+		if err := verifyNFTJSONRuleExact(dispatch, "inet", "syswarden", "stateful_protect", expected.dispatchComment, []any{map[string]any{"jump": map[string]any{"target": expected.chainName}}}); err != nil {
+			return err
+		}
+	} else if len(statefulRules) < 3 {
 		errs = append(errs, fmt.Errorf("stateful_protect contains %d rules and cannot hold the required terminal dispatch/log/drop sequence", len(statefulRules)))
 	} else {
 		dispatch = statefulRules[len(statefulRules)-3]

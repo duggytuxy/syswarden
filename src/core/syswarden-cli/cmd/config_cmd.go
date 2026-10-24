@@ -129,6 +129,9 @@ var configValidateCmd = &cobra.Command{
 			schema = "historical"
 		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Configuration is valid (schema: %s).\n", schema)
+		for _, line := range report.ModulePlan {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), line)
+		}
 		for _, key := range report.DeprecatedKeys {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Deprecated key: %s\n", key)
 		}

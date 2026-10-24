@@ -155,8 +155,12 @@ func renderNFTNetdevTemplate(profile nftNetdevTemplateProfile, interfaces []stri
 // It proves complete official source/topology equivalence, not the origin of
 // populated sets. Independent source lineage, population attestation,
 // producer quiescence and a generation fence remain mandatory for retirement.
-func inspectNFTNetdevTemplateTopology(source, live []byte) (nftNetdevTemplateEvidence, error) {
+func inspectNFTNetdevTemplateTopology(source, live []byte, policyMode ...string) (nftNetdevTemplateEvidence, error) {
 	var empty nftNetdevTemplateEvidence
+	listOnly := len(policyMode) > 0 && policyMode[0] == listPolicyVersion
+	if len(policyMode) > 1 || len(policyMode) > 0 && policyMode[0] != "" && !listOnly {
+		return empty, fmt.Errorf("unknown ingress policy mode")
+	}
 	interfaces, err := nftNetdevTemplateInterfaces(source)
 	if err != nil {
 		return empty, err
@@ -170,7 +174,18 @@ func inspectNFTNetdevTemplateTopology(source, live []byte) (nftNetdevTemplateEvi
 	for _, profile := range profiles {
 		for _, geoCandidate := range []bool{false, true} {
 			for _, asnCandidate := range []bool{false, true} {
-				if string(source) == renderNFTNetdevTemplate(profile, interfaces, geoCandidate, asnCandidate) {
+				candidateSource := renderNFTNetdevTemplate(profile, interfaces, geoCandidate, asnCandidate)
+				if listOnly {
+					if profile.Profile != "go-current" || geoCandidate || asnCandidate {
+						continue
+					}
+					projected, err := listPolicySource([]byte(candidateSource))
+					if err != nil {
+						return empty, err
+					}
+					candidateSource = string(projected)
+				}
+				if string(source) == candidateSource {
 					if matched != nil {
 						return empty, fmt.Errorf("ingress source matches multiple official profiles")
 					}
@@ -194,6 +209,7 @@ func inspectNFTNetdevTemplateTopology(source, live []byte) (nftNetdevTemplateEvi
 		return empty, err
 	}
 	var projected []any
+	removedStructural := 0
 	for _, entry := range expected {
 		encoded, err := json.Marshal(entry)
 		if err != nil {
@@ -206,6 +222,10 @@ func inspectNFTNetdevTemplateTopology(source, live []byte) (nftNetdevTemplateEvi
 			continue
 		}
 		wrapper := entry.(map[string]any)
+		if _, isRule := wrapper["rule"]; listOnly && isRule && bytes.Contains(encoded, []byte(`"field":"flags"`)) {
+			removedStructural++
+			continue
+		}
 		if chain, ok := wrapper["chain"].(map[string]any); ok {
 			if len(interfaces) == 1 {
 				chain["dev"] = interfaces[0]
@@ -220,6 +240,9 @@ func inspectNFTNetdevTemplateTopology(source, live []byte) (nftNetdevTemplateEvi
 			}
 		}
 		projected = append(projected, entry)
+	}
+	if listOnly && removedStructural != 4 {
+		return empty, fmt.Errorf("list-only ingress structural projection is incomplete")
 	}
 	if !reflect.DeepEqual(observed, projected) {
 		return empty, fmt.Errorf("ingress kernel topology includes changed or unrecognized objects, rules or ordering")

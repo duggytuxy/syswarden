@@ -253,6 +253,21 @@ func (m *Migrator) freshDefaultConfigData() (map[string]string, error) {
 	// default was enabled. New modular installations must remain opt-in without
 	// rewriting that historical fixture or changing migration of operator data.
 	configData["SYSWARDEN_ALLOW_SAAS_MONITORS"] = "n"
+	// Apply the fresh profile only to new templates, never to operator input.
+	configData["SYSWARDEN_INSTALL_PROFILE"] = StandardInstallProfile
+	configData["SYSWARDEN_POLICY_MODE"] = "lists"
+	for _, key := range []string{
+		"SYSWARDEN_HARDENING", "APPLY_CIS_L2_HARDENING",
+		"SYSWARDEN_ENABLE_GEO", "SYSWARDEN_ENABLE_ASN", "SYSWARDEN_ENABLE_L2",
+		"SYSWARDEN_ARP_PROTECT", "SYSWARDEN_ENABLE_OSINT", "SYSWARDEN_ENABLE_WAAP",
+		"SYSWARDEN_ENABLE_LOG_BRIDGE", "SYSWARDEN_ENABLE_DETECTION", "SYSWARDEN_ENABLE_WATCHDOG",
+	} {
+		configData[key] = "n"
+	}
+	for _, key := range []string{"SYSWARDEN_HONEYPORTS", "SYSWARDEN_BRUTEFORCE_LOGS", "SYSWARDEN_MODSEC_LOGS"} {
+		configData[key] = ""
+	}
+	configData["SYSWARDEN_LIST_CHOICE"] = "1"
 	return configData, nil
 }
 
@@ -285,9 +300,9 @@ func InitializeDefaults(outputDir string) error {
 	return nil
 }
 
-// EnsureDefaults creates only missing modular configuration files. Existing
-// regular files remain byte-for-byte untouched so operator overrides and local
-// permissions are never replaced during install or upgrade.
+// EnsureDefaults initializes a fresh profile or resumes its unpublished exact
+// templates. Incomplete published or customized policies require recovery.
+// Existing regular files and local permissions remain untouched.
 func EnsureDefaults(outputDir string) error {
 	if err := ensureConfigDirectory(outputDir, 0750); err != nil {
 		return err
@@ -313,6 +328,9 @@ func EnsureDefaults(outputDir string) error {
 	master, err := m.masterConfigContent(configData)
 	if err != nil {
 		return fmt.Errorf("generate default master configuration: %w", err)
+	}
+	if err := preflightMissingDefaults(outputDir, master, modules); err != nil {
+		return err
 	}
 	for _, module := range modules {
 		if err := ensureMissingConfigFile(modulesDir, module.name, []byte(module.content)); err != nil {
@@ -931,6 +949,14 @@ func canonicalizeGeneratedTOML(content string) (string, error) {
 }
 
 func (m *Migrator) generateCore(oldConfig map[string]string) (string, error) {
+	profile := legacyValue(oldConfig, "SYSWARDEN_INSTALL_PROFILE", "")
+	if profile != "" && profile != StandardInstallProfile {
+		return "", fmt.Errorf("unsupported installation profile")
+	}
+	profileLine := ""
+	if profile != "" {
+		profileLine = "install_profile = " + quoteTOML(profile) + "\n"
+	}
 	hardening, err := legacyBoolText(oldConfig, "SYSWARDEN_HARDENING", false)
 	if err != nil {
 		return "", err
@@ -955,7 +981,7 @@ func (m *Migrator) generateCore(oldConfig map[string]string) (string, error) {
 # Priority: 00 (loaded first, lowest precedence)
 
 [core]
-# "keep" preserves the operator-managed frontend, performs no service transition and refuses active or enabled iptables services.
+` + profileLine + `# "keep" preserves the operator-managed frontend, performs no service transition and refuses active or enabled iptables services.
 # "nftables" requires an enabled and active nftables.service with firewalld, UFW, iptables-services and netfilter-persistent inactive and disabled.
 # "iptables" is retained for legacy parsing only and is rejected by operational policy mutations.
 firewall_backend = ` + quoteTOML(firewallBackend) + `
@@ -996,6 +1022,10 @@ func migratedFirewallBackend(oldConfig map[string]string) (string, error) {
 }
 
 func (m *Migrator) generateNetwork(oldConfig map[string]string) (string, error) {
+	osint, err := legacyBoolText(oldConfig, "SYSWARDEN_ENABLE_OSINT", true)
+	if err != nil {
+		return "", err
+	}
 	whitelistInfra, err := legacyBoolText(oldConfig, "SYSWARDEN_WHITELIST_INFRA", true)
 	if err != nil {
 		return "", err
@@ -1039,6 +1069,7 @@ func (m *Migrator) generateNetwork(oldConfig map[string]string) (string, error) 
 # Priority: 10
 
 [network]
+policy_mode = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_POLICY_MODE", "host")) + `
 # Boolean values: true or false (no quotes)
 whitelist_infra = ` + whitelistInfra + `
 
@@ -1074,6 +1105,7 @@ custom_url_ipv6 = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_CUSTOM_URL_IPV
 custom_hash = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_CUSTOM_HASH", "")) + `
 custom_hash_ipv6 = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_CUSTOM_HASH_IPV6", "")) + `
 use_spamhaus = ` + useSpamhaus + `
+osint_enabled = ` + osint + `
 
 [network.wireguard]
 enabled = ` + wireguardEnabled + `
@@ -1084,6 +1116,14 @@ subnet = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_WG_SUBNET", "")) + `
 }
 
 func (m *Migrator) generateSecurity(oldConfig map[string]string) (string, error) {
+	watchdog, err := legacyBoolText(oldConfig, "SYSWARDEN_ENABLE_WATCHDOG", true)
+	if err != nil {
+		return "", err
+	}
+	detection, err := legacyBoolText(oldConfig, "SYSWARDEN_ENABLE_DETECTION", true)
+	if err != nil {
+		return "", err
+	}
 	enableL2, err := legacyBoolText(oldConfig, "SYSWARDEN_ENABLE_L2", false)
 	if err != nil {
 		return "", err
@@ -1102,6 +1142,7 @@ func (m *Migrator) generateSecurity(oldConfig map[string]string) (string, error)
 # Priority: 20
 
 [security]
+detection_enabled = ` + detection + `
 # Format requires quotes: ["6379", "23"]
 honeyports = [` + honeyPortsStr + `]
 
@@ -1111,13 +1152,21 @@ arp_protect = ` + arpProtect + `
 lan_mode = ` + lanMode + `
 
 [security.compliance]
-enable_watchdog = true
+enable_watchdog = ` + watchdog + `
 check_interval = "24h"
 `
 	return canonicalizeGeneratedTOML(content)
 }
 
 func (m *Migrator) generateWAAP(oldConfig map[string]string) (string, error) {
+	enabled, err := legacyBoolText(oldConfig, "SYSWARDEN_ENABLE_WAAP", true)
+	if err != nil {
+		return "", err
+	}
+	bridge, err := legacyBoolText(oldConfig, "SYSWARDEN_ENABLE_LOG_BRIDGE", true)
+	if err != nil {
+		return "", err
+	}
 	enforcementMode := legacyValue(oldConfig, "SYSWARDEN_ENFORCEMENT_MODE", "enforcing")
 	if enforcementMode != "enforcing" && enforcementMode != "audit" {
 		return "", fmt.Errorf("legacy key SYSWARDEN_ENFORCEMENT_MODE has invalid mode %q", enforcementMode)
@@ -1135,6 +1184,8 @@ func (m *Migrator) generateWAAP(oldConfig map[string]string) (string, error) {
 # Priority: 30
 
 [waap]
+enabled = ` + enabled + `
+log_bridge_enabled = ` + bridge + `
 # Modes: "enforcing", "audit"
 enforcement_mode = ` + quoteTOML(enforcementMode) + `
 bruteforce_logs = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_BRUTEFORCE_LOGS", "auto")) + `

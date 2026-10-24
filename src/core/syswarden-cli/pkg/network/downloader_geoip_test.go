@@ -55,15 +55,15 @@ func TestEmbeddedGeoIPSelectionPreservesLegacyNoneSentinelIssue128(t *testing.T)
 }
 
 func TestFeedLifecycleValidatesEmbeddedGeoIPBeforeLANShortCircuitIssue128(t *testing.T) {
-	for name, update := range map[string]func(string, string, string, string, string, string, string, string, string, bool, bool) error{
+	for name, update := range map[string]func(string, string, string, string, string, string, string, string, string, bool, bool, bool) error{
 		"explicit": DownloadFeeds,
 		"install":  DownloadFeedsForInstall,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := update("https://codeberg.org/", "", "", "", "1", "ru cn", "", "kp", "", true, false); err != nil {
+			if err := update("https://codeberg.org/", "", "", "", "1", "ru cn", "", "kp", "", true, false, true); err != nil {
 				t.Fatalf("fresh embedded GeoIP selection failed: %v", err)
 			}
-			if err := update("https://codeberg.org/", "", "", "", "1", "zz", "", "", "", true, false); err == nil || !strings.Contains(err.Error(), "zz") {
+			if err := update("https://codeberg.org/", "", "", "", "1", "zz", "", "", "", true, false, true); err == nil || !strings.Contains(err.Error(), "zz") {
 				t.Fatalf("unsupported embedded GeoIP selection error = %v", err)
 			}
 		})

@@ -427,9 +427,12 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 
 	// ZERO-TRUST MODE: Drop everything that is not in the Zero-Trust allowed GEO/ASN list
 	appendStrictAllowInputRules(&nftRules, strictAllow.configured, validLANSubnets4, validLANSubnets6)
-	sshPort, err := effectiveSSHPort(config.GlobalConfig.SSHPort)
-	if err != nil {
-		return err
+	sshPort := "22" // Unused reference parameter in list-only mode.
+	if config.GlobalConfig.FirewallPolicyMode != "lists" {
+		sshPort, err = effectiveSSHPort(config.GlobalConfig.SSHPort)
+		if err != nil {
+			return err
+		}
 	}
 	haPort := ""
 	if config.GlobalConfig.HAEnabled && config.GlobalConfig.HAPeerPort != "" {
@@ -443,7 +446,10 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	}
 
 	// Dynamically allow explicitly opened ports
-	detectedTCPPorts, detectedUDPPorts := GetOpenPorts()
+	var detectedTCPPorts, detectedUDPPorts []string
+	if config.GlobalConfig.FirewallPolicyMode != "lists" {
+		detectedTCPPorts, detectedUDPPorts = GetOpenPorts()
+	}
 	tcpPorts, err := canonicalPorts("detected TCP ports", detectedTCPPorts)
 	if err != nil {
 		return err
@@ -627,17 +633,35 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	if err != nil {
 		return fmt.Errorf("prepare authoritative nftables runner: %w", err)
 	}
+	policySource := nftRules.String()
+	if config.GlobalConfig.FirewallPolicyMode == "lists" {
+		verification.generation.PolicyMode = listPolicyVersion
+		if err := validateListPolicyGeneration(listPolicyVersion, verification.generation.Base); err != nil {
+			return err
+		}
+		projected, err := listPolicySource([]byte(policySource))
+		if err != nil {
+			return err
+		}
+		policySource = string(projected)
+		verification.operatorPolicy.listOnly = true
+	}
+	wrapperSources := validLANSubnets
+	if config.GlobalConfig.FirewallPolicyMode == "lists" {
+		// List filtering does not require trusted-zone exemptions for private networks.
+		wrapperSources = nil
+	}
 	var wrapperPlan *linuxWrapperReconciliationPlan
 	transactionID, err := applyNftablesPolicyWithWrappers(
 		ctx,
 		runner,
 		nftStateDirectory,
-		nftRules.String(),
+		policySource,
 		populations,
 		verification,
 		func() error {
 			var prepareErr error
-			wrapperPlan, prepareErr = prepareLinuxFirewallWrapperReconciliationForInterfaces(firewallBackend, validLANSubnets, wrapperPorts, portInterfaces)
+			wrapperPlan, prepareErr = prepareLinuxFirewallWrapperReconciliationForInterfaces(firewallBackend, wrapperSources, wrapperPorts, portInterfaces)
 			if prepareErr != nil {
 				return prepareErr
 			}
@@ -661,8 +685,6 @@ func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	if err != nil {
 		return err
 	}
-	_ = exec.Command("sysctl", "-w", "net.core.wmem_max=8388608").Run() // #nosec
-	_ = exec.Command("sysctl", "-w", "net.core.rmem_max=8388608").Run() // #nosec
 
 	fmt.Printf("[INFO] Nftables transaction %s applied and verified successfully.\n", transactionID)
 	return nil
@@ -867,8 +889,21 @@ func prepareNftSetPopulations(
 		includeSaaSPair, saasPairErr = validateSaaSListPair(listDirectory)
 	}
 	whitelist4, whitelist6 := whitelistNftSources(listDirectory, includeSaaSPair)
-	blacklist4 := []nftListSource{optional("syswarden_blacklist.ipv4"), optional("syswarden_threatintel.ipv4")}
-	blacklist6 := []nftListSource{optional("syswarden_blacklist.ipv6"), optional("syswarden_threatintel.ipv6")}
+	blacklist4 := []nftListSource{optional("syswarden_blacklist.ipv4")}
+	blacklist6 := []nftListSource{optional("syswarden_blacklist.ipv6")}
+	selection := configuredThreatIntelSelection(config.GlobalConfig)
+	for _, family := range []int{4, 6} {
+		if !selection.IncludesFamily(family) {
+			continue
+		}
+		source := optional(fmt.Sprintf("syswarden_threatintel.ipv%d", family))
+		source.feedSelection = &selection
+		if family == 4 {
+			blacklist4 = append(blacklist4, source)
+		} else {
+			blacklist6 = append(blacklist6, source)
+		}
+	}
 
 	ztASN4, ztASN6, ztASNSourceErr := configuredASNNftSources(listDirectory, strictAllow.asns, true)
 	asn4, asn6, asnErr := configuredASNNftSources(listDirectory, config.GlobalConfig.ASNList, false)

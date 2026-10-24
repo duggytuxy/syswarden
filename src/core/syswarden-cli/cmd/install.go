@@ -9,7 +9,6 @@ import (
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
 	"syswarden-cli/pkg/network"
-	"syswarden-cli/pkg/security"
 	"syswarden-cli/pkg/system"
 
 	"github.com/spf13/cobra"
@@ -20,7 +19,7 @@ var preflightLegacyWireGuardForInstall = network.PreflightLegacyWireGuardConflic
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install SYSWARDEN and configure security modules",
-	Long:  "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs.",
+	Long:  "Installs the selected firewall services and feed scheduler. Fresh packages use the standard-list-only profile. SSH, CIS and OS hardening require a separate explicit configuration operation.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
 		if err := preflightSystemdFirewallOrderingForInstall(); err != nil {
@@ -89,6 +88,9 @@ var installCmd = &cobra.Command{
 			return installStageError("firewall backend preflight failed", err)
 		}
 
+		for _, line := range config.ModulePlan(config.GlobalConfig) {
+			fmt.Println("[PLAN] " + line)
+		}
 		if err := installDependenciesForInstall(); err != nil {
 			return installStageError("dependency installation failed", err)
 		}
@@ -101,15 +103,18 @@ var installCmd = &cobra.Command{
 		if err := preflightWireGuardForInstall(); err != nil {
 			return installStageError("WireGuard preflight failed before SSH or firewall mutation", err)
 		}
+		if err := preflightModuleDependencies(); err != nil {
+			return installStageError("selected module prerequisite failed", err)
+		}
 		if os.Getenv("SYSWARDEN_PKG_INSTALL") == "1" {
 			if err := preparePackagedLegacyDynamicBanUpgrade(); err != nil {
 				return installStageError("legacy dynamic firewall recovery failed", err)
 			}
 		}
 
-		if err := configureSSHForInstall(); err != nil {
-			return installStageError("SSH configuration failed", err)
-		}
+		// Installation and upgrades preserve SSH configuration and running access.
+		// Historical generated hardening booleans do not authorize a new change.
+		fmt.Println("[INFO] Preserving SSH, CIS and OS policy; package installation does not activate host hardening.")
 
 		if err := prepareNetworkIntelligenceForInstall(); err != nil {
 			return err
@@ -150,15 +155,6 @@ var installCmd = &cobra.Command{
 		}
 		if err := integration.SetupAbuseIPDB(); err != nil {
 			return installStageError("AbuseIPDB configuration failed", err)
-		}
-
-		// Phase 4: Security Hardening (Wave 1 of Grand Purge)
-		fmt.Println("[SYSWARDEN] Starting OS & CIS Hardening...")
-		if err := security.ApplyCISHardening(); err != nil {
-			return installStageError("CIS hardening failed", err)
-		}
-		if err := security.ApplyOSHardening(); err != nil {
-			return installStageError("OS hardening failed", err)
 		}
 
 		// Phase 2.5: Private Network & HA (Wave 2 of Grand Purge)
@@ -203,7 +199,6 @@ var recoverPendingWireGuardForwardingForInstall = network.RecoverPendingWireGuar
 var recoverPendingWireGuardForInstall = network.RecoverPendingWireguardState
 var preflightWireGuardForInstall = network.PreflightWireguard
 var setupWireGuardForInstall = network.SetupWireguard
-var configureSSHForInstall = system.ConfigureSSH
 var applyPoliciesForInstall = firewall.ApplyPolicies
 var hostCronSchedulingPreflight = func(haEnabled bool) error {
 	_, err := system.PreflightRuntimeCronScheduling(haEnabled)
@@ -333,6 +328,7 @@ func prepareNetworkIntelligenceForInstall() error {
 			config.GlobalConfig.GeoCodes,
 			config.GlobalConfig.GeoAllowed,
 			config.GlobalConfig.LANMode,
+			config.GlobalConfig.OSINTEnabled,
 		); err != nil {
 			return installStageError("offline last-known-good feed attestation failed", err)
 		}
@@ -354,6 +350,7 @@ func prepareNetworkIntelligenceForInstall() error {
 		config.GlobalConfig.ASNAllowed,
 		config.GlobalConfig.LANMode,
 		config.GlobalConfig.UseSpamhaus,
+		config.GlobalConfig.OSINTEnabled,
 	); err != nil {
 		return installStageError("failed to download threat intelligence feeds", err)
 	}
@@ -444,14 +441,8 @@ func installStageError(stage string, err error) error {
 }
 
 func prepareInstallConfiguration(configRoot string) error {
-	if err := config.RemoveRetiredWebTUIConfiguration(configRoot); err != nil {
-		return fmt.Errorf("remove retired Web-TUI configuration: %w", err)
-	}
-	if err := config.EnsureDefaults(configRoot); err != nil {
-		return fmt.Errorf("complete missing modular defaults: %w", err)
-	}
-	if err := config.ParseConfig(configRoot); err != nil {
-		return fmt.Errorf("validate modular configuration: %w", err)
+	if err := config.PrepareInstallationConfiguration(configRoot); err != nil {
+		return err
 	}
 	if config.GlobalConfig == nil {
 		return fmt.Errorf("validated configuration is unavailable")
@@ -465,4 +456,11 @@ func prepareInstallConfiguration(configRoot string) error {
 
 func init() {
 	rootCmd.AddCommand(installCmd)
+}
+
+var preflightModuleDependencies = func() error {
+	if err := system.PreflightSelectedModuleDependencies(); err != nil {
+		return err
+	}
+	return integration.PreflightWazuh()
 }

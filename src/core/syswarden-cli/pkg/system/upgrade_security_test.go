@@ -403,11 +403,11 @@ func TestExternalCommandContractRejectsUnexpectedArguments(t *testing.T) {
 	t.Parallel()
 
 	validPackage := "/var/tmp/syswarden-update-safe/package.deb"
-	validAPT := []string{"-o", aptDPkgLockTimeoutOption, "install", "-y", validPackage}
+	validAPT := []string{"-o", aptDPkgLockTimeoutOption, "--no-install-recommends", "--no-remove", "install", "-y", validPackage}
 	if err := validateExternalCommand("/usr/bin/apt-get", validAPT); err != nil {
 		t.Fatalf("validateExternalCommand() rejected exact installer contract: %v", err)
 	}
-	validRPM := []string{"--setopt=localpkg_gpgcheck=1", "install", "-y", "/var/tmp/syswarden-update-safe/package.rpm"}
+	validRPM := []string{"--setopt=localpkg_gpgcheck=1", "--setopt=install_weak_deps=False", "--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False", "install", "-y", "/var/tmp/syswarden-update-safe/package.rpm"}
 	if err := validateExternalCommand("/usr/bin/dnf", validRPM); err != nil {
 		t.Fatalf("validateExternalCommand() rejected native RPM signature contract: %v", err)
 	}
@@ -550,18 +550,18 @@ func TestUpdaterInstallsOnlyVerifiedPackageAndCleansWorkspace(t *testing.T) {
 				return nil
 			}
 			installs.Add(1)
-			if len(args) != 5 || args[0] != "-o" || args[1] != aptDPkgLockTimeoutOption ||
-				args[2] != "install" || args[3] != "-y" {
+			if len(args) != 7 || args[0] != "-o" || args[1] != aptDPkgLockTimeoutOption ||
+				args[2] != "--no-install-recommends" || args[3] != "--no-remove" || args[4] != "install" || args[5] != "-y" {
 				t.Fatalf("installer arguments = %#v", args)
 			}
-			content, err := os.ReadFile(args[4])
+			content, err := os.ReadFile(args[6])
 			if err != nil {
 				t.Fatalf("ReadFile(installer package) error = %v", err)
 			}
 			if !bytes.Equal(content, packagePayload) {
 				t.Fatalf("installer package content = %q", content)
 			}
-			info, err := os.Lstat(args[4])
+			info, err := os.Lstat(args[6])
 			if err != nil {
 				t.Fatalf("Lstat(installer package) error = %v", err)
 			}
@@ -603,8 +603,8 @@ func TestUpdaterDoesNotRetryFailedDEBInstallation(t *testing.T) {
 				return nil
 			}
 			installs.Add(1)
-			if len(args) != 5 || args[0] != "-o" || args[1] != "DPkg::Lock::Timeout=300" ||
-				args[2] != "install" || args[3] != "-y" {
+			if len(args) != 7 || args[0] != "-o" || args[1] != "DPkg::Lock::Timeout=300" ||
+				args[2] != "--no-install-recommends" || args[3] != "--no-remove" || args[4] != "install" || args[5] != "-y" {
 				t.Fatalf("installer arguments = %#v", args)
 			}
 			return installFailure

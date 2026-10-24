@@ -222,11 +222,11 @@ func TestCLIValidatorMatchesCoreParityContract_SW_CFG_002(t *testing.T) {
 		{name: "noncanonical log pattern spacing", module: "[waap]\nbruteforce_logs = \"/var/log/nginx/*.log  /var/log/auth.log\"\n", wantErr: true},
 		{name: "duplicate log pattern", module: "[waap]\nbruteforce_logs = \"/var/log/auth.log /var/log/auth.log\"\n", wantErr: true},
 		{name: "invalid log glob", module: "[waap]\nmodsec_logs = \"/var/log/modsec/[.log\"\n", wantErr: true},
-		{name: "canonical IPv4 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n"},
-		{name: "WireGuard with keep backend", module: "[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n", wantErr: true},
-		{name: "IPv6 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"2001:db8::/64\"\n", wantErr: true},
-		{name: "distinct SSH and HA ports with WireGuard", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"2222\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n"},
-		{name: "HA port collides with SSH while WireGuard enabled", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"62026\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n", wantErr: true},
+		{name: "canonical IPv4 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n"},
+		{name: "WireGuard with keep backend", module: "[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n", wantErr: true},
+		{name: "IPv6 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"2001:db8::/64\"\n", wantErr: true},
+		{name: "distinct SSH and HA ports with WireGuard", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"2222\"\n[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n"},
+		{name: "HA port collides with SSH while WireGuard enabled", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"62026\"\n[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n", wantErr: true},
 	}
 	previous := GlobalConfig
 	t.Cleanup(func() { GlobalConfig = previous })

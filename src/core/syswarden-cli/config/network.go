@@ -1,6 +1,7 @@
 package config
 
 type NetworkConfig struct {
+	PolicyMode string `mapstructure:"policy_mode"`
 	WhitelistInfra bool             `mapstructure:"whitelist_infra"`
 	LanSubnets     []string         `mapstructure:"lan_subnets" validate:"canonical_cidr_slice"`
 	WhitelistIPs   []string         `mapstructure:"whitelist_ips" validate:"ip_or_cidr_slice"`
@@ -13,12 +14,13 @@ type NetworkConfig struct {
 }
 
 type BlocklistsConfig struct {
-	ListChoice  string `mapstructure:"list_choice" validate:"omitempty,oneof=1 2 3 4"`
-	CustomURL   string `mapstructure:"custom_url" validate:"https_url_optional"`
-	CustomURL6  string `mapstructure:"custom_url_ipv6" validate:"https_url_optional"`
-	CustomHash  string `mapstructure:"custom_hash" validate:"sha256_optional"`
-	CustomHash6 string `mapstructure:"custom_hash_ipv6" validate:"sha256_optional"`
-	UseSpamhaus bool   `mapstructure:"use_spamhaus"`
+	OSINTEnabled bool   `mapstructure:"osint_enabled"`
+	ListChoice   string `mapstructure:"list_choice" validate:"omitempty,oneof=1 2 3 4"`
+	CustomURL    string `mapstructure:"custom_url" validate:"https_url_optional"`
+	CustomURL6   string `mapstructure:"custom_url_ipv6" validate:"https_url_optional"`
+	CustomHash   string `mapstructure:"custom_hash" validate:"sha256_optional"`
+	CustomHash6  string `mapstructure:"custom_hash_ipv6" validate:"sha256_optional"`
+	UseSpamhaus  bool   `mapstructure:"use_spamhaus"`
 }
 
 type GeoConfig struct {

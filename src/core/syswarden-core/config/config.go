@@ -84,6 +84,7 @@ type runtimeConfig struct {
 }
 
 type coreConfig struct {
+	InstallProfile  string `mapstructure:"install_profile"`
 	ConfigDir       string `mapstructure:"config_dir"`
 	EnterpriseMode  bool   `mapstructure:"enterprise_mode"`
 	LogLevel        string `mapstructure:"log_level"`
@@ -95,6 +96,7 @@ type coreConfig struct {
 }
 
 type networkConfig struct {
+	PolicyMode     string           `mapstructure:"policy_mode"`
 	WhitelistInfra bool             `mapstructure:"whitelist_infra"`
 	LanSubnets     []string         `mapstructure:"lan_subnets"`
 	WhitelistIPs   []string         `mapstructure:"whitelist_ips"`
@@ -129,18 +131,20 @@ type wireGuardConfig struct {
 }
 
 type blocklistsConfig struct {
-	ListChoice  string `mapstructure:"list_choice"`
-	CustomURL   string `mapstructure:"custom_url"`
-	CustomURL6  string `mapstructure:"custom_url_ipv6"`
-	CustomHash  string `mapstructure:"custom_hash"`
-	CustomHash6 string `mapstructure:"custom_hash_ipv6"`
-	UseSpamhaus bool   `mapstructure:"use_spamhaus"`
+	OSINTEnabled bool   `mapstructure:"osint_enabled"`
+	ListChoice   string `mapstructure:"list_choice"`
+	CustomURL    string `mapstructure:"custom_url"`
+	CustomURL6   string `mapstructure:"custom_url_ipv6"`
+	CustomHash   string `mapstructure:"custom_hash"`
+	CustomHash6  string `mapstructure:"custom_hash_ipv6"`
+	UseSpamhaus  bool   `mapstructure:"use_spamhaus"`
 }
 
 type securityConfig struct {
-	Honeyports []string         `mapstructure:"honeyports"`
-	L2         l2Config         `mapstructure:"l2"`
-	Compliance complianceConfig `mapstructure:"compliance"`
+	DetectionEnabled bool             `mapstructure:"detection_enabled"`
+	Honeyports       []string         `mapstructure:"honeyports"`
+	L2               l2Config         `mapstructure:"l2"`
+	Compliance       complianceConfig `mapstructure:"compliance"`
 }
 
 type l2Config struct {
@@ -155,6 +159,8 @@ type complianceConfig struct {
 }
 
 type waapConfig struct {
+	Enabled                 bool   `mapstructure:"enabled"`
+	LogBridgeEnabled        bool   `mapstructure:"log_bridge_enabled"`
 	TrustedLogProducers     string `mapstructure:"trusted_log_producers"`
 	EnforcementMode         string `mapstructure:"enforcement_mode"`
 	BruteforceLogs          string `mapstructure:"bruteforce_logs"`
@@ -382,6 +388,9 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 	sort.Strings(diagnostics.DeprecatedKeys)
 
 	resolveSaaSAlias(candidate, observed)
+	if err := resolveOptionalModules(candidate); err != nil {
+		return nil, diagnostics, err
+	}
 	var typed runtimeConfig
 	if err := candidate.Unmarshal(&typed); err != nil {
 		return nil, diagnostics, fmt.Errorf("decode runtime configuration: %w", err)
@@ -484,6 +493,9 @@ func parseDocument(content []byte, relative string) (map[string]any, error) {
 			return nil, fmt.Errorf("%s has unsupported schema_version %d", relative, version)
 		}
 	}
+	if err := validateOptionalModuleDocument(relative, document); err != nil {
+		return nil, err
+	}
 	if err := validateOperatorPolicyDocument(relative, document); err != nil {
 		return nil, err
 	}
@@ -572,6 +584,9 @@ func readSecureRegularFile(root *os.Root, name, display string) ([]byte, error) 
 }
 
 func validateRuntimeConfig(value *runtimeConfig) error {
+	if value != nil && value.Network.PolicyMode == "lists" && (value.Network.WireGuard.Enabled || value.Security.L2.EnableL2 || value.Security.L2.ARPProtect || value.Network.Geo.Enabled || value.Network.ASN.Enabled || len(value.Security.Honeyports) != 0 || len(value.OperatorPolicy.Rules) != 0) {
+		return fmt.Errorf("selected host firewall modules require explicit network.policy_mode = host")
+	}
 	if value.SchemaVersion < 0 || value.SchemaVersion > CurrentSchemaVersion {
 		return fmt.Errorf("unsupported schema_version %d", value.SchemaVersion)
 	}

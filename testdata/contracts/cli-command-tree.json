@@ -828,7 +828,7 @@
     "path": "syswarden install",
     "use": "install",
     "short": "Install SYSWARDEN and configure security modules",
-    "long": "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs.",
+    "long": "Installs the selected firewall services and feed scheduler. Fresh packages use the standard-list-only profile. SSH, CIS and OS hardening require a separate explicit configuration operation.",
     "flags": [
       {
         "name": "config",

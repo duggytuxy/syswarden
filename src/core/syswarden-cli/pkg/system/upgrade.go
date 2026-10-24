@@ -105,10 +105,28 @@ func productionHTTPClient() *http.Client {
 }
 
 func runExternalCommand(ctx context.Context, name string, args ...string) error {
-	if err := validateExternalCommand(name, args); err != nil {
-		return err
+	return runWithNativeDependencyRetention(ctx, name, args, false, preserveNativeDependencyReasons,
+		func(ctx context.Context, name string, args ...string) error {
+			return executeExternalCommand(ctx, name, productionCommandEnvironment(name), args...)
+		})
+}
+
+func productionCommandEnvironment(name string) []string {
+	if productionPackageManager(name) {
+		return productionNativeCommandEnvironment()
 	}
-	return executeExternalCommand(ctx, name, productionExternalCommandEnvironment(), args...)
+	return productionExternalCommandEnvironment()
+}
+
+// The package execution boundary is independent of the manager-specific
+// retention backend. APK retains requirements within its add transaction.
+func productionPackageManager(name string) bool {
+	switch name {
+	case "/usr/bin/apt-get", "/usr/bin/dnf", "/usr/bin/yum", "/sbin/apk", "/usr/sbin/apk":
+		return true
+	default:
+		return false
+	}
 }
 
 func productionExternalCommandEnvironment() []string {
@@ -135,6 +153,23 @@ func productionExternalCommandEnvironment() []string {
 }
 
 func executeExternalCommand(ctx context.Context, name string, environment []string, args ...string) error {
+	if name == "/sbin/apk" || name == "/usr/sbin/apk" {
+		preserved, err := apkPreservedInstallArguments(name, args, productionOpenRCWireGuardDefinitionPaths())
+		if err != nil {
+			return fmt.Errorf("preserve installed APK dependencies before update: %w", err)
+		}
+		args = preserved
+	}
+	cmd, err := productionExternalCommand(ctx, name, environment, args...)
+	if err != nil {
+		return err
+	}
+	return cmd.Run()
+}
+
+// Construct without executing so callers can inspect the actual fixed-path
+// command boundary without invoking a package manager or changing its database.
+func productionExternalCommand(ctx context.Context, name string, environment []string, args ...string) (*exec.Cmd, error) {
 	var cmd *exec.Cmd
 	switch name {
 	case "/usr/bin/apt-get":
@@ -158,7 +193,10 @@ func executeExternalCommand(ctx context.Context, name string, environment []stri
 	case "/usr/bin/systemctl":
 		cmd = exec.CommandContext(ctx, "/usr/bin/systemctl")
 	default:
-		return fmt.Errorf("refusing untrusted executable path %q", name)
+		return nil, fmt.Errorf("refusing untrusted executable path %q", name)
+	}
+	if productionPackageManager(name) {
+		cmd.Dir = "/"
 	}
 	cmd.Args = append([]string{cmd.Path}, args...)
 	if environment != nil {
@@ -166,25 +204,26 @@ func executeExternalCommand(ctx context.Context, name string, environment []stri
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return cmd, nil
 }
 
 func validateExternalCommand(name string, args []string) error {
 	switch name {
 	case "/usr/bin/apt-get":
-		if len(args) != 5 {
+		if len(args) != 7 {
 			break
 		}
-		if args[0] == "-o" && args[1] == aptDPkgLockTimeoutOption && args[2] == "install" &&
-			args[3] == "-y" && validSecurePackageArgument(args[4]) {
+		if args[0] == "-o" && args[1] == aptDPkgLockTimeoutOption && args[2] == "--no-install-recommends" &&
+			args[3] == "--no-remove" && args[4] == "install" && args[5] == "-y" && validSecurePackageArgument(args[6]) {
 			return nil
 		}
 	case "/usr/bin/dnf", "/usr/bin/yum":
-		if len(args) != 4 {
+		if len(args) != 7 {
 			break
 		}
-		if args[0] == "--setopt=localpkg_gpgcheck=1" && args[1] == "install" &&
-			args[2] == "-y" && validSecurePackageArgument(args[3]) {
+		if args[0] == "--setopt=localpkg_gpgcheck=1" && args[1] == "--setopt=install_weak_deps=False" &&
+			args[2] == "--setopt=clean_requirements_on_remove=False" && args[3] == "--setopt=obsoletes=False" &&
+			args[4] == "install" && args[5] == "-y" && validSecurePackageArgument(args[6]) {
 			return nil
 		}
 	case "/sbin/apk", "/usr/sbin/apk":
