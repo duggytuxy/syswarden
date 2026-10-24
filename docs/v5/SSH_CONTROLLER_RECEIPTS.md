@@ -33,8 +33,10 @@ The controller validates the approved challenge, request and signing identity
 before any connection. It then invokes the existing all-context fresh SSH
 transport. The authorization guard and trusted local clock are checked around
 that execution and after signing. Expiry is exclusive, and a clock moving
-backward during a call is refused. Cancellation, late revocation, expiry or a
-failed final route returns no signed result. Cloned inputs cannot be changed by
+backward during a call is refused. Both elapsed-time ordering and wall-clock
+ordering are checked, because receipt expiry is expressed as Unix time. A
+monotonic reading cannot hide a wall-clock rollback. Cancellation, late
+revocation, expiry or a failed final route returns no signed result. Cloned inputs cannot be changed by
 later caller buffer mutations.
 
 Only a successful batch produces a signed canonical payload. It binds the

@@ -127,7 +127,8 @@ func probeSSHAccessChallenge(parent context.Context, requestWire, challengeWire 
 	check := func() error {
 		authorizationErr := guard()
 		now := clock()
-		if now.Before(last) {
+		// Expiry uses wall time; a monotonic reading must not mask its rollback.
+		if now.Before(last) || now.Round(0).Before(last.Round(0)) {
 			return ErrInventoryChanged
 		}
 		last = now
@@ -279,7 +280,8 @@ func withSSHIssuedAccessReceipt(ctx context.Context, journal *sshJournal, approv
 	guard := func() error {
 		authorizationErr := authorize()
 		now := clock()
-		if now.Before(last) {
+		// Expiry uses wall time; a monotonic reading must not mask its rollback.
+		if now.Before(last) || now.Round(0).Before(last.Round(0)) {
 			return ErrInventoryChanged
 		}
 		last = now

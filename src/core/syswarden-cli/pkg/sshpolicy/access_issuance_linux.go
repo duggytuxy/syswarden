@@ -59,7 +59,8 @@ func issueSSHAuthorizedAccessChallenge(ctx context.Context, journal *sshJournal,
 	guard := func() error {
 		authErr := authority.recheck()
 		now := clock()
-		if now.Before(last) {
+		// Expiry uses wall time; a monotonic reading must not mask its rollback.
+		if now.Before(last) || now.Round(0).Before(last.Round(0)) {
 			return ErrInventoryChanged
 		}
 		last = now
