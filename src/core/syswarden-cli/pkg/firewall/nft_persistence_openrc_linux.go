@@ -14,13 +14,16 @@ import (
 )
 
 type nftOpenRCObservation struct {
-	profile map[string]string
-	configs []string
-	runtime nftOpenRCRuntime
+	profile   map[string]string
+	configs   []string
+	runtime   nftOpenRCRuntime
+	processes nftOpenRCProcessObserver
 }
 
+type nftOpenRCProcessObserver func(nftPersistenceFilesystem) (nftPersistenceRead, error)
+
 var nftOpenRCAbsentPaths = []string{
-	"/sbin/livecd-functions.sh", "/etc/profile.env", "/etc/conf.d/rc",
+	"/var/cache/rc/openrc-run.sh", "/sbin/livecd-functions.sh", "/usr/local/etc/init.d/nftables", "/etc/profile.env", "/etc/conf.d/rc",
 	"/bin/nft", "/sbin/nft", "/usr/bin/nft",
 	"/usr/libexec/rc/sbin/nft", "/usr/libexec/rc/bin/nft",
 	"/usr/local/sbin/nft", "/usr/local/bin/nft",
@@ -49,7 +52,7 @@ func requireNFTOpenRCPathAbsent(host nftPersistenceFilesystem, path string) erro
 	return nil
 }
 
-func captureNFTOpenRCLoader(ctx context.Context, host nftPersistenceFilesystem, profiles []map[string]string) (*nftPersistenceLoaderInspection, error) {
+func captureNFTOpenRCLoader(ctx context.Context, host nftPersistenceFilesystem, profiles []map[string]string, processes nftOpenRCProcessObserver) (*nftPersistenceLoaderInspection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -113,14 +116,14 @@ func captureNFTOpenRCLoader(ctx context.Context, host nftPersistenceFilesystem, 
 			return nil, err
 		}
 	}
-	runtime, err := captureNFTOpenRCRuntime(host)
+	runtime, err := captureNFTOpenRCRuntime(host, processes)
 	if err != nil {
 		return nil, err
 	}
 	inspection.status = nftPersistenceLoaderStatus{values: values, entries: []string{nftOpenRCRulesFile(values)}, binary: "/usr/sbin/nft", fragments: []string{"/etc/init.d/nftables"}}
 	inspection.resolvedBinary = inspection.status.binary
 	inspection.manager = inspection.files["/sbin/openrc-run"]
-	inspection.openrc = &nftOpenRCObservation{matched, configs, runtime}
+	inspection.openrc = &nftOpenRCObservation{matched, configs, runtime, processes}
 	content, err := json.Marshal(struct {
 		Schema  string                            `json:"schema"`
 		Values  map[string]string                 `json:"values"`
@@ -135,7 +138,11 @@ func captureNFTOpenRCLoader(ctx context.Context, host nftPersistenceFilesystem, 
 }
 
 func inspectNFTOpenRCLoader(ctx context.Context, host nftPersistenceFilesystem, profiles []map[string]string) (*nftPersistenceLoaderInspection, error) {
-	inspection, err := captureNFTOpenRCLoader(ctx, host, profiles)
+	return inspectNFTOpenRCLoaderUsing(ctx, host, profiles, captureNFTOpenRCProcesses)
+}
+
+func inspectNFTOpenRCLoaderUsing(ctx context.Context, host nftPersistenceFilesystem, profiles []map[string]string, processes nftOpenRCProcessObserver) (*nftPersistenceLoaderInspection, error) {
+	inspection, err := captureNFTOpenRCLoader(ctx, host, profiles, processes)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +153,7 @@ func (inspection *nftPersistenceLoaderInspection) verifyOpenRC(ctx context.Conte
 	if inspection == nil || inspection.openrc == nil {
 		return fmt.Errorf("OpenRC nftables observation is incomplete")
 	}
-	next, err := captureNFTOpenRCLoader(ctx, inspection.host, []map[string]string{inspection.openrc.profile})
+	next, err := captureNFTOpenRCLoader(ctx, inspection.host, []map[string]string{inspection.openrc.profile}, inspection.openrc.processes)
 	if err != nil {
 		return err
 	}

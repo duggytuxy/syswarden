@@ -258,10 +258,12 @@ inventory. Unrelated records remain byte-for-byte unchanged, and the original
 inode is retained privately. A custom provider or unresolved producer remains a
 refusal. Full native uninstall, remove and purge qualification remains required.
 
-The current complete native APK probes still refuse firewall retirement: the
-shared nftables persistence observer attests a systemd loader and does not yet
-attest the Alpine OpenRC loader. The recovery copy and exact cron retirement do
-not remove this blocker. Do not install systemd as a workaround, bypass the
-observer, stop the shared nftables service or flush its rules. OpenRC loader
-configuration and its effective entry points require their own bounded
-observation before native removal can be qualified.
+Early complete native APK probes exposed a systemd-only nftables persistence
+observer. The candidate now has a [bounded Alpine OpenRC observer](OPENRC_NFTABLES_OBSERVATION.md)
+for reviewed distribution definitions, literal configuration, native runtime
+state and active loader processes. It never executes an init script to obtain
+status. Unknown or changing inputs remain a refusal, preserving existing
+protection. Do not install systemd as a workaround, bypass the observer, stop the
+shared nftables service or flush its rules. Component checks and recovery payload
+retention do not establish complete native uninstall, remove or purge acceptance;
+each complete path still requires its own qualification.

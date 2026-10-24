@@ -57,7 +57,7 @@ func TestNFTOpenRCReadsLoaderWithoutExecutingShellOrNFT(t *testing.T) {
 	host, profiles := fixtureNFTOpenRCLoader(t)
 	writeNFTOpenRCFixture(t, host, "/etc/rc.conf.d/custom.conf", "rules_file='/etc/global.nft'\n")
 	writeNFTOpenRCFixture(t, host, "/etc/conf.d/nftables", "rules_file='/etc/operator.nft'\n")
-	loader, err := inspectNFTOpenRCLoader(context.Background(), host, profiles)
+	loader, err := inspectNFTOpenRCLoaderUsing(context.Background(), host, profiles, fixtureNFTOpenRCPID1Only)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +108,26 @@ func TestNFTOpenRCRejectsUnsafeDefinitionsAndState(t *testing.T) {
 		"runlevel transition": func(t *testing.T, h nftPersistenceFilesystem) {
 			writeNFTOpenRCFixture(t, h, "/run/openrc/rc.starting", "")
 		},
+		"scheduled alias": func(t *testing.T, h nftPersistenceFilesystem) {
+			writeNFTOpenRCFixture(t, h, "/run/queue/nftables", "pending")
+			if err := h.root.Symlink("/run/queue", "run/openrc/scheduled/trigger"); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"local service": func(t *testing.T, h nftPersistenceFilesystem) {
+			writeNFTOpenRCFixture(t, h, "/usr/local/etc/init.d/nftables", "#!/bin/sh\nexit 0\n")
+		},
+		"runlevel cycle": func(t *testing.T, h nftPersistenceFilesystem) {
+			if err := h.root.Symlink("../default", "etc/runlevels/default/loop"); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"runtime wrapper": func(t *testing.T, h nftPersistenceFilesystem) {
+			writeNFTOpenRCFixture(t, h, "/run/openrc/openrc-run.sh", "#!/bin/sh\n")
+		},
+		"cached wrapper": func(t *testing.T, h nftPersistenceFilesystem) {
+			writeNFTOpenRCFixture(t, h, "/var/cache/rc/openrc-run.sh", "#!/bin/sh\n")
+		},
 		"pid1": func(t *testing.T, h nftPersistenceFilesystem) { writeNFTOpenRCFixture(t, h, "/proc/1/comm", "sh\n") },
 		"softlevel": func(t *testing.T, h nftPersistenceFilesystem) {
 			writeNFTOpenRCFixture(t, h, "/run/openrc/softlevel", "shutdown\n")
@@ -135,7 +155,7 @@ func TestNFTOpenRCRejectsUnsafeDefinitionsAndState(t *testing.T) {
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
 			host, profiles := fixtureNFTOpenRCLoader(t)
-			loader, err := inspectNFTOpenRCLoader(context.Background(), host, profiles)
+			loader, err := inspectNFTOpenRCLoaderUsing(context.Background(), host, profiles, fixtureNFTOpenRCPID1Only)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -143,7 +163,7 @@ func TestNFTOpenRCRejectsUnsafeDefinitionsAndState(t *testing.T) {
 			if err := loader.verify(context.Background()); err == nil {
 				t.Fatal("changed input accepted")
 			}
-			if _, err := inspectNFTOpenRCLoader(context.Background(), host, profiles); err == nil {
+			if _, err := inspectNFTOpenRCLoaderUsing(context.Background(), host, profiles, fixtureNFTOpenRCPID1Only); err == nil {
 				t.Fatal("unsafe initial state accepted")
 			}
 		})
@@ -164,7 +184,7 @@ func TestNFTOpenRCBootProofRequiresStartedAndEnabled(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			loader, err := inspectNFTOpenRCLoader(context.Background(), host, profiles)
+			loader, err := inspectNFTOpenRCLoaderUsing(context.Background(), host, profiles, fixtureNFTOpenRCPID1Only)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -206,4 +226,15 @@ func TestNFTOpenRCConfigurationHasLiteralShellMeaning(t *testing.T) {
 	if nftOpenRCRulesFile(values) != "/etc/legacy.nft" {
 		t.Fatal("legacy literal alias lost")
 	}
+}
+
+// Loader fixture tests isolate the process scanner, which has its own synthetic
+// procfs adversarial suite and a production-only filesystem attestation.
+func fixtureNFTOpenRCPID1Only(host nftPersistenceFilesystem) (nftPersistenceRead, error) {
+	directory, err := host.openDirectory("/proc/1")
+	if err != nil {
+		return nftPersistenceRead{}, err
+	}
+	defer func() { _ = directory.Close() }()
+	return readNFTOpenRCRuntimeFile(host, directory, "comm")
 }

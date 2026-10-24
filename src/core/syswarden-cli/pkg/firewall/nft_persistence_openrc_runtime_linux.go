@@ -124,7 +124,7 @@ func rejectNFTOpenRCPending(host nftPersistenceFilesystem, directory *os.Root, d
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
-			continue
+			return fmt.Errorf("OpenRC scheduled inventory contains an unsupported alias or entry")
 		}
 		child, err := openNFTOpenRCChild(host, directory, entry.Name())
 		if err != nil {
@@ -197,6 +197,10 @@ func captureNFTOpenRCEnablement(host nftPersistenceFilesystem, result *nftOpenRC
 		if err != nil {
 			return err
 		}
+		if err := rejectNFTOpenRCStack(host, directory, entry.Name()); err != nil {
+			_ = directory.Close()
+			return err
+		}
 		proof, linkErr := readNFTOpenRCLink(host, directory, "nftables")
 		_ = directory.Close()
 		if errors.Is(linkErr, fs.ErrNotExist) {
@@ -213,7 +217,38 @@ func captureNFTOpenRCEnablement(host nftPersistenceFilesystem, result *nftOpenRC
 	return nil
 }
 
-func captureNFTOpenRCRuntime(host nftPersistenceFilesystem) (nftOpenRCRuntime, error) {
+func rejectNFTOpenRCStack(host nftPersistenceFilesystem, directory *os.Root, level string) error {
+	entries, err := nftOpenRCEntries(directory)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		// OpenRC follows directory links as stacked runlevels. An unresolved
+		// stack or cycle cannot establish the simple boot/default contract.
+		info, err := directory.Lstat(entry.Name())
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			target, readErr := directory.Readlink(entry.Name())
+			if readErr != nil {
+				return readErr
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join("/etc/runlevels", level, target)
+			}
+			parent, openErr := host.openDirectory(filepath.Dir(target))
+			if openErr != nil {
+				return openErr
+			}
+			info, err = parent.Lstat(filepath.Base(target))
+			_ = parent.Close()
+		}
+		if err != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("OpenRC runlevel stack or unresolved service requires separate observation")
+		}
+	}
+	return nil
+}
+
+func captureNFTOpenRCRuntime(host nftPersistenceFilesystem, processes nftOpenRCProcessObserver) (nftOpenRCRuntime, error) {
 	result := nftOpenRCRuntime{proofs: make(map[string]nftPersistenceRead)}
 	parent, err := host.openDirectory("/run")
 	if err != nil {
@@ -225,7 +260,7 @@ func captureNFTOpenRCRuntime(host nftPersistenceFilesystem) (nftOpenRCRuntime, e
 		return result, err
 	}
 	defer func() { _ = runtime.Close() }()
-	for _, marker := range []string{"rc.starting", "rc.stopping"} {
+	for _, marker := range []string{"rc.starting", "rc.stopping", "openrc-run.sh"} {
 		if _, err := runtime.Lstat(marker); !errors.Is(err, fs.ErrNotExist) {
 			return result, fmt.Errorf("OpenRC runlevel transition is pending")
 		}
@@ -243,12 +278,10 @@ func captureNFTOpenRCRuntime(host nftPersistenceFilesystem) (nftOpenRCRuntime, e
 			return result, fmt.Errorf("unsupported OpenRC runlevel")
 		}
 	}
-	proc, err := host.openDirectory("/proc/1")
-	if err != nil {
-		return result, err
+	if processes == nil {
+		return result, fmt.Errorf("OpenRC process observer is missing")
 	}
-	comm, err := readNFTOpenRCRuntimeFile(host, proc, "comm")
-	_ = proc.Close()
+	comm, err := processes(host)
 	if err != nil {
 		return result, err
 	}

@@ -29,13 +29,16 @@ It resolves `rules_file`, the legacy `NFTABLES_SAVE` alias, or the distribution
 default `/etc/nftables.nft`. Spaces in values require quotes. It refuses shell
 evaluation, unknown settings, namespace overrides, forwarding changes and
 save-on-stop. Optional legacy/environment imports, plugins, hidden global
-configuration, runlevel-specific service configuration and executable shadowing
+configuration, runlevel-specific service configuration, cached or runtime
+framework overrides, and executable shadowing
 are refused rather than silently ignored. This is deliberately not a general
 shell interpreter.
 
 Observation requires a coherent OpenRC runtime and PID 1, stable runlevel state,
-and no pending or failed nftables transition. Persistent runlevel links are
-observed separately. An operator boot-loader proof additionally requires a
+and no pending or failed nftables transition. A separate bounded procfs
+inspection rejects active loader processes, including reloads that do not set
+OpenRC transition markers. Unreadable or changing observations refuse recovery. Persistent runlevel links are
+observed separately; unresolved stacked runlevels are refused. An operator boot-loader proof additionally requires a
 started nftables service and its enablement in `boot` or `default`; an idle
 unstarted loader alone does not establish that proof. Runtime observation does
 not establish rule ownership or current kernel enforcement.
