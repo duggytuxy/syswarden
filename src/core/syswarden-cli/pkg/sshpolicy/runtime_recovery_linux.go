@@ -380,14 +380,15 @@ func recoverSSHActivatedConfiguration(ctx context.Context, journal *sshJournal, 
 	}
 	// request owns the runtime checks through signal dispatch and observation.
 	// Its consumed lease must not be checked again as if it were unattempted.
-	requestFence := func() error {
-		if lease.identity() != intent.Target {
-			return ErrInventoryChanged
-		}
-		return baseFence()
+	// request serializes the target under its own mutex. Its policy callback
+	// must not reenter identity/check and deadlock that mutex. Check identity
+	// again only after request returns and releases its ownership lock.
+	requestGuard := sshRollbackInventoryGuard(ctx, journal, intent.Transaction, current, parserCheck, baseFence)
+	requestErr := lease.request(ctx, requestGuard)
+	if lease.identity() != intent.Target {
+		requestErr = errors.Join(requestErr, ErrInventoryChanged)
 	}
-	requestGuard := sshRollbackInventoryGuard(ctx, journal, intent.Transaction, current, parserCheck, requestFence)
-	if err := errors.Join(lease.request(ctx, requestGuard), requestGuard()); err != nil {
+	if err := errors.Join(requestErr, requestGuard()); err != nil {
 		return result, err
 	}
 	result.RequestReturned = true

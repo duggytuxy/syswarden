@@ -120,6 +120,35 @@ func TestSSHRuntimeRecoveryRestoresExactInodesAndNeverClaimsAccess(t *testing.T)
 	}
 }
 
+// Use the actual serialized target: a fixture lease without its mutex cannot
+// detect reentrant identity/check calls from the request's policy guard.
+func TestSSHRuntimeRecoveryWithSerializedTarget(t *testing.T) {
+	_, plan, deps, journal := runtimeRecoveryFixture(t, false, false)
+	sends, observations, closes := 0, 0, 0
+	bind := func(ctx context.Context, guard func() error) (sshActivationLease, error) {
+		if err := errors.Join(ctx.Err(), guard()); err != nil {
+			return nil, err
+		}
+		return &sshActivationTarget{
+			ctx: ctx, target: strings.Repeat("b", 64),
+			verify: func(context.Context) error { return nil },
+			send:   func() error { sends++; return nil },
+			after: func(ctx context.Context, guard func() error) error {
+				observations++
+				return errors.Join(ctx.Err(), guard())
+			},
+			closeFn: func() error { closes++; return nil },
+		}, nil
+	}
+	approved := runtimeRecoveryPlan(t, journal, plan, deps, bind)
+	result, err := recoverSSHActivatedConfiguration(t.Context(), journal, plan.summary.PlanSHA256, deps.parserDigest, approved,
+		deps.run, deps.checkParser, bind, sshPublicationDefaults())
+	if err != nil || !result.ConfigurationRestored || !result.RequestReturned || !result.RecoveryRequired ||
+		sends != 1 || observations != 1 || closes != 2 {
+		t.Fatal("serialized recovery request failed", result, sends, observations, closes, err)
+	}
+}
+
 func TestSSHRuntimeRecoveryResumesBeforeReloadButNeverReplaysReloadIntent(t *testing.T) {
 	for _, kind := range []string{"journal-sync", "directory-sync", "rename-before", "rename-after"} {
 		limit := map[string]int{"journal-sync": 6, "directory-sync": 8, "rename-before": 2, "rename-after": 2}[kind]

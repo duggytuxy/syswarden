@@ -44,12 +44,10 @@ func TestOpenSSHRuntimeRecoveryOracle(t *testing.T) {
 		if err := errors.Join(ctx.Err(), guard()); err != nil {
 			return nil, err
 		}
-		return &activationTestLease{strings.Repeat("d", 64),
-			func() error { return unix.PidfdSendSignal(target.pidfd, 0, nil, 0) },
-			func(ctx context.Context, guard func() error) error {
-				if err := errors.Join(ctx.Err(), guard()); err != nil {
-					return err
-				}
+		return &sshActivationTarget{
+			ctx: ctx, target: strings.Repeat("d", 64),
+			verify: func(context.Context) error { return unix.PidfdSendSignal(target.pidfd, 0, nil, 0) },
+			send: func() error {
 				if _, err := os.Lstat(f.path(DropInPath)); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("restoring request preceded drop-in retirement", err)
 				}
@@ -61,12 +59,17 @@ func TestOpenSSHRuntimeRecoveryOracle(t *testing.T) {
 				runtime.expectForward(target, backend, false)
 				requests++
 				runtime.reload(target)
+				return nil
+			},
+			after: func(ctx context.Context, guard func() error) error {
 				runtime.expectForward(target, backend, true)
 				runtime.expectFreshTransport(target, jump)
 				runtime.expectAccess("target", true)
 				runtime.expectAccess("via-bastion", true)
-				return guard()
-			}, func() error { return nil }}, nil
+				return errors.Join(ctx.Err(), guard())
+			},
+			closeFn: func() error { return nil },
+		}, nil
 	}
 	approved := runtimeRecoveryPlan(t, journal, plan, deps, bind)
 	result, err := recoverSSHActivatedConfiguration(t.Context(), journal, plan.summary.PlanSHA256, deps.parserDigest, approved,

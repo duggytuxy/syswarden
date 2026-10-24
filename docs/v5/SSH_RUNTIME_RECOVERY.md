@@ -68,12 +68,15 @@ qualification remain required before operational acceptance.
 Filesystem tests cover original inode and evidence preservation, independent
 approval, all inverse rename and synchronization failures, explicit resume,
 parser/target/input changes, final parser failure, request cancellation and
-replay refusal. Existing file-only activation fences remain tested.
+replay refusal. A composed test uses the actual serialized request target to
+reject reentrant policy callbacks that could deadlock its ownership mutex.
+Existing file-only activation fences remain tested.
 
 The installed-parser oracle covers forwarding, CIS and attributed legacy CIS
 with declared direct, bastion and Ansible contexts. A separate opt-in runtime
-oracle calls the recovery coordinator with disposable OpenSSH daemons and a
-fixture process lease. It verifies that the former forwarding restriction
+oracle calls the recovery coordinator with disposable OpenSSH daemons and the
+actual serialized request target with fixture observation callbacks. It verifies
+that the former forwarding restriction
 survives disk restoration until the separate reload, then checks restored
 forwarding and fresh direct/ProxyJump authentication. It does not exercise the
 production systemd binder or establish an enrolled independent controller.
