@@ -42,8 +42,11 @@ Loaded aliases must independently resolve to one identical canonical service
 and at most one identical canonical socket. Service process identifiers and
 invocation identities must be internally consistent. An active service also
 requires a bounded canonical cgroup path; inactive services must have none.
-A non-instanced socket must target that service and have a reciprocal
-relationship. Two distinct
+A non-instanced socket must target that service. An active socket also requires
+the reciprocal runtime relationship. An inactive unused socket may be unloaded
+between separate manager queries, so a missing reverse runtime reference alone
+does not invalidate its independently resolved configured target. Existing
+conflicting references and changing samples remain refused. Two distinct
 services or sockets are ambiguous and refused.
 
 An inactive vendor `Accept=yes` socket is recorded as instanced without making
@@ -87,10 +90,14 @@ unsafe executables/endpoints and output bounds through the actual copy path.
 An opt-in installed-manager oracle executes only the fixed read-only queries.
 When run without root it validates the real property format via the system
 bus, not the root adapter's private-bus transport. Native root validation is
-still required before acceptance under the v5.00.0 IVVQ contract.
+still required before acceptance under the v5.00.0 IVVQ contract. The separate
+[isolated production binder oracle](SSH_SYSTEMD_ORACLE.md) now exercises
+root-adapter transport and real reloads in a disposable rootless Debian fixture.
 
 The systemd references describe the
 [`show` property interface](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html)
 and [socket activation and `Accept`](https://www.freedesktop.org/software/systemd/man/latest/systemd.socket.html).
+The [unit garbage collection rules](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#Unit%20Garbage%20Collection)
+explain why an unused inactive socket need not remain loaded between queries.
 Their supported behaviors inform this deliberately bounded adapter; they do
 not establish product support for every service-manager configuration.

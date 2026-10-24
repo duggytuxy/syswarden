@@ -302,3 +302,39 @@ func TestSSHSystemdRecordsInactiveVendorInstancedSocket(t *testing.T) {
 		t.Fatal("accepted incomplete map")
 	}
 }
+
+func TestSSHSystemdInactiveSocketMayLackRuntimeReverseReference(t *testing.T) {
+	for _, scenario := range []string{"inactive", "inactive-alias", "active", "wrong-target", "missing-target", "wrong-reverse", "changing"} {
+		t.Run(scenario, func(t *testing.T) {
+			units := sshManagerFixture("ssh.service", "ssh.socket", true, scenario == "active", scenario == "inactive-alias")
+			units["ssh.service"]["TriggeredBy"] = ""
+			if scenario == "inactive-alias" {
+				units["sshd.service"]["TriggeredBy"] = ""
+			}
+			switch scenario {
+			case "wrong-target":
+				units["ssh.socket"]["Triggers"] = "sshd.service"
+			case "missing-target":
+				units["ssh.socket"]["Triggers"] = ""
+			case "wrong-reverse":
+				units["ssh.service"]["TriggeredBy"] = "sshd.socket"
+			}
+			calls := 0
+			query := func(_ context.Context, name string) ([]byte, error) {
+				calls++
+				if scenario == "changing" && calls == 5 {
+					units["ssh.service"]["TriggeredBy"] = "ssh.socket"
+				}
+				return sshUnitWire(units[name]), nil
+			}
+			got, err := observeSSHSystemd(context.Background(), strings.Repeat("a", 64), query, func() error { return nil })
+			if scenario == "inactive" || scenario == "inactive-alias" {
+				if err != nil || !got.ServiceActive || got.SocketActive || got.Mode != "service" || got.RuntimeActivated {
+					t.Fatal("inactive socket blocked service observation", got, err)
+				}
+			} else if err == nil || got != (SystemdSummary{}) {
+				t.Fatal("ambiguous socket observation accepted", got, err)
+			}
+		})
+	}
+}

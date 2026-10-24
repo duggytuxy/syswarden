@@ -112,7 +112,21 @@ func readSSHSystemdEndpoint(root *os.File, uid int) (inventorySnapshot, error) {
 		return inventorySnapshot{}, ErrInventoryUnsafe
 	}
 	reader.state.nodes["/run/systemd/private"] = stamp(st)
-	return reader.state, nil
+	return sshEndpointAncestors(reader.state), nil
+}
+
+// Shared runtime directory membership changes during ordinary daemon reloads.
+// Retain each protected ancestor's inode, device, type, permissions, owner and
+// captured attributes, but do not bind its unrelated child count or timestamps.
+// The endpoint socket retains its full stamp. Configuration inventories retain
+// their stronger membership and timestamp checks; this is only a bus boundary.
+func sshEndpointAncestors(snapshot inventorySnapshot) inventorySnapshot {
+	for name, node := range snapshot.nodes {
+		if node.exists && node.mode&unix.S_IFMT == unix.S_IFDIR {
+			snapshot.nodes[name] = inventoryStamp{exists: true, dev: node.dev, ino: node.ino, mode: node.mode, uid: node.uid, gid: node.gid}
+		}
+	}
+	return snapshot
 }
 
 // Do not embed bytes.Buffer: its promoted ReadFrom would bypass Write's limit

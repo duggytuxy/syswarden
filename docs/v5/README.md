@@ -162,6 +162,9 @@ public record. Final publication remains subject to the v5.00.0 IVVQ contract.
     The [restoration assessment](SSH_RESTORATION_ASSESSMENT.md) checks complete
     inverse history, the restored graph and current endpoints after reload
     intent without repairing records, repeating a request or accepting recovery.
+    The [isolated systemd binder oracle](SSH_SYSTEMD_ORACLE.md) exercises real
+    production reload dispatch and listener replacement, including no-op and
+    restored-file negative controls with fresh pinned authentication.
     Causal policy-consumption proof and operational recovery completion remain open.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native

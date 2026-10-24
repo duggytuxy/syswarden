@@ -182,7 +182,7 @@ func readSSHSystemBusEndpoint(root *os.File, uid int) (snapshot inventorySnapsho
 		return inventorySnapshot{}, ErrInventoryUnsafe
 	}
 	reader.state.nodes["/run/dbus/system_bus_socket"] = stamp(st)
-	return reader.state, nil
+	return sshEndpointAncestors(reader.state), nil
 }
 
 func validSSHStartupQuery(key string) bool {
