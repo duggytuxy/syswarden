@@ -2,6 +2,7 @@ package network
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -351,6 +352,14 @@ func publishSaaSListPair(ipv4Path, ipv6Path string, ipv4Content, ipv6Content []b
 	oldManifest, oldManifestExists, err := readExistingSaaSList(directory, saasPairManifestName)
 	if err != nil {
 		return err
+	}
+	// A refresh must not silently remove an address family's existing exemptions.
+	// Reject the whole generation before staging, including optional-feed failures.
+	if len(bytes.TrimSpace(oldIPv4)) > 0 && len(bytes.TrimSpace(ipv4Content)) == 0 {
+		return errors.New("SaaS refresh would empty the existing IPv4 allowance; previous pair retained")
+	}
+	if len(bytes.TrimSpace(oldIPv6)) > 0 && len(bytes.TrimSpace(ipv6Content)) == 0 {
+		return errors.New("SaaS refresh would empty the existing IPv6 allowance; previous pair retained")
 	}
 	ipv4Stage, err := stageSaaSList(directory, ipv4Name, ipv4Content)
 	if err != nil {

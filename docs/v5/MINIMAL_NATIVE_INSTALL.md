@@ -102,6 +102,16 @@ the unsigned workflow because its fresh enablement behavior has not been
 qualified against this inactive-installation contract. This guard is not full
 migration or lifecycle acceptance.
 
+## Optional network allowance refresh
+
+The optional SaaS monitor allowance preserves its last published IPv4/IPv6 pair
+when a refresh would empty a previously populated family. This also covers a
+failed optional provider while another provider still returns usable addresses.
+The entire new pair is refused before staging; the previous files and pair
+manifest remain unchanged. An initially single-family allowance remains
+supported. This safeguard concerns additive monitor exemptions, not strict
+GeoIP/ASN allow-mode completeness or verification of provider accuracy.
+
 ## WireGuard credential output
 
 Installation and reactivation never render a client configuration or its QR
