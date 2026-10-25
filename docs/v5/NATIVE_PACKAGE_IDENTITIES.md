@@ -65,9 +65,28 @@ They do not establish native install, update or removal acceptance.
 
 Public workflow generation deliberately remains on the historical `syswarden`
 contract. It does not publish `syswarden-base` or use this local metadata helper.
-The updater, package attestations, unsigned-era discovery and Go removal paths
-still need identity support. Do not deploy the opt-in base artifacts as supported
-packages until those paths and the native lifecycle are qualified.
+The signed update inventory, candidate package attestations and unsigned-era
+discovery still need identity support. Do not deploy the opt-in base artifacts as
+supported packages until those paths and the native lifecycle are qualified.
+
+Standalone uninstall now checks both native names on DEB, RPM and APK. It refuses
+direct payload removal while either name is registered, including partial Debian
+states, and reports the corresponding native removal command. Coexisting names
+or conflicting package authorities require repair. The historical optional RPM
+profile's runtime-only removal exception remains limited to `syswarden`.
+DEB and RPM systemd payload ownership checks select the registered variant and
+bind the file inventory and release evidence to that exact name. They refuse
+cross-variant ownership, coexistence and unproven state. The historical Debian
+recovery exception also remains limited to `syswarden`.
+
+Online and offline updaters require one fully installed compatibility package
+before reading release metadata or opening a qualification bundle, then recheck
+the identity before installation. `syswarden-base` is explicitly refused until
+the authenticated inventory supports it. Unregistered/manual installations are
+also refused and must use their documented installation procedure. Package
+registration checks are bounded read-only queries; they do not authorize an
+automatic variant switch or implement base updates. Native lifecycle qualification
+remains required for these source changes.
 
 ## Payload handoff boundary
 
@@ -177,8 +196,8 @@ transition remains unsupported and requires its own explicit design if requested
 Update artifact naming, signed manifest inventory, package ownership attestations,
 dependency attestations, updater selection and legacy unsigned-era discovery
 together. An old updater's refusal is not successful migration. The current
-updater and Go uninstall discovery still target `syswarden`; packaging metadata
-alone cannot make `syswarden-base` safe to update or completely remove.
+updater deliberately refuses `syswarden-base`; packaging metadata and ownership
+guards alone cannot establish safe updates or complete removal.
 
 Preserve administrator policy and runtime behavior through install, upgrade,
 failure, retry, reload, reboot and maintenance. Qualify standalone uninstall,

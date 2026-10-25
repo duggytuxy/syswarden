@@ -838,14 +838,15 @@ func testUpdaterForPlatform(
 	runner commandRunner,
 ) *updater {
 	return &updater{
-		client:          client,
-		latestURL:       "https://updates.test/latest",
-		downloadBaseURL: "https://updates.test/download",
-		currentVersion:  "v4.02.8",
-		goos:            goos,
-		goarch:          goarch,
-		tempBase:        tempBase,
-		trustedKeys:     keys,
+		preflightNativeIdentity: func(context.Context) error { return nil },
+		client:                  client,
+		latestURL:               "https://updates.test/latest",
+		downloadBaseURL:         "https://updates.test/download",
+		currentVersion:          "v4.02.8",
+		goos:                    goos,
+		goarch:                  goarch,
+		tempBase:                tempBase,
+		trustedKeys:             keys,
 		lookPath: func(name string) (string, error) {
 			switch name {
 			case "apt-get":

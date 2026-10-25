@@ -507,64 +507,67 @@ func attestSysWardenSystemdDropInPackageOwnershipWithDPKGOwner(
 	parseDPKGOwner func([]byte) (string, error),
 ) (string, error) {
 	var claims []string
-	var failures []string
-
-	dpkgQuery, dpkgPresent, err := resolveOptionalFirewallRemovalExecutable(executor, "dpkg-query")
-	if err != nil {
-		return "", err
-	}
-	if dpkgPresent {
-		files, queryErr := executor.output(dpkgQuery, "--listfiles", "syswarden")
-		if queryErr != nil {
-			failures = append(failures, "dpkg-query file inventory failed")
-		} else if err := attestSysWardenDPKGDropInFileList(files, path); err != nil {
-			failures = append(failures, "dpkg-query: "+err.Error())
-		} else {
-			version, versionErr := executor.output(
-				dpkgQuery, "--show", "--showformat="+syswardenDropInDPKGVersionFormat, "syswarden",
-			)
-			if versionErr != nil {
-				failures = append(failures, "dpkg-query version failed")
-			} else if claim, parseErr := parseDPKGOwner(version); parseErr != nil {
-				failures = append(failures, "dpkg-query: "+parseErr.Error())
+	for _, manager := range []string{"dpkg-query", "rpm"} {
+		executable, present, err := resolveOptionalFirewallRemovalExecutable(executor, manager)
+		if err != nil {
+			return "", err
+		}
+		if !present {
+			continue
+		}
+		transaction := manager == "rpm" && servicePackageEnvironment("SYSWARDEN_PKG_INSTALL") == "1"
+		registered, err := queryNativeProductRegistrations(executor, executable, manager, transaction)
+		if err != nil {
+			return "", fmt.Errorf("attest systemd drop-in package registration: %w", err)
+		}
+		if len(registered) > 1 {
+			return "", fmt.Errorf("refusing coexisting SysWarden package variants for systemd ownership")
+		}
+		if len(registered) == 0 {
+			continue
+		}
+		packageName := registered[0].name
+		var claim string
+		if manager == "dpkg-query" {
+			files, err := executor.output(executable, "--listfiles", packageName)
+			if err != nil {
+				return "", fmt.Errorf("query SysWarden dpkg file inventory: %w", err)
+			}
+			if err := attestSysWardenDPKGDropInFileList(files, path); err != nil {
+				return "", err
+			}
+			version, err := executor.output(executable, "--show", "--showformat="+syswardenDropInDPKGVersionFormat, packageName)
+			if err != nil {
+				return "", fmt.Errorf("query SysWarden dpkg version: %w", err)
+			}
+			if packageName == compatibilityNativePackageName {
+				// Historical recovery exceptions belong only to the historical identity.
+				claim, err = parseDPKGOwner(version)
 			} else {
-				claims = append(claims, claim)
+				claim, err = parseSysWardenDPKGDropInOwnerForPackage(packageName, version)
+			}
+			if err != nil {
+				return "", err
+			}
+		} else {
+			owner, err := executor.output(executable, "--query", "--file", path, "--queryformat", syswardenDropInRPMOwnerFormat)
+			if err != nil {
+				return "", fmt.Errorf("query SysWarden RPM file ownership: %w", err)
+			}
+			claim, err = parseSysWardenRPMDropInOwners(owner, transaction)
+			if err != nil {
+				return "", err
 			}
 		}
-	}
-
-	rpm, rpmPresent, err := resolveOptionalFirewallRemovalExecutable(executor, "rpm")
-	if err != nil {
-		return "", err
-	}
-	if rpmPresent {
-		owner, queryErr := executor.output(
-			rpm, "--query", "--file", path, "--queryformat", syswardenDropInRPMOwnerFormat,
-		)
-		if queryErr != nil {
-			failures = append(failures, "RPM ownership query failed")
-		} else if claim, parseErr := parseSysWardenRPMDropInOwners(
-			owner, servicePackageEnvironment("SYSWARDEN_PKG_INSTALL") == "1",
-		); parseErr != nil {
-			failures = append(failures, "RPM: "+parseErr.Error())
-		} else {
-			claims = append(claims, claim)
+		if !strings.HasPrefix(claim, packageName+"@") {
+			return "", fmt.Errorf("SysWarden file owner differs from the registered package variant")
 		}
+		claims = append(claims, claim)
 	}
-
-	if len(claims) == 1 {
-		return claims[0], nil
+	if len(claims) != 1 {
+		return "", fmt.Errorf("SysWarden systemd drop-in requires exactly one native package authority")
 	}
-	if len(claims) > 1 {
-		return "", fmt.Errorf("refusing multiple package authorities for the SysWarden systemd ordering drop-in")
-	}
-	if len(failures) == 0 {
-		return "", fmt.Errorf("no supported package authority can attest the SysWarden systemd ordering drop-in")
-	}
-	return "", fmt.Errorf(
-		"no package authority attested the SysWarden systemd ordering drop-in: %s",
-		strings.Join(failures, "; "),
-	)
+	return claims[0], nil
 }
 
 func attestSysWardenDPKGDropInFileList(output []byte, path string) error {
@@ -587,6 +590,13 @@ func attestSysWardenDPKGDropInFileList(output []byte, path string) error {
 }
 
 func parseSysWardenDPKGDropInOwner(output []byte) (string, error) {
+	return parseSysWardenDPKGDropInOwnerForPackage(compatibilityNativePackageName, output)
+}
+
+func parseSysWardenDPKGDropInOwnerForPackage(packageName string, output []byte) (string, error) {
+	if !validNativeProductPackageName(packageName) {
+		return "", fmt.Errorf("unknown SysWarden native package identity")
+	}
 	if len(output) == 0 || output[len(output)-1] != '\n' || bytes.ContainsAny(output, "\x00\r") ||
 		bytes.Count(output, []byte{'\n'}) != 1 {
 		return "", fmt.Errorf("SysWarden dpkg owner is ambiguous")
@@ -602,7 +612,7 @@ func parseSysWardenDPKGDropInOwner(output []byte) (string, error) {
 	if fields[0] != current {
 		return "", fmt.Errorf("SysWarden dpkg owner differs from the running release")
 	}
-	return "syswarden@" + fields[0] + "#amd64#dpkg", nil
+	return packageName + "@" + fields[0] + "#amd64#dpkg", nil
 }
 
 func currentSysWardenPackageVersion() (string, error) {
@@ -647,11 +657,19 @@ func parseSysWardenRPMDropInOwners(output []byte, packageTransaction bool) (stri
 	}
 	claims := make([]string, 0, len(lines))
 	currentPresent := false
+	packageName := ""
 	for _, line := range lines {
 		fields := strings.Split(line, "\t")
-		if len(fields) != 4 || fields[0] != "syswarden" || !safePackageVersion(fields[1]) ||
+		if len(fields) != 4 || !validNativeProductPackageName(fields[0]) || !safePackageVersion(fields[1]) ||
 			fields[2] != "x86_64" || fields[3] != "8" {
 			return "", fmt.Errorf("SysWarden RPM owner is not exact")
+		}
+		if packageName != "" && fields[0] != packageName {
+			return "", fmt.Errorf("refusing cross-variant RPM payload ownership")
+		}
+		packageName = fields[0]
+		if packageName == baseNativePackageName && !strings.HasSuffix(fields[1], "-"+standardRPMPackageRelease) {
+			return "", fmt.Errorf("base RPM ownership requires the standard package release")
 		}
 		for _, currentEVR := range currentEVRs {
 			if fields[1] == currentEVR {
@@ -659,7 +677,7 @@ func parseSysWardenRPMDropInOwners(output []byte, packageTransaction bool) (stri
 				break
 			}
 		}
-		claims = append(claims, "syswarden@"+fields[1]+"#x86_64#sha256#rpm")
+		claims = append(claims, packageName+"@"+fields[1]+"#x86_64#sha256#rpm")
 	}
 	if !currentPresent {
 		return "", fmt.Errorf("SysWarden RPM ownership does not include the running release")
@@ -673,6 +691,13 @@ func parseSysWardenRPMDropInOwner(output []byte) (string, error) {
 }
 
 func parseInstalledSysWardenDPKG(output []byte) (string, error) {
+	return parseInstalledSysWardenDPKGForPackage(compatibilityNativePackageName, output)
+}
+
+func parseInstalledSysWardenDPKGForPackage(packageName string, output []byte) (string, error) {
+	if !validNativeProductPackageName(packageName) {
+		return "", fmt.Errorf("unknown SysWarden native package identity")
+	}
 	if len(output) == 0 || output[len(output)-1] != '\n' || bytes.ContainsAny(output, "\x00\r") ||
 		bytes.Count(output, []byte{'\n'}) != 1 {
 		return "", fmt.Errorf("installed SysWarden dpkg state is ambiguous")
@@ -689,59 +714,42 @@ func parseInstalledSysWardenDPKG(output []byte) (string, error) {
 	if fields[2] != current {
 		return "", fmt.Errorf("installed SysWarden dpkg release differs from the running release")
 	}
-	return "syswarden@" + fields[2] + "#amd64#dpkg", nil
+	return packageName + "@" + fields[2] + "#amd64#dpkg", nil
 }
 
 func detectInstalledSysWardenPackageAuthority(executor firewallManagerExecutor) (string, error) {
 	var claims []string
-	var failures []string
-
-	dpkgQuery, dpkgPresent, err := resolveOptionalFirewallRemovalExecutable(executor, "dpkg-query")
-	if err != nil {
-		return "", err
-	}
-	if dpkgPresent {
-		output, queryErr := executor.output(
-			dpkgQuery, "--show", "--showformat="+syswardenDropInDPKGInstalledFormat, "syswarden",
-		)
-		switch {
-		case queryErr == nil:
-			claim, parseErr := parseInstalledSysWardenDPKG(output)
-			if parseErr != nil {
-				failures = append(failures, "dpkg-query: "+parseErr.Error())
-			} else {
-				claims = append(claims, claim)
-			}
-		case bytes.Equal(output, []byte(syswardenDropInDPKGAbsentEvidence)):
-		default:
-			failures = append(failures, "dpkg-query package state failed ambiguously")
+	for _, manager := range []string{"dpkg-query", "rpm"} {
+		executable, present, err := resolveOptionalFirewallRemovalExecutable(executor, manager)
+		if err != nil {
+			return "", err
 		}
-	}
-
-	rpm, rpmPresent, err := resolveOptionalFirewallRemovalExecutable(executor, "rpm")
-	if err != nil {
-		return "", err
-	}
-	if rpmPresent {
-		output, queryErr := executor.output(
-			rpm, "--query", "syswarden", "--queryformat", syswardenDropInRPMOwnerFormat,
-		)
-		switch {
-		case queryErr == nil:
-			claim, parseErr := parseSysWardenRPMDropInOwner(output)
-			if parseErr != nil {
-				failures = append(failures, "RPM: "+parseErr.Error())
-			} else {
-				claims = append(claims, claim)
-			}
-		case bytes.Equal(output, []byte(syswardenDropInRPMAbsentEvidence)):
-		default:
-			failures = append(failures, "RPM package state failed ambiguously")
+		if !present {
+			continue
 		}
-	}
-
-	if len(failures) != 0 {
-		return "", fmt.Errorf("cannot attest installed SysWarden package state: %s", strings.Join(failures, "; "))
+		registered, err := queryNativeProductRegistrations(executor, executable, manager, false)
+		if err != nil {
+			return "", err
+		}
+		for _, registration := range registered {
+			var output []byte
+			var claim string
+			if manager == "dpkg-query" {
+				output, err = executor.output(executable, "--show", "--showformat="+syswardenDropInDPKGInstalledFormat, registration.name)
+				if err == nil {
+					claim, err = parseInstalledSysWardenDPKGForPackage(registration.name, output)
+				}
+			} else {
+				output, err = executor.output(executable, "--query", registration.name, "--queryformat", syswardenDropInRPMOwnerFormat)
+				if err == nil {
+					claim, err = parseSysWardenRPMDropInOwner(output)
+				}
+			}
+			if err != nil || !strings.HasPrefix(claim, registration.name+"@") {
+				return "", errors.Join(fmt.Errorf("cannot attest the exact installed SysWarden package variant"), err)
+			}
+			claims = append(claims, claim)
+		}
 	}
 	if len(claims) > 1 {
 		return "", fmt.Errorf("refusing multiple installed SysWarden package authorities")

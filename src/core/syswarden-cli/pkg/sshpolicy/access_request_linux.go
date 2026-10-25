@@ -139,8 +139,27 @@ func prepareSSHActivationAccessRequest(ctx context.Context, journal *sshJournal,
 }
 
 func makeSSHActivationAccessRequest(a *sshActivationAssessment, summary ActivationAssessment, pins []sshAccessRoutePins) ([]byte, error) {
-	contexts := a.owned.plan.intent.Contexts
-	if len(pins) != len(contexts) {
+	routes, err := bindSSHAccessRoutes(a.owned.plan.intent.Contexts, pins)
+	if err != nil {
+		return nil, err
+	}
+	assessment, err := sshActivationDigest(summary)
+	if err != nil {
+		return nil, err
+	}
+	request := sshAccessRequest{Schema: 1, Domain: sshAccessRequestDomain, Transaction: a.owned.prepared.Transaction,
+		Plan: a.owned.prepared.PlanSHA256, Intent: digestBytes(a.intent.data), Target: a.target, Assessment: assessment, Routes: routes}
+	wire, err := json.Marshal(request)
+	if err != nil || len(wire) > maxSSHAccessRequestBytes {
+		return nil, errors.Join(ErrInventoryUnsafe, err)
+	}
+	return wire, nil
+}
+
+// The same complete route binding is required before publication and when
+// preparing post-reload access. Enrollment may not omit or substitute a route.
+func bindSSHAccessRoutes(contexts []accessContext, pins []sshAccessRoutePins) ([]sshAccessRequestRoute, error) {
+	if len(contexts) == 0 || len(contexts) > MaxAccessContexts || len(pins) != len(contexts) {
 		return nil, ErrInventoryUnsafe
 	}
 	byID := make(map[string]sshAccessRoutePins, len(pins))
@@ -150,28 +169,20 @@ func makeSSHActivationAccessRequest(a *sshActivationAssessment, summary Activati
 		}
 		byID[pin.ContextID] = pin
 	}
-	assessment, err := sshActivationDigest(summary)
-	if err != nil {
-		return nil, err
-	}
-	request := sshAccessRequest{Schema: 1, Domain: sshAccessRequestDomain, Transaction: a.owned.prepared.Transaction,
-		Plan: a.owned.prepared.PlanSHA256, Intent: digestBytes(a.intent.data), Target: a.target, Assessment: assessment}
+	routes := make([]sshAccessRequestRoute, 0, len(contexts))
 	for _, access := range contexts {
 		pin, exists := byID[access.ID]
 		if !exists {
 			return nil, ErrInventoryUnsafe
 		}
+		delete(byID, access.ID)
 		route, err := copySSHAccessRoute(sshAccessRequestRoute{access, pin.Target, pin.Jump})
 		if err != nil {
 			return nil, err
 		}
-		request.Routes = append(request.Routes, route)
+		routes = append(routes, route)
 	}
-	wire, err := json.Marshal(request)
-	if err != nil || len(wire) > maxSSHAccessRequestBytes {
-		return nil, errors.Join(ErrInventoryUnsafe, err)
-	}
-	return wire, nil
+	return routes, nil
 }
 
 func parseSSHAccessRequest(wire []byte, approved string) (sshAccessRequest, error) {

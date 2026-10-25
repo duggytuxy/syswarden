@@ -137,9 +137,38 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	if exchange {
 		accessFixture = isolatedSSHEnrollAccess(t, plan.PlanSHA256)
 	}
-	published, err := isolatedSSHPublish(t, ctx, plan.PlanSHA256, label)
-	if err != nil || !published.Published || published.RecoveryRequired || published.Verification.RuntimeActivated {
-		t.Fatal("production publication failed", published, err)
+	if exchange {
+		// Keep the production opener, retained runtime and protected enrollment.
+		// Only the container label resolver uses its explicit fixture label.
+		opener := func(ctx context.Context, approved, enrollment string) (*sshMigrationSession, error) {
+			session, err := openSSHMigrationSession(ctx, approved, enrollment)
+			if err == nil {
+				session.deps.resolveLabel = func(context.Context, inventorySnapshot) (*sshTargetLabel, error) {
+					return &sshTargetLabel{label, func(context.Context) error { return nil }, func() error { return nil }}, nil
+				}
+			}
+			return session, err
+		}
+		migration, err := runSSHMigrationSession(ctx, plan.PlanSHA256, accessFixture.approval, opener)
+		if err != nil || !migration.Published || !migration.IntentDurable || !migration.RequestReturned || !migration.RecoveryRequired {
+			t.Fatal("coordinated production publication/reload failed", migration, err)
+		}
+	} else {
+		published, err := isolatedSSHPublish(t, ctx, plan.PlanSHA256, label)
+		if err != nil || !published.Published || published.RecoveryRequired || published.Verification.RuntimeActivated {
+			t.Fatal("production publication failed", published, err)
+		}
+		probe(profile != "legacy-cis") // Publication did not signal the daemon.
+		session, err := openSSHRecoverySession(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		activation, activationErr := attemptSSHActivation(ctx, session.journal, plan.PlanSHA256,
+			session.parser, session.run, session.check, session.bind)
+		closeErr := session.close()
+		if activationErr != nil || closeErr != nil || !activation.IntentDurable || !activation.RequestReturned || !activation.RecoveryRequired {
+			t.Fatal("production activation boundary failed", activation, activationErr, closeErr)
+		}
 	}
 	drop, err := os.Open(DropInPath)
 	if err != nil {
@@ -149,17 +178,6 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	labelCloseErr := drop.Close()
 	if labelErr != nil || labelCloseErr != nil || !reflect.DeepEqual(actualLabel, label) {
 		t.Fatal("published fixture label differs", labelErr, labelCloseErr)
-	}
-	probe(profile != "legacy-cis") // Publication did not signal the daemon.
-	session, err := openSSHRecoverySession(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	activation, activationErr := attemptSSHActivation(ctx, session.journal, plan.PlanSHA256,
-		session.parser, session.run, session.check, session.bind)
-	closeErr := session.close()
-	if activationErr != nil || closeErr != nil || !activation.IntentDurable || !activation.RequestReturned || !activation.RecoveryRequired {
-		t.Fatal("production activation boundary failed", activation, activationErr, closeErr)
 	}
 	probe(false)
 	if exchange {

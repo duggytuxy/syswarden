@@ -32,13 +32,21 @@ func TestAPKQualificationQueriesUsePortableQuietInstalledOption(t *testing.T) {
 }
 
 func TestAPKStandaloneRemovalUsesPortableQuietInstalledOption(t *testing.T) {
-	executor := testFirewallRemovalPackageExecutor(t, []string{"apk"}, func(_ string, args ...string) ([]byte, error) {
-		if !reflect.DeepEqual(args, []string{"info", "--quiet", "-e", "syswarden"}) {
-			t.Fatalf("nonportable APK ownership query: %v", args)
+	for _, installed := range []string{"syswarden", "syswarden-base"} {
+		calls := 0
+		executor := testFirewallRemovalPackageExecutor(t, []string{"apk"}, func(_ string, args ...string) ([]byte, error) {
+			calls++
+			if len(args) != 4 || !reflect.DeepEqual(args[:3], []string{"info", "--quiet", "-e"}) ||
+				(args[3] != "syswarden" && args[3] != "syswarden-base") {
+				t.Fatalf("nonportable APK ownership query: %v", args)
+			}
+			if args[3] != installed {
+				return nil, packageAuthorityTestExit(1)
+			}
+			return nil, nil
+		})
+		if err := preflightStandaloneUninstallWith(executor, func(string) (bool, error) { return false, nil }); err == nil || !strings.Contains(err.Error(), "apk del "+installed) || calls != 2 {
+			t.Fatalf("installed APK ownership was not preserved: %v calls=%d", err, calls)
 		}
-		return nil, nil
-	})
-	if err := preflightStandaloneUninstallWith(executor, func(string) (bool, error) { return false, nil }); err == nil || !strings.Contains(err.Error(), "apk del") {
-		t.Fatalf("installed APK ownership was not preserved: %v", err)
 	}
 }

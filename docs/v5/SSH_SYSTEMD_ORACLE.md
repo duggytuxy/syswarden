@@ -184,8 +184,10 @@ part of the separate, incomplete #422 migration qualification.
 
 The `access-exchange` scenario extends the forwarding recovery case with a
 single explicitly declared direct administrator context. It independently writes
-a synthetic private controller enrollment, then calls the actual root-only
-request, issuance and receipt adapters after activation. Real OpenSSH
+a synthetic private controller enrollment before publication. It exercises the
+internal coordinated first migration with the production opener and retained
+systemd lease, then calls the actual root-only request, issuance and receipt
+adapters after activation. Only label resolution uses the fixture label. Real OpenSSH
 authentication produces a signed fixture receipt. Issuance and receipt replay
 are refused. Revoking the enrollment blocks a new request, while the subsequent
 original restoration must still succeed and retain both access records.

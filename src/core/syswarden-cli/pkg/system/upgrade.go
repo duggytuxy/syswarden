@@ -49,29 +49,30 @@ type qualificationDependencyAttestor func(context.Context, packageTarget) error
 type qualificationCandidateCLIAttestor func(context.Context, packageTarget, *os.File) (string, error)
 
 type updater struct {
-	client             *http.Client
-	latestURL          string
-	downloadBaseURL    string
-	currentVersion     string
-	goos               string
-	goarch             string
-	tempBase           string
-	trustedKeys        map[string]ed25519.PublicKey
-	lookPath           func(string) (string, error)
-	runCommand         commandRunner
-	effectiveUID       int
-	requireRoot        bool
-	stdout             io.Writer
-	metadataTimeout    time.Duration
-	packageTimeout     time.Duration
-	installTimeout     time.Duration
-	attestTimeout      time.Duration
-	retireWebTUI       func() error
-	attestRPM          installedRPMReleaseAttestor
-	attestInstalled    installedVersionAttestor
-	attestDependencies qualificationDependencyAttestor
-	attestCandidateCLI qualificationCandidateCLIAttestor
-	activateCandidate  qualificationActivator
+	client                  *http.Client
+	latestURL               string
+	downloadBaseURL         string
+	currentVersion          string
+	goos                    string
+	goarch                  string
+	tempBase                string
+	trustedKeys             map[string]ed25519.PublicKey
+	lookPath                func(string) (string, error)
+	runCommand              commandRunner
+	effectiveUID            int
+	requireRoot             bool
+	stdout                  io.Writer
+	metadataTimeout         time.Duration
+	packageTimeout          time.Duration
+	installTimeout          time.Duration
+	attestTimeout           time.Duration
+	retireWebTUI            func() error
+	attestRPM               installedRPMReleaseAttestor
+	preflightNativeIdentity func(context.Context) error
+	attestInstalled         installedVersionAttestor
+	attestDependencies      qualificationDependencyAttestor
+	attestCandidateCLI      qualificationCandidateCLIAttestor
+	activateCandidate       qualificationActivator
 }
 
 func productionHTTPClient() *http.Client {
@@ -271,24 +272,25 @@ func newProductionUpdater() (*updater, error) {
 	}
 
 	return &updater{
-		client:          productionHTTPClient(),
-		latestURL:       latestReleaseAPI,
-		downloadBaseURL: releaseDownloadBase,
-		currentVersion:  Version,
-		goos:            runtime.GOOS,
-		goarch:          runtime.GOARCH,
-		tempBase:        productionTempBase,
-		trustedKeys:     trustedKeys,
-		lookPath:        exec.LookPath,
-		runCommand:      runExternalCommand,
-		effectiveUID:    os.Geteuid(),
-		requireRoot:     true,
-		stdout:          os.Stdout,
-		metadataTimeout: metadataDownloadTimeout,
-		packageTimeout:  packageDownloadTimeout,
-		installTimeout:  packageInstallationTimeout,
-		attestRPM:       attestInstalledStandardRPMRelease,
-		attestInstalled: attestInstalledQualificationVersion,
+		client:                  productionHTTPClient(),
+		latestURL:               latestReleaseAPI,
+		downloadBaseURL:         releaseDownloadBase,
+		currentVersion:          Version,
+		goos:                    runtime.GOOS,
+		goarch:                  runtime.GOARCH,
+		tempBase:                productionTempBase,
+		trustedKeys:             trustedKeys,
+		lookPath:                exec.LookPath,
+		runCommand:              runExternalCommand,
+		effectiveUID:            os.Geteuid(),
+		requireRoot:             true,
+		stdout:                  os.Stdout,
+		metadataTimeout:         metadataDownloadTimeout,
+		packageTimeout:          packageDownloadTimeout,
+		installTimeout:          packageInstallationTimeout,
+		attestRPM:               attestInstalledStandardRPMRelease,
+		preflightNativeIdentity: preflightStandardNativeUpdate,
+		attestInstalled:         attestInstalledQualificationVersion,
 		retireWebTUI: func() error {
 			return config.RemoveRetiredWebTUIConfiguration("/etc/syswarden/config")
 		},
@@ -307,6 +309,10 @@ func UpgradeSystem() error {
 
 func (u *updater) run(ctx context.Context) (returnErr error) {
 	if err := u.validateConfiguration(); err != nil {
+		return err
+	}
+
+	if err := u.preflightStandardNativeIdentity(ctx, u.metadataTimeout); err != nil {
 		return err
 	}
 
@@ -416,6 +422,10 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return err
 	}
 
+	if err := u.preflightStandardNativeIdentity(ctx, u.metadataTimeout); err != nil {
+		return fmt.Errorf("native package identity changed before installation: %w", err)
+	}
+
 	fmt.Fprintf(u.stdout, "[INFO] Installing authenticated %s package...\n", target.format)
 	installCtx, cancelInstall := context.WithTimeout(ctx, u.installTimeout)
 	err = u.runCommand(installCtx, target.installer, target.installArguments(packagePath)...)
@@ -431,7 +441,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 }
 
 func (u *updater) validateConfiguration() error {
-	if u.client == nil || u.lookPath == nil || u.runCommand == nil || u.stdout == nil {
+	if u.client == nil || u.lookPath == nil || u.runCommand == nil || u.stdout == nil || u.preflightNativeIdentity == nil {
 		return errors.New("updater dependencies are incomplete")
 	}
 	if u.metadataTimeout <= 0 || u.packageTimeout <= 0 || u.installTimeout <= 0 {

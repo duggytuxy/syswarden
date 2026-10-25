@@ -24,6 +24,33 @@ lease closure. A repeated attempt, including one after reopening the journal,
 is refused. No result from this component claims policy consumption, operational
 recovery or a newly authenticated connection.
 
+## Coordinated first publication
+
+The internal migration session now requires both the exact approved plan and
+an independently approved controller enrollment before it changes configuration.
+It checks the explicit TOML selection and matches every enrolled direct or
+bastion route to the plan. A missing route, endpoint mismatch, revoked enrollment
+or an externally owned policy refuses the operation before publication.
+
+The session binds the actual systemd process, executable address space and
+listener generation before publishing. That same retained lease is checked
+through publication and handed once to the durable activation dispatcher. It
+never selects a replacement daemon after configuration has changed. The original
+bounded lifetime remains in force; the dispatch guard checks the published
+configuration and enrollment instead of reusing the obsolete original inventory.
+
+Enrollment must already occupy its protected path when the plan inventory is
+approved. Filling that existing reserved file binds the resulting enrollment
+separately; adding a new directory entry after approval changes the inventory
+and requires a new plan. This internal coordinator does not provision enrollment.
+
+A publication failure never triggers a reload. Once journal preparation exists,
+all partial facts and recovery uncertainty are returned, including errors while
+closing retained resources. Reopening the publication journal revalidates its
+full history under the original approval. It does not adopt a transaction from
+a previous attempt or permit an automatic retry. No public activation command,
+installer hook or terminal migration acceptance is enabled by this composition.
+
 ## Ordering and ownership
 
 The dispatcher first reconstructs the original independently approved plan and

@@ -53,6 +53,8 @@ func (failure *qualificationCommandExitError) Error() string {
 	return fmt.Sprintf("qualification query exited with status %d", failure.code)
 }
 
+func (failure *qualificationCommandExitError) ExitCode() int { return failure.code }
+
 type qualificationBoundedBuffer struct {
 	buffer   bytes.Buffer
 	limit    int
@@ -131,21 +133,22 @@ func newQualificationUpdater() (*updater, error) {
 		return nil, err
 	}
 	return &updater{
-		goos:               runtime.GOOS,
-		goarch:             runtime.GOARCH,
-		tempBase:           productionTempBase,
-		trustedKeys:        trustedKeys,
-		lookPath:           exec.LookPath,
-		runCommand:         runQualificationExternalCommand,
-		effectiveUID:       os.Geteuid(),
-		requireRoot:        true,
-		stdout:             os.Stdout,
-		installTimeout:     packageInstallationTimeout,
-		attestTimeout:      qualificationAttestTimeout,
-		attestInstalled:    attestInstalledQualificationVersion,
-		attestDependencies: attestOfflineQualificationPackageDependencies,
-		attestCandidateCLI: attestQualificationPackageCLI,
-		activateCandidate:  runQualificationActivationCommand,
+		goos:                    runtime.GOOS,
+		goarch:                  runtime.GOARCH,
+		tempBase:                productionTempBase,
+		trustedKeys:             trustedKeys,
+		lookPath:                exec.LookPath,
+		runCommand:              runQualificationExternalCommand,
+		effectiveUID:            os.Geteuid(),
+		requireRoot:             true,
+		stdout:                  os.Stdout,
+		installTimeout:          packageInstallationTimeout,
+		attestTimeout:           qualificationAttestTimeout,
+		attestInstalled:         attestInstalledQualificationVersion,
+		preflightNativeIdentity: preflightStandardNativeUpdate,
+		attestDependencies:      attestOfflineQualificationPackageDependencies,
+		attestCandidateCLI:      attestQualificationPackageCLI,
+		activateCandidate:       runQualificationActivationCommand,
 		retireWebTUI: func() error {
 			return config.RemoveRetiredWebTUIConfiguration("/etc/syswarden/config")
 		},
@@ -154,7 +157,7 @@ func newQualificationUpdater() (*updater, error) {
 
 func (u *updater) validateQualificationConfiguration() error {
 	if u.lookPath == nil || u.runCommand == nil || u.stdout == nil || u.attestInstalled == nil ||
-		u.attestDependencies == nil || u.attestCandidateCLI == nil || u.activateCandidate == nil {
+		u.attestDependencies == nil || u.attestCandidateCLI == nil || u.activateCandidate == nil || u.preflightNativeIdentity == nil {
 		return errors.New("offline qualification updater dependencies are incomplete")
 	}
 	if u.installTimeout <= 0 {
@@ -222,6 +225,9 @@ func (u *updater) attestQualificationInstallation(
 
 func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candidateVersion string) (returnErr error) {
 	if err := u.validateQualificationConfiguration(); err != nil {
+		return err
+	}
+	if err := u.preflightStandardNativeIdentity(ctx, u.attestTimeout); err != nil {
 		return err
 	}
 	if err := validateQualificationCandidateVersion(candidateVersion); err != nil {
@@ -341,6 +347,10 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 		return fmt.Errorf("reverify package after candidate CLI attestation: %w", err)
 	}
 	fmt.Fprintf(u.stdout, "[INFO] Verified package SHA-256 %s.\n", artifact.SHA256)
+
+	if err := u.preflightStandardNativeIdentity(ctx, u.attestTimeout); err != nil {
+		return fmt.Errorf("native package identity changed before qualification installation: %w", err)
+	}
 
 	fmt.Fprintf(u.stdout, "[INFO] Installing authenticated %s qualification package without repository access...\n", target.format)
 	installCtx, cancelInstall := context.WithTimeout(ctx, u.installTimeout)
@@ -1846,6 +1856,9 @@ func runQualificationCommandOutput(ctx context.Context, name string, args ...str
 }
 
 func allowedQualificationQuery(name string, args []string) bool {
+	if allowedNativeProductRegistrationQuery(name, args) {
+		return true
+	}
 	same := func(want ...string) bool {
 		if len(args) != len(want) {
 			return false
