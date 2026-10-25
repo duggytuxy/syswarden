@@ -5,7 +5,9 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
+import struct
 import subprocess
 import tarfile
 import tempfile
@@ -44,6 +46,48 @@ def container_inspection(identity, arguments):
                            "CapAdd": ["CAP_SYS_CHROOT"], "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges"]}}
 
 
+def static_cli_bytes():
+    data = bytearray(160)
+    data[:7] = b"\x7fELF\x02\x01\x01"
+    struct.pack_into("<HHIQQQIHHHHHH", data, 16, 2, 62, 1, 0x400000, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+    struct.pack_into("<IIQQQQQQ", data, 64, 1, 5, 0, 0x400000, 0x400000, len(data), len(data), 4096)
+    return bytes(data)
+
+
+def configuration_export(mutate=None):
+    contents = {name: b"# synthetic inactive configuration\n" for name in probe.CONFIG_FILES}
+    contents["config.toml"] += b'schema_version=1\n[core]\ninstall_profile="unconfigured-v1"\nconfig_dir="/etc/syswarden/config/modules"\n'
+    contents["modules/00-core.toml"] += b'core.install_profile="unconfigured-v1"\ncore.firewall_backend="keep"\n'
+    contents["modules/10-network.toml"] += b'network.policy_mode="lists"\nnetwork.blocklists.list_choice="4"\n'
+    contents["modules/99-user.toml"] += "".join(key + "=false\n" for key in probe.INACTIVE_KEYS).encode()
+    contents["modules/99-user.toml"] += "".join(key + '=""\n' for key in probe.EMPTY_CONFIG_KEYS).encode()
+    contents["modules/99-user.toml"] += b"security.honeyports=[]\n"
+    members = []
+    for name in ("config", "config/modules", *("config/" + name for name in probe.CONFIG_FILES)):
+        entry = tarfile.TarInfo(name)
+        if name in ("config", "config/modules"):
+            entry.type, entry.mode = tarfile.DIRTYPE, 0o700
+            data = b""
+        else:
+            entry.mode = 0o600
+            data = contents[name[7:]]
+            entry.size = len(data)
+        members.append([entry, data])
+    if mutate:
+        mutate(members)
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        for entry, data in members:
+            entry.size = len(data)
+            archive.addfile(entry, io.BytesIO(data))
+    return stream.getvalue()
+
+
+def real_output(format_name="deb"):
+    output = successful_output(format_name=format_name).replace(b"CLI_PHASE=fresh\nCLI_ARGC=1\nCLI_ARG=install\n", b"")
+    return output.replace(b"HOOK_EVENTS_BEGIN", probe.REAL_STAGING_DISPOSITION.encode() + b"\nREAL_CONFIGURATION_PASS\nHOOK_EVENTS_BEGIN")
+
+
 class FreshHookDispatchTests(unittest.TestCase):
     def identity(self, root=Path("/tmp")):
         helpers = probe.isolation_helpers()
@@ -76,6 +120,229 @@ class FreshHookDispatchTests(unittest.TestCase):
                         self.assertIn(b'!= 0:0', selected)
                         self.assertIn(b'syswarden_set_native_install_phase preinstall "$@"', selected)
 
+    def test_static_cli_requires_exact_amd64_executable_without_interpreter_or_dynamic_segments(self):
+        data = static_cli_bytes()
+        probe.validate_static_amd64_elf(data)
+        mutations = [b"not-elf", data[:63]]
+        for offset, format_name, value in ((4, "B", 1), (5, "B", 2), (7, "B", 9), (16, "H", 3),
+                (18, "H", 183), (20, "I", 2), (32, "Q", 1000), (52, "H", 0), (54, "H", 0),
+                (56, "H", 0), (56, "H", 129), (64, "I", 2), (64, "I", 3), (68, "I", 4),
+                (72, "Q", 1000), (96, "Q", 1000), (104, "Q", 1)):
+            changed = bytearray(data)
+            struct.pack_into("<" + format_name, changed, offset, value)
+            mutations.append(bytes(changed))
+        for data in mutations:
+            with self.subTest(data=data[:24]), self.assertRaises(ValueError):
+                probe.validate_static_amd64_elf(data)
+
+    def test_real_cli_snapshot_refuses_symlink_multilink_and_identity_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "cli"
+            binary.write_bytes(static_cli_bytes())
+            binary.chmod(0o700)
+            link = root / "link"
+            link.symlink_to(binary)
+            with self.assertRaises(ValueError):
+                probe.native.snapshot_retention_binary(link)
+            link.unlink()
+            os.link(binary, link)
+            with self.assertRaises(ValueError):
+                probe.native.snapshot_retention_binary(binary)
+            link.unlink()
+            snapshot = probe.native.snapshot_retention_binary(binary)
+            binary.write_bytes(static_cli_bytes() + b"changed")
+            with self.assertRaises(ValueError):
+                snapshot.recheck()
+
+    def test_independent_toml_export_refuses_inventory_links_permissions_and_active_policy(self):
+        result = probe.parse_configuration_export(configuration_export())
+        self.assertEqual(set(result["configuration_sha256"]), set(probe.CONFIG_FILES))
+        self.assertTrue(result["independent_toml_validation"])
+        mutations = [lambda members: members.pop(), lambda members: members.append(copy.deepcopy(members[-1])),
+                     lambda members: setattr(members[-1][0], "name", "config/../outside"),
+                     lambda members: setattr(members[-1][0], "name", "config/extra.toml"),
+                     lambda members: setattr(members[-1][0], "type", tarfile.SYMTYPE),
+                     lambda members: setattr(members[-1][0], "type", tarfile.LNKTYPE),
+                     lambda members: setattr(members[-1][0], "type", tarfile.GNUTYPE_SPARSE),
+                     lambda members: setattr(members[0][0], "name", "/"),
+                     lambda members: setattr(members[-1][0], "name", "config//modules/99-user.toml"),
+                     lambda members: setattr(members[-1][0], "name", "./config/modules/99-user.toml"),
+                     lambda members: setattr(members[-1][0], "uid", 1000),
+                     lambda members: setattr(members[-1][0], "mode", 0o644),
+                     lambda members: setattr(members[0][0], "mode", 0o777),
+                     lambda members: members[-1].__setitem__(1, b"invalid TOML = ["),
+                     lambda members: members[-1].__setitem__(1, members[-1][1].replace(b"=false", b"=true", 1)),
+                     lambda members: members[-1].__setitem__(1, members[-1][1].replace(b"=false", b'="false"', 1)),
+                     lambda members: members[-1].__setitem__(1, b"# missing switches\n"),
+                     lambda members: members[4].__setitem__(1, members[4][1].replace(b'choice="4"', b'choice="1"')),
+                     lambda members: members[2].__setitem__(1, members[2][1].replace(b'unconfigured-v1', b'standard-v1')),
+                     lambda members: members[2].__setitem__(1, members[2][1].replace(b'schema_version=1', b'schema_version=true'))]
+        for index, mutation in enumerate(mutations):
+            with self.subTest(mutation=index), self.assertRaises(ValueError):
+                probe.parse_configuration_export(configuration_export(mutation))
+        def over_aggregate(members):
+            for entry in members[2:]:
+                entry[1] = b"#" + b"x" * ((128 << 10) - 2) + b"\n"
+        with self.assertRaisesRegex(ValueError, "aggregate"):
+            probe.parse_configuration_export(configuration_export(over_aggregate))
+        for bad in (b"", b"not-tar", b"x" * ((2 << 20) + 1), configuration_export() + b"trailing",
+                    configuration_export() + configuration_export()):
+            with self.assertRaises(ValueError):
+                probe.parse_configuration_export(bad)
+
+    def test_raw_tar_framing_rejects_hidden_pax_gnu_and_nonfile_headers(self):
+        good = configuration_export()
+        probe.validate_configuration_tar_framing(good)
+        for kind in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK,
+                     tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.GNUTYPE_SPARSE, tarfile.FIFOTYPE, tarfile.CHRTYPE):
+            entry = tarfile.TarInfo("override")
+            entry.type = kind
+            content = b"config/modules/99-user.toml\0"
+            entry.size = len(content)
+            header = entry.tobuf(format=tarfile.USTAR_FORMAT)
+            prefixed = header + content + b"\0" * ((-len(content)) % 512) + good
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "unsupported raw tar header"):
+                probe.parse_configuration_export(prefixed)
+        # A valid PAX record can cause tarfile to expose an allowed name even
+        # when the underlying raw regular header contains a foreign name.
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            entry = tarfile.TarInfo("foreign")
+            entry.pax_headers = {"path": "config/config.toml"}
+            archive.addfile(entry, io.BytesIO(b""))
+        with self.assertRaisesRegex(ValueError, "unsupported raw tar header"):
+            probe.parse_configuration_export(stream.getvalue())
+        for data in (good[:-1], good + b"x" * 512, b"\0" * 512, good[:512],
+                     good[:124] + b"9" * 12 + good[136:],
+                     good[:345] + b"prefix" + good[351:]):
+            with self.subTest(data=data[:20]), self.assertRaises(ValueError):
+                probe.validate_configuration_tar_framing(data)
+
+    def test_real_cli_output_requires_actual_staging_and_validation_without_stub_events(self):
+        for format_name in probe.FORMATS:
+            good = real_output(format_name)
+            self.assertTrue(probe.parse_result(good, "local", "syswarden", format_name, True)["fresh_cli_staging_call"])
+            for invalid in (successful_output(format_name=format_name), good.replace(b"REAL_CONFIGURATION_PASS\n", b""),
+                            good.replace(probe.REAL_STAGING_DISPOSITION.encode(), b"wrong disposition"),
+                            good.replace(b"REAL_CONFIGURATION_PASS", b"REAL_CONFIGURATION_PASS\nREAL_CONFIGURATION_PASS"),
+                            good.replace(b"HOOK_EVENTS_END", b"CLI_PHASE=fresh\nHOOK_EVENTS_END")):
+                with self.assertRaises(ValueError):
+                    probe.parse_result(invalid, "local", "syswarden", format_name, True)
+            with self.assertRaises(ValueError):
+                probe.parse_result(good, "local", "syswarden", format_name)
+
+    def test_final_admin_and_forbidden_checks_follow_readonly_validation(self):
+        validation = probe.SCRIPT.index("/bin/sh validate-real.sh")
+        self.assertGreater(probe.SCRIPT.index("test ! -s forbidden"), validation)
+        self.assertGreater(probe.SCRIPT.index("sha256sum -c administrator.sha256"), validation)
+        self.assertIn("/etc/cron.d/syswarden /etc/cron.d/.syswarden*", probe.REAL_VALIDATION)
+
+    def test_shell_permission_check_cannot_overwrite_real_cli_dispatch(self):
+        # Execute the actual selection, permission and branch fragments using
+        # only private fixture files and a shell function for container stat.
+        # Reusing the selection variable for permissions makes this test fail.
+        lines = probe.SCRIPT.splitlines()
+        selection = next(line for line in lines if "=$(cat cli-mode)" in line)
+        selection_case = next(line for line in lines if "in stub|real)" in line)
+        permission = next(line for line in lines if "=$(stat -c '%a' /run/.containerenv)" in line)
+        permission_check = next(line for line in lines if "& 0022))" in line)
+        branches = re.findall(r'if \[ "\$[a-z_]+" = real \]; then\n.*?\nfi', probe.SCRIPT, flags=re.DOTALL)
+        self.assertEqual(len(branches), 2)
+        for selected in ("stub", "real"):
+            with self.subTest(selected=selected), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "cli-mode").write_text(selected + "\n")
+                (root / "validate-real.sh").write_text("printf 'real-validation-called\\n'\n")
+                program = "\n".join(("set -eu", "stat() { printf '644\\n'; }", selection, selection_case,
+                                      permission, permission_check, *branches,
+                                      "printf 'list=%s wg=%s\\n' \"${SYSWARDEN_LIST_CHOICE:-unset}\" \"${SYSWARDEN_ENABLE_WG:-unset}\""))
+                program = program.replace("/etc/syswarden", str(root / "absent"))
+                result = subprocess.run(["/bin/sh", "-eu", "-c", program], cwd=root, env={"PATH": os.environ["PATH"]},
+                                        capture_output=True, check=False, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = b"real-validation-called\nlist=1 wg=y\n" if selected == "real" else b"list=unset wg=unset\n"
+                self.assertEqual(result.stdout, expected)
+
+    def test_real_mode_inherits_only_known_legacy_selection_challenges(self):
+        parser = (probe.ROOT / "src/core/syswarden-cli/config/parser.go").read_text()
+        for name in ("SYSWARDEN_LIST_CHOICE", "SYSWARDEN_ENABLE_WG"):
+            self.assertIn('case "' + name + '":', parser)
+        self.assertIn('if [ "$cli_mode" = real ]; then\n    # Legacy flat-file selection names', probe.SCRIPT)
+        self.assertIn('export SYSWARDEN_LIST_CHOICE=1 SYSWARDEN_ENABLE_WG=y', probe.SCRIPT)
+        self.assertNotIn('export SYSWARDEN_NETWORK_BLOCKLISTS_LIST_CHOICE', probe.SCRIPT)
+
+    def test_real_payload_uses_exact_sealed_binary_without_host_execution(self):
+        actual_run = probe.subprocess.run
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source-cli"
+            source.write_bytes(static_cli_bytes())
+            source.chmod(0o700)
+            snapshot = probe.native.snapshot_retention_binary(source)
+            work = root / "payload"
+            work.mkdir()
+            def build(arguments, **kwargs):
+                if arguments[0] != "/fixture/nfpm":
+                    self.assertEqual(arguments[0], "/bin/bash")
+                    return actual_run(arguments, **kwargs)
+                spec = json.loads((work / "fixture.json").read_text())
+                self.assertEqual(spec["license"], "GPL-3.0-or-later")
+                self.assertEqual((work / "cli").read_bytes(), snapshot.data)
+                self.assertEqual(spec["contents"][0]["dst"], "/opt/syswarden/bin/syswarden-cli")
+                Path(arguments[arguments.index("--target") + 1]).write_bytes(b"inert-package-with-real-cli")
+                return subprocess.CompletedProcess(arguments, 0, b"built\n")
+            with mock.patch.object(probe.subprocess, "run", side_effect=build):
+                data, binding = probe.payload(work, Path("/fixture/nfpm"), "local", "syswarden-base", "apk", snapshot)
+            self.assertEqual(binding["cli_mode"], "real")
+            self.assertEqual(binding["cli_sha256"], hashlib.sha256(snapshot.data).hexdigest())
+            with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+                self.assertEqual(archive.extractfile("cli-mode").read(), b"real\n")
+                self.assertEqual(archive.extractfile("validate-real.sh").read(), probe.REAL_VALIDATION.encode())
+                self.assertEqual(archive.extractfile("real-cli.sha256").read(),
+                                 (binding["cli_sha256"] + "  /opt/syswarden/bin/syswarden-cli\n").encode())
+            source.write_bytes(snapshot.data + b"drift")
+            with self.assertRaises(ValueError):
+                probe.payload(root / "not-created", Path("/fixture/nfpm"), "local", "syswarden", "deb", snapshot)
+            self.assertFalse((root / "not-created").exists())
+
+    def test_real_validation_script_refuses_cli_failure_or_configuration_mutation(self):
+        # Run only a synthetic shell responder and temporary paths on the host.
+        for behavior in ("read-only", "mutate", "fail", "empty-query-fail", "menu-fail"):
+            with self.subTest(behavior=behavior), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                config = root / "config"
+                (config / "modules").mkdir(parents=True)
+                for name in probe.CONFIG_FILES:
+                    (config / name).write_bytes(b"synthetic private policy\n")
+                    (config / name).chmod(0o600)
+                cli = root / "responder"
+                cli.write_text('#!/bin/sh\nset -eu\nif [ "$1" = config ] && [ "$#" = 1 ]; then\n'
+                    + ('exit 1\n' if behavior == "menu-fail" else 'IFS= read -r choice; test "$choice" = 0; exit 0\n')
+                    + 'fi\nif [ "$1:$2" = "config:validate" ]; then\n'
+                    + ('exit 1\n' if behavior == "fail" else
+                       'printf changed >> "' + str(config / "config.toml") + '"\n' if behavior == "mutate" else 'true\n')
+                    + 'exit 0\nfi\ntest "$1" = config-get\ncase "$2" in\n'
+                    + 'core.install_profile) echo unconfigured-v1 ;;\ncore.firewall_backend) echo keep ;;\n'
+                    + 'network.policy_mode) echo lists ;;\nnetwork.blocklists.list_choice) echo 4 ;;\n'
+                    + 'core.ssh_port|waap.bruteforce_logs|waap.modsec_logs) ' + ('exit 1' if behavior == "empty-query-fail" else 'echo') + ' ;;\n'
+                    + "security.honeyports) echo '[]' ;;\n*) echo false ;;\nesac\n")
+                cli.chmod(0o700)
+                (root / "real-cli.sha256").write_text(hashlib.sha256(cli.read_bytes()).hexdigest() + "  " + str(cli) + "\n")
+                script = probe.REAL_VALIDATION.replace("/etc/syswarden/config", str(config))
+                script = script.replace("/opt/syswarden/bin/syswarden-cli", str(cli))
+                script = script.replace("0:0:600:1", f"{os.geteuid()}:{os.getegid()}:600:1")
+                # The product absence checks are container-only. Point their
+                # fixed parent directories at empty private fixture paths.
+                for directory in ("/etc/syswarden", "/etc/cron.d", "/etc/runlevels/default", "/usr/lib/systemd/system", "/lib/systemd/system"):
+                    script = script.replace(directory, str(root / "absent"))
+                # The first replacement already moved the configuration root;
+                # its parent inventory should observe that exact private root.
+                script = script.replace(str(root / "absent") + "/config", str(config))
+                result = subprocess.run(["/bin/sh", "-eu", "-c", script], cwd=root, capture_output=True, check=False, timeout=10)
+                self.assertEqual(result.returncode == 0, behavior == "read-only", result.stderr)
+                self.assertEqual(b"REAL_CONFIGURATION_PASS\n" in result.stdout, behavior == "read-only")
+
     def test_missing_duplicated_or_reset_hook_source_refuses(self):
         source = probe.SOURCE_FILES["local"].read_text()
         opening = 'cat << \'EOF\' >> preinst.sh'
@@ -106,7 +373,7 @@ class FreshHookDispatchTests(unittest.TestCase):
                 probe.sandbox_command("/usr/bin/podman", "a" * 64, identity, *selected)
 
     def test_all_shell_inputs_parse_without_execution(self):
-        scripts = [probe.CLI, probe.SCRIPT.encode(), probe.delegate("preinst.sh"), probe.delegate("postinst.sh")]
+        scripts = [probe.CLI, probe.SCRIPT.encode(), probe.REAL_VALIDATION.encode(), probe.delegate("preinst.sh"), probe.delegate("postinst.sh")]
         scripts += [probe.emitted_hook(source, hook) for source in probe.SOURCES for hook in ("preinst.sh", "postinst.sh")]
         for script in scripts:
             result = subprocess.run(["/bin/sh", "-n"], input=script, capture_output=True, check=False, timeout=5)
@@ -269,11 +536,17 @@ class FreshHookDispatchTests(unittest.TestCase):
                 probe.validate_isolation(candidate, "a" * 64, identity, "d" * 64, arguments)
 
     def run_mock(self, root, *, cleanup=True, timeout=False, native_status=0, image_arch="amd64",
-                 missing_cid=False, changed_cid=False, unsafe_mount=False, create_failure=False):
+                 missing_cid=False, changed_cid=False, unsafe_mount=False, create_failure=False,
+                 real_cli=False, export_failure=False, export_invalid=False, export_cid_drift=False):
         nfpm = root / "nfpm"
         nfpm.write_bytes(b"caller-trusted-tool")
         nfpm.chmod(0o700)
         output = root / "output"
+        binary = None
+        if real_cli:
+            binary = root / "real-cli"
+            binary.write_bytes(static_cli_bytes())
+            binary.chmod(0o700)
         helpers = probe.isolation_helpers()
         calls = []
         created = None
@@ -299,6 +572,14 @@ class FreshHookDispatchTests(unittest.TestCase):
                 if unsafe_mount:
                     item["Mounts"] = [{"Type": "bind", "Source": "/", "Destination": "/host"}]
                 return subprocess.CompletedProcess(arguments, 0, json.dumps([item]).encode())
+            if arguments[2] == "cp":
+                self.assertTrue(real_cli)
+                self.assertEqual(arguments[3:], ["d" * 64 + ":/etc/syswarden/config", "-"])
+                self.assertTrue(any(call[2] == "start" for call in calls))
+                if export_cid_drift:
+                    (output / "container.cid").write_text("e" * 64 + "\n")
+                return subprocess.CompletedProcess(arguments, 1 if export_failure else 0,
+                                                    b"invalid" if export_invalid else configuration_export())
             self.assertEqual(arguments[2:], ["start", "--attach", "--interactive", "d" * 64])
             self.assertEqual(kwargs["input"], b"sealed-tar")
             self.assertTrue(any(call[2:4] == ["container", "inspect"] for call in calls))
@@ -306,22 +587,23 @@ class FreshHookDispatchTests(unittest.TestCase):
                 raise subprocess.TimeoutExpired(arguments, 75, output=b"timeout retained\n")
             if changed_cid:
                 (output / "container.cid").unlink()
-            return subprocess.CompletedProcess(arguments, native_status, successful_output())
-        passed = cleanup and not any((timeout, native_status, missing_cid, changed_cid, unsafe_mount, create_failure)) and image_arch == "amd64"
+            return subprocess.CompletedProcess(arguments, native_status, real_output() if real_cli else successful_output())
+        passed = cleanup and not any((timeout, native_status, missing_cid, changed_cid, unsafe_mount, create_failure,
+                                                export_failure, export_invalid, export_cid_drift)) and image_arch == "amd64"
         with mock.patch.object(probe.os, "geteuid", return_value=1000), mock.patch.object(probe.shutil, "which", return_value="/usr/bin/podman"), \
                 mock.patch.object(helpers, "execute_local", side_effect=command), mock.patch.object(helpers, "container_exists", return_value=False), \
                 mock.patch.object(helpers, "cleanup_container", return_value={"verified": cleanup}) as cleaned, \
                 mock.patch.object(probe, "payload", return_value=(b"sealed-tar", {})):
             if passed:
-                probe.run(nfpm, "a" * 64, output, "local", "syswarden", "deb")
+                probe.run(nfpm, "a" * 64, output, "local", "syswarden", "deb", binary)
             else:
                 with self.assertRaises((RuntimeError, ValueError)):
-                    probe.run(nfpm, "a" * 64, output, "local", "syswarden", "deb")
+                    probe.run(nfpm, "a" * 64, output, "local", "syswarden", "deb", binary)
             if image_arch == "amd64":
                 summary = json.loads((output / "results.json").read_text())
                 self.assertEqual(summary["passed"], passed)
-                self.assertFalse(summary["real_toml_staging_verified"])
-                if missing_cid or changed_cid:
+                self.assertEqual(summary["real_toml_staging_verified"], passed and real_cli)
+                if missing_cid or changed_cid or export_cid_drift:
                     cleaned.assert_not_called()
                     self.assertFalse(summary["cleanup"]["verified"])
                 else:
@@ -337,7 +619,10 @@ class FreshHookDispatchTests(unittest.TestCase):
 
     def test_cleanup_timeout_native_failure_and_wrong_architecture_refuse(self):
         for options in ({}, {"cleanup": False}, {"timeout": True}, {"native_status": 1}, {"image_arch": "arm64"},
-                        {"missing_cid": True}, {"changed_cid": True}, {"unsafe_mount": True}, {"create_failure": True}):
+                        {"missing_cid": True}, {"changed_cid": True}, {"unsafe_mount": True}, {"create_failure": True},
+                        {"real_cli": True}, {"real_cli": True, "export_failure": True}, {"real_cli": True, "export_invalid": True},
+                        {"real_cli": True, "export_cid_drift": True}, {"real_cli": True, "cleanup": False},
+                        {"real_cli": True, "native_status": 1}):
             with self.subTest(options=options), tempfile.TemporaryDirectory() as temporary:
                 self.run_mock(Path(temporary), **options)
 

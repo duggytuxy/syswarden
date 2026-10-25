@@ -60,6 +60,11 @@ var rootCmd = &cobra.Command{
 		if err := enforceRemovalState(cmd); err != nil {
 			return err
 		}
+		if cmd == configCmd {
+			if err := refusePendingFirewallTransactionHook(); err != nil {
+				return fmt.Errorf("[ERROR] configuration editor requires resolved firewall recovery state: %w", err)
+			}
+		}
 		if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "install" {
 			if freshNativePackageInstallation() {
 				// First installation stages only validated configuration. It
@@ -116,6 +121,7 @@ func init() {
 
 var initConfigHook = initConfig
 var recoverPendingFirewallTransactionHook = firewall.RecoverPendingAuthoritativeTransaction
+var refusePendingFirewallTransactionHook = firewall.RefusePendingAuthoritativeTransaction
 
 var earlyFirewallRecoveryCommands = map[string]struct{}{
 	"allow-ssh":               {},
@@ -137,11 +143,8 @@ var earlyFirewallRecoveryCommands = map[string]struct{}{
 }
 
 func commandRequiresEarlyFirewallRecovery(cmd *cobra.Command) bool {
-	if cmd == nil || cmd == configValidateCmd {
+	if cmd == nil || cmd == configValidateCmd || cmd == configCmd {
 		return false
-	}
-	if cmd == configCmd {
-		return true
 	}
 	if cmd == configMigrateCmd || cmd == migrateConfigCmd {
 		dryRun, err := cmd.Flags().GetBool("dry-run")
@@ -156,14 +159,15 @@ func commandRequiresEarlyFirewallRecovery(cmd *cobra.Command) bool {
 }
 
 // Configuration inspection and migration commands load their explicitly
-// selected inputs themselves. Loading the process-wide runtime configuration
-// first would let compatibility normalization modify operator files before a
-// read-only validation or dry-run migration starts.
+// selected inputs themselves. Opening the editor menu loads no configuration.
+// Loading the process-wide runtime configuration first would let compatibility
+// normalization modify operator files before a read-only validation or dry-run
+// migration starts.
 func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return true
 	}
-	if cmd == configGetCmd || cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
+	if cmd == configCmd || cmd == configGetCmd || cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
 		return false
 	}
 	if isolatedSSHPolicyCommand(cmd) {

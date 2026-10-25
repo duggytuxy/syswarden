@@ -47,7 +47,7 @@ var configCmd = &cobra.Command{
 			_, _ = fmt.Fprintln(output, "7) Set Profile Name")
 			_, _ = fmt.Fprintln(output, "8) Import Configuration File")
 			_, _ = fmt.Fprintln(output, "9) Master Configuration    (config.toml)")
-			_, _ = fmt.Fprintln(output, "0) Save & Exit")
+			_, _ = fmt.Fprintln(output, "0) Exit")
 			_, _ = fmt.Fprint(output, "\nSelect [0-9]: ")
 
 			line, err := reader.ReadString('\n')
@@ -62,8 +62,8 @@ var configCmd = &cobra.Command{
 
 			if choice == 0 {
 				_, _ = fmt.Fprintln(output, "\n[*] Exiting Configuration Editor.")
-				_, _ = fmt.Fprintln(output, "Remember to run 'sudo syswarden reload' to apply changes.")
-				_, _ = fmt.Fprintln(output, "(If this is a fresh setup, run 'sudo syswarden install' instead).")
+				_, _ = fmt.Fprintln(output, "Run 'sudo syswarden config validate' and review the selected policy before activation.")
+				_, _ = fmt.Fprintln(output, "An explicit 'sudo syswarden install' for a fresh setup, or 'sudo syswarden reload' for an existing setup, changes host policy and services.")
 				return nil
 			}
 
@@ -106,7 +106,7 @@ var configCmd = &cobra.Command{
 			if err := launchConfigEditor(editor, targetPath, cmd.InOrStdin(), output, cmd.ErrOrStderr()); err != nil {
 				return fmt.Errorf("[ERROR] editor execution failed: %w", err)
 			}
-			_, _ = fmt.Fprintln(output, "[*] Configuration updated successfully.")
+			_, _ = fmt.Fprintln(output, "[*] Editor closed. Changes have not been validated or activated; run 'syswarden config validate' before activation.")
 		}
 	},
 }

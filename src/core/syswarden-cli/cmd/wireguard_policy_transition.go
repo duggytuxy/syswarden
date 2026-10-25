@@ -10,6 +10,12 @@ import (
 var preflightWireGuardPolicyTransition = network.RefusePendingWireGuardPolicyTransition
 
 func enforceWireGuardPolicyTransition(cmd *cobra.Command) error {
+	if cmd == configCmd {
+		if err := preflightWireGuardPolicyTransition(); err != nil {
+			return fmt.Errorf("WireGuard policy transition requires recovery before configuration editor preparation: %w", err)
+		}
+		return nil
+	}
 	top := topLevelCommand(cmd)
 	if top == nil {
 		return nil

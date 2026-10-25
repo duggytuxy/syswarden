@@ -63,8 +63,8 @@ func TestEarlyFirewallRecoveryCommandScope_SW_FW_005(t *testing.T) {
 }
 
 func TestEarlyFirewallRecoveryDistinguishesConfigurationMutations_SW_FW_005(t *testing.T) {
-	if !commandRequiresEarlyFirewallRecovery(configCmd) {
-		t.Fatal("interactive configuration mutation is missing the early firewall recovery barrier")
+	if commandRequiresEarlyFirewallRecovery(configCmd) {
+		t.Fatal("opening the configuration menu unexpectedly requires mutating firewall recovery")
 	}
 	if commandRequiresEarlyFirewallRecovery(configValidateCmd) {
 		t.Fatal("read-only configuration validation unexpectedly requires mutating firewall recovery")

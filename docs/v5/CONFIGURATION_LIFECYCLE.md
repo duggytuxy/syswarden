@@ -72,13 +72,18 @@ check does not change rule ordering or the existing country/ASN union semantics.
 The global `--config` option selects the legacy flat-file fallback; it does not
 redirect the normal modular root or the protected SSH transaction inputs.
 
+Opening `syswarden config` does not load or normalize configuration, recover
+firewall state, create its state directory or acquire a transaction lock. It
+refuses pending removal, WireGuard and firewall recovery state before presenting
+the menu. Firewall journal absence is a point-in-time observation, not activation
+authority or a lock against a later transaction. Invalid TOML can still be
+opened for repair when the existing module directory is available.
+
 The current editor writes directly through the selected external editor. Its
-success message only reports the editor process result. It does not establish
-that the edited configuration is valid. Opening the menu also uses the existing
-command preflight, including pending firewall recovery and normal configuration
-loading, which can perform compatibility normalization. Use `config validate`
-for read-only inspection. Import and profile-name operations already validate
-the complete merged candidate before an atomic `99-user.toml` replacement.
+completion message reports only that the editor closed; it does not establish
+validation or activation. Use `config validate` for read-only inspection. Import
+and profile-name operations already validate the complete merged candidate
+before an atomic `99-user.toml` replacement.
 
 The Linux publisher exchanges an existing file atomically and uses a no-replace
 operation for a new file. It rechecks the captured configuration before

@@ -452,6 +452,23 @@ an accepted preservation strategy.
 
 ## Native characterization
 
+`scripts/ci/native_fresh_configuration_probe.py` executes the exact emitted
+fresh hooks with native DEB, RPM or APK arguments in disposable offline rootless
+Linux AMD64 containers. It checks actual isolation before starting the fixture
+and requires cleanup of the same recorded container identity. Its default CLI
+stub qualifies hook dispatch only. The optional `--cli-binary` uses a supplied
+static AMD64 CLI to verify the seven generated TOML files independently, require
+all optional selectors to remain disabled, and exercise read-only validation,
+value lookup and menu entry/exit. Configuration bytes and metadata and selected
+administrator sentinels must remain unchanged during those reads.
+
+The fixture contains only its synthetic package and CLI payload. It does not
+qualify the production package dependency set, signed release provenance,
+all possible host changes, activation or migration. Its command traps and
+observed artifact inventory supplement container isolation; they are not a
+complete syscall trace. Neither a passing stub nor a passing real-CLI fixture
+establishes full native package acceptance.
+
 `scripts/ci/apk_dependency_transition_probe.py` runs explicitly requested,
 synthetic APK cases in disposable rootless Linux AMD64 containers. It requires
 an existing exact image ID, never pulls images, and uses no network or host
