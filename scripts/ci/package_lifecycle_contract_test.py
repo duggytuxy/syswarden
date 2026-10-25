@@ -22,8 +22,10 @@ from pathlib import Path
 
 try:
     from scripts.ci import package_lifecycle_lab
+    from scripts.ci import package_variant_metadata_test as variant_contracts
 except ModuleNotFoundError:  # Direct execution from scripts/ci.
     import package_lifecycle_lab
+    import package_variant_metadata_test as variant_contracts
 
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -94,6 +96,69 @@ def stop_test_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is None:
         process.kill()
     process.wait(timeout=2)
+
+
+def generated_workflow_packages(version: str) -> list[dict]:
+    """Run the real build blocks with inert native-tool argument recorders."""
+    records: list[dict] = []
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        environment = variant_contracts.workflow_fixture(root, version)
+        shell = variant_contracts.fixture_shell(environment)
+        for family, step in (
+            ("deb", "Build Debian Package (.deb)"),
+            ("rpm", "Build RHEL Family Package (.rpm)"),
+        ):
+            result = variant_contracts.bash(
+                shell + "fpm() { printf '%s\\0' \"$@\"; printf '\\0'; }\n"
+                + variant_contracts.workflow_step(step)
+            )
+            if result.returncode:
+                raise AssertionError(result.stderr.decode())
+            for arguments in variant_contracts.nul_calls(result.stdout):
+                def value(flag: str) -> str:
+                    if arguments.count(flag) != 1:
+                        raise AssertionError(f"expected one {flag} in {arguments}")
+                    return arguments[arguments.index(flag) + 1]
+
+                records.append({
+                    "family": family, "name": value("-n"), "version": value("-v"),
+                    "architecture": value("--architecture"), "path": value("-p"),
+                    "dependencies": [arguments[i + 1] for i, arg in enumerate(arguments) if arg == "-d"],
+                    "arguments": arguments, "environment": environment,
+                })
+        tools = root / "tools"
+        tools.mkdir()
+        nfpm = tools / "nfpm"
+        nfpm.write_text("#!/bin/bash\nprintf '%s\\0' \"$@\"\nprintf '\\0'\n")
+        nfpm.chmod(0o755)
+        result = variant_contracts.bash(
+            shell
+            + 'go() { [[ "$*" == "install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0" ]]; }\n'
+            + variant_contracts.workflow_step("Build Alpine Package (.apk)")
+        )
+        if result.returncode:
+            raise AssertionError(result.stderr.decode())
+        for arguments in variant_contracts.nul_calls(result.stdout):
+            if arguments.count("--config") != 1 or arguments.count("--target") != 1:
+                raise AssertionError(f"ambiguous nfpm invocation: {arguments}")
+            config = Path(arguments[arguments.index("--config") + 1]).read_text()
+
+            def field(name: str) -> str:
+                values = re.findall(rf'^{name}: "([^"\n]+)"$', config, re.MULTILINE)
+                if len(values) != 1:
+                    raise AssertionError(f"expected one nfpm {name}")
+                return values[0]
+
+            dependencies = config.split("depends:\n", 1)[1].split("contents:\n", 1)[0].split("conflicts:\n", 1)[0]
+            records.append({
+                "family": "apk", "name": field("name"), "version": field("version"),
+                "architecture": field("arch"),
+                "path": arguments[arguments.index("--target") + 1],
+                "dependencies": re.findall(r'^  - ([A-Za-z0-9+_.-]+)$', dependencies, re.MULTILINE),
+                "config": config, "arguments": arguments, "environment": environment,
+            })
+    return records
 
 
 class PackageLifecycleContractTests(unittest.TestCase):
@@ -318,14 +383,27 @@ class PackageLifecycleContractTests(unittest.TestCase):
 
     def test_linux_package_family_and_architecture_matrix(self) -> None:
         required_assets = {
-            'syswarden_${VERSION}_amd64.deb',
-            "syswarden-${VERSION}-1.x86_64.rpm",
+            '${PACKAGE_NAME}_${VERSION}_amd64.deb',
+            "${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm",
             "syswarden-${VERSION}-1.rhelpo.x86_64.rpm",
-            'syswarden_${VERSION}_x86_64.apk',
+            '${PACKAGE_NAME}_${VERSION}_x86_64.apk',
         }
         for asset in required_assets:
             with self.subTest(asset=asset):
                 self.assertIn(asset, self.workflow)
+        for version, names in (("4.10.4", ("syswarden",)), ("5.00.0", ("syswarden", "syswarden-base"))):
+            records = generated_workflow_packages(version)
+            self.assertCountEqual(
+                [(record["name"], record["family"]) for record in records],
+                [(name, family) for name in names for family in ("deb", "rpm", "apk")],
+            )
+            self.assertCountEqual(
+                [Path(record["path"]).name for record in records],
+                variant_contracts.workflow_assets(version),
+            )
+            for record in records:
+                self.assertEqual(record["version"], version)
+                self.assertEqual(record["architecture"], "x86_64" if record["family"] == "rpm" else "amd64")
 
     def test_packaging_workspace_is_isolated_and_fail_closed(self) -> None:
         self.assertIn(
@@ -415,7 +493,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn('dpkg-deb --fsys-tarfile', packaged)
         self.assertIn('rpm2cpio "${package}"', packaged)
         self.assertIn(
-            '"${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" "${relative}"',
+            '"${PACKAGE_ASSETS}/${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm" "${relative}"',
             packaged,
         )
         self.assertIn(
@@ -426,7 +504,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertNotIn('cpio --extract --make-directories', packaged)
         self.assertNotIn('dpkg-deb --extract', packaged)
         self.assertIn('tar --extract --to-stdout', packaged)
-        self.assertIn('syswarden_${VERSION}_x86_64.apk', packaged)
+        self.assertIn('${PACKAGE_NAME}_${VERSION}_x86_64.apk', packaged)
         self.assertEqual(packaged.count('--reference-root "${STAGING_AMD64}"'), 2)
         self.assertEqual(
             packaged.count('--reference-root "${RHEL_PROFILE_STAGING}"'), 1
@@ -1315,29 +1393,50 @@ class PackageLifecycleContractTests(unittest.TestCase):
         for script_name in ("preinst.sh", "postinst.sh", "prerm.sh", "postrm.sh"):
             with self.subTest(rpm_scriptlet=script_name):
                 self.assertIn(
-                    f'"${{PACKAGE_RPM_SCRIPTS}}/{script_name}"', workflow_rpm
+                    f'"${{SELECTED_PACKAGE_RPM_SCRIPTS}}/{script_name}"', workflow_rpm
                 )
                 self.assertNotIn(
-                    f'"${{PACKAGE_RPM_SCRIPTS}}/{script_name}"', workflow_deb
+                    f'"${{SELECTED_PACKAGE_RPM_SCRIPTS}}/{script_name}"', workflow_deb
                 )
                 self.assertNotIn(
-                    f'"${{PACKAGE_RPM_SCRIPTS}}/{script_name}"', workflow_apk
+                    f'"${{SELECTED_PACKAGE_RPM_SCRIPTS}}/{script_name}"', workflow_apk
                 )
                 self.assertIn(
-                    f'"${{PACKAGE_SCRIPTS}}/{script_name}"', workflow_deb
+                    f'"${{SELECTED_PACKAGE_SCRIPTS}}/{script_name}"', workflow_deb
                 )
                 self.assertIn(
-                    f'"${{PACKAGE_SCRIPTS}}/{script_name}"', workflow_apk
+                    f'"${{SELECTED_PACKAGE_SCRIPTS}}/{script_name}"', workflow_apk
                 )
                 self.assertIn(f'"${{RPM_SCRIPTS}}/{script_name}"', local_rpm)
                 self.assertNotIn(f'"${{RPM_SCRIPTS}}/{script_name}"', local_deb)
                 self.assertNotIn(f'"${{RPM_SCRIPTS}}/{script_name}"', local_apk)
                 self.assertIn(
-                    f'"${{PACKAGE_SCRIPTS}}/{script_name}"', workflow_validation
+                    f'"${{SELECTED_PACKAGE_SCRIPTS}}/{script_name}"', workflow_validation
                 )
                 self.assertIn(
                     f"validate_local_rpm_scriptlet \"${{rpm_path}}\" ", local
                 )
+        for version in ("4.10.4", "5.00.0"):
+            for record in generated_workflow_packages(version):
+                if record["family"] == "apk":
+                    variant_contracts.PackageVariantMetadataTests.assert_exact_nfpm_version(
+                        self, record["config"], version, revision=version.startswith("5.")
+                    )
+                    continue
+                arguments, environment = record["arguments"], record["environment"]
+                self.assertEqual(arguments.count("--source-date-epoch-default"), 1)
+                self.assertEqual(arguments[arguments.index("--source-date-epoch-default") + 1], environment["SOURCE_DATE_EPOCH"])
+                rpm = record["family"] == "rpm"
+                script_root = environment["PACKAGE_RPM_SCRIPTS" if rpm else "PACKAGE_SCRIPTS"]
+                if version.startswith("5."):
+                    script_root += "/" + record["name"]
+                for flag, hook in (("--before-install", "preinst"), ("--after-install", "postinst"), ("--before-remove", "prerm"), ("--after-remove", "postrm")):
+                    self.assertEqual(arguments.count(flag), 1)
+                    self.assertEqual(arguments[arguments.index(flag) + 1], f"{script_root}/{hook}.sh")
+                if rpm:
+                    definitions = [arguments[i + 1] for i, flag in enumerate(arguments) if flag == "--rpm-rpmbuild-define"]
+                    self.assertCountEqual(definitions, rpm_defines)
+                    self.assertEqual(arguments[arguments.index("--rpm-changelog") + 1], environment["RPM_CHANGELOG"])
         for query, expected in (
             ("%{BUILDTIME}", "${SOURCE_DATE_EPOCH}"),
             ("%{BUILDHOST}", "syswarden-build.invalid"),
@@ -1810,13 +1909,17 @@ class PackageLifecycleContractTests(unittest.TestCase):
 
     def test_all_package_outputs_use_the_isolated_asset_directory(self) -> None:
         assets = (
-            'syswarden_${VERSION}_amd64.deb',
-            "syswarden-${VERSION}-1.x86_64.rpm",
-            'syswarden_${VERSION}_x86_64.apk',
+            '${PACKAGE_NAME}_${VERSION}_amd64.deb',
+            "${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm",
+            '${PACKAGE_NAME}_${VERSION}_x86_64.apk',
         )
         for asset in assets:
             with self.subTest(asset=asset):
                 self.assertIn(f'"${{PACKAGE_ASSETS}}/{asset}"', self.workflow)
+        for version in ("4.10.4", "5.00.0"):
+            for record in generated_workflow_packages(version):
+                with self.subTest(version=version, package=record["path"]):
+                    self.assertEqual(Path(record["path"]).parent, Path(record["environment"]["PACKAGE_ASSETS"]))
         self.assertIn('cd "${PACKAGE_ASSETS}"', self.workflow)
         self.assertIn('--packages "${PACKAGE_ASSETS}"', self.workflow)
         self.assertIn(
@@ -5999,10 +6102,10 @@ systemctl() {
             'expected="$(cat "${expected_path}")"',
             '"%{${tag}PROG}"',
             '== "/bin/sh"',
-            'validate_rpm_scriptlet "${path}" PREIN "${PACKAGE_SCRIPTS}/preinst.sh"',
-            'validate_rpm_scriptlet "${path}" POSTIN "${PACKAGE_SCRIPTS}/postinst.sh"',
-            'validate_rpm_scriptlet "${path}" PREUN "${PACKAGE_SCRIPTS}/prerm.sh"',
-            'validate_rpm_scriptlet "${path}" POSTUN "${PACKAGE_SCRIPTS}/postrm.sh"',
+            'validate_rpm_scriptlet "${path}" PREIN "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"',
+            'validate_rpm_scriptlet "${path}" POSTIN "${SELECTED_PACKAGE_SCRIPTS}/postinst.sh"',
+            'validate_rpm_scriptlet "${path}" PREUN "${SELECTED_PACKAGE_SCRIPTS}/prerm.sh"',
+            'validate_rpm_scriptlet "${path}" POSTUN "${SELECTED_PACKAGE_SCRIPTS}/postrm.sh"',
         ):
             self.assertIn(required, validate_rpm)
         forbidden_tokens = (
@@ -6132,7 +6235,7 @@ systemctl() {
                     [
                         "/bin/bash",
                         "-c",
-                        "set -euo pipefail\nVERSION=4.02.14\nPACKAGE_SCRIPTS=\"$2\"\n"
+                        "set -euo pipefail\nVERSION=4.02.14\nSELECTED_PACKAGE_SCRIPTS=\"$2\"\n"
                         + validate_rpm
                         + '\nvalidate_rpm "$1" x86_64',
                         "rpm-artifact-contract",
@@ -6383,45 +6486,25 @@ systemctl() {
         self.assertLess(revalidate, offline_branch)
 
     def test_linux_packages_declare_every_runtime_dependency(self) -> None:
+        required = {
+            "deb": {"wireguard-tools", "jq", "qrencode", "unattended-upgrades", "apt-listchanges", "procps"},
+            "rpm": {"wireguard-tools", "jq", "checkpolicy", "policycoreutils-python-utils", "dnf-automatic", "procps-ng"},
+            "apk": {"wireguard-tools", "libqrencode-tools", "jq", "openrc", "cronie", "cronie-openrc", "procps-ng", "shadow"},
+        }
         local = self.local_compatibility_dependencies()
-        for dependency in ("wireguard-tools", "jq"):
-            self.assertGreaterEqual(
-                self.workflow.count(f'-d "{dependency}"'),
-                2,
-                dependency,
-            )
-            for family in ("deb", "rpm", "apk"):
+        for family, dependencies in required.items():
+            for dependency in dependencies:
                 self.assertEqual(local[family].count(dependency), 1, (family, dependency))
-        self.assertEqual(self.workflow.count('-d "qrencode"'), 1)
-        self.assertEqual(local["deb"].count("qrencode"), 1)
-        for dependency in ("checkpolicy", "policycoreutils-python-utils"):
-            self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 2)
-            self.assertEqual(local["rpm"].count(dependency), 1, dependency)
-        for dependency in (
-            "wireguard-tools",
-            "libqrencode-tools",
-            "jq",
-            "openrc",
-            "cronie",
-            "cronie-openrc",
-        ):
-            self.assertGreaterEqual(
-                self.workflow.count(f"            - {dependency}\n"),
-                1,
-                dependency,
-            )
-            self.assertEqual(local["apk"].count(dependency), 1, dependency)
-
-        for dependency in ("unattended-upgrades", "apt-listchanges", "procps"):
-            self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 1, dependency)
-            self.assertEqual(local["deb"].count(dependency), 1, dependency)
-        for dependency in ("dnf-automatic", "procps-ng"):
-            self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 2, dependency)
-            self.assertEqual(local["rpm"].count(dependency), 1, dependency)
-        self.assertEqual(self.workflow.count("            - procps-ng\n"), 1)
-        self.assertEqual(local["apk"].count("procps-ng"), 1)
-        self.assertEqual(self.workflow.count("            - shadow\n"), 1)
-        self.assertEqual(local["apk"].count("shadow"), 1)
+        for version in ("4.10.4", "5.00.0"):
+            for record in generated_workflow_packages(version):
+                with self.subTest(version=version, name=record["name"], family=record["family"]):
+                    family = record["family"]
+                    expected = local[family] if record["name"] == "syswarden" else variant_contracts.BASE_DEPENDENCIES[family]
+                    self.assertCountEqual(record["dependencies"], expected)
+                    self.assertEqual(len(record["dependencies"]), len(set(record["dependencies"])))
+                    if record["name"] == "syswarden":
+                        for dependency in required[family]:
+                            self.assertEqual(record["dependencies"].count(dependency), 1)
 
     def test_manual_dependency_resolution_excludes_optional_packages(self) -> None:
         source = DEPENDENCIES_SOURCE.read_text(encoding="utf-8")
@@ -6521,18 +6604,6 @@ systemctl() {
         return dependencies
 
     def test_runtime_dependency_sets_match_all_package_generators_and_lab(self) -> None:
-        def fpm_dependencies(source: str) -> set[str]:
-            return set(re.findall(r'-d "([A-Za-z0-9+_.-]+)"', source))
-
-        def yaml_dependencies(source: str) -> set[str]:
-            block = source.split("depends:\n", 1)[1].split("\ncontents:\n", 1)[0]
-            return set(re.findall(r"^\s+- ([A-Za-z0-9+_.-]+)$", block, re.MULTILINE))
-
-        workflow_sets = {
-            "deb": fpm_dependencies(workflow_step_script(self.workflow, "Build Debian Package (.deb)")),
-            "rpm": fpm_dependencies(workflow_step_script(self.workflow, "Build RHEL Family Package (.rpm)")),
-            "apk": yaml_dependencies(workflow_step_script(self.workflow, "Build Alpine Package (.apk)")),
-        }
         local_sets = {family: set(values) for family, values in self.local_compatibility_dependencies().items()}
         dependency_contract = package_lifecycle_lab.LIFECYCLE_SCRIPT.split(
             "expected_runtime_dependencies() {", 1
@@ -6544,28 +6615,43 @@ systemctl() {
             self.assertIsNotNone(values, family)
             lab_sets[family] = set(values.group(1).split())
 
-        self.assertEqual(local_sets, workflow_sets)
-        self.assertEqual(lab_sets, workflow_sets)
+        self.assertEqual(lab_sets, local_sets)
+        for version in ("4.10.4", "5.00.0"):
+            records = generated_workflow_packages(version)
+            for record in records:
+                expected = local_sets if record["name"] == "syswarden" else variant_contracts.BASE_DEPENDENCIES
+                self.assertCountEqual(record["dependencies"], expected[record["family"]])
+        rhel = workflow_step_script(self.workflow, "Build Opt-in RHEL Package-owned Variant (.rpm)")
+        # The opt-in package-owned profile additionally requires systemd.
+        self.assertCountEqual(re.findall(r'-d "([A-Za-z0-9+_.-]+)"', rhel), local_sets["rpm"] | {"systemd"})
 
     def test_apk_upgrade_hook_keeps_pre_contract_and_distinct_post_phase(self) -> None:
-        workflow_preinstall = 'preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"'
-        workflow_preupgrade = 'preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"'
-        workflow_postinstall = 'postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"'
-        workflow_postupgrade = 'postupgrade: "${PACKAGE_SCRIPTS}/postupgrade.sh"'
+        workflow_preinstall = 'preinstall: "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"'
+        workflow_preupgrade = 'preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"'
+        workflow_postinstall = 'postinstall: "${SELECTED_PACKAGE_SCRIPTS}/postinst.sh"'
+        workflow_postupgrade = 'postupgrade: "${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh"'
         workflow_apk_hook = (
             "          apk:\n"
             "            scripts:\n"
-            '              preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"\n'
-            '              postupgrade: "${PACKAGE_SCRIPTS}/postupgrade.sh"\n'
+            '              preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"\n'
+            '              postupgrade: "${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh"\n'
         )
         self.assertEqual(self.workflow.count(workflow_preinstall), 1)
         self.assertEqual(self.workflow.count(workflow_preupgrade), 1)
         self.assertEqual(self.workflow.count(workflow_postinstall), 1)
         self.assertEqual(self.workflow.count(workflow_postupgrade), 1)
         self.assertEqual(self.workflow.count(workflow_apk_hook), 1)
-        self.assertEqual(self.workflow.count("            - openrc\n"), 1)
-        self.assertEqual(self.workflow.count("            - cronie\n"), 1)
-        self.assertEqual(self.workflow.count("            - cronie-openrc\n"), 1)
+        for version in ("4.10.4", "5.00.0"):
+            for record in generated_workflow_packages(version):
+                if record["family"] != "apk":
+                    continue
+                for dependency in ("openrc", "cronie", "cronie-openrc"):
+                    self.assertEqual(record["dependencies"].count(dependency), 1)
+                scripts = record["environment"]["PACKAGE_SCRIPTS"]
+                if version.startswith("5."):
+                    scripts += "/" + record["name"]
+                for selector, hook in (("preinstall", "preinst"), ("preupgrade", "preinst"), ("postinstall", "postinst"), ("postupgrade", "postupgrade")):
+                    self.assertEqual(record["config"].count(f'{selector}: "{scripts}/{hook}.sh"\n'), 1)
         self.assertIn(".pre-install$/", self.workflow)
         self.assertIn(".pre-upgrade$/", self.workflow)
         self.assertIn(".post-install$/", self.workflow)
@@ -6599,7 +6685,7 @@ systemctl() {
             self.workflow, "Validate Package Metadata"
         )
         validate_start = validation_step.index("validate_apk() {")
-        invocation_start = validation_step.index("\nvalidate_deb ", validate_start)
+        invocation_start = validation_step.index('\nfor variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do', validate_start)
         validate_function = validation_step[validate_start:invocation_start].replace(
             "${{ github.repository }}", "duggytuxy/syswarden"
         )
@@ -6645,7 +6731,7 @@ systemctl() {
                 [
                     "/bin/bash",
                     "-c",
-                    'set -euo pipefail\nVERSION=4.02.14\nPACKAGE_SCRIPTS="$3"\n'
+                    'set -euo pipefail\nVERSION=4.02.14\nSELECTED_PACKAGE_SCRIPTS="$3"\n'
                     + validate_function
                     + '\nvalidate_apk "$1" "$2"',
                     "apk-archive-contract",

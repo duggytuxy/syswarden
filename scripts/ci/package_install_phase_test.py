@@ -114,15 +114,34 @@ class PackageInstallPhaseTests(unittest.TestCase):
     def test_packagers_bind_permission_timestamp_and_integrity_to_upgrade_wrapper(self) -> None:
         local, workflow = LOCAL.read_text(), WORKFLOW.read_text()
         self.assertIn('postupgrade: "./postupgrade.sh"', local)
-        self.assertIn('postupgrade: "${PACKAGE_SCRIPTS}/postupgrade.sh"', workflow)
+        self.assertIn('postupgrade: "${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh"', workflow)
         self.assertIn("chmod +x preinst.sh postinst.sh postupgrade.sh postrm.sh prerm.sh", local)
         self.assertRegex(workflow, r'chmod 0755 \\\n(?:.*\\\n)*\s*"\$\{PACKAGE_SCRIPTS\}/postupgrade.sh"')
         self.assertIn("    postupgrade.sh \\\n", local)
         for source in (local, workflow):
             self.assertIn("package_install_phase.sh", source)
-        self.assertIn('"${PACKAGE_SCRIPTS}/postupgrade.sh" \\\n              <(tar --extract', workflow)
+        self.assertIn('"${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh" \\\n              <(tar --extract', workflow)
         self.assertIn('if ! validate_local_apk_install_hooks \\\n', local)
         self.assertIn('scripts/ci/package_install_phase_test.py \\\n', workflow)
+        variants = contracts.variant_contracts
+        for version in ("4.10.4", "5.00.0"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                environment = variants.workflow_fixture(Path(temporary), version)
+                result = variants.bash(
+                    variants.fixture_shell(environment)
+                    + variants.workflow_step("Prepare Linux Maintainer Scripts")
+                    + variants.workflow_step("Normalize Package Input Timestamps")
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                names = ("",) if version.startswith("4.") else ("syswarden", "syswarden-base")
+                for name in names:
+                    scripts = Path(environment["PACKAGE_SCRIPTS"]) / name
+                    installed = (scripts / "postinst.sh").read_bytes()
+                    upgraded = scripts / "postupgrade.sh"
+                    self.assertEqual(installed.count(INSTALL_CALL.encode()), 1)
+                    self.assertEqual(upgraded.read_bytes(), installed.replace(INSTALL_CALL.encode(), UPGRADE_CALL.encode()))
+                    self.assertEqual(upgraded.stat().st_mode & 0o777, 0o755)
+                    self.assertEqual(int(upgraded.stat().st_mtime), int(environment["SOURCE_DATE_EPOCH"]))
 
     def test_local_archive_validation_rejects_fresh_upgrade_missing_and_duplicate_hooks(self) -> None:
         function = "validate_local_apk_install_hooks() {" + LOCAL.read_text().split("validate_local_apk_install_hooks() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"

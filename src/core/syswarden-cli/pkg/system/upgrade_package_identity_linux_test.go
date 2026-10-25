@@ -251,7 +251,7 @@ func TestNativeUpdateAuthoritySelectsOnlineAndOfflineArtifacts(t *testing.T) {
 					return testCompatibilityUpdateIdentity(tc.authority), nil
 				}
 				u.lookPath = testAllPackageFrontends
-				u.attestRPM = func(context.Context, string) error { return nil }
+				u.attestRPM = func(context.Context, string, string) error { return nil }
 				u.installPackage = guardedTestNativeInstaller(offline, func(_ context.Context, name string, args ...string) error {
 					wantInstaller := tc.installer
 					if offline && tc.format == packageFormatDEB {

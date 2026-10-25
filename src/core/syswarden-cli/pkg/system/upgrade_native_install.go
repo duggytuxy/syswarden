@@ -25,22 +25,33 @@ func verifyPackageAtNativeExecution(ctx context.Context, file *os.File, path str
 }
 
 func runAuthenticatedNativeInstall(ctx context.Context, target packageTarget, path string, beforeExecute func(context.Context) error) error {
-	return runAuthenticatedNativeInstallWith(ctx, target, path, false, preserveNativeDependencyReasons,
-		planAuthenticatedAPKInstall, func(ctx context.Context, name string, args ...string) error {
+	return runAuthenticatedNativeInstallWith(ctx, target, path, false,
+		func(ctx context.Context, manager string) error {
+			return preserveNativeDependencyReasonsForName(ctx, manager, target.packageName)
+		}, func(ctx context.Context, name string, args []string) ([]string, error) {
+			return planAuthenticatedAPKInstallForName(ctx, target.packageName, name, args)
+		}, func(ctx context.Context, name string, args ...string) error {
 			return executeExternalCommand(ctx, name, productionCommandEnvironment(name), args...)
 		}, beforeExecute)
 }
 
 func runAuthenticatedQualificationInstall(ctx context.Context, target packageTarget, path string, beforeExecute func(context.Context) error) error {
-	return runAuthenticatedNativeInstallWith(ctx, target, path, true, preserveNativeDependencyReasons,
-		planAuthenticatedAPKInstall, executeQualificationExternalCommand, beforeExecute)
+	return runAuthenticatedNativeInstallWith(ctx, target, path, true,
+		func(ctx context.Context, manager string) error {
+			return preserveNativeDependencyReasonsForName(ctx, manager, target.packageName)
+		}, func(ctx context.Context, name string, args []string) ([]string, error) {
+			return planAuthenticatedAPKInstallForName(ctx, target.packageName, name, args)
+		}, executeQualificationExternalCommand, beforeExecute)
 }
 
-func planAuthenticatedAPKInstall(ctx context.Context, name string, args []string) ([]string, error) {
+func planAuthenticatedAPKInstallForName(ctx context.Context, packageName, name string, args []string) ([]string, error) {
+	if ctx == nil || !validNativeProductPackageName(packageName) {
+		return nil, errors.New("authenticated APK planning requires an exact native identity")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	planned, err := apkPreservedInstallArguments(name, args, productionOpenRCWireGuardDefinitionPaths())
+	planned, err := apkPreservedInstallArgumentsForName(packageName, name, args, productionOpenRCWireGuardDefinitionPaths())
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr
 	}

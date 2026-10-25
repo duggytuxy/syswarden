@@ -68,16 +68,47 @@ func attestNativePackageHeaderWith(ctx context.Context, target packageTarget, ve
 	if identity.name != target.packageName || identity.architecture != architecture {
 		return errors.New("authenticated native package name or architecture differs from release selection")
 	}
-	// The selected APK filename does not encode a revision. Only the release
-	// builder's revision zero belongs to this manifest contract.
-	if target.format == packageFormatAPK && identity.version != strings.TrimPrefix(version, "v")+"-r0" {
-		return errors.New("authenticated APK revision differs from release selection")
+	if target.format == packageFormatAPK {
+		if !authenticatedAPKVersionMatches(version, target.packageName, identity.version) {
+			return errors.New("authenticated APK revision or version differs from release selection")
+		}
+		return ctx.Err()
 	}
 	canonical, err := canonicalInstalledSyswardenVersion(identity.version, target.format)
 	if err != nil || canonical != version {
 		return errors.New("authenticated native package version differs from release selection")
 	}
 	return ctx.Err()
+}
+
+// APK filenames omit the native revision. New packages use exactly revision zero.
+// Historical compatibility v4 builders omitted it and normalized numeric minor
+// components. Accept only spellings derived from the authenticated release, not
+// an arbitrary version normalized out of untrusted package metadata.
+func authenticatedAPKVersionMatches(release, packageName, nativeVersion string) bool {
+	if !validNativeProductPackageName(packageName) {
+		return false
+	}
+	if _, err := parseReleaseVersion(release); err != nil {
+		return false
+	}
+	canonical := strings.TrimPrefix(release, "v")
+	if packageName == baseNativePackageName && strings.HasPrefix(canonical, "4.") {
+		return false
+	}
+	if nativeVersion == canonical+"-r0" {
+		return true
+	}
+	if packageName != compatibilityNativePackageName || !strings.HasPrefix(canonical, "4.") {
+		return false
+	}
+	parts := strings.Split(canonical, ".")
+	minor := strings.TrimLeft(parts[1], "0")
+	if minor == "" {
+		minor = "0"
+	}
+	historical := "4." + minor + "." + parts[2]
+	return nativeVersion == canonical || nativeVersion == historical || nativeVersion == historical+"-r0"
 }
 
 func (u *updater) attestAuthenticatedPackageIdentity(ctx context.Context, target packageTarget, version string, file *os.File, timeout time.Duration) error {

@@ -3,8 +3,8 @@
 Development design for issue #422 and consolidated PR452. This document does not
 establish production package support, migration readiness or v5.00.0 IVVQ
 acceptance. Published v4 release package metadata and canonical signatures remain unchanged.
-Local opt-in metadata generation and the v5 signed identity contract are
-intermediate implementations.
+Local opt-in metadata generation, unsigned v5 workflow generation and the v5
+signed identity contract are intermediate implementations.
 SysWarden supports Linux AMD64 only.
 
 ## Identity boundary
@@ -44,8 +44,8 @@ sets. `./build_packages.sh --minimal-package` generates the base identity in
 using the existing pinned toolchain. Commit the metadata helper and builder
 together before a complete local build.
 
-The helper `scripts/ci/package_variant_metadata.sh` selects the local name,
-dependencies and mutual conflict. It declares no provider alias, replacement,
+The helper `scripts/ci/package_variant_metadata.sh` selects the name,
+dependencies and mutual conflict for local and v5 workflow builds. It declares no provider alias, replacement,
 obsoletion or dependency between the two identities. The runtime staging paths,
 service names, launchers and recovery hook path remain unchanged. The generated
 Debian changelog uses its native package name. Alpine install, upgrade and removal
@@ -64,11 +64,23 @@ configuration generation without installing packages. They verify exact names,
 dependencies, conflicts, unchanged staging selections and hook context routing.
 They do not establish native install, update or removal acceptance.
 
-Public workflow generation deliberately remains on the historical `syswarden`
-contract. It does not publish `syswarden-base` or use this local metadata helper.
-Public dual-identity generation, native payload qualification and
-unsigned-era discovery still need coordinated qualification. Do not deploy the opt-in base artifacts as
-supported packages until those paths and the native lifecycle are qualified.
+The public package workflow preserves the historical three-artifact build for
+v4. The v5 unsigned build produces both complete identities, in compatibility
+DEB/RPM/APK then base DEB/RPM/APK order. Each has separate staged hooks and payload
+provenance extraction. Exact native names, versions, architectures, dependency
+profiles, conflicts and hook contents are checked for both identities before
+checksum publication. Unsupported generation majors are refused.
+
+The pinned nfpm APK writer does not emit its generic conflict field. APK variants
+therefore declare the other identity as an explicit negative native dependency.
+DEB and RPM retain their native conflict metadata. This does not authorize a
+cross-variant solver transition or prove its safety.
+
+Unsigned inventory validation accepts exactly the versioned package set. V5
+release preparation and publication remain refused before staging because the
+native signing and release-evidence consumers still require coordinated
+identity-bound proofs. Native payload and lifecycle qualification remain open.
+Do not deploy opt-in base artifacts as accepted packages until those paths pass.
 
 Standalone uninstall now checks both native names on DEB, RPM and APK. It refuses
 direct payload removal while either name is registered, including partial Debian
@@ -129,6 +141,78 @@ reach the ownership query. Neither proves downloaded payload headers,
 dependency retention, runtime behavior or migration acceptance. The production
 native transaction matrix remains open.
 
+## Selected native preparation
+
+The separate `native_package_identity_evidence.py` component verifies a
+qualification-only schema 2 evidence bundle for all six standard v5 coordinates.
+The caller must independently authenticate the release commit, evidence seal,
+signature policy and selected keys. The verifier requires exact ordered native
+inventories, identity-specific signature records and complete file bindings.
+It rechecks native signatures through the existing offline verification adapters
+and refuses cross-identity substitution. DEB detached signatures preserve the
+original package bytes; APK signing must add only the selected signature prefix
+to the exact unsigned bytes. RPM payload preservation and native header metadata
+remain caller-authenticated assertions, not independently recomputed facts here.
+
+The component has no publishing mode or production updater entry. Its synthetic
+bundle tests and real ephemeral GnuPG signature-association test are scoped
+evidence, not six-format native signing or release acceptance. V4 serializers
+remain unchanged, and v5 public signing and publication remain closed.
+
+The retention components explicitly select one known native owner. DEB and RPM
+queries bind identity and historical requirements to that name; product records
+must have the supported native architecture. A correctly generated base package
+has no historical optional dependencies to promote. Independently installed
+optional packages retain their existing reasons and are not inspected as owned
+dependencies merely because their names are known.
+
+The native retention oracle exercises the actual Go preparation component with
+inert local packages in offline Debian 13, AlmaLinux 10 and Fedora 44 containers.
+Both compatibility dependency retention and minimal same-name upgrades preserve
+administrator sentinels and the unrelated packages' automatic cleanup eligibility.
+The captured test executable is a bounded regular single-link file, copied from
+the same bytes used for its evidence digest. Source drift, skipped Go oracles and
+unverified container cleanup fail the probe. These observations qualify the
+retention component and synthetic package graph, not full product hooks or
+runtime migration. DNF5 multi-name queries explicitly delimit each result.
+
+APK checks the selected installed record, architecture and bounded world/database
+snapshots. Coexisting product identities, missing or duplicated product roots,
+and selected-product version pins, repository tags or conflict constraints are
+refused. A bare product root or an exact `name><Q1...` root matching the installed
+record checksum is accepted. The checksum must use the observed canonical APK v2
+encoding; it is native identity evidence, not signature authority. A local-file
+update rebinds this checksum to the new package. Other root forms are not
+normalized or silently dropped. A local-file add could rewrite administrator
+constraints or create an explicit root;
+that is not authorized by a same-name update. Existing constrained dependency
+roots remain unchanged, and only eligible unrooted historical dependencies are
+added to the planned transaction. These snapshots do not lock the native database. Disposable Alpine 3.22 and 3.24
+observations with inert nfpm-generated APK v2 files confirm checksum-root
+rebinding and the need to refuse explicit pins and tags. They do not qualify
+product scripts, native APK v3 formats or a full migration.
+
+Offline prerequisite attestation uses the selected variant's exact profile. RPM
+also requires the systemd runtime separately from its declared package metadata.
+No optional module is installed or activated by this attestation. RPM channel
+queries bind the selected name, epoch zero, standard release, exact running
+version and x86_64; the separate package-owned RHEL channel stays refused.
+Cancellation before or during a prerequisite or channel query cannot become
+accepted evidence. Bounded dependency, payload, installation and activation
+callbacks are also refused if they return success after their own deadline; a
+late native result cannot authorize the next phase or a completion claim.
+
+Historical compatibility APK v4 builds omitted the native revision and may
+contain a normalized numeric minor, such as `4.3.2`. Installed attestation maps
+that spelling to `v4.03.2`, while comparing raw CLI ownership text exactly first.
+Only the compatibility v4 identity can use this historical interpretation. Base
+and v5 installed packages require an explicit canonical revision. Ambiguous
+revision syntax remains refused; parsing does not establish package trust.
+
+Both production base-update gates remain closed. These components and their
+injected-query regressions require native transaction, autoremove and recovery
+qualification before base updates can be enabled.
+
 ## Downloaded native identity
 
 Online and offline updaters inspect the already authenticated package descriptor
@@ -142,9 +226,15 @@ The bounded readers support the current builder profiles: gzip control metadata
 in DEB ar archives, V4 RPM typed headers and APK v2 gzip/tar streams. APK accepts
 the optional signature stream but requires exactly one control metadata record
 and one data stream. RPM requires the standard release `1` and absent or zero
-epoch. APK requires revision `r0`. Alpine generation disables nfpm's semantic
-version normalization so `5.00.0` remains `5.00.0-r0`, matching the release
-contract. Unsupported framing or alternative package profiles fail closed.
+epoch. New APKs require exactly revision `r0`. Local generation and unsigned v5
+workflow generation set that revision explicitly and disable nfpm semantic
+normalization, preserving `5.00.0-r0`. Historical hosted v4 generation continues
+to omit the revision. Compatibility v4 candidate headers accept only the exact
+canonical or historical numeric spelling derived from the selected authenticated
+release, with no suffix or revision zero. A different revision, variant or
+release is refused. A retained signed v4.10.4 APK and inert real nfpm builds
+exercise these header forms; this does not re-establish their signature or
+release acceptance. Unsupported framing or alternative profiles fail closed.
 
 Inspection does not execute package tools, scripts or payloads. It preserves the
 descriptor position and bounds metadata sizes and archive traversal. The signed
@@ -167,8 +257,8 @@ v5.00.0 IVVQ acceptance. Production base updates remain refused.
 Production base updates remain explicitly refused. The new signed inventory
 does not enable compatibility-package substitution, switch package identity,
 relax native signature verification or bypass historical dependency retention.
-Public workflows continue the stable v4 three-artifact contract until v5
-production generation and the lifecycle matrix are completed together.
+Public workflows preserve the stable v4 three-artifact contract. Unsigned v5
+generation does not open native signing, production updates or release acceptance.
 
 ## Payload handoff boundary
 

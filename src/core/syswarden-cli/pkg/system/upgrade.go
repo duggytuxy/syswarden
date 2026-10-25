@@ -41,7 +41,7 @@ func firstSignedUpdaterVersion() string {
 }
 
 type commandRunner func(context.Context, string, ...string) error
-type installedRPMReleaseAttestor func(context.Context, string) error
+type installedRPMReleaseAttestor func(context.Context, string, string) error
 type installedVersionAttestor func(context.Context, packageTarget, int) (installedQualificationEvidence, error)
 type qualificationActivator func(context.Context, installedQualificationEvidence) error
 type qualificationDependencyAttestor func(context.Context, packageTarget) error
@@ -328,7 +328,11 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		}
 		attestationCtx, cancel := context.WithTimeout(ctx, u.metadataTimeout)
 		defer cancel()
+		if err := attestationCtx.Err(); err != nil {
+			return fmt.Errorf("attest current installed package: %w", err)
+		}
 		evidence, err := u.attestInstalled(attestationCtx, target, u.effectiveUID)
+		err = errors.Join(err, attestationCtx.Err())
 		if err != nil {
 			return fmt.Errorf("release version is current, but installed package state or integrity is not verified; inspect the native package manager and resolve any incomplete configuration: %w", err)
 		}
@@ -435,6 +439,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	err = u.installPackage(installCtx, target, packagePath, func(ctx context.Context) error {
 		return verifyPackageAtNativeExecution(ctx, packageFile, packagePath, artifact, u.effectiveUID)
 	})
+	err = errors.Join(err, installCtx.Err())
 	cancelInstall()
 	if err != nil {
 		return fmt.Errorf("install %s package: %w", target.format, err)

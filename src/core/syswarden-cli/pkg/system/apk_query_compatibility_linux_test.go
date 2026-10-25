@@ -12,7 +12,7 @@ import (
 // APK 2.14 and APK 3 share -e. The newer --exists spelling is not
 // accepted by APK 2.14; quiet is necessary for the expected empty output.
 func TestAPKQualificationQueriesUsePortableQuietInstalledOption(t *testing.T) {
-	target := packageTarget{format: packageFormatAPK, installer: "/sbin/apk"}
+	target := packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK, installer: "/sbin/apk"}
 	calls := 0
 	err := attestOfflineQualificationPackageDependenciesWith(t.Context(), target, func(_ context.Context, path string, args ...string) ([]byte, error) {
 		calls++

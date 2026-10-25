@@ -1241,9 +1241,9 @@ func TestQualificationDependencyPreflightFailsBeforePackageTransaction(t *testin
 
 func TestQualificationDependencyPreflightAttestsEveryDeclaredPackage(t *testing.T) {
 	for _, target := range []packageTarget{
-		{format: packageFormatDEB, installer: "/usr/bin/apt-get"},
-		{format: packageFormatRPM, installer: "/usr/bin/dnf"},
-		{format: packageFormatAPK, installer: "/sbin/apk"},
+		{packageName: compatibilityNativePackageName, format: packageFormatDEB, installer: "/usr/bin/apt-get"},
+		{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/dnf"},
+		{packageName: compatibilityNativePackageName, format: packageFormatAPK, installer: "/sbin/apk"},
 	} {
 		t.Run(target.format, func(t *testing.T) {
 			calls := 0
@@ -1567,5 +1567,64 @@ func TestQualificationProcessRejectsLingeringDescendantAfterParentSuccess(t *tes
 	err := runQualificationProcessGroup(t.Context(), command)
 	if err == nil || !strings.Contains(err.Error(), "left a live descendant process") {
 		t.Fatalf("lingering qualification descendant error = %v", err)
+	}
+}
+
+// A callback's nil return does not override the actual bounded operation's
+// deadline. No later installation or activation may consume expired evidence.
+func TestQualificationRefusesLateSuccessAtEveryBoundedCallback(t *testing.T) {
+	for _, stage := range []string{"dependencies", "candidate-cli", "install", "activation"} {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newQualificationFixture(t)
+			var networkCalls, installCalls atomic.Int32
+			u, output, tempBase := qualificationTestUpdater(t, fixture, "v4.04.2", &networkCalls, &installCalls)
+			u.attestTimeout = 50 * time.Millisecond
+			u.installTimeout = 50 * time.Millisecond
+			activationCalls := 0
+			u.activateCandidate = func(ctx context.Context, _ installedQualificationEvidence) error {
+				activationCalls++
+				if stage == "activation" {
+					<-ctx.Done()
+				}
+				return nil
+			}
+			switch stage {
+			case "dependencies":
+				u.attestDependencies = func(ctx context.Context, _ packageTarget) error { <-ctx.Done(); return nil }
+			case "candidate-cli":
+				u.attestCandidateCLI = func(ctx context.Context, _ packageTarget, _ *os.File) (string, error) {
+					<-ctx.Done()
+					return strings.Repeat("a", sha256.Size*2), nil
+				}
+			case "install":
+				original := u.installPackage
+				u.installPackage = func(ctx context.Context, target packageTarget, path string, guard func(context.Context) error) error {
+					if err := original(ctx, target, path, guard); err != nil {
+						return err
+					}
+					<-ctx.Done()
+					return nil
+				}
+			}
+			err := u.runQualificationBundle(t.Context(), fixture.bundle, testQualificationCandidate)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("late %s success accepted: %v", stage, err)
+			}
+			if networkCalls.Load() != 0 || strings.Contains(output.String(), "upgrade completed successfully") {
+				t.Fatal("expired operation made a completion claim or network request")
+			}
+			expectedInstalls := int32(0)
+			if stage == "install" || stage == "activation" {
+				expectedInstalls = 1
+			}
+			expectedActivations := 0
+			if stage == "activation" {
+				expectedActivations = 1
+			}
+			if installCalls.Load() != expectedInstalls || activationCalls != expectedActivations {
+				t.Fatalf("late success crossed boundary: installs=%d activation=%d", installCalls.Load(), activationCalls)
+			}
+			assertEmptyDirectory(t, tempBase)
+		})
 	}
 }

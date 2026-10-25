@@ -54,20 +54,41 @@ func nativeRetentionCommandVariant(manager, operation string, names []string, ge
 	if generation != 4 && generation != 5 {
 		return "", nil, errors.New("unqualified native package manager generation")
 	}
+	// Select an executable from constants instead of forwarding a caller's path.
+	var rpmManager string
+	switch manager {
+	case "/usr/bin/dnf":
+		rpmManager = "/usr/bin/dnf"
+	case "/usr/bin/yum":
+		rpmManager = "/usr/bin/yum"
+	}
 	if operation == "provider" && (manager == "/usr/bin/dnf" || manager == "/usr/bin/yum") && len(names) == 0 {
-		return manager, []string{"--noplugins", "--version"}, nil
+		return rpmManager, []string{"--noplugins", "--version"}, nil
+	}
+	if operation == "product-requires" && len(names) == 1 {
+		return retentionProductRequiresCommandForName(manager, names[0])
 	}
 	eligible := retentionEligible(manager)
 	if len(eligible) == 0 || len(names) == 0 || len(names) > len(eligible) {
 		return "", nil, errors.New("invalid dependency retention command scope")
 	}
 	seen := make(map[string]bool)
+	selected := make([]string, 0, len(names))
 	for _, name := range names {
-		if seen[name] || (!slices.Contains(eligible, name) && !(operation == "identity" && name == "syswarden")) {
+		if seen[name] || (!slices.Contains(eligible, name) && !(operation == "identity" && validNativeProductPackageName(name))) {
 			return "", nil, errors.New("unapproved dependency retention package")
 		}
 		seen[name] = true
+		// Return only compiled-in names. Caller text is a selector, never an
+		// argument to the native process even after successful validation.
+		for _, candidate := range append(slices.Clone(eligible), nativeProductPackageNames[:]...) {
+			if name == candidate {
+				selected = append(selected, candidate)
+				break
+			}
+		}
 	}
+	names = selected
 	deb := manager == "/usr/bin/apt-get" || manager == "/usr/bin/dpkg"
 	switch operation {
 	case "identity":
@@ -91,24 +112,38 @@ func nativeRetentionCommandVariant(manager, operation string, names []string, ge
 		if generation == 5 {
 			args := []string{"--no-plugins", "--cacheonly", "--disable-repo=*", "-q"}
 			if operation == "retain" {
-				return manager, append(append(args, "--assumeyes", "mark", "user"), names...), nil
+				return rpmManager, append(append(args, "--assumeyes", "mark", "user"), names...), nil
 			}
-			return manager, append(append(args, "repoquery", "--installed", "--queryformat", "%{name}\t%{reason}\n"), names...), nil
+			return rpmManager, append(append(args, "repoquery", "--installed", "--queryformat", "%{name}\t%{reason}\n"), names...), nil
 		}
 		args := []string{"--noplugins", "--cacheonly", "--disablerepo=*", "-q"}
 		if operation == "retain" {
-			return manager, append(append(args, "mark", "install"), names...), nil
+			return rpmManager, append(append(args, "mark", "install"), names...), nil
 		}
-		return manager, append(append(args, "repoquery", "--installed", "--qf", "%{name}\t%{reason}"), names...), nil
+		return rpmManager, append(append(args, "repoquery", "--installed", "--qf", "%{name}\t%{reason}"), names...), nil
 	}
 	return "", nil, errors.New("unapproved dependency retention operation")
 }
 
 func retentionProductRequiresCommand(manager string) (string, []string, error) {
+	return retentionProductRequiresCommandForName(manager, compatibilityNativePackageName)
+}
+
+func retentionProductRequiresCommandForName(manager, packageName string) (string, []string, error) {
+	if !validNativeProductPackageName(packageName) {
+		return "", nil, errors.New("RPM dependency query requires an exact product identity")
+	}
 	if manager != "/usr/bin/dnf" && manager != "/usr/bin/yum" {
 		return "", nil, errors.New("RPM dependency query requires the RPM manager")
 	}
-	return "/usr/bin/rpm", []string{"--query", "--requires", "syswarden"}, nil
+	switch packageName {
+	case compatibilityNativePackageName:
+		return "/usr/bin/rpm", []string{"--query", "--requires", compatibilityNativePackageName}, nil
+	case baseNativePackageName:
+		return "/usr/bin/rpm", []string{"--query", "--requires", baseNativePackageName}, nil
+	default:
+		return "", nil, errors.New("RPM dependency query requires an exact product identity")
+	}
 }
 
 func runNativeRetentionCommandVariant(ctx context.Context, manager, operation string, names []string, generation int) ([]byte, error) {
@@ -156,6 +191,9 @@ func runNativeRetentionCommandVariant(ctx context.Context, manager, operation st
 }
 
 func retentionRecord(manager, name string, data []byte) (string, string, error) {
+	if len(retentionEligible(manager)) == 0 || (!validNativeProductPackageName(name) && !slices.Contains(retentionEligible(manager), name)) {
+		return "", "", errors.New("native package identity is outside the retention scope")
+	}
 	text := string(data)
 	if len(text) == 0 || len(text) > 64<<10 || strings.Count(text, "\n") != 1 || !strings.HasSuffix(text, "\n") || strings.ContainsAny(text, "\x00\r") {
 		return "", "", errors.New("native package identity is empty, oversized or ambiguous")
@@ -164,13 +202,13 @@ func retentionRecord(manager, name string, data []byte) (string, string, error) 
 	deb := manager == "/usr/bin/apt-get" || manager == "/usr/bin/dpkg"
 	if deb {
 		if len(fields) != 5 || fields[0] != name || (fields[1] != "ii " && fields[1] != "hi ") ||
-			!retentionVersion(fields[2]) || (fields[3] != "amd64" && (name == "syswarden" || fields[3] != "all")) {
+			!retentionVersion(fields[2]) || (fields[3] != "amd64" && (validNativeProductPackageName(name) || fields[3] != "all")) {
 			return "", "", errors.New("DEB retention requires one configured native package identity")
 		}
 		return strings.Join(fields[:4], "\t"), fields[4], nil
 	}
 	if len(retentionEligible(manager)) == 0 || len(fields) != 3 || fields[0] != name || !retentionVersion(fields[1]) ||
-		(fields[2] != "x86_64" && (name == "syswarden" || fields[2] != "noarch")) {
+		(fields[2] != "x86_64" && (validNativeProductPackageName(name) || fields[2] != "noarch")) {
 		return "", "", errors.New("RPM retention requires one native package identity")
 	}
 	return strings.TrimSuffix(text, "\n"), "", nil
@@ -262,17 +300,27 @@ func retentionProtected(reason string) bool {
 }
 
 func inspectNativeRetention(ctx context.Context, manager string, run nativeRetentionRunner) (nativeRetentionSnapshot, error) {
+	return inspectNativeRetentionForName(ctx, manager, compatibilityNativePackageName, run)
+}
+
+func inspectNativeRetentionForName(ctx context.Context, manager, packageName string, run nativeRetentionRunner) (nativeRetentionSnapshot, error) {
 	snapshot := nativeRetentionSnapshot{identities: make(map[string]string), reasons: make(map[string]string)}
-	data, err := run(ctx, manager, "identity", []string{"syswarden"})
+	if ctx == nil || run == nil || !validNativeProductPackageName(packageName) || len(retentionEligible(manager)) == 0 {
+		return snapshot, errors.New("native dependency retention requires an exact product identity and available runner")
+	}
+	if err := ctx.Err(); err != nil {
+		return snapshot, err
+	}
+	data, err := run(ctx, manager, "identity", []string{packageName})
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.owner, snapshot.dependencies, err = retentionRecord(manager, "syswarden", data)
+	snapshot.owner, snapshot.dependencies, err = retentionRecord(manager, packageName, data)
 	if err != nil {
 		return snapshot, err
 	}
 	if manager == "/usr/bin/dnf" || manager == "/usr/bin/yum" {
-		data, err = run(ctx, manager, "product-requires", nil)
+		data, err = run(ctx, manager, "product-requires", []string{packageName})
 		if err != nil {
 			return snapshot, err
 		}
@@ -280,7 +328,7 @@ func inspectNativeRetention(ctx context.Context, manager string, run nativeReten
 	}
 	names, err := retentionDeclared(manager, snapshot.dependencies)
 	if err != nil || len(names) == 0 {
-		return snapshot, err
+		return snapshot, errors.Join(err, ctx.Err())
 	}
 	for _, name := range names {
 		data, err = run(ctx, manager, "identity", []string{name})
@@ -298,25 +346,28 @@ func inspectNativeRetention(ctx context.Context, manager string, run nativeReten
 		return snapshot, err
 	}
 	snapshot.reasons, err = retentionReasons(manager, names, data)
-	return snapshot, err
+	return snapshot, errors.Join(err, ctx.Err())
 }
 
-func preserveNativeDependencyReasons(ctx context.Context, manager string) error {
+func preserveNativeDependencyReasonsForName(ctx context.Context, manager, packageName string) error {
+	if ctx == nil || !validNativeProductPackageName(packageName) || len(retentionEligible(manager)) == 0 {
+		return errors.New("native dependency retention requires an exact product identity and supported manager")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	run, err := bindNativeRetentionRunner(ctx, manager, runNativeRetentionCommandVariant)
 	if err != nil {
 		return err
 	}
-	return preserveNativeDependencyReasonsWith(ctx, manager, run)
+	return preserveNativeDependencyReasonsForNameWith(ctx, manager, packageName, run)
 }
 
 // Every native operation has its own native locking. Repeated inventory checks
 // detect observed drift; they are not a package-manager lock spanning commands.
 // Concurrent administrator package changes require coordination. A failed reason
 // operation may already retain a subset; never undo those protections on retry.
-func preserveNativeDependencyReasonsWith(ctx context.Context, manager string, run nativeRetentionRunner) error {
-	if len(retentionEligible(manager)) == 0 || run == nil {
+func preserveNativeDependencyReasonsForNameWith(ctx context.Context, manager, packageName string, run nativeRetentionRunner) error {
+	if ctx == nil || !validNativeProductPackageName(packageName) || len(retentionEligible(manager)) == 0 || run == nil {
 		return errors.New("native dependency retention is unavailable")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -324,14 +375,14 @@ func preserveNativeDependencyReasonsWith(ctx context.Context, manager string, ru
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	before, err := inspectNativeRetention(ctx, manager, run)
+	before, err := inspectNativeRetentionForName(ctx, manager, packageName, run)
 	if err != nil {
 		return fmt.Errorf("inspect historical dependencies before replacement: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	current, err := inspectNativeRetention(ctx, manager, run)
+	current, err := inspectNativeRetentionForName(ctx, manager, packageName, run)
 	if err != nil || !reflect.DeepEqual(before, current) {
 		return errors.New("native dependency inventory changed or became unavailable before preparation")
 	}
@@ -350,7 +401,7 @@ func preserveNativeDependencyReasonsWith(ctx context.Context, manager string, ru
 	if _, err := run(ctx, manager, "retain", names); err != nil {
 		return fmt.Errorf("native reason preparation incomplete; do not replace the package, retained reasons are not reverted: %w", err)
 	}
-	after, err := inspectNativeRetention(ctx, manager, run)
+	after, err := inspectNativeRetentionForName(ctx, manager, packageName, run)
 	for _, name := range names {
 		current.reasons[name] = "user"
 		if manager == "/usr/bin/apt-get" || manager == "/usr/bin/dpkg" {

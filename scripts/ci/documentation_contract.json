@@ -1148,9 +1148,19 @@
       "literal": "ed25519.Verify(publicKey, manifestBytes, signature)"
     },
     {
-      "id": "release-three-packages",
+      "id": "release-versioned-unsigned-package-inventory",
       "path": "scripts/ci/release_gate.py",
-      "literal": "f\"syswarden_{version}_x86_64.apk\","
+      "literal": "Return the unsigned build inventory in update-manifest identity order."
+    },
+    {
+      "id": "release-v5-publication-refused-before-staging",
+      "path": "scripts/ci/release_gate.py",
+      "literal": "def prepare(args: argparse.Namespace) -> None:\n    _require_supported_publication(args.tag)"
+    },
+    {
+      "id": "release-v5-publication-refused-before-verification",
+      "path": "scripts/ci/release_gate.py",
+      "literal": "def expected_release_assets(tag: str) -> set[str]:\n    _require_supported_publication(tag)"
     },
     {
       "id": "release-signed-manifest",

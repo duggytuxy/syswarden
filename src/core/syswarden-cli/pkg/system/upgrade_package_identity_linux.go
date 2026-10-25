@@ -17,7 +17,7 @@ type nativeUpdateIdentity struct {
 
 func (identity nativeUpdateIdentity) validate() error {
 	if identity.name == baseNativePackageName {
-		return fmt.Errorf("syswarden-base updates are unavailable until the authenticated release inventory supports that identity; refusing compatibility-package substitution")
+		return fmt.Errorf("syswarden-base updates are unavailable pending coordinated native signature and lifecycle qualification; refusing compatibility-package substitution")
 	}
 	if identity.name != compatibilityNativePackageName {
 		return fmt.Errorf("standard updater requires the registered compatibility package identity")
@@ -33,8 +33,9 @@ func (identity nativeUpdateIdentity) validate() error {
 	}
 }
 
-// The public signed inventory still contains only the compatibility package.
-// Base installations must not select that artifact or invoke retention for it.
+// The v5 inventory represents both identities, but production base transactions
+// remain closed pending native signature and lifecycle qualification.
+// Base installations must not select a compatibility artifact or retain for it.
 func preflightStandardNativeUpdate(ctx context.Context) (nativeUpdateIdentity, error) {
 	executor := hostFirewallExecutor()
 	executor.output = func(path string, arguments ...string) ([]byte, error) {

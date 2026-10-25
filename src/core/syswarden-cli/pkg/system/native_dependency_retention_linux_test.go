@@ -39,6 +39,112 @@ func TestNativeRetentionCommandScope(t *testing.T) {
 	}
 }
 
+func TestNativeRetentionSelectedProductCommands(t *testing.T) {
+	for _, packageName := range nativeProductPackageNames {
+		for _, manager := range []string{"/usr/bin/apt-get", "/usr/bin/dpkg", "/usr/bin/dnf", "/usr/bin/yum"} {
+			for _, generation := range []int{4, 5} {
+				path, args, err := nativeRetentionCommandVariant(manager, "identity", []string{packageName}, generation)
+				wantPath, wantArgs := "/usr/bin/rpm", []string{"--query", "--queryformat", rpmRetentionQuery, packageName}
+				deb := manager == "/usr/bin/apt-get" || manager == "/usr/bin/dpkg"
+				if deb {
+					wantPath, wantArgs = "/usr/bin/dpkg-query", []string{"--show", debRetentionQuery, packageName}
+				}
+				if err != nil || path != wantPath || !slices.Equal(args, wantArgs) {
+					t.Fatalf("selected identity command: %s %q %v", path, args, err)
+				}
+				path, args, err = nativeRetentionCommandVariant(manager, "product-requires", []string{packageName}, generation)
+				if deb {
+					if err == nil {
+						t.Fatal("RPM requires query accepted for DEB")
+					}
+				} else if err != nil || path != "/usr/bin/rpm" || !slices.Equal(args, []string{"--query", "--requires", packageName}) {
+					t.Fatalf("selected requires command: %s %q %v", path, args, err)
+				}
+				for _, operation := range []string{"reasons", "retain"} {
+					if _, _, err := nativeRetentionCommandVariant(manager, operation, []string{packageName}, generation); err == nil {
+						t.Fatalf("product entered dependency mutation scope: %s %s", packageName, operation)
+					}
+				}
+			}
+		}
+	}
+	for _, names := range [][]string{nil, {"other"}, {"rsyslog"}, {"syswarden", "syswarden-base"}, {"syswarden-base=1"}, {"--root=/tmp"}} {
+		if _, _, err := nativeRetentionCommandVariant("/usr/bin/dnf", "product-requires", names, 4); err == nil {
+			t.Fatalf("ambiguous product query accepted: %q", names)
+		}
+	}
+}
+
+func TestNativeRetentionSelectedProductIdentityIsExact(t *testing.T) {
+	for _, packageName := range nativeProductPackageNames {
+		for _, manager := range []string{"/usr/bin/apt-get", "/usr/bin/dpkg", "/usr/bin/dnf", "/usr/bin/yum"} {
+			deb := manager == "/usr/bin/apt-get" || manager == "/usr/bin/dpkg"
+			valid := packageName + "\t0:5.00.0-1\tx86_64\n"
+			if deb {
+				valid = packageName + "\thi \t5.00.0\tamd64\tnftables\n"
+			}
+			if _, _, err := retentionRecord(manager, packageName, []byte(valid)); err != nil {
+				t.Fatal(err)
+			}
+			for _, bad := range []string{
+				strings.Replace(valid, packageName, "foreign", 1),
+				strings.ReplaceAll(strings.ReplaceAll(valid, "amd64", "all"), "x86_64", "noarch"),
+				strings.ReplaceAll(strings.ReplaceAll(valid, "amd64", "386"), "x86_64", "i686"),
+				valid + valid,
+			} {
+				if _, _, err := retentionRecord(manager, packageName, []byte(bad)); err == nil {
+					t.Fatalf("non-exact selected identity accepted: %q", bad)
+				}
+			}
+		}
+	}
+}
+
+func TestNativeRetentionSelectedProductRefusesBeforeQueries(t *testing.T) {
+	called := false
+	run := func(context.Context, string, string, []string) ([]byte, error) {
+		called = true
+		return nil, errors.New("unexpected query")
+	}
+	for _, packageName := range []string{"", "foreign", "syswarden-base=1", "syswarden*", "--root=/tmp"} {
+		if err := preserveNativeDependencyReasonsForName(t.Context(), "/usr/bin/apt-get", packageName); err == nil {
+			t.Fatalf("production helper accepted unknown product %q", packageName)
+		}
+		if err := preserveNativeDependencyReasonsForNameWith(t.Context(), "/usr/bin/apt-get", packageName, run); err == nil {
+			t.Fatalf("injected helper accepted unknown product %q", packageName)
+		}
+		if _, err := inspectNativeRetentionForName(t.Context(), "/usr/bin/apt-get", packageName, run); err == nil {
+			t.Fatalf("inspection accepted unknown product %q", packageName)
+		}
+	}
+	var missingContext context.Context
+	if err := preserveNativeDependencyReasonsForNameWith(missingContext, "/usr/bin/apt-get", baseNativePackageName, run); err == nil {
+		t.Fatal("nil context accepted")
+	}
+	if err := preserveNativeDependencyReasonsForNameWith(t.Context(), "/usr/bin/apt-get", baseNativePackageName, nil); err == nil {
+		t.Fatal("nil runner accepted")
+	}
+	if err := preserveNativeDependencyReasonsForNameWith(t.Context(), "/tmp/apt-get", baseNativePackageName, run); err == nil {
+		t.Fatal("foreign manager accepted")
+	}
+	if called {
+		t.Fatal("invalid selection reached native queries")
+	}
+}
+
+func TestNativeRetentionCompatibilityInspectionWrapper(t *testing.T) {
+	run := func(_ context.Context, manager, operation string, names []string) ([]byte, error) {
+		if manager != "/usr/bin/apt-get" || operation != "identity" || !slices.Equal(names, []string{compatibilityNativePackageName}) {
+			t.Fatalf("compatibility wrapper changed authority: %s %s %q", manager, operation, names)
+		}
+		return []byte("syswarden\tii \t5.00.0\tamd64\tnftables\n"), nil
+	}
+	got, err := inspectNativeRetention(t.Context(), "/usr/bin/apt-get", run)
+	if err != nil || got.owner != "syswarden\tii \t5.00.0\tamd64" || len(got.identities) != 0 || len(got.reasons) != 0 {
+		t.Fatalf("compatibility snapshot: %+v %v", got, err)
+	}
+}
+
 func TestNativeRetentionRejectsAmbiguousDeclarationsAndReasons(t *testing.T) {
 	for _, manager := range []string{"/usr/bin/apt-get", "/usr/bin/dnf"} {
 		for _, declaration := range []string{"rsyslog >= 1", "rsyslog:any", "rsyslog (>= 1)", "nftables | rsyslog", "(rsyslog if nftables)", "rsyslog\x00", "rsyslog\r", "rsyslog\t", strings.Repeat("a", 65537)} {
@@ -91,96 +197,111 @@ func TestNativeRetentionIdentityRefusesIncompleteAndForeignPackages(t *testing.T
 }
 
 func TestNativeRetentionPreparesOnlyHistoricalAutomaticDependencies(t *testing.T) {
-	for _, manager := range []string{"/usr/bin/apt-get", "/usr/bin/dpkg", "/usr/bin/dnf", "/usr/bin/yum"} {
-		for _, scenario := range []string{"automatic", "already protected", "minimal", "query failure", "before drift", "after drift", "reason failure", "reason unconfirmed", "cancel before", "cancel after"} {
-			t.Run(manager+"/"+scenario, func(t *testing.T) {
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				if scenario == "cancel before" {
-					cancel()
-				}
-				deb := manager == "/usr/bin/apt-get" || manager == "/usr/bin/dpkg"
-				protected := scenario == "already protected"
-				reads, writes := 0, 0
-				run := func(_ context.Context, gotManager, operation string, names []string) ([]byte, error) {
-					if gotManager != manager {
-						t.Fatal("manager changed")
+	for _, packageName := range nativeProductPackageNames {
+		for _, manager := range []string{"/usr/bin/apt-get", "/usr/bin/dpkg", "/usr/bin/dnf", "/usr/bin/yum"} {
+			for _, scenario := range []string{"automatic", "already protected", "minimal", "query failure", "wrong owner", "owner drift", "before drift", "after drift", "reason failure", "reason unconfirmed", "cancel before", "cancel after"} {
+				t.Run(packageName+"/"+manager+"/"+scenario, func(t *testing.T) {
+					ctx, cancel := context.WithCancel(t.Context())
+					defer cancel()
+					if scenario == "cancel before" {
+						cancel()
 					}
-					switch operation {
-					case "identity":
-						if names[0] == "syswarden" {
-							reads++
+					deb := manager == "/usr/bin/apt-get" || manager == "/usr/bin/dpkg"
+					protected := scenario == "already protected"
+					reads, writes := 0, 0
+					run := func(_ context.Context, gotManager, operation string, names []string) ([]byte, error) {
+						if gotManager != manager {
+							t.Fatal("manager changed")
 						}
-						if scenario == "query failure" {
-							return nil, errors.New("fixture unavailable")
-						}
-						version := "1.0"
-						if (scenario == "before drift" && reads == 2) || (scenario == "after drift" && reads == 3) {
-							version = "1.1"
-						}
-						if deb {
-							dependencies := ""
-							if names[0] == "syswarden" && scenario != "minimal" {
-								dependencies = "nftables, rsyslog, wireguard-tools"
+						switch operation {
+						case "identity":
+							if names[0] == packageName {
+								reads++
 							}
-							return []byte(names[0] + "\thi \t" + version + "\tamd64\t" + dependencies + "\n"), nil
-						}
-						return []byte(names[0] + "\t0:" + version + "-1\tx86_64\n"), nil
-					case "product-requires":
-						if scenario == "minimal" {
-							return []byte("nftables\n"), nil
-						}
-						return []byte("nftables\nrsyslog\nwireguard-tools\n"), nil
-					case "reasons":
-						// wireguard-tools represents an administrator/group choice and
-						// must never be included in the reason mutation.
-						if deb {
+							identityName := names[0]
+							if names[0] == packageName && (scenario == "wrong owner" || scenario == "owner drift" && reads == 2) {
+								identityName = compatibilityNativePackageName
+								if identityName == packageName {
+									identityName = baseNativePackageName
+								}
+							}
+							if scenario == "query failure" {
+								return nil, errors.New("fixture unavailable")
+							}
+							version := "1.0"
+							if (scenario == "before drift" && reads == 2) || (scenario == "after drift" && reads == 3) {
+								version = "1.1"
+							}
+							if deb {
+								dependencies := ""
+								if names[0] == packageName && scenario != "minimal" {
+									dependencies = "nftables, rsyslog, wireguard-tools"
+								}
+								return []byte(identityName + "\thi \t" + version + "\tamd64\t" + dependencies + "\n"), nil
+							}
+							return []byte(identityName + "\t0:" + version + "-1\tx86_64\n"), nil
+						case "product-requires":
+							if !slices.Equal(names, []string{packageName}) {
+								t.Fatalf("requires query changed product: %q", names)
+							}
+							if scenario == "minimal" {
+								return []byte("nftables\n"), nil
+							}
+							return []byte("nftables\nrsyslog\nwireguard-tools\n"), nil
+						case "reasons":
+							if scenario == "minimal" {
+								t.Fatal("minimal package queried unrelated dependency reasons")
+							}
+							// wireguard-tools represents an administrator/group choice and
+							// must never be included in the reason mutation.
+							if deb {
+								if protected {
+									return nil, nil
+								}
+								return []byte("rsyslog\n"), nil
+							}
 							if protected {
-								return nil, nil
+								return []byte("rsyslog\tuser\nwireguard-tools\tgroup\n"), nil
 							}
-							return []byte("rsyslog\n"), nil
+							return []byte("rsyslog\tdependency\nwireguard-tools\tgroup\n"), nil
+						case "retain":
+							writes++
+							if !reflect.DeepEqual(names, []string{"rsyslog"}) {
+								t.Fatalf("changed unrelated/protected scope: %q", names)
+							}
+							if scenario == "reason failure" {
+								return nil, errors.New("partial native failure")
+							}
+							if scenario != "reason unconfirmed" {
+								protected = true
+							}
+							if scenario == "cancel after" {
+								cancel()
+							}
+							return nil, nil
 						}
-						if protected {
-							return []byte("rsyslog\tuser\nwireguard-tools\tgroup\n"), nil
-						}
-						return []byte("rsyslog\tdependency\nwireguard-tools\tgroup\n"), nil
-					case "retain":
-						writes++
-						if !reflect.DeepEqual(names, []string{"rsyslog"}) {
-							t.Fatalf("changed unrelated/protected scope: %q", names)
-						}
-						if scenario == "reason failure" {
-							return nil, errors.New("partial native failure")
-						}
-						if scenario != "reason unconfirmed" {
-							protected = true
-						}
-						if scenario == "cancel after" {
-							cancel()
-						}
+						t.Fatalf("unexpected operation: %q", operation)
 						return nil, nil
 					}
-					t.Fatalf("unexpected operation: %q", operation)
-					return nil, nil
-				}
-				err := preserveNativeDependencyReasonsWith(ctx, manager, run)
-				wantError := scenario != "automatic" && scenario != "already protected" && scenario != "minimal"
-				if (err != nil) != wantError {
-					t.Fatalf("error %v, want failure=%v", err, wantError)
-				}
-				wantWrites := 0
-				if slices.Contains([]string{"automatic", "after drift", "reason failure", "reason unconfirmed", "cancel after"}, scenario) {
-					wantWrites = 1
-				}
-				if writes != wantWrites {
-					t.Fatalf("writes=%d want %d", writes, wantWrites)
-				}
-				if !wantError {
-					if err := preserveNativeDependencyReasonsWith(ctx, manager, run); err != nil || writes != wantWrites {
-						t.Fatalf("retry changed retained choices: %v, writes=%d", err, writes)
+					err := preserveNativeDependencyReasonsForNameWith(ctx, manager, packageName, run)
+					wantError := scenario != "automatic" && scenario != "already protected" && scenario != "minimal"
+					if (err != nil) != wantError {
+						t.Fatalf("error %v, want failure=%v", err, wantError)
 					}
-				}
-			})
+					wantWrites := 0
+					if slices.Contains([]string{"automatic", "after drift", "reason failure", "reason unconfirmed", "cancel after"}, scenario) {
+						wantWrites = 1
+					}
+					if writes != wantWrites {
+						t.Fatalf("writes=%d want %d", writes, wantWrites)
+					}
+					if !wantError {
+						if err := preserveNativeDependencyReasonsForNameWith(ctx, manager, packageName, run); err != nil || writes != wantWrites {
+							t.Fatalf("retry changed retained choices: %v, writes=%d", err, writes)
+						}
+					}
+				})
+			}
 		}
 	}
 }
@@ -199,9 +320,23 @@ func TestNativeDependencyRetentionOracle(t *testing.T) {
 			t.Fatal("isolated laboratory marker missing", err)
 		}
 	}
-	manager := os.Getenv("SYSWARDEN_NATIVE_RETENTION_MANAGER")
-	if manager != "/usr/bin/apt-get" && manager != "/usr/bin/dnf" {
+	var manager string
+	switch os.Getenv("SYSWARDEN_NATIVE_RETENTION_MANAGER") {
+	case "/usr/bin/apt-get":
+		manager = "/usr/bin/apt-get"
+	case "/usr/bin/dnf":
+		manager = "/usr/bin/dnf"
+	default:
 		t.Fatal("unsupported laboratory manager")
+	}
+	var packageName string
+	switch os.Getenv("SYSWARDEN_NATIVE_RETENTION_PACKAGE") {
+	case "", compatibilityNativePackageName:
+		packageName = compatibilityNativePackageName
+	case baseNativePackageName:
+		packageName = baseNativePackageName
+	default:
+		t.Fatal("unsupported laboratory product package")
 	}
 	bound, err := bindNativeRetentionRunner(t.Context(), manager, runNativeRetentionCommandVariant)
 	if err != nil {
@@ -219,7 +354,7 @@ func TestNativeDependencyRetentionOracle(t *testing.T) {
 		t.Fatal("exact expected retention write count required")
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := preserveNativeDependencyReasonsWith(t.Context(), manager, run); err != nil {
+		if err := preserveNativeDependencyReasonsForNameWith(t.Context(), manager, packageName, run); err != nil {
 			t.Fatal(err)
 		}
 		if fmt.Sprint(writes) != expected {
@@ -228,6 +363,7 @@ func TestNativeDependencyRetentionOracle(t *testing.T) {
 	}
 
 	fmt.Println("NATIVE_RETENTION_PASS=" + manager)
+	fmt.Println("NATIVE_RETENTION_PACKAGE=" + packageName)
 }
 
 func TestNativeRetentionPreservesExactRPMReasons(t *testing.T) {

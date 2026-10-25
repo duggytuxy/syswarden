@@ -4,6 +4,7 @@ package system
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,8 +19,19 @@ var apkOptionalDependencyNames = [...]string{
 }
 
 type apkRetentionRecord struct {
-	name, version, dependencies, flags string
-	seen                               map[byte]bool
+	name, version, architecture, checksum, dependencies, flags string
+	seen                                                       map[byte]bool
+}
+
+// Q1 is the installed identity encoding observed for APK v2 packages with both
+// observed apk-tools generations. This is a native identity comparison, not a
+// package authentication algorithm or evidence of administrator intent.
+func validAPKRetentionChecksum(checksum string) bool {
+	if len(checksum) != 30 || !strings.HasPrefix(checksum, "Q1") {
+		return false
+	}
+	decoded, err := base64.StdEncoding.Strict().DecodeString(checksum[2:])
+	return err == nil && len(decoded) == 20 && base64.StdEncoding.EncodeToString(decoded) == checksum[2:]
 }
 
 func apkRetentionName(token string) string {
@@ -30,7 +42,7 @@ func apkRetentionName(token string) string {
 }
 
 func apkRetentionRelevant(name string) bool {
-	if name == "syswarden" {
+	if validNativeProductPackageName(name) {
 		return true
 	}
 	for _, allowed := range apkOptionalDependencyNames {
@@ -46,6 +58,13 @@ func apkRetentionRelevant(name string) bool {
 // It is read-only and returns only compiled-in bare package names, never data
 // suitable for injecting APK options, constraints, repositories or file paths.
 func apkDependencyRetentionNames(world, installed []byte) ([]string, error) {
+	return apkDependencyRetentionNamesForName(compatibilityNativePackageName, world, installed)
+}
+
+func apkDependencyRetentionNamesForName(packageName string, world, installed []byte) ([]string, error) {
+	if !validNativeProductPackageName(packageName) {
+		return nil, errors.New("APK retention requires an exact product identity")
+	}
 	if len(world) == 0 || len(world) > 1<<20 || len(installed) == 0 || len(installed) > maximumAPKInstalledDatabaseSize ||
 		bytes.IndexByte(world, 0) >= 0 || bytes.IndexByte(installed, 0) >= 0 ||
 		bytes.ContainsAny(world, "\r\t") || bytes.ContainsRune(installed, '\r') {
@@ -62,7 +81,7 @@ func apkDependencyRetentionNames(world, installed []byte) ([]string, error) {
 				return nil, errors.New("APK installed record is malformed")
 			}
 			key, value := line[0], line[2:]
-			if !strings.ContainsRune("PVDf", rune(key)) {
+			if !strings.ContainsRune("PVCADf", rune(key)) {
 				continue
 			}
 			if record.seen[key] {
@@ -74,6 +93,10 @@ func apkDependencyRetentionNames(world, installed []byte) ([]string, error) {
 				record.name = value
 			case 'V':
 				record.version = value
+			case 'A':
+				record.architecture = value
+			case 'C':
+				record.checksum = value
 			case 'D':
 				record.dependencies = value
 			case 'f':
@@ -91,9 +114,20 @@ func apkDependencyRetentionNames(world, installed []byte) ([]string, error) {
 		}
 		records[record.name] = record
 	}
-	owner, exists := records["syswarden"]
+	owner, exists := records[packageName]
 	if !exists {
-		return nil, errors.New("APK update requires an installed SysWarden package")
+		return nil, errors.New("APK update requires the selected installed SysWarden package")
+	}
+	for _, other := range nativeProductPackageNames {
+		if _, exists := records[other]; other != packageName && exists {
+			return nil, errors.New("APK update refuses coexisting SysWarden package identities")
+		}
+	}
+	if owner.architecture != "x86_64" || !retentionVersion(owner.version) {
+		return nil, errors.New("APK product package has an unsupported architecture or version")
+	}
+	if !validAPKRetentionChecksum(owner.checksum) {
+		return nil, errors.New("APK product package lacks a supported canonical installed checksum")
 	}
 	// APK v2's S flag describes the checksum representation. Other flags
 	// report broken files/scripts/xattrs or an unknown state. Inspect only
@@ -105,7 +139,7 @@ func apkDependencyRetentionNames(world, installed []byte) ([]string, error) {
 	declared := make(map[string]bool)
 	for _, dependency := range strings.Fields(owner.dependencies) {
 		name := apkRetentionName(dependency)
-		if !apkRetentionRelevant(name) || name == "syswarden" {
+		if !apkRetentionRelevant(name) || validNativeProductPackageName(name) {
 			continue
 		}
 		// Published historical metadata uses bare names. Preserve ambiguous
@@ -123,6 +157,7 @@ func apkDependencyRetentionNames(world, installed []byte) ([]string, error) {
 		}
 	}
 	rooted := make(map[string]bool)
+	productRoot := false
 	for _, line := range strings.Split(string(world), "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -131,6 +166,17 @@ func apkDependencyRetentionNames(world, installed []byte) ([]string, error) {
 			return nil, errors.New("APK world contains an ambiguous requirement")
 		}
 		name := apkRetentionName(strings.TrimPrefix(line, "!"))
+		if validNativeProductPackageName(name) {
+			// A same-name local-file update rebinds a checksum root to the new
+			// package. Only an exact binding to the selected installed C field
+			// is accepted. Version pins, tags and other constraints stay intact
+			// through refusal, never through normalization or direct world edits.
+			if name != packageName || productRoot || (line != packageName && line != packageName+"><"+owner.checksum) {
+				return nil, errors.New("APK update requires one bare or exact installed-checksum product root; preserve administrator constraints for manual review")
+			}
+			productRoot = true
+			continue
+		}
 		if !declared[name] {
 			continue
 		}
@@ -138,6 +184,9 @@ func apkDependencyRetentionNames(world, installed []byte) ([]string, error) {
 			return nil, errors.New("APK world has conflicting or duplicate retention requirements")
 		}
 		rooted[name] = true
+	}
+	if !productRoot {
+		return nil, errors.New("APK update refuses to create a new explicit product root")
 	}
 	var names []string
 	for _, name := range apkOptionalDependencyNames {
@@ -153,6 +202,13 @@ func apkDependencyRetentionNames(world, installed []byte) ([]string, error) {
 // SysWarden never edits world directly. Administrators must serialize migration
 // with other configuration operations; this snapshot is not an APK lock lease.
 func apkPreservedInstallArguments(name string, args []string, paths openRCWireGuardDefinitionPaths) ([]string, error) {
+	return apkPreservedInstallArgumentsForName(compatibilityNativePackageName, name, args, paths)
+}
+
+func apkPreservedInstallArgumentsForName(packageName, name string, args []string, paths openRCWireGuardDefinitionPaths) ([]string, error) {
+	if !validNativeProductPackageName(packageName) {
+		return nil, errors.New("APK retention requires an exact product identity")
+	}
 	if name != "/sbin/apk" && name != "/usr/sbin/apk" {
 		return nil, errors.New("APK retention requires a trusted installer path")
 	}
@@ -175,7 +231,7 @@ func apkPreservedInstallArguments(name string, args []string, paths openRCWireGu
 	if err != nil {
 		return nil, fmt.Errorf("read protected APK installed database: %w", err)
 	}
-	names, err := apkDependencyRetentionNames(world.content, database.content)
+	names, err := apkDependencyRetentionNamesForName(packageName, world.content, database.content)
 	if err != nil {
 		return nil, err
 	}

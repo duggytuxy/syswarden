@@ -141,7 +141,7 @@ func TestNativePackageIdentityUpdateRequiresSingleInstalledCompatibility(t *test
 				if (err != nil) != test.wantError {
 					t.Fatalf("identity preflight: %v", err)
 				}
-				if test.name == "base" && !strings.Contains(err.Error(), "authenticated release inventory") {
+				if test.name == "base" && !strings.Contains(err.Error(), "coordinated native signature and lifecycle qualification") {
 					t.Fatalf("missing base update refusal: %v", err)
 				}
 				if err == nil && identity != testCompatibilityUpdateIdentity(manager) {

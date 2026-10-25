@@ -908,3 +908,24 @@ func readUpdaterTestFile(directory, name string) ([]byte, error) {
 	defer root.Close()
 	return root.ReadFile(name)
 }
+
+func TestOnlineUpdaterRefusesLateInstallerSuccessBeforeFinalization(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("authenticated installer deadline fixture")
+	manifest := testMarshalManifest(t, testUpdateManifest(t, testUpdateVersion, payload))
+	client := newUpdaterTestClient(manifest, testSignManifest(privateKey, manifest), payload)
+	executions, finalizations := 0, 0
+	temporary := t.TempDir()
+	u := testUpdater(client, temporary, "amd64", map[string]ed25519.PublicKey{testReleaseKeyID: publicKey},
+		func(ctx context.Context, _ string, _ ...string) error { executions++; <-ctx.Done(); return nil })
+	u.installTimeout = 50 * time.Millisecond
+	u.retireWebTUI = func() error { finalizations++; return nil }
+	err = u.run(t.Context())
+	if !errors.Is(err, context.DeadlineExceeded) || executions != 1 || finalizations != 0 {
+		t.Fatalf("expired installation result=%v, executions=%d finalizations=%d", err, executions, finalizations)
+	}
+	assertEmptyDirectory(t, temporary)
+}

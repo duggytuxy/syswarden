@@ -1171,6 +1171,7 @@ fi
 )
 
 # Generate Alpine APK via nfpm
+# Local artifacts use the explicit r0 native revision required for candidates.
 echo "[*] Generating .apk package via nfpm..."
 cat << EOF > nfpm_alpine_amd64.yaml
 name: "${PACKAGE_NAME}"
@@ -1178,6 +1179,7 @@ arch: "amd64"
 platform: "linux"
 version: "${VERSION}"
 version_schema: none
+release: "0"
 maintainer: "SysWarden Engineering"
 description: "SysWarden Host-based Security Orchestrator for Alpine Linux"
 vendor: "SysWarden Security"

@@ -293,6 +293,7 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 	}
 	dependencyCtx, cancelDependencies := context.WithTimeout(ctx, u.attestTimeout)
 	err = u.attestDependencies(dependencyCtx, target)
+	err = errors.Join(err, dependencyCtx.Err())
 	cancelDependencies()
 	if err != nil {
 		return fmt.Errorf("attest locally installed dependencies before candidate transaction: %w", err)
@@ -353,6 +354,7 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 	}
 	payloadAttestationCtx, cancelPayloadAttestation := context.WithTimeout(ctx, u.attestTimeout)
 	expectedCandidateCLISHA256, err := u.attestCandidateCLI(payloadAttestationCtx, target, packageFile)
+	err = errors.Join(err, payloadAttestationCtx.Err())
 	cancelPayloadAttestation()
 	if err != nil {
 		return fmt.Errorf("attest candidate CLI from authenticated package: %w", err)
@@ -383,6 +385,7 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 	err = u.installPackage(installCtx, target, packagePath, func(ctx context.Context) error {
 		return verifyPackageAtNativeExecution(ctx, packageFile, packagePath, artifact, u.effectiveUID)
 	})
+	err = errors.Join(err, installCtx.Err())
 	cancelInstall()
 	if err != nil {
 		return fmt.Errorf("install %s qualification package: %w", target.format, err)
@@ -417,6 +420,7 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 	fmt.Fprintln(u.stdout, "[INFO] Activating the exactly attested candidate through the offline qualification install path...")
 	activationCtx, cancelActivation := context.WithTimeout(ctx, u.installTimeout)
 	err = u.activateCandidate(activationCtx, preActivationCandidate)
+	err = errors.Join(err, activationCtx.Err())
 	cancelActivation()
 	if err != nil {
 		return fmt.Errorf("qualification candidate attested but activation failed: %w", err)
@@ -1581,7 +1585,7 @@ func attestInstalledAPKVersionForName(ctx context.Context, packageName, apkPath,
 	// Origin and license are display metadata, not package identity. Their
 	// values may vary, and licenses may contain spaces or nested parentheses.
 	rawVersion := strings.TrimPrefix(fields[0], packagePrefix)
-	version, err := canonicalInstalledSyswardenVersion(rawVersion, packageFormatAPK)
+	version, err := canonicalInstalledAPKVersionForName(rawVersion, packageName)
 	if err != nil {
 		return "", err
 	}
@@ -1599,6 +1603,27 @@ func attestInstalledAPKVersionForName(ctx context.Context, packageName, apkPath,
 }
 
 func qualificationRequiredPackages(format string) []string {
+	return qualificationRequiredPackagesForName(format, compatibilityNativePackageName)
+}
+
+func qualificationRequiredPackagesForName(format, packageName string) []string {
+	if !validNativeProductPackageName(packageName) {
+		return nil
+	}
+	if packageName == baseNativePackageName {
+		switch format {
+		case packageFormatDEB:
+			return []string{"bash-completion", "cron", "curl", "jq", "nftables", "procps", "wget"}
+		case packageFormatRPM:
+			// systemd is a runtime attestation prerequisite in addition to the
+			// minimal package's declared dependency metadata.
+			return []string{"bash-completion", "cronie", "curl", "jq", "nftables", "procps-ng", "systemd", "wget"}
+		case packageFormatAPK:
+			return []string{"bash-completion", "cronie", "cronie-openrc", "curl", "jq", "nftables", "openrc", "procps-ng", "shadow", "wget"}
+		default:
+			return nil
+		}
+	}
 	switch format {
 	case packageFormatDEB:
 		return []string{
@@ -1638,14 +1663,23 @@ func attestOfflineQualificationPackageDependenciesWith(
 	target packageTarget,
 	output qualificationCommandOutput,
 ) error {
-	if output == nil {
+	if ctx == nil || output == nil || !validNativeProductPackageName(target.packageName) {
 		return errors.New("offline package dependency attestation is unavailable")
 	}
-	required := qualificationRequiredPackages(target.format)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if target.format == packageFormatAPK && target.installer != "/sbin/apk" && target.installer != "/usr/sbin/apk" {
+		return errors.New("offline APK dependency attestation requires a trusted frontend")
+	}
+	required := qualificationRequiredPackagesForName(target.format, target.packageName)
 	if len(required) == 0 {
 		return fmt.Errorf("unsupported package format %q for dependency attestation", target.format)
 	}
 	for _, dependency := range required {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var (
 			name string
 			args []string
@@ -1666,6 +1700,9 @@ func attestOfflineQualificationPackageDependenciesWith(
 			return fmt.Errorf("unsupported package format %q for dependency attestation", target.format)
 		}
 		result, err := output(ctx, name, args...)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return fmt.Errorf("required package dependency %q is unavailable: %w", dependency, err)
 		}
@@ -1674,6 +1711,48 @@ func attestOfflineQualificationPackageDependenciesWith(
 		}
 	}
 	return nil
+}
+
+// Historical compatibility APK builds normalized the numeric minor version.
+// Only compatibility v4 evidence may omit a revision or use that spelling. Raw
+// ownership evidence is still compared exactly before this interpretation.
+func canonicalInstalledAPKVersionForName(rawVersion, packageName string) (string, error) {
+	if !validNativeProductPackageName(packageName) {
+		return "", errors.New("installed APK version requires an exact native identity")
+	}
+	version, revision, ok := strings.Cut(rawVersion, "-r")
+	if !ok && packageName == compatibilityNativePackageName && strings.HasPrefix(rawVersion, "4.") {
+		// Published v4 APKs omitted the native revision. This changes only
+		// interpretation after exact installed-owner comparison, never bytes.
+		rawVersion += "-r0"
+		version, revision, ok = strings.Cut(rawVersion, "-r")
+	}
+	if !ok || revision == "" || (len(revision) > 1 && revision[0] == '0') {
+		return "", errors.New("installed APK version has a noncanonical revision")
+	}
+	for _, character := range revision {
+		if character < '0' || character > '9' {
+			return "", errors.New("installed APK revision must be numeric")
+		}
+	}
+	if !strings.HasPrefix(version, "4.") && revision != "0" {
+		return "", errors.New("installed APK revision differs from the release contract")
+	}
+	canonical, err := canonicalInstalledSyswardenVersion(rawVersion, packageFormatAPK)
+	if err == nil && packageName == baseNativePackageName {
+		parsed, parseErr := parseReleaseVersion(canonical)
+		if parseErr != nil || parsed.major < 5 {
+			return "", errors.New("installed base APK version predates the native identity contract")
+		}
+	}
+	if err == nil || packageName != compatibilityNativePackageName {
+		return canonical, err
+	}
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 || parts[0] != "4" || len(parts[1]) != 1 || parts[1][0] < '0' || parts[1][0] > '9' {
+		return "", err
+	}
+	return canonicalInstalledSyswardenVersion("4.0"+parts[1]+"."+parts[2]+"-r"+revision, packageFormatAPK)
 }
 
 func canonicalInstalledSyswardenVersion(rawVersion, format string) (string, error) {

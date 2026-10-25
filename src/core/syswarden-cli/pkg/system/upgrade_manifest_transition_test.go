@@ -158,7 +158,7 @@ func TestV5SignedUpdateStillRequiresDependencyRetention(t *testing.T) {
 						func(context.Context, string) error { prepared.Add(1); return refused },
 						func(context.Context, string, ...string) error { executed.Add(1); return nil })
 				})
-			u.attestRPM = func(context.Context, string) error { return nil }
+			u.attestRPM = func(context.Context, string, string) error { return nil }
 			u.preflightNativeIdentity = func(context.Context) (nativeUpdateIdentity, error) {
 				authority := "dpkg-query"
 				if manager == "/usr/bin/dnf" {

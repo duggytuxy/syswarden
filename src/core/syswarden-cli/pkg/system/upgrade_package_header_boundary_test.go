@@ -570,3 +570,37 @@ func TestNativePackageHeaderBoundaryNilGatePrecedesOnlineDiscovery(t *testing.T)
 	}
 	assertEmptyDirectory(t, u.tempBase)
 }
+
+func TestAPKCandidateVersionPreservesOnlySelectedHistoricalSpellings(t *testing.T) {
+	for _, tc := range []struct {
+		release, name, native string
+		want                  bool
+	}{
+		{"v4.10.4", compatibilityNativePackageName, "4.10.4", true},
+		{"v4.10.4", compatibilityNativePackageName, "4.10.4-r0", true},
+		{"v4.03.2", compatibilityNativePackageName, "4.3.2", true},
+		{"v4.03.2", compatibilityNativePackageName, "4.03.2", true},
+		{"v4.03.2", compatibilityNativePackageName, "4.3.2-r0", true},
+		{"v4.00.1", compatibilityNativePackageName, "4.0.1", true},
+		{"v4.03.2", compatibilityNativePackageName, "4.3.2-r1", false},
+		{"v4.03.2", compatibilityNativePackageName, "4.3.2-r00", false},
+		{"v4.03.2", compatibilityNativePackageName, "4.3.02", false},
+		{"v4.03.2", compatibilityNativePackageName, "4.30.2", false},
+		{"v4.03.2", baseNativePackageName, "4.3.2", false},
+		{"v4.03.2", baseNativePackageName, "4.03.2", false},
+		{"v4.03.2", baseNativePackageName, "4.03.2-r0", false},
+		{"v5.00.0", compatibilityNativePackageName, "5.0.0", false},
+		{"v5.00.0", compatibilityNativePackageName, "5.00.0", false},
+		{"v5.00.0", baseNativePackageName, "5.00.0", false},
+		{"v5.00.0", baseNativePackageName, "5.00.0-r0", true},
+		{"v5.00.0", baseNativePackageName, "5.00.0-r1", false},
+		{"v4.10.4", "foreign", "4.10.4-r0", false},
+		{"v4.3.2", compatibilityNativePackageName, "4.3.2", false},
+	} {
+		t.Run(tc.release+"/"+tc.name+"/"+tc.native, func(t *testing.T) {
+			if got := authenticatedAPKVersionMatches(tc.release, tc.name, tc.native); got != tc.want {
+				t.Fatalf("version match=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
