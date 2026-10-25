@@ -19,8 +19,10 @@ invalid types, excessive sizes and unsupported signatures.
 
 The declaration must select exactly the pinned installed daemon path. The
 supported static arguments are `-D`, optional `-e`, and an optional separate
-`-f /etc/ssh/sshd_config` pair. Without `-f`, this is OpenSSH's documented default
-configuration path. The check binds the command's recorded PID and monotonic
+`-f /etc/ssh/sshd_config` pair. Without `-f`, a separate activation binder verifies
+the retained parser's compiled default selection and effective configuration as
+described in [the activation boundary](SSH_ACTIVATION_BOUNDARY.md). The read-only
+startup declaration alone does not establish that selection. The check binds the command's recorded PID and monotonic
 start to the current service observation and rejects a completed invocation.
 The complete declaration must remain identical across the process observation.
 

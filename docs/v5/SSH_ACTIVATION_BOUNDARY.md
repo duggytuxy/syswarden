@@ -149,12 +149,21 @@ memory handle, and no timeout success is synthesized.
 
 This observation strengthens the runtime evidence without acknowledging every
 policy directive or fresh administrator access. The durable activation fence
-remains. Future consumption acceptance must also qualify the daemon build's
-configuration semantics: a startup without explicit `-f` uses its compiled
-configuration path, while the verifier selects `/etc/ssh/sshd_config` explicitly.
-An executable hash establishes continuity, not that compiled default. A separate
-qualification must bind that path and the supported OpenSSH parsing/reload
-semantics. A concurrent legitimate reload can also overlap with this request;
+remains. Before creating the signal lease, the binder now verifies configuration
+selection as well. A declaration with explicit `-f` must select exactly
+`/etc/ssh/sshd_config`. For a declaration without `-f`, the retained executable
+runs with fixed parser-only `-T -ddd` arguments. Its first main-file load event
+must name that exact path, and all effective directives must match the protected
+explicit-file parse except the forced diagnostic log level. Equal values from
+another compiled default do not pass. Missing, ambiguous or unsupported traces,
+changed inputs, cancellation and execution/output limits invalidate the result.
+The selection digest binds the startup declaration, executable and policy into
+the activation target. Raw trace content is not exposed in diagnostics.
+
+This is bounded evidence from a qualified parser, not independent daemon-build
+provenance or proof that the running service consumed every directive. Supported
+OpenSSH parsing/reload semantics and distribution builds still require native
+qualification. A concurrent legitimate reload can also overlap with this request;
 any eventual consumption claim must describe the guarded interval, not exclusive
 causation by this particular signal. Isolated tests exercise a real same-PID exec, no-op and early-exec
 refusals, cancellation, guard/access failures, process exit and descriptor

@@ -28,6 +28,7 @@ func TestSSHIsolatedSystemdActivationOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	isolatedSSHDefaultConfigurationOracle(t, before)
 	if _, err := os.Lstat(DropInPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("reserved fixture path is not absent", err)
 	}
@@ -106,6 +107,106 @@ func TestSSHIsolatedSystemdActivationOracle(t *testing.T) {
 	}
 	isolatedSSHPrivateMountRefusal(t, before, backend.Addr().String())
 	t.Log("production systemd binder: no-op refused, real reload and restoration observed; no migration completion claimed")
+}
+
+// A changed compiled default can produce identical effective values while
+// loading a different file. Patch only a copied fixture ELF's exact pathname
+// literal, and run it only in parser mode inside the disposable namespace.
+func isolatedSSHDefaultConfigurationOracle(t *testing.T, original []byte) {
+	t.Helper()
+	before, err := ObserveSystemdListeners()
+	if err != nil {
+		t.Fatal("observe service before parser-only default selection", err)
+	}
+	root, err := os.Open("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	daemon, err := openSSHD(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.file.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	output, err := daemon.run(ctx, nil, "effective", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := parseEffective(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startup := StartupSummary{Schema: 1, DeclarationVerified: true, CommandSHA256: strings.Repeat("a", 64)}
+	guard := func() error { return daemon.recheck(root, 0) }
+	if identity, err := bindSSHConfigurationSelection(ctx, startup, daemon.digest, policy, daemon.runDefaultConfiguration, guard); err != nil || identity == "" {
+		t.Fatal("installed default configuration was not bound", err)
+	}
+	const alternative = "/run/ssh/sshd_config"
+	const private = "/run/syswarden-ssh-native-oracle/default-path"
+	if err := os.Mkdir(private, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir("/run/ssh", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(alternative, original, 0600); err != nil { // #nosec G703 -- The destination is a fixed literal in the guarded disposable fixture; original is file content, never a path.
+		t.Fatal(err)
+	}
+	// Read the already pinned original. Require exactly one same-size literal
+	// so the control cannot accidentally modify instructions or ELF layout.
+	originalELF := make([]byte, daemon.state.size)
+	if _, err := daemon.file.ReadAt(originalELF, 0); err != nil {
+		t.Fatal(err)
+	}
+	oldLiteral, newLiteral := []byte(MainPath+"\x00"), []byte(alternative+"\x00")
+	if len(oldLiteral) != len(newLiteral) || bytes.Count(originalELF, oldLiteral) != 1 {
+		t.Fatal("unsupported fixture ELF default-path literal")
+	}
+	modified := bytes.Replace(originalELF, oldLiteral, newLiteral, 1)
+	if err := os.WriteFile(private+"/sshd", modified, 0700); err != nil { // #nosec G306 -- This private copied AMD64 test executable needs owner execute permission; it runs only in parser mode in the disposable fixture.
+		t.Fatal(err)
+	}
+	directory, err := os.Open(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.Close()
+	file, state, digest, err := readSSHD(directory, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	changed := &pinnedSSHD{file: file, state: state, digest: digest}
+	actual, trace, err := changed.runDefaultConfiguration(ctx)
+	if err != nil {
+		t.Fatal("modified default parser fixture failed", err)
+	}
+	defer clear(actual)
+	defer clear(trace)
+	values, err := parseEffective(actual)
+	if err != nil || compareEffective(policy, values, map[string]bool{"loglevel": true}) != nil {
+		t.Fatal("negative control did not retain equivalent effective values", err)
+	}
+	identity, err := bindSSHConfigurationSelection(ctx, startup, changed.digest, policy, changed.runDefaultConfiguration, guard)
+	if err == nil || identity != "" || !strings.Contains(err.Error(), "compiled configuration path differs") {
+		t.Fatal("different compiled default accepted despite identical effective values", err)
+	}
+	startup.ExplicitConfiguration = true
+	identity, err = bindSSHConfigurationSelection(ctx, startup, changed.digest, policy, nil, guard)
+	if err != nil || identity == "" {
+		t.Fatal("explicit configuration incorrectly depends on compiled default", err)
+	}
+	after, err := ObserveSystemdListeners()
+	if err != nil || before.Process.IdentitySHA256 != after.Process.IdentitySHA256 || before.SocketsSHA256 != after.SocketsSHA256 {
+		t.Fatal("parser-only default selection changed the process or listeners", err)
+	}
+	current, err := os.ReadFile(MainPath)
+	if err != nil || !bytes.Equal(original, current) {
+		t.Fatal("parser-only default selection changed the active main file", err)
+	}
+	t.Log("compiled default selection: installed path accepted; identical policy from alternate default refused; explicit selection remains separate")
 }
 
 func requireSSHIsolatedSystemdFixture(t *testing.T) {

@@ -39,6 +39,17 @@ The same runner accepts `--scenario recovery-forwarding`, `recovery-cis`,
 folder and creates a new disposable container. The default `activation` scenario
 retains the independent signal/listener negative controls described above.
 
+The activation scenario also checks default main-file selection with the real
+pinned parser. A private copy of the fixture ELF has only its unique, same-size
+compiled configuration pathname replaced. Both files contain identical policy,
+so their effective directives match, but implicit selection of the alternate
+path must be refused. Explicit verified `-f` selection remains separate. The
+copied executable runs only in parser test mode inside the disposable namespace;
+it never replaces the installed daemon or starts a listener. The running process,
+listener generation and original main-file bytes must remain unchanged across
+these probes. This control qualifies selection evidence on the fixture build,
+not arbitrary daemon provenance or completed policy consumption.
+
 Recovery scenarios use the real pinned OpenSSH parser, transaction journal,
 publication engine and production activation binder. They then call the actual
 fixed-path `InspectSystemdRecovery`, `RestoreOriginalSystemd` and

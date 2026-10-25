@@ -73,6 +73,11 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	if err != nil {
 		return nil, err
 	}
+	configuration, err := bindSSHConfigurationSelection(ctx, *held.summary.Startup, resources.daemon.digest,
+		values, resources.daemon.runDefaultConfiguration, guard)
+	if err != nil {
+		return nil, err
+	}
 	expected, err := sshExpectedEndpoints(values)
 	if err != nil {
 		return nil, err
@@ -105,7 +110,7 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	if err := errors.Join(check(ctx), guard(), execution.beforeRequest()); err != nil {
 		return nil, err
 	}
-	target, err := sshActivationDigest([]any{"systemd-pidfd-sighup-exec-listeners-v3", held.summary, expected, namespace, listeners.before})
+	target, err := sshActivationDigest([]any{"systemd-pidfd-sighup-exec-listeners-v4", held.summary, configuration, expected, namespace, listeners.before})
 	if err != nil {
 		return nil, err
 	}
