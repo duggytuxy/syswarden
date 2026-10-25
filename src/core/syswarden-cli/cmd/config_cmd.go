@@ -222,6 +222,7 @@ func reviewUserModuleProposal(cmd *cobra.Command, reader *bufio.Reader, output i
 	for _, line := range review.ModulePlan {
 		_, _ = fmt.Fprintln(output, line)
 	}
+	printConfigurationEffects(output, review.Effects)
 	_, _ = fmt.Fprintf(output, "Unknown keys: %d. Deprecated entries: %d.\n", review.UnknownKeyCount, review.DeprecatedKeyCount)
 	_, _ = fmt.Fprintln(output, "Configuration values are private and are not printed in this summary. Review the edited or imported TOML before approving.")
 	_, _ = fmt.Fprintln(output, "Publishing replaces only the reviewed TOML file. Host policy and services are not activated.")

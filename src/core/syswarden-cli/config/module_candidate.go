@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -173,6 +174,7 @@ func validateModuleCandidateWithIntent(configDir string, target tomlEditTarget, 
 		return nil, fmt.Errorf("configuration changed during merged validation: %w", err)
 	}
 	snapshot.report.ModulePlan = ModulePlan(mapModularToLegacy(&candidate))
+	snapshot.effects = configurationEffects(&candidate)
 	return snapshot, nil
 }
 
@@ -184,4 +186,18 @@ func readEditFileIdentity(root *os.Root, name, display string) ([]byte, *secureF
 		return nil, nil, err
 	}
 	return content, newSecureFileIdentity(content, info), nil
+}
+
+// Bound directory inventory independently of individual TOML sizes. Readers of
+// runtime configuration retain their existing limits; this applies to editing,
+// recovery review and preview snapshots only.
+func readBoundedEditEntries(directory *os.File) ([]os.DirEntry, error) {
+	entries, err := directory.ReadDir(maximumModuleEditInputs + 16)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if len(entries) == maximumModuleEditInputs+16 {
+		return nil, errors.New("configuration directory exceeds the edit/preview inventory limit")
+	}
+	return entries, nil
 }

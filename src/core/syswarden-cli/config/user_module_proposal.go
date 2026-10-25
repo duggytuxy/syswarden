@@ -59,6 +59,7 @@ type ModuleReview struct {
 	ApprovalID         string
 	ExpiresAt          time.Time
 	ModulePlan         []string
+	Effects            []ConfigurationEffect
 	UnknownKeyCount    int
 	DeprecatedKeyCount int
 }
@@ -169,6 +170,7 @@ func (edit *ModuleEdit) Prepare(ctx context.Context, content []byte) (*ModulePro
 		Target: state.target.relative, ApprovalID: hex.EncodeToString(hash.Sum(nil)),
 		ExpiresAt:       time.Now().Add(userModuleReviewLifetime),
 		ModulePlan:      append([]string(nil), validated.report.ModulePlan...),
+		Effects:         append([]ConfigurationEffect(nil), validated.effects...),
 		UnknownKeyCount: len(validated.report.UnknownKeys), DeprecatedKeyCount: len(validated.report.DeprecatedKeys),
 	}
 	state.prepared = true
@@ -185,6 +187,7 @@ func (proposal *ModuleProposal) Review() ModuleReview {
 	defer proposal.state.mu.Unlock()
 	review := proposal.state.review
 	review.ModulePlan = append([]string(nil), review.ModulePlan...)
+	review.Effects = append([]ConfigurationEffect(nil), review.Effects...)
 	return review
 }
 
@@ -316,7 +319,7 @@ func captureModuleInputs(configDir string, target tomlEditTarget, intent *secure
 	if err != nil {
 		return nil, nil, err
 	}
-	entries, err := file.ReadDir(-1)
+	entries, err := readBoundedEditEntries(file)
 	_ = file.Close()
 	if err != nil {
 		return nil, nil, err
@@ -330,6 +333,13 @@ func captureModuleInputs(configDir string, target tomlEditTarget, intent *secure
 	for _, entry := range entries {
 		if filepath.Ext(entry.Name()) != ".toml" {
 			continue
+		}
+		inputCount := len(snapshot.moduleNames)
+		if snapshot.master != nil {
+			inputCount++
+		}
+		if inputCount >= maximumModuleEditInputs {
+			return nil, nil, errors.New("configuration exceeds the edit/preview TOML input limit")
 		}
 		snapshot.moduleNames = append(snapshot.moduleNames, entry.Name())
 		content, identity, err := readEditFileIdentity(modules, entry.Name(), filepath.Join(modulesDir, entry.Name()))

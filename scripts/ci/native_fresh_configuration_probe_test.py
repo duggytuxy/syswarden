@@ -85,7 +85,7 @@ def configuration_export(mutate=None):
 
 def real_output(format_name="deb"):
     output = successful_output(format_name=format_name).replace(b"CLI_PHASE=fresh\nCLI_ARGC=1\nCLI_ARG=install\n", b"")
-    return output.replace(b"HOOK_EVENTS_BEGIN", probe.REAL_STAGING_DISPOSITION.encode() + b"\nREAL_CONFIGURATION_PASS\nHOOK_EVENTS_BEGIN")
+    return output.replace(b"HOOK_EVENTS_BEGIN", probe.REAL_STAGING_DISPOSITION.encode() + b"\nREAL_CONFIGURATION_PREVIEW_PASS\nREAL_CONFIGURATION_EDIT_INSPECTION_PASS\nREAL_CONFIGURATION_PASS\nHOOK_EVENTS_BEGIN")
 
 
 class FreshHookDispatchTests(unittest.TestCase):
@@ -226,6 +226,10 @@ class FreshHookDispatchTests(unittest.TestCase):
             for invalid in (successful_output(format_name=format_name), good.replace(b"REAL_CONFIGURATION_PASS\n", b""),
                             good.replace(probe.REAL_STAGING_DISPOSITION.encode(), b"wrong disposition"),
                             good.replace(b"REAL_CONFIGURATION_PASS", b"REAL_CONFIGURATION_PASS\nREAL_CONFIGURATION_PASS"),
+                            good.replace(b"REAL_CONFIGURATION_PREVIEW_PASS\n", b""),
+                            good.replace(b"REAL_CONFIGURATION_EDIT_INSPECTION_PASS\n", b""),
+                            good.replace(b"REAL_CONFIGURATION_PREVIEW_PASS", b"REAL_CONFIGURATION_PREVIEW_PASS\nREAL_CONFIGURATION_PREVIEW_PASS"),
+                            good.replace(b"REAL_CONFIGURATION_EDIT_INSPECTION_PASS", b"REAL_CONFIGURATION_EDIT_INSPECTION_PASS\nREAL_CONFIGURATION_EDIT_INSPECTION_PASS"),
                             good.replace(b"HOOK_EVENTS_END", b"CLI_PHASE=fresh\nHOOK_EVENTS_END")):
                 with self.assertRaises(ValueError):
                     probe.parse_result(invalid, "local", "syswarden", format_name, True)
@@ -237,6 +241,9 @@ class FreshHookDispatchTests(unittest.TestCase):
         self.assertGreater(probe.SCRIPT.index("test ! -s forbidden"), validation)
         self.assertGreater(probe.SCRIPT.index("sha256sum -c administrator.sha256"), validation)
         self.assertIn("/etc/cron.d/syswarden /etc/cron.d/.syswarden*", probe.REAL_VALIDATION)
+        for operation in ('"$cli" config preview', '"$cli" config recover-edit'):
+            self.assertLess(probe.REAL_VALIDATION.index(operation), probe.REAL_VALIDATION.index("sha256sum -c real-config.sha256"))
+            self.assertLess(probe.REAL_VALIDATION.index(operation), probe.REAL_VALIDATION.index("real-config.after"))
 
     def test_shell_permission_check_cannot_overwrite_real_cli_dispatch(self):
         # Execute the actual selection, permission and branch fragments using
@@ -308,7 +315,7 @@ class FreshHookDispatchTests(unittest.TestCase):
 
     def test_real_validation_script_refuses_cli_failure_or_configuration_mutation(self):
         # Run only a synthetic shell responder and temporary paths on the host.
-        for behavior in ("read-only", "mutate", "fail", "empty-query-fail", "menu-fail"):
+        for behavior in ("read-only", "mutate", "fail", "empty-query-fail", "menu-fail", "preview-fail", "preview-mutate", "preview-missing-text", "recovery-fail", "recovery-mutate", "recovery-missing-text"):
             with self.subTest(behavior=behavior), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 config = root / "config"
@@ -317,7 +324,19 @@ class FreshHookDispatchTests(unittest.TestCase):
                     (config / name).write_bytes(b"synthetic private policy\n")
                     (config / name).chmod(0o600)
                 cli = root / "responder"
-                cli.write_text('#!/bin/sh\nset -eu\nif [ "$1" = config ] && [ "$#" = 1 ]; then\n'
+                preview_reply = "Validated configuration preview (7 TOML inputs).\nNo managed threat list is selected.\nNo host change was applied. This preview grants no activation approval and does not prove runtime state or access.\n"
+                recovery_reply = "No pending TOML file publication requires recovery.\n"
+                inspection = ""
+                for command, prefix, reply in (("preview", "preview", preview_reply), ("recover-edit", "recovery", recovery_reply)):
+                    inspection += 'if [ "$1" = config ] && [ "${2:-}" = "' + command + '" ]; then\n'
+                    if behavior == prefix + "-fail":
+                        inspection += "exit 1\n"
+                    elif behavior == prefix + "-mutate":
+                        inspection += 'printf changed >> "' + str(config / "config.toml") + '"\n'
+                    if behavior != prefix + "-missing-text":
+                        inspection += "printf '%s' '" + reply + "'\n"
+                    inspection += "exit 0\nfi\n"
+                cli.write_text('#!/bin/sh\nset -eu\n' + inspection + 'if [ "$1" = config ] && [ "$#" = 1 ]; then\n'
                     + ('exit 1\n' if behavior == "menu-fail" else 'IFS= read -r choice; test "$choice" = 0; exit 0\n')
                     + 'fi\nif [ "$1:$2" = "config:validate" ]; then\n'
                     + ('exit 1\n' if behavior == "fail" else

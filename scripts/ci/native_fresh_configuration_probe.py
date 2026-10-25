@@ -2,7 +2,7 @@
 """Opt-in fresh-hook fixture with an inert or explicitly supplied static CLI.
 
 The default stub qualifies hook dispatch. Real CLI mode additionally verifies
-inactive TOML staging and read-only validation. Neither mode accepts production
+inactive TOML staging, read-only effect preview and pending-edit inspection. Neither mode accepts production
 package assembly, prerequisites, runtime activation or migration. Only disposable
 offline rootless Linux AMD64 containers execute the fixture or supplied binary.
 """
@@ -305,6 +305,14 @@ PATH=/tmp/sw-fresh-lab/traps:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 unset SYSWARDEN_PKG_INSTALL SYSWARDEN_NATIVE_INSTALL_PHASE SYSWARDEN_OFFLINE_QUALIFICATION
 "$cli" config validate --path "$root"
+"$cli" config preview > real-preview.log
+grep -Fx 'Validated configuration preview (7 TOML inputs).' real-preview.log
+grep -F 'No managed threat list is selected.' real-preview.log
+grep -Fx 'No host change was applied. This preview grants no activation approval and does not prove runtime state or access.' real-preview.log
+printf 'REAL_CONFIGURATION_PREVIEW_PASS\n'
+"$cli" config recover-edit > real-edit-inspection.log
+grep -Fx 'No pending TOML file publication requires recovery.' real-edit-inspection.log
+printf 'REAL_CONFIGURATION_EDIT_INSPECTION_PASS\n'
 # Enter and leave the real menu without selecting an editor or activation.
 printf '0\n' | "$cli" config
 require_value() {
@@ -585,12 +593,15 @@ def parse_result(output: bytes, source: str, package_name: str, format_name: str
     real_dispositions = [line for line in lines if line in (REAL_STAGING_DISPOSITION, "  * " + REAL_STAGING_DISPOSITION)]
     if real_cli:
         if (len(real_dispositions) != 1 or real_dispositions[0].startswith("  * ") and format_name != "apk"
-                or lines.count("REAL_CONFIGURATION_PASS") != 1):
+                or lines.count("REAL_CONFIGURATION_PASS") != 1
+                or lines.count("REAL_CONFIGURATION_PREVIEW_PASS") != 1
+                or lines.count("REAL_CONFIGURATION_EDIT_INSPECTION_PASS") != 1):
             raise ValueError("real fresh configuration staging or validation is not exact")
-    elif real_dispositions or "REAL_CONFIGURATION_PASS" in lines:
+    elif real_dispositions or any(line.startswith("REAL_CONFIGURATION_") for line in lines):
         raise ValueError("real configuration evidence is unexpected in stub mode")
     return {"native_arguments": observed, "fresh_cli_staging_call": True, "administrator_sentinels_preserved": True,
-            "configuration_readonly_observed": real_cli}
+            "configuration_readonly_observed": real_cli, "configured_effect_preview_observed": real_cli,
+            "pending_edit_inspection_observed": real_cli}
 
 
 def run(nfpm: Path, image: str, output: Path, source: str, package_name: str, format_name: str, cli_binary: Path | None = None) -> None:

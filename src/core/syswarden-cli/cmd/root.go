@@ -29,7 +29,7 @@ var rootCmd = &cobra.Command{
 			// APK pre-commit must never load policy or recover firewall state.
 			return nil
 		}
-		if cmd == configCmd || commandRequiresEarlyFirewallRecovery(cmd) {
+		if cmd == configCmd || cmd == configPreviewCmd || commandRequiresEarlyFirewallRecovery(cmd) {
 			if err := refusePendingModuleEditHook(); err != nil {
 				return err
 			}
@@ -65,7 +65,7 @@ var rootCmd = &cobra.Command{
 		if err := enforceRemovalState(cmd); err != nil {
 			return err
 		}
-		if cmd == configCmd || cmd == configEditRecoveryCmd {
+		if cmd == configCmd || cmd == configPreviewCmd || cmd == configEditRecoveryCmd {
 			if err := refusePendingFirewallTransactionHook(); err != nil {
 				return fmt.Errorf("[ERROR] configuration editor requires resolved firewall recovery state: %w", err)
 			}
@@ -173,7 +173,7 @@ func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return true
 	}
-	if cmd == configCmd || cmd == configEditRecoveryCmd || cmd == configGetCmd || cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
+	if cmd == configCmd || cmd == configPreviewCmd || cmd == configEditRecoveryCmd || cmd == configGetCmd || cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
 		return false
 	}
 	if isolatedSSHPolicyCommand(cmd) {

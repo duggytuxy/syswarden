@@ -32,6 +32,7 @@ var (
 
 type mergedConfigSnapshot struct {
 	report          ValidationReport
+	effects         []ConfigurationEffect
 	configRootInfo  os.FileInfo
 	modulesRootInfo os.FileInfo
 	marker          *secureFileIdentity
@@ -264,7 +265,7 @@ func (snapshot *mergedConfigSnapshot) revalidateTarget(configDir string, publish
 	if err != nil {
 		return err
 	}
-	entries, err := directory.ReadDir(-1)
+	entries, err := readBoundedEditEntries(directory)
 	_ = directory.Close()
 	if err != nil {
 		return err

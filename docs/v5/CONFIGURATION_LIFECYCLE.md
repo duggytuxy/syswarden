@@ -62,6 +62,7 @@ check does not change rule ordering or the existing country/ASN union semantics.
 | Command | Current boundary |
 | --- | --- |
 | `syswarden config` | Provides private candidate editing, merged validation and explicit publication review for ordinary TOML modules, master metadata, the profile name and file import. It does not provide a review-and-activate transaction. |
+| `syswarden config preview` | Validates the normal complete TOML snapshot and describes significant configured effects without host probes, writes or activation authority. |
 | `syswarden config recover-edit` | Inspects an interrupted ordinary TOML publication and requires a fresh exact approval for a supported file recovery. It never activates policy. |
 | `syswarden config validate --path /etc/syswarden/config` | Reads and validates the merged TOML, prints the selected module plan and reports unknown/deprecated keys without changing configuration or runtime. |
 | `syswarden config-get KEY` | Reads one validated effective modular value. Some legacy-compatible settings can still reflect environment overrides, unlike file-only validation. |
@@ -76,7 +77,7 @@ redirect the normal modular root or the protected SSH transaction inputs.
 Opening `syswarden config` does not load or normalize configuration, recover
 firewall state, create its state directory or acquire a transaction lock. It
 refuses pending removal, WireGuard and firewall recovery state before presenting
-the menu. Firewall journal absence is a point-in-time observation, not activation
+the menu. The same read-only barriers protect `config preview`. Firewall journal absence is a point-in-time observation, not activation
 authority or a lock against a later transaction. Invalid TOML can still be
 opened for repair when the existing module directory is available.
 
@@ -88,14 +89,14 @@ override file. The fixed target inventory excludes `05-ssh.toml`, arbitrary
 filenames and path traversal; SSH still requires its protected workflow.
 
 The merged candidate must pass validation before the menu displays the exact
-target, module-selection summary, warning counts and unique publication phrase.
+target, module-selection summary, configured effects, warning counts and unique publication phrase.
 Configuration values are not printed in that summary; review the edited or
 imported TOML before approving. Empty or incorrect input cancels publication.
 EOF, expired approval, changed TOML or a new recovery barrier refuses it. An
 approval is limited to that exact target, original snapshot and candidate, and
 cannot be reused. Publishing does not activate host policy or services.
 
-Proposal capture and validation limit each TOML file to 256 KiB. Candidate
+Proposal capture and preview limit each TOML file to 256 KiB, the complete input inventory to 256 files, and directory enumeration to fewer than 272 entries. Oversized inventories are refused before unbounded enumeration or content capture. Candidate
 merging retains lexical precedence, including when an explicitly selected
 historical file is absent and would be created. A proposed file never counts
 as an already complete fresh installation: a missing fresh module remains a
@@ -147,6 +148,25 @@ the intent to bypass the barrier. A completed file recovery still requires
 configuration validation and does not reload services or establish host,
 SSH-access, native migration or final IVVQ acceptance.
 
+Use `syswarden config preview` to review the current merged file selections and
+significant effects before activation. The publication prompt shows the same
+effect categories for its private candidate, so an unpublished edit does not
+replace the preview of current files. Both omit addresses, endpoints, arbitrary
+values and credentials from their summaries. Review sensitive settings directly
+in the protected TOML. The preview is a point-in-time file observation, not a
+comparison with installed services or active kernel policy.
+
+The review distinguishes host/list firewall policy, feed selection and refresh,
+strict GeoIP/ASN allow requirements, access exceptions, VPN forwarding/NAT,
+detection, log forwarding, external reports, independently installed Wazuh,
+HA/BunkerWeb and separate SSH/system hardening. Disabled selections may still
+cause owned-artifact or scheduling reconciliation during install/reload; they do
+not mean that those commands are read-only or automatically undo prior policy.
+Runtime ownership, available prerequisites, resolved feed populations, actual
+access and recovery remain separate checks. The preview neither grants approval
+nor runs a native package command, service action, firewall command or request
+to an external endpoint.
+
 After editing, run validation and review every reported selection and warning.
 Unknown keys are reported but do not by themselves make validation fail. A
 successful validation is neither approval to mutate the host nor proof of
@@ -164,8 +184,8 @@ around the journaled atomic publication primitive. Those
 barriers are point-in-time checks, not cross-process locks or host activation
 authority. Do not replace this original snapshot with a newly captured baseline
 after approval, or write invalid live policy and then attempt a generic repair.
-The dedicated SSH module needs its own protected publication boundary. There are currently no `config apply` or `config preview`
-commands, the menu has no dedicated `05-ssh.toml` item, and editor exit is not
+The dedicated SSH module needs its own protected publication boundary. There is currently no `config apply`
+command; `config preview` grants no activation authority, the menu has no dedicated `05-ssh.toml` item, and editor exit is not
 confirmation of a host change.
 
 For SSH, `ssh-policy ports`, `plan` and `verify` expose bounded observation and
