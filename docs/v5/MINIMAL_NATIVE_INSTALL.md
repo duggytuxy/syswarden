@@ -100,6 +100,34 @@ upgraded merely by installing this candidate. Guarded v1-to-v2 policy migration,
 encrypted client traffic, administrator routing preservation, reload and reboot
 remain explicit native acceptance gates.
 
+## Owned WireGuard policy assessment
+
+`syswarden recover-wireguard --assess-owned-policy` inspects an already owned
+policy without publishing a configuration, changing rules or starting/stopping
+a service. It requires the complete manifest and exact companion files. The
+result includes source identities, a scoped successor digest, preserved OpenRC
+link ownership and an attested historical migration receipt when present. Keys
+and configuration contents are never printed. A modified or partial ownership
+set, pending transaction, changed predecessor or conflicting runtime is refused.
+
+The candidate successor changes only the exact generated `PostUp` line. Client
+configuration, private keys, PSK, peer settings, token, service choices and
+forwarding persistence remain unchanged. Two matching observations detect drift;
+they are not a lock, a write lease or proof that a service cannot start later.
+On Alpine, service activity and enablement are explicitly unobserved until a
+bounded OpenRC observer is available. The assessment never executes an init
+status script to infer them, and records this limitation as a blocker.
+
+This mode cannot be combined with `--apply`, `--plan-sha256` or historical
+recovery modes. It prints no apply command and grants no migration authority.
+Existing v1 policy still needs a recoverable server/manifest replacement, a
+service-start fence, a successor record for any sealed predecessor, and exact
+runtime retirement. Do not disable an access tunnel merely to clear a diagnostic
+blocker. The activation and recovery workflow must be qualified first. The
+assessment does not establish migration-ready packages or final IVVQ acceptance.
+The `scoped-v2` state identifies the validated file policy only. It does not
+establish complete runtime health, peer reachability or encrypted traffic flow.
+
 ## Dynamic observations and ban lifetime
 
 Kernel packet-log observations retain their detection and threshold telemetry

@@ -2,7 +2,46 @@
 
 package wireguardstate
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+	"net/netip"
+	"strings"
+)
+
+// ScopedServerConfiguration changes only the exact generated PostUp policy.
+// It does not establish file ownership, authorize publication or mutate runtime.
+// Keys, endpoint-independent peer settings, token and all other bytes survive.
+func ScopedServerConfiguration(server []byte) ([]byte, error) {
+	identity, err := ParseServerConfiguration(server)
+	if err != nil {
+		return nil, err
+	}
+	if identity.PolicyVersion == 2 {
+		return bytes.Clone(server), nil
+	}
+	if identity.PolicyVersion != 0 || identity.ActiveInterface == "wg-syswarden" {
+		return nil, fmt.Errorf("WireGuard policy cannot be upgraded to scoped forwarding")
+	}
+	lines := strings.Split(string(server), "\n")
+	address, err := netip.ParsePrefix(strings.TrimPrefix(lines[1], "Address = "))
+	if err != nil {
+		return nil, fmt.Errorf("WireGuard policy has no canonical address")
+	}
+	identity.PolicyVersion = 2
+	identity.IPv4Subnet = address.Masked().String()
+	postUp := ScopedServerPostUp(identity)
+	if identity.SharedForward {
+		postUp = strings.TrimSuffix(postUp, "'") + ScopedSharedForwardPostUpSuffix(identity) + "'"
+	}
+	lines[4] = "PostUp = " + postUp
+	target := []byte(strings.Join(lines, "\n"))
+	parsed, err := ParseServerConfiguration(target)
+	if err != nil || parsed != identity {
+		return nil, fmt.Errorf("WireGuard scoped target does not preserve the approved identity")
+	}
+	return target, nil
+}
 
 // ScopedServerPostUp renders the v2 policy from already validated fields.
 // Unrelated forwarding continues through the administrator's other chains.

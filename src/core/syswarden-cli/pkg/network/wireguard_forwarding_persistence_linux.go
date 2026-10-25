@@ -22,7 +22,7 @@ import (
 
 const (
 	wireGuardForwardingTransitionSchema = "syswarden-wireguard-forwarding-transition-v1"
-	wireGuardForwardingTransitionPath   = "/etc/wireguard/.syswarden-forwarding-transition-v1.json"
+	wireGuardForwardingTransitionPath   = wireguardstate.ForwardingTransitionPath
 	wireGuardForwardingHeaderPrefix     = "# SYSWARDEN net.ipv4.ip_forward baseline v1 token="
 	wireGuardForwardingSetting          = "net.ipv4.ip_forward = 1\n"
 	maximumForwardingArtifactBytes      = 4096
