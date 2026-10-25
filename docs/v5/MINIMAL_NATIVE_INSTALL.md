@@ -42,6 +42,12 @@ package requirements. Keep issue #422 and consolidated PR452 open until both the
 package dependency boundary and the runtime migration/lifecycle gates pass.
 A green generic build or isolated SSH oracle does not replace those gates.
 
+The selected package design separates a fresh `syswarden-base` identity from the
+retained `syswarden` compatibility root. The [native identity design and
+laboratory](NATIVE_PACKAGE_IDENTITIES.md) distinguish dependency-graph evidence
+from production payload handoff, signed updater integration and lifecycle
+acceptance. Production dependency metadata remains unchanged at this stage.
+
 ## Incomplete configuration recovery
 
 Installation and repair must not replace lost policy with the fresh standard
