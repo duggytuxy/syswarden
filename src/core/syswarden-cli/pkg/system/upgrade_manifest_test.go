@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -367,12 +366,11 @@ func TestV3SharedWireVectorVerifiesBothNativeIdentities(t *testing.T) {
 	// Read the signed bytes directly and never manufacture a consumer fixture.
 	const publicTestKeyID = "syswarden-update-test-01"
 	const publicTestKeyBase64 = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=" // gitleaks:allow -- Published RFC 8032 test public key, never a release credential.
-	vectorDirectory := filepath.Join("..", "..", "..", "..", "..", "scripts", "ci", "testdata", "native-identity-v3")
-	data, err := os.ReadFile(filepath.Join(vectorDirectory, updateManifestAssetName))
+	data, err := os.ReadFile("../../../../../scripts/ci/testdata/native-identity-v3/syswarden-update-manifest-v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	signature, err := os.ReadFile(filepath.Join(vectorDirectory, updateManifestSignatureAssetName))
+	signature, err := os.ReadFile("../../../../../scripts/ci/testdata/native-identity-v3/syswarden-update-manifest-v1.json.sig")
 	if err != nil {
 		t.Fatal(err)
 	}
