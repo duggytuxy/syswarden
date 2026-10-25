@@ -54,7 +54,21 @@ type sshAccessSession struct {
 
 type sshAccessSessionOpen func(context.Context, string, string) (*sshAccessSession, error)
 
-func openSSHAccessSession(ctx context.Context, plan, enrollment string) (_ *sshAccessSession, err error) {
+func openSSHAccessSession(ctx context.Context, plan, enrollment string) (*sshAccessSession, error) {
+	return openSSHAccessSessionForPurpose(ctx, plan, "", enrollment)
+}
+
+func openSSHRestoredAccessSession(ctx context.Context, plan, recovery, enrollment string) (*sshAccessSession, error) {
+	if !lowerDigest.MatchString(recovery) {
+		return nil, ErrInventoryUnsafe
+	}
+	return openSSHAccessSessionForPurpose(ctx, plan, recovery, enrollment)
+}
+
+func openSSHAccessSessionForPurpose(ctx context.Context, plan, recovery, enrollment string) (_ *sshAccessSession, err error) {
+	if ctx == nil {
+		return nil, ErrInventoryUnsafe
+	}
 	root, err := os.Open("/")
 	if err != nil {
 		return nil, err
@@ -81,7 +95,11 @@ func openSSHAccessSession(ctx context.Context, plan, enrollment string) (_ *sshA
 			err = errors.Join(err, closeAll())
 		}
 	}()
-	authority, err = openSSHAccessAuthority(root, 0, plan, enrollment, time.Now)
+	if recovery == "" {
+		authority, err = openSSHAccessAuthority(root, 0, plan, enrollment, time.Now)
+	} else {
+		authority, err = openSSHRestoredAccessAuthority(root, 0, plan, recovery, enrollment, time.Now)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +144,7 @@ func withSSHAccessSession(ctx context.Context, plan, enrollment string, open ssh
 		return openErr
 	}
 	if session == nil || session.journal == nil || session.run == nil || session.check == nil || session.observe == nil || session.authority == nil || session.clock == nil || session.close == nil ||
-		session.authority.plan != plan || session.authority.digest != enrollment {
+		session.authority.plan != plan || session.authority.recovery != "" || session.authority.digest != enrollment {
 		return ErrInventoryUnsafe
 	}
 	if err := errors.Join(ctx.Err(), session.check(), session.authority.recheck()); err != nil {

@@ -66,6 +66,11 @@ func init() {
 		sshpolicy.PrepareSystemdAccessRequest, sshpolicy.IssueSystemdAccessChallenge,
 		sshpolicy.RecordSystemdAccessReceipt, sshpolicy.ProbeAccessChallenge,
 	})...)
+	command.AddCommand(newSSHRestoredAccessCommands(sshRestoredAccessOperations{
+		sshpolicy.PrepareSystemdRestoredAccessRequest, sshpolicy.IssueSystemdRestoredAccessChallenge,
+		sshpolicy.RecordSystemdRestoredAccessReceipt, sshpolicy.ProbeRestoredAccessChallenge,
+	})...)
+	command.AddCommand(newSSHRestoredAccessInspectionCommand(sshpolicy.InspectSystemdRestoredAccess))
 	command.AddCommand(newSSHOwnedCommand(sshpolicy.VerifyOwned))
 	command.AddCommand(newSSHActivationAssessmentCommand(sshpolicy.AssessSystemdActivation))
 	command.AddCommand(newSSHRestoreOriginalCommand(sshpolicy.InspectSystemdRecovery, sshpolicy.RestoreOriginalSystemd))
@@ -127,5 +132,5 @@ func readOnlySSHPolicyCommand(cmd *cobra.Command) bool {
 	return path == "syswarden ssh-policy" || path == "syswarden ssh-policy plan" ||
 		path == "syswarden ssh-policy verify" || path == "syswarden ssh-policy ports" ||
 		path == "syswarden ssh-policy verify-owned" || path == "syswarden ssh-policy assess-activation" ||
-		path == "syswarden ssh-policy assess-restoration"
+		path == "syswarden ssh-policy assess-restoration" || path == "syswarden ssh-policy restoration-access-inspect"
 }

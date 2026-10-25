@@ -115,3 +115,19 @@ when expired, malformed or associated with a revoked controller. Its image is
 bound by the independent restoration approval. The closed history can contain
 17 entries after the six inverse/reload records. Controller availability never
 authorizes restoration and is not required to inspect or apply this recovery.
+
+## Separately authorized restored access
+
+The [restoration access commands](SSH_ACCESS_COMMANDS.md#access-after-restoring-the-original-policy)
+require a separate enrollment binding the original plan and approved recovery.
+They add at most two purpose-specific records after the complete inverse
+transition. The ordinary 17-entry observer remains strict; the access path admits
+only the exact approved, pinned record images, outside the original history
+digest. Original records are never rewritten.
+
+Request preparation, issuance and recording recheck file, parser, authority, time
+and endpoint state. A late change suppresses successful delivery while retaining
+any durable partial history. Read-only inspection does not reconstruct writer
+durability and refuses expired enrollment or challenges. Even valid freshly
+authenticated restored access leaves `recovery_required=true`; policy consumption
+and terminal recovery acceptance require separate qualification.

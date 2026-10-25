@@ -254,7 +254,7 @@ func (m *Migrator) freshDefaultConfigData() (map[string]string, error) {
 	// rewriting that historical fixture or changing migration of operator data.
 	configData["SYSWARDEN_ALLOW_SAAS_MONITORS"] = "n"
 	// Apply the fresh profile only to new templates, never to operator input.
-	configData["SYSWARDEN_INSTALL_PROFILE"] = StandardInstallProfile
+	configData["SYSWARDEN_INSTALL_PROFILE"] = UnconfiguredInstallProfile
 	configData["SYSWARDEN_POLICY_MODE"] = "lists"
 	for _, key := range []string{
 		"SYSWARDEN_HARDENING", "APPLY_CIS_L2_HARDENING",
@@ -267,7 +267,7 @@ func (m *Migrator) freshDefaultConfigData() (map[string]string, error) {
 	for _, key := range []string{"SYSWARDEN_HONEYPORTS", "SYSWARDEN_BRUTEFORCE_LOGS", "SYSWARDEN_MODSEC_LOGS"} {
 		configData[key] = ""
 	}
-	configData["SYSWARDEN_LIST_CHOICE"] = "1"
+	configData["SYSWARDEN_LIST_CHOICE"] = "4"
 	return configData, nil
 }
 
@@ -637,6 +637,11 @@ config_dir = ` + quoteTOML(filepath.Join(m.OutputDir, "modules")) + `
 enterprise_mode = ` + enterpriseMode + `
 log_level = "INFO"
 `
+	if oldConfig["SYSWARDEN_INSTALL_PROFILE"] == UnconfiguredInstallProfile {
+		// Only the new profile carries this second marker. Keep historical and
+		// standard-v1 master templates byte-for-byte unchanged.
+		content += "install_profile = " + quoteTOML(UnconfiguredInstallProfile) + "\n"
+	}
 	return canonicalizeGeneratedTOML(content)
 }
 
@@ -950,7 +955,7 @@ func canonicalizeGeneratedTOML(content string) (string, error) {
 
 func (m *Migrator) generateCore(oldConfig map[string]string) (string, error) {
 	profile := legacyValue(oldConfig, "SYSWARDEN_INSTALL_PROFILE", "")
-	if profile != "" && profile != StandardInstallProfile {
+	if profile != "" && profile != StandardInstallProfile && profile != UnconfiguredInstallProfile {
 		return "", fmt.Errorf("unsupported installation profile")
 	}
 	profileLine := ""

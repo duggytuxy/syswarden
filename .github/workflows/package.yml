@@ -133,6 +133,8 @@ jobs:
             scripts/ci/package_qualification_matrix_test.py \
             scripts/ci/package_lifecycle_contract_test.py \
             scripts/ci/package_install_phase_test.py \
+            scripts/ci/package_fresh_configuration_test.py \
+            scripts/ci/native_fresh_configuration_probe_test.py \
             scripts/ci/package_lifecycle_lab_test.py \
             scripts/ci/package_v5_apk_removal_test.py \
             scripts/ci/package_stage_gate_test.py \
@@ -477,9 +479,11 @@ jobs:
             "${STAGING_AMD64}/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf"
 
       - name: Stage Opt-in RHEL Package-owned RPM Payload
+        if: startsWith(env.VERSION, '4.')
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${VERSION}" == 4.* ]] || { echo 'RHEL package-owned generation is unavailable for v5.' >&2; exit 1; }
           cp -a "${STAGING_AMD64}/." "${RHEL_PROFILE_STAGING}/"
           # RHEL vendor units already carry the socket ownership capability.
           cmp -s \
@@ -800,14 +804,25 @@ jobs:
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_systemd_ordering_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_wireguard_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_install_phase.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/preinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
+          syswarden_set_native_install_phase preinstall "$@"
           syswarden_preflight_wireguard /
-          syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
           syswarden_preflight_systemd_ordering_dropin
           syswarden_preflight_systemd_socket_dropin
+          if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
+              if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+                 [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+                  printf '%s\n' 'Fresh installation refuses retained package-removal barriers.' >&2
+                  exit 1
+              fi
+              printf '%s\n' 'SysWarden fresh installation: pre-install host mutation deferred.'
+              exit 0
+          fi
+          syswarden_preflight_alpine_cronie
           if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
               if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
                  [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
@@ -875,7 +890,6 @@ jobs:
           set -e
           export SYSWARDEN_PKG_INSTALL=1
           syswarden_set_native_install_phase postinstall "$@"
-          syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
           if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
               if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
@@ -886,6 +900,17 @@ jobs:
               printf '%s\n' 'SysWarden offline qualification staging: post-install host mutation deferred.'
               exit 0
           fi
+          if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
+              if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+                 [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+                  printf '%s\n' 'Fresh installation refuses retained package-removal barriers.' >&2
+                  exit 1
+              fi
+              # Fresh CLI staging validates TOML only, including on an offline image.
+              /opt/syswarden/bin/syswarden-cli install
+              exit 0
+          fi
+          syswarden_preflight_alpine_cronie
           ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
           ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
 
@@ -1129,12 +1154,17 @@ jobs:
           EOF
 
           # APK upgrade has a fixed selector even when apk-tools supplies no phase environment.
+          [ "$(grep -Fxc 'syswarden_set_native_install_phase preinstall "$@"' "${PACKAGE_SCRIPTS}/preinst.sh")" -eq 1 ]
+          sed 's/^syswarden_set_native_install_phase preinstall "\$@"$/syswarden_set_native_install_phase preupgrade "$@"/' \
+            "${PACKAGE_SCRIPTS}/preinst.sh" > "${PACKAGE_SCRIPTS}/preupgrade.sh"
+          [ "$(grep -Fxc 'syswarden_set_native_install_phase preupgrade "$@"' "${PACKAGE_SCRIPTS}/preupgrade.sh")" -eq 1 ]
           [ "$(grep -Fxc 'syswarden_set_native_install_phase postinstall "$@"' "${PACKAGE_SCRIPTS}/postinst.sh")" -eq 1 ]
           sed 's/^syswarden_set_native_install_phase postinstall "\$@"$/syswarden_set_native_install_phase postupgrade "$@"/' \
             "${PACKAGE_SCRIPTS}/postinst.sh" > "${PACKAGE_SCRIPTS}/postupgrade.sh"
           [ "$(grep -Fxc 'syswarden_set_native_install_phase postupgrade "$@"' "${PACKAGE_SCRIPTS}/postupgrade.sh")" -eq 1 ]
           chmod 0755 \
             "${PACKAGE_SCRIPTS}/preinst.sh" \
+            "${PACKAGE_SCRIPTS}/preupgrade.sh" \
             "${PACKAGE_SCRIPTS}/postinst.sh" \
             "${PACKAGE_SCRIPTS}/postupgrade.sh" \
             "${PACKAGE_SCRIPTS}/postrm.sh" \
@@ -1148,7 +1178,7 @@ jobs:
             SELECTED_PACKAGE_RPM_SCRIPTS="${PACKAGE_RPM_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
             if [[ -n "${PACKAGE_SCRIPT_SUBDIRECTORY}" ]]; then
               install -d -m 0700 "${SELECTED_PACKAGE_SCRIPTS}" "${SELECTED_PACKAGE_RPM_SCRIPTS}"
-              for script_name in preinst.sh postinst.sh postupgrade.sh prerm.sh postrm.sh; do
+              for script_name in preinst.sh preupgrade.sh postinst.sh postupgrade.sh prerm.sh postrm.sh; do
                 syswarden_render_local_package_hook "${PACKAGE_SCRIPTS}/${script_name}" > \
                   "${SELECTED_PACKAGE_SCRIPTS}/${script_name}"
                 chmod 0755 "${SELECTED_PACKAGE_SCRIPTS}/${script_name}"
@@ -1220,13 +1250,16 @@ jobs:
           normalize_package_mtimes \
             "${STAGING_AMD64}" \
             "${STAGING_APK_AMD64}" \
-            "${RHEL_PROFILE_STAGING}" \
-            "${RHEL_PROFILE_SOURCE}" \
-            "${RHEL_PROFILE_RPM_SCRIPTS}" \
             "${PACKAGE_SCRIPTS}" \
             "${PACKAGE_RPM_SCRIPTS}" \
-            "${RPM_CHANGELOG}" \
-            "${RHEL_PROFILE_RPM_CHANGELOG}"
+            "${RPM_CHANGELOG}"
+          if [[ "${VERSION}" == 4.* ]]; then
+            normalize_package_mtimes \
+              "${RHEL_PROFILE_STAGING}" \
+              "${RHEL_PROFILE_SOURCE}" \
+              "${RHEL_PROFILE_RPM_SCRIPTS}" \
+              "${RHEL_PROFILE_RPM_CHANGELOG}"
+          fi
           echo "RPM_CHANGELOG=${RPM_CHANGELOG}" >> "${GITHUB_ENV}"
           echo "RPM_CHANGELOG_EPOCH=${RPM_CHANGELOG_EPOCH}" >> "${GITHUB_ENV}"
           echo "RHEL_PROFILE_RPM_CHANGELOG=${RHEL_PROFILE_RPM_CHANGELOG}" >> "${GITHUB_ENV}"
@@ -1302,9 +1335,11 @@ jobs:
           done
 
       - name: Build Opt-in RHEL Package-owned Variant (.rpm)
+        if: startsWith(env.VERSION, '4.')
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${VERSION}" == 4.* ]] || { echo 'RHEL package-owned generation is unavailable for v5.' >&2; exit 1; }
           fpm -s dir -t rpm \
             -n syswarden \
             -v "${VERSION}" \
@@ -1396,7 +1431,7 @@ jobs:
             postremove: "${SELECTED_PACKAGE_SCRIPTS}/postrm.sh"
           apk:
             scripts:
-              preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"
+              preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preupgrade.sh"
               postupgrade: "${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh"
           EOF
 
@@ -1614,7 +1649,10 @@ jobs:
             [[ "${#postinstall_members[@]}" -eq 1 ]]
             [[ "${#postupgrade_members[@]}" -eq 1 ]]
             cmp -s \
-              <(tar --extract --to-stdout --file "${path}" "${preinstall_members[0]}") \
+              "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh" \
+              <(tar --extract --to-stdout --file "${path}" "${preinstall_members[0]}")
+            cmp -s \
+              "${SELECTED_PACKAGE_SCRIPTS}/preupgrade.sh" \
               <(tar --extract --to-stdout --file "${path}" "${preupgrade_members[0]}")
             cmp -s \
               "${SELECTED_PACKAGE_SCRIPTS}/postinst.sh" \
@@ -1650,7 +1688,7 @@ jobs:
                 return 1
               fi
               validate_apk_hook "${path}" .pre-install preinst.sh
-              validate_apk_hook "${path}" .pre-upgrade preinst.sh
+              validate_apk_hook "${path}" .pre-upgrade preupgrade.sh
               validate_apk_hook "${path}" .post-install postinst.sh
               validate_apk_hook "${path}" .post-upgrade postupgrade.sh
               validate_apk_hook "${path}" .pre-deinstall prerm.sh
@@ -1668,9 +1706,11 @@ jobs:
           done
 
       - name: Validate Opt-in RHEL Package-owned Variant
+        if: startsWith(env.VERSION, '4.')
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${VERSION}" == 4.* ]] || { echo 'RHEL package-owned generation is unavailable for v5.' >&2; exit 1; }
           standard="${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm"
           profile="${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm"
           [[ "$(rpm --query --package --queryformat '%{NAME}' "${standard}")" == syswarden ]]
@@ -1690,9 +1730,11 @@ jobs:
             --sha256 "${profile_sha256}"
 
       - name: Generate Opt-in RHEL Package-owned Checksums
+        if: startsWith(env.VERSION, '4.')
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${VERSION}" == 4.* ]] || { echo 'RHEL package-owned generation is unavailable for v5.' >&2; exit 1; }
           name="syswarden-${VERSION}-1.rhelpo.x86_64.rpm"
           (
             cd "${RHEL_PROFILE_ASSETS}"
@@ -1895,35 +1937,39 @@ jobs:
               --expected-digest-contract \
               "${VALIDATED_APK_AMD64_DIGEST_CONTRACT}"
           done
-          PAYLOAD_ATTEST_VARIANT_ROOT="${PAYLOAD_ATTEST_ROOT}"
-          for relative in \
-            opt/syswarden/bin/syswarden-cli \
-            opt/syswarden/bin/syswarden-core \
-            opt/syswarden/bin/syswarden-tui \
-            opt/syswarden/signatures.json; do
-            extract_exact_member rpm-rhel-package-owned \
-              "${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm" "${relative}"
-          done
+          if [[ "${VERSION}" == 4.* ]]; then
+            PAYLOAD_ATTEST_VARIANT_ROOT="${PAYLOAD_ATTEST_ROOT}"
+            for relative in \
+              opt/syswarden/bin/syswarden-cli \
+              opt/syswarden/bin/syswarden-core \
+              opt/syswarden/bin/syswarden-tui \
+              opt/syswarden/signatures.json; do
+              extract_exact_member rpm-rhel-package-owned \
+                "${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm" "${relative}"
+            done
 
-          PYTHONDONTWRITEBYTECODE=1 python3 \
-            "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
-            --root "${PAYLOAD_ATTEST_ROOT}/rpm-rhel-package-owned" \
-            --mode pie \
-            --revision "${SOURCE_COMMIT_SHA}" \
-            --vcs-time "${SOURCE_VCS_TIME}" \
-            --signatures-source \
-            "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
-            --reference-root "${RHEL_PROFILE_STAGING}" \
-            --expected-digest-contract \
-            "${VALIDATED_AMD64_DIGEST_CONTRACT}"
+            PYTHONDONTWRITEBYTECODE=1 python3 \
+              "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+              --root "${PAYLOAD_ATTEST_ROOT}/rpm-rhel-package-owned" \
+              --mode pie \
+              --revision "${SOURCE_COMMIT_SHA}" \
+              --vcs-time "${SOURCE_VCS_TIME}" \
+              --signatures-source \
+              "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+              --reference-root "${RHEL_PROFILE_STAGING}" \
+              --expected-digest-contract \
+              "${VALIDATED_AMD64_DIGEST_CONTRACT}"
+          fi
           (
             cd "${PACKAGE_ASSETS}"
             sha256sum --check --strict SHA256SUMS.txt
           )
-          (
-            cd "${RHEL_PROFILE_ASSETS}"
-            sha256sum --check --strict SHA256SUMS.txt
-          )
+          if [[ "${VERSION}" == 4.* ]]; then
+            (
+              cd "${RHEL_PROFILE_ASSETS}"
+              sha256sum --check --strict SHA256SUMS.txt
+            )
+          fi
           find "${PACKAGE_ASSETS}" -maxdepth 1 -type f -exec chmod 0444 -- {} +
           find "${RHEL_PROFILE_ASSETS}" -maxdepth 1 -type f -exec chmod 0444 -- {} +
 
@@ -1951,7 +1997,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Opt-in RHEL Package-owned Artifact
-        if: ${{ !github.event.act }}
+        if: ${{ !github.event.act && startsWith(env.VERSION, '4.') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: syswarden-rhel-package-owned-${{ env.VERSION }}
@@ -1971,7 +2017,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Opt-in RHEL Package-owned Artifact with Act-compatible protocol
-        if: ${{ github.event.act }}
+        if: ${{ github.event.act && startsWith(env.VERSION, '4.') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         env:
           ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'

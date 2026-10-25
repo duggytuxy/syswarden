@@ -11,8 +11,40 @@ syswarden_set_native_install_phase() {
             # APK 2 does not reliably expose APK_SCRIPT. These selectors are
             # fixed in the separate generated install and upgrade scripts.
             case "${syswarden_install_hook}" in
-                postinstall) SYSWARDEN_NATIVE_INSTALL_PHASE=fresh ;;
-                postupgrade) SYSWARDEN_NATIVE_INSTALL_PHASE=upgrade ;;
+                preinstall|postinstall) SYSWARDEN_NATIVE_INSTALL_PHASE=fresh ;;
+                preupgrade|postupgrade) SYSWARDEN_NATIVE_INSTALL_PHASE=upgrade ;;
+            esac
+        elif [ "${syswarden_install_hook}" = preinstall ]; then
+            case "${1:-}" in
+                install)
+                    # dpkg install has no previous version on a fresh system.
+                    # A retained old version is never interpreted as fresh.
+                    if [ "$#" -eq 1 ] || { [ "$#" -eq 2 ] && [ -z "$2" ]; }; then
+                        SYSWARDEN_NATIVE_INSTALL_PHASE=fresh
+                    elif [ "$#" -eq 3 ] && [ -z "$2" ]; then
+                        case "$3" in
+                            *[!0-9A-Za-z.+:~-]*) ;;
+                            [0-9]*) SYSWARDEN_NATIVE_INSTALL_PHASE=fresh ;;
+                        esac
+                    fi
+                    ;;
+                upgrade)
+                    if [ "$#" -ge 2 ] && [ "$#" -le 3 ]; then
+                        case "$2" in
+                            *[!0-9A-Za-z.+:~-]*) ;;
+                            [0-9]*) SYSWARDEN_NATIVE_INSTALL_PHASE=upgrade ;;
+                        esac
+                    fi
+                    ;;
+                ''|0*|*[!0-9]*) ;;
+                *)
+                    if [ "$#" -eq 1 ]; then
+                        case "$1" in
+                            1) SYSWARDEN_NATIVE_INSTALL_PHASE=fresh ;;
+                            *) SYSWARDEN_NATIVE_INSTALL_PHASE=upgrade ;;
+                        esac
+                    fi
+                    ;;
             esac
         elif [ "${syswarden_install_hook}" = postinstall ]; then
             case "${1:-}" in

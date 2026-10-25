@@ -83,9 +83,10 @@ historical main-file edits, delete a journal or restore daemon state. Those
 operations require exact ownership and their separately reviewed lifecycle
 or recovery procedure. Do not remove evidence to bypass a refusal.
 
-Issue #422 remains open for the standard-list-only native package profile,
-independent OS/CIS opt-in, optional module inventory and preserved upgrade
-choices. SSH integration also requires owned updates, service and socket
+Issue #422 native qualification remains open for fresh packages that select no
+list and defer activation until explicit configuration through `syswarden config`,
+independent OS/CIS opt-in, optional module inventory and preserved upgrade choices.
+SSH integration also requires owned updates, service and socket
 activation, independent access checks, public recovery, and separate native
 uninstall, remove and purge trials. This intermediate component evidence does
 not constitute final v5.00.0 IVVQ acceptance.

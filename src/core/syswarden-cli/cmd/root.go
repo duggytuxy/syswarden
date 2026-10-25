@@ -20,7 +20,7 @@ var rootCmd = &cobra.Command{
 	Short: "SYSWARDEN Security Orchestrator",
 	Long:  "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		if cmd.CommandPath() == "syswarden ssh-policy access-probe" {
+		if sshAccessControllerCommand(cmd) {
 			// The independent controller has no target configuration or removal
 			// state. Its command validates only approved private exchange files.
 			return nil
@@ -61,6 +61,11 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 		if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "install" {
+			if freshNativePackageInstallation() {
+				// First installation stages only validated configuration. It
+				// must not observe/prepare services or recover firewall state.
+				return nil
+			}
 			plan, err := prepareNativeServicesForInstall()
 			if err != nil {
 				return installStageError("native service-state preflight failed before command preparation", err)

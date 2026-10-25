@@ -365,7 +365,7 @@ class UnsignedWorkflowVariantTests(unittest.TestCase):
                     else:
                         self.assertEqual(dependencies.splitlines(), [f"  - {value}" for value in expected["apk"]])
                         self.assertEqual(config.name, "nfpm_alpine_x86_64.yaml")
-                    for selector, hook in (("preinstall", "preinst"), ("postinstall", "postinst"), ("preremove", "prerm"), ("postremove", "postrm"), ("preupgrade", "preinst"), ("postupgrade", "postupgrade")):
+                    for selector, hook in (("preinstall", "preinst"), ("postinstall", "postinst"), ("preremove", "prerm"), ("postremove", "postrm"), ("preupgrade", "preupgrade"), ("postupgrade", "postupgrade")):
                         self.assertIn(f'{selector}: "{script_root}/{hook}.sh"\n', generated)
                     for forbidden in ("provides:", "replaces:", "obsoletes:"):
                         self.assertNotIn(forbidden, generated)
@@ -378,7 +378,7 @@ class UnsignedWorkflowVariantTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 names = ("",) if version.startswith("4.") else ("syswarden", "syswarden-base")
                 for name in names:
-                    for hook in ("preinst.sh", "postinst.sh", "postupgrade.sh", "prerm.sh", "postrm.sh"):
+                    for hook in ("preinst.sh", "preupgrade.sh", "postinst.sh", "postupgrade.sh", "prerm.sh", "postrm.sh"):
                         template = (Path(environment["PACKAGE_SCRIPTS"]) / hook).read_bytes()
                         expected = template
                         if name == "syswarden-base":
@@ -387,7 +387,7 @@ class UnsignedWorkflowVariantTests(unittest.TestCase):
                         selected = Path(environment["PACKAGE_SCRIPTS"]) / name / hook
                         self.assertEqual(selected.read_bytes(), expected)
                         self.assertEqual(int(selected.stat().st_mtime), int(environment["SOURCE_DATE_EPOCH"]))
-                        if hook != "postupgrade.sh":
+                        if hook not in {"preupgrade.sh", "postupgrade.sh"}:
                             rpm = Path(environment["PACKAGE_RPM_SCRIPTS"]) / name / hook
                             self.assertEqual(rpm.read_bytes(), expected.replace(b"%", b"%%"))
                             self.assertEqual(int(rpm.stat().st_mtime), int(environment["SOURCE_DATE_EPOCH"]))
@@ -447,7 +447,7 @@ sys.stdout.write(state[family][key])
                     environment = workflow_fixture(root, "5.00.0")
                     scripts = Path(environment["PACKAGE_SCRIPTS"]) / name
                     scripts.mkdir()
-                    hooks = {hook: f"#!/bin/sh\n# Synthetic {name} {hook}\nexit 0\n".encode() for hook in ("preinst.sh", "postinst.sh", "postupgrade.sh", "prerm.sh", "postrm.sh")}
+                    hooks = {hook: f"#!/bin/sh\n# Synthetic {name} {hook}\nexit 0\n".encode() for hook in ("preinst.sh", "preupgrade.sh", "postinst.sh", "postupgrade.sh", "prerm.sh", "postrm.sh")}
                     for hook, data in hooks.items():
                         (scripts / hook).write_bytes(data)
                     stub, fixture, archive = root / "native-stub.py", root / "native.json", root / "package.tar.gz"
@@ -482,7 +482,7 @@ sys.stdout.write(state[family][key])
                         *[f"depend = {dependency}" for dependency in expected["apk"]],
                         f"depend = !{conflict}", "",
                     ]).encode()
-                    apk_hooks = {".pre-install": "preinst.sh", ".pre-upgrade": "preinst.sh", ".post-install": "postinst.sh", ".post-upgrade": "postupgrade.sh", ".pre-deinstall": "prerm.sh", ".post-deinstall": "postrm.sh"}
+                    apk_hooks = {".pre-install": "preinst.sh", ".pre-upgrade": "preupgrade.sh", ".post-install": "postinst.sh", ".post-upgrade": "postupgrade.sh", ".pre-deinstall": "prerm.sh", ".post-deinstall": "postrm.sh"}
                     cases = {
                         "deb": ("valid", "name", "version", "architecture", "extra dependency", "duplicate dependency", "conflict", "replacement", "hook", "extra hook", "query error"),
                         "rpm": ("valid", "name", "epoch", "extra dependency", "duplicate dependency", "conflict", "replacement", "provides", "hook", "extra hook", "weak dependency", "requires error", "provides error"),
@@ -589,8 +589,11 @@ with Path(log).open("a") as output:
                 for name in workflow_assets(version):
                     (Path(environment["PACKAGE_ASSETS"]) / name).write_text(f"synthetic {name}\n")
                 profile_name = f"syswarden-{version}-1.rhelpo.x86_64.rpm"
-                (Path(environment["RHEL_PROFILE_ASSETS"]) / profile_name).write_text("synthetic RHEL opt-in fixture\n")
-                result = bash(fixture_shell(environment) + workflow_step("Generate Checksums") + workflow_step("Generate Opt-in RHEL Package-owned Checksums"))
+                checksums = workflow_step("Generate Checksums")
+                if version.startswith("4."):
+                    (Path(environment["RHEL_PROFILE_ASSETS"]) / profile_name).write_text("synthetic RHEL opt-in fixture\n")
+                    checksums += workflow_step("Generate Opt-in RHEL Package-owned Checksums")
+                result = bash(fixture_shell(environment) + checksums)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 result = bash(fixture_shell(environment) + "python3() { printf '%s\\0' \"$@\"; printf '\\0'; }\n" + workflow_step("Validate Exact Package Artifact"))
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -614,7 +617,7 @@ with Path(log).open("a") as output:
                 self.assertEqual(result.returncode, 0, result.stderr)
                 records = [json.loads(line) for line in log.read_text().splitlines()]
                 names = ("syswarden",) if version.startswith("4.") else ("syswarden", "syswarden-base")
-                self.assertEqual(len(records), 3 * len(names) + 1)
+                self.assertEqual(len(records), 3 * len(names) + (1 if version.startswith("4.") else 0))
                 expected_roots = {}
                 for name in names:
                     namespace = root / "payload-attestation"
@@ -622,7 +625,10 @@ with Path(log).open("a") as output:
                         namespace /= name
                     for family, filename in zip(("deb", "rpm", "apk"), (f"{name}_{version}_amd64.deb", f"{name}-{version}-1.x86_64.rpm", f"{name}_{version}_x86_64.apk"), strict=True):
                         expected_roots[str(namespace / family)] = filename
-                expected_roots[str(root / "payload-attestation/rpm-rhel-package-owned")] = profile_name
+                if version.startswith("4."):
+                    expected_roots[str(root / "payload-attestation/rpm-rhel-package-owned")] = profile_name
+                else:
+                    self.assertEqual(list(Path(environment["RHEL_PROFILE_ASSETS"]).iterdir()), [])
                 actual_roots = [record["args"][record["args"].index("--root") + 1] for record in records]
                 self.assertEqual(sorted(actual_roots), sorted(expected_roots))
                 for record in records:

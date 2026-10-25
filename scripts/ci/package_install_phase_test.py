@@ -20,6 +20,8 @@ HELPER = ROOT / "scripts/ci/package_install_phase.sh"
 LOCAL = ROOT / "build_packages.sh"
 WORKFLOW = ROOT / ".github/workflows/package.yml"
 INSTALL_CALL = 'syswarden_set_native_install_phase postinstall "$@"'
+PREINSTALL_CALL = 'syswarden_set_native_install_phase preinstall "$@"'
+PREUPGRADE_CALL = 'syswarden_set_native_install_phase preupgrade "$@"'
 UPGRADE_CALL = 'syswarden_set_native_install_phase postupgrade "$@"'
 WRAPPER_MARKER = "# APK upgrade has a fixed selector even when apk-tools supplies no phase environment.\n"
 
@@ -72,15 +74,34 @@ class PackageInstallPhaseTests(unittest.TestCase):
             for arguments in ((), ("5.00.0",), ("5.00.0", "4.10.4")):
                 self.assertEqual(self.run_phase(True, INSTALL_CALL, arguments, inherited), "fresh")
                 self.assertEqual(self.run_phase(True, UPGRADE_CALL, arguments, inherited), "upgrade")
+                self.assertEqual(self.run_phase(True, PREINSTALL_CALL, arguments, inherited), "fresh")
+                self.assertEqual(self.run_phase(True, PREUPGRADE_CALL, arguments, inherited), "upgrade")
         for alpine in (False, True):
             for call in ('syswarden_set_native_install_phase', 'syswarden_set_native_install_phase invalid "$@"'):
                 self.assertEqual(self.run_phase(alpine, call, (), "fresh"), "unknown")
         self.assertEqual(self.run_phase(False, UPGRADE_CALL, ("1",), "fresh"), "unknown")
 
-    def generated_upgrade(self, source: str, installed: str, directory: Path) -> subprocess.CompletedProcess[str]:
+    def test_preinstall_deb_rpm_arguments_are_closed_and_do_not_trust_inheritance(self) -> None:
+        cases = (
+            (("install",), "fresh"), (("install", ""), "fresh"), (("install", "", "5.00.0"), "fresh"),
+            (("install", "4.10.4"), "unknown"), (("install", "4.10.4", "5.00.0"), "unknown"),
+            (("upgrade", "4.10.4"), "upgrade"), (("upgrade", "4.10.4", "5.00.0"), "upgrade"),
+            (("1",), "fresh"), (("2",), "upgrade"), (("23",), "upgrade"),
+            ((), "unknown"), (("install", "", "bad version"), "unknown"),
+            (("install", "", "bad"), "unknown"), (("install", "", "5.00.0", "extra"), "unknown"),
+            (("upgrade",), "unknown"), (("upgrade", ""), "unknown"), (("upgrade", "bad version"), "unknown"),
+            (("configure",), "unknown"), (("01",), "unknown"), (("1", "2"), "unknown"),
+        )
+        for inherited in ("fresh", "upgrade", "spoofed"):
+            for arguments, expected in cases:
+                with self.subTest(inherited=inherited, arguments=arguments):
+                    self.assertEqual(self.run_phase(False, PREINSTALL_CALL, arguments, inherited), expected)
+
+    def generated_upgrade(self, source: str, installed: str, directory: Path, preinstalled: str) -> subprocess.CompletedProcess[str]:
         block = source.split(WRAPPER_MARKER, 1)[1].split("chmod ", 1)[0]
         block = textwrap.dedent(block)
         (directory / "postinst.sh").write_text(installed)
+        (directory / "preinst.sh").write_text(preinstalled)
         return subprocess.run(
             ["/bin/bash", "-eu", "-c", 'PACKAGE_SCRIPTS="$1"\n' + block,
              "wrapper-contract", str(directory)],
@@ -95,27 +116,35 @@ class PackageInstallPhaseTests(unittest.TestCase):
             (WORKFLOW.read_text(), self.contract.script),
         ):
             installed = loader("postinst.sh")
+            preinstalled = loader("preinst.sh")
             self.assertEqual(installed.count("\n" + INSTALL_CALL + "\n"), 1)
             self.assertLess(installed.index("\n" + INSTALL_CALL), installed.index("\nsyswarden_preflight_alpine_cronie\n"))
             self.assertIn(HELPER.read_text(), installed)
             with tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
-                result = self.generated_upgrade(source, installed, directory)
+                result = self.generated_upgrade(source, installed, directory, preinstalled)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 upgraded = (directory / "postupgrade.sh").read_text()
                 self.assertEqual(upgraded, installed.replace("\n" + INSTALL_CALL + "\n", "\n" + UPGRADE_CALL + "\n"))
+                self.assertEqual((directory / "preupgrade.sh").read_text(), preinstalled.replace("\n" + PREINSTALL_CALL + "\n", "\n" + PREUPGRADE_CALL + "\n"))
                 outputs.append(upgraded)
             for invalid in (installed.replace(INSTALL_CALL, "true"), installed + "\n" + INSTALL_CALL + "\n"):
                 with tempfile.TemporaryDirectory() as temporary:
-                    result = self.generated_upgrade(source, invalid, Path(temporary))
+                    result = self.generated_upgrade(source, invalid, Path(temporary), preinstalled)
+                    self.assertNotEqual(result.returncode, 0)
+            for invalid in (preinstalled.replace(PREINSTALL_CALL, "true"), preinstalled + "\n" + PREINSTALL_CALL + "\n"):
+                with tempfile.TemporaryDirectory() as temporary:
+                    result = self.generated_upgrade(source, installed, Path(temporary), invalid)
                     self.assertNotEqual(result.returncode, 0)
         self.assertEqual(outputs[0], outputs[1])
 
     def test_packagers_bind_permission_timestamp_and_integrity_to_upgrade_wrapper(self) -> None:
         local, workflow = LOCAL.read_text(), WORKFLOW.read_text()
+        self.assertIn('preupgrade: "./preupgrade.sh"', local)
+        self.assertIn('preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preupgrade.sh"', workflow)
         self.assertIn('postupgrade: "./postupgrade.sh"', local)
         self.assertIn('postupgrade: "${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh"', workflow)
-        self.assertIn("chmod +x preinst.sh postinst.sh postupgrade.sh postrm.sh prerm.sh", local)
+        self.assertIn("chmod +x preinst.sh preupgrade.sh postinst.sh postupgrade.sh postrm.sh prerm.sh", local)
         self.assertRegex(workflow, r'chmod 0755 \\\n(?:.*\\\n)*\s*"\$\{PACKAGE_SCRIPTS\}/postupgrade.sh"')
         self.assertIn("    postupgrade.sh \\\n", local)
         for source in (local, workflow):
@@ -142,11 +171,19 @@ class PackageInstallPhaseTests(unittest.TestCase):
                     self.assertEqual(upgraded.read_bytes(), installed.replace(INSTALL_CALL.encode(), UPGRADE_CALL.encode()))
                     self.assertEqual(upgraded.stat().st_mode & 0o777, 0o755)
                     self.assertEqual(int(upgraded.stat().st_mtime), int(environment["SOURCE_DATE_EPOCH"]))
+                    preinstalled = (scripts / "preinst.sh").read_bytes()
+                    preupgraded = scripts / "preupgrade.sh"
+                    self.assertEqual(preinstalled.count(PREINSTALL_CALL.encode()), 1)
+                    self.assertEqual(preupgraded.read_bytes(), preinstalled.replace(PREINSTALL_CALL.encode(), PREUPGRADE_CALL.encode()))
+                    self.assertEqual(preupgraded.stat().st_mode & 0o777, 0o755)
+                    self.assertEqual(int(preupgraded.stat().st_mtime), int(environment["SOURCE_DATE_EPOCH"]))
 
     def test_local_archive_validation_rejects_fresh_upgrade_missing_and_duplicate_hooks(self) -> None:
         function = "validate_local_apk_install_hooks() {" + LOCAL.read_text().split("validate_local_apk_install_hooks() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            (directory / "preinst.sh").write_bytes(b"pre-fresh\n")
+            (directory / "preupgrade.sh").write_bytes(b"pre-upgrade\n")
             (directory / "postinst.sh").write_bytes(b"fresh\n")
             (directory / "postupgrade.sh").write_bytes(b"upgrade\n")
             for members, accepted in (
@@ -157,7 +194,7 @@ class PackageInstallPhaseTests(unittest.TestCase):
             ):
                 archive = directory / "fixture.apk"
                 with tarfile.open(archive, "w:gz") as output:
-                    for name, content in members:
+                    for name, content in ((".pre-install", b"pre-fresh\n"), (".pre-upgrade", b"pre-upgrade\n")) + members:
                         member = tarfile.TarInfo(name)
                         member.size = len(content)
                         output.addfile(member, io.BytesIO(content))

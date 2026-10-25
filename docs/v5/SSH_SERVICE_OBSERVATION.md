@@ -75,8 +75,9 @@ separate [process observer](SSH_PROCESS_OBSERVATION.md) now binds a live process
 and executable; loaded configuration, listeners and access remain unverified.
 
 The [minimal native installation contract](https://github.com/duggytuxy/syswarden/issues/422)
-is unchanged: fresh packages select the standard list only, and SSH/CIS/OS
-hardening requires explicit independent TOML choices. This component neither
+requires fresh packages to select no list and defer activation until explicit
+configuration through `syswarden config`. SSH/CIS/OS hardening requires explicit
+independent TOML choices. This component neither
 implements that package wiring nor turns an installed service into consent.
 The [shared transaction](SSH_TRANSACTION.md), owned updates, activation,
 public recovery and independent native removal paths still need integration.

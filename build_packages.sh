@@ -323,6 +323,13 @@ DEB_PACKAGE_FILENAME="${PACKAGE_NAME}_${VERSION}_amd64.deb"
 APK_PACKAGE_FILENAME="${PACKAGE_NAME}_${VERSION}_x86_64.apk"
 RPM_PACKAGE_RELEASE="1"
 if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
+    case "${VERSION}" in
+        4.*) ;;
+        *)
+            echo "[-] The RHEL package-owned profile is unavailable for v5 until inactive fresh installation is qualified." >&2
+            exit 1
+            ;;
+    esac
     RPM_PACKAGE_RELEASE="1.rhelpo"
 fi
 RPM_PACKAGE_FILENAME="${PACKAGE_NAME}-${VERSION}-${RPM_PACKAGE_RELEASE}.x86_64.rpm"
@@ -653,14 +660,25 @@ cat "${SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> preinst
 cat "${SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> preinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_preflight.sh" >> preinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_wireguard_preflight.sh" >> preinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_install_phase.sh" >> preinst.sh
 cat << 'EOF' >> preinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
+syswarden_set_native_install_phase preinstall "$@"
 syswarden_preflight_wireguard /
-syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
 syswarden_preflight_systemd_ordering_dropin
 syswarden_preflight_systemd_socket_dropin
+if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
+    if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+       [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+        printf '%s\n' 'Fresh installation refuses retained package-removal barriers.' >&2
+        exit 1
+    fi
+    printf '%s\n' 'SysWarden fresh installation: pre-install host mutation deferred.'
+    exit 0
+fi
+syswarden_preflight_alpine_cronie
 if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
     if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
        [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
@@ -729,7 +747,6 @@ cat << 'EOF' >> postinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
 syswarden_set_native_install_phase postinstall "$@"
-syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
 if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
     if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
@@ -740,6 +757,17 @@ if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
     printf '%s\n' 'SysWarden offline qualification staging: post-install host mutation deferred.'
     exit 0
 fi
+if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
+    if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+       [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+        printf '%s\n' 'Fresh installation refuses retained package-removal barriers.' >&2
+        exit 1
+    fi
+    # Fresh CLI staging validates TOML only, including on an offline image.
+    /opt/syswarden/bin/syswarden-cli install
+    exit 0
+fi
+syswarden_preflight_alpine_cronie
 ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
 ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
 
@@ -987,11 +1015,15 @@ for package_hook in preinst.sh postinst.sh prerm.sh postrm.sh; do
     mv -- "${package_hook}.variant" "${package_hook}"
 done
 # APK upgrade has a fixed selector even when apk-tools supplies no phase environment.
+[ "$(grep -Fxc 'syswarden_set_native_install_phase preinstall "$@"' preinst.sh)" -eq 1 ]
+sed 's/^syswarden_set_native_install_phase preinstall "\$@"$/syswarden_set_native_install_phase preupgrade "$@"/' \
+    preinst.sh > preupgrade.sh
+[ "$(grep -Fxc 'syswarden_set_native_install_phase preupgrade "$@"' preupgrade.sh)" -eq 1 ]
 [ "$(grep -Fxc 'syswarden_set_native_install_phase postinstall "$@"' postinst.sh)" -eq 1 ]
 sed 's/^syswarden_set_native_install_phase postinstall "\$@"$/syswarden_set_native_install_phase postupgrade "$@"/' \
     postinst.sh > postupgrade.sh
 [ "$(grep -Fxc 'syswarden_set_native_install_phase postupgrade "$@"' postupgrade.sh)" -eq 1 ]
-chmod +x preinst.sh postinst.sh postupgrade.sh postrm.sh prerm.sh
+chmod +x preinst.sh preupgrade.sh postinst.sh postupgrade.sh postrm.sh prerm.sh
 
 RPM_SCRIPTS="${PACKAGE_WORKSPACE}/rpm-scripts"
 install -d -m 0700 "${RPM_SCRIPTS}"
@@ -1059,6 +1091,7 @@ normalize_package_mtimes \
     staging-rpm \
     staging-apk \
     preinst.sh \
+    preupgrade.sh \
     postinst.sh \
     postupgrade.sh \
     prerm.sh \
@@ -1205,7 +1238,7 @@ scripts:
   postremove: "./postrm.sh"
 apk:
   scripts:
-    preupgrade: "./preinst.sh"
+    preupgrade: "./preupgrade.sh"
     postupgrade: "./postupgrade.sh"
 EOF
 "${NFPM_BIN}" pkg \
@@ -1321,9 +1354,13 @@ validate_local_apk_install_hooks() {
     local apk_path="$1"
     local hook expected
     local -a members=()
-    for hook in post-install post-upgrade; do
-        expected=postinst.sh
-        if [ "${hook}" = post-upgrade ]; then expected=postupgrade.sh; fi
+    for hook in pre-install pre-upgrade post-install post-upgrade; do
+        case "${hook}" in
+            pre-install) expected=preinst.sh ;;
+            pre-upgrade) expected=preupgrade.sh ;;
+            post-install) expected=postinst.sh ;;
+            post-upgrade) expected=postupgrade.sh ;;
+        esac
         mapfile -t members < <(
             tar --list --file "${apk_path}" | awk -v hook=".${hook}" '$0 == hook || $0 == "./" hook { print }'
         )

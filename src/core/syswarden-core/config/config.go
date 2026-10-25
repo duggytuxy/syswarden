@@ -315,11 +315,13 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 	configureEnvironment(candidate)
 	setDefaults(candidate, configPath)
 	observed := make(map[string]struct{})
+	var profileInventory unconfiguredProfileInventory
 	merge := func(relative string, content []byte) error {
 		document, err := parseDocument(content, relative)
 		if err != nil {
 			return err
 		}
+		profileInventory.record(relative, document)
 		flattenKeys("", document, observed)
 		if err := candidate.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("merge %s: %w", relative, err)
@@ -387,6 +389,9 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 	sort.Strings(diagnostics.UnknownKeys)
 	sort.Strings(diagnostics.DeprecatedKeys)
 
+	if err := profileInventory.validate(); err != nil {
+		return nil, diagnostics, err
+	}
 	resolveSaaSAlias(candidate, observed)
 	if err := resolveOptionalModules(candidate); err != nil {
 		return nil, diagnostics, err

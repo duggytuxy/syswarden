@@ -14,6 +14,9 @@ import time
 from pathlib import Path
 
 
+OWNER_LABEL = "io.syswarden.ssh-systemd-oracle.owner"
+
+
 def binary_stamp(value: os.stat_result) -> tuple:
     # Reading a new file may update atime. Pin identity, permissions, size and
     # nanosecond mutation timestamps without treating that read as a mutation.
@@ -140,19 +143,56 @@ def require_native_pass(result, test_name: str) -> None:
         raise RuntimeError("exact passing native SSH result without skips is required; inspect the private command records")
 
 
-def cleanup(run, name: str) -> dict:
-    # Also inspect after an uncertain create outcome. Never select by age or label.
+def owned_container(run, selector: str, name: str, token: str, cid: str | None) -> str:
+    # The token binds this invocation, not every container with a product label.
+    # Full inspect identity prevents prefix IDs, aliases and name replacement.
+    inspected = run(["podman", "container", "inspect", selector])
+    if inspected.returncode:
+        raise ValueError("container ownership could not be verified")
+    try:
+        values = json.loads(inspected.stdout)
+        if not isinstance(values, list) or len(values) != 1:
+            raise ValueError
+        item = values[0]
+        actual = item["Id"]
+        if (not isinstance(actual, str) or re.fullmatch(r"[0-9a-f]{64}", actual) is None
+                or item["Name"] != name
+                or item["Config"]["Labels"].get(OWNER_LABEL) != token
+                or (cid is not None and actual != cid)):
+            raise ValueError
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        raise ValueError("container ownership differs; preserve the container") from exc
+    return actual
+
+
+def cleanup(run, name: str, token: str, cid: str | None) -> dict:
+    if (re.fullmatch(r"syswarden-ssh-binder-[0-9a-f]{32}", name) is None
+            or re.fullmatch(r"[0-9a-f]{64}", token) is None
+            or (cid is not None and re.fullmatch(r"[0-9a-f]{64}", cid) is None)):
+        return {"absent": False, "error": "invalid container ownership binding"}
     exists = run(["podman", "container", "exists", name])
     if exists.returncode == 1:
-        return {"absent": True, "exists": 1}
+        # A known original ID must also be absent, even if its name was changed.
+        original = run(["podman", "container", "exists", cid]) if cid else None
+        return {"absent": original is None or original.returncode == 1,
+                "exists": 1, "id_exists": original.returncode if original else None}
     if exists.returncode != 0:
         return {"absent": False, "exists": exists.returncode}
-    remove = run(["podman", "rm", "-f", name])
-    after = run(["podman", "container", "exists", name])
+    try:
+        # An uncertain create may establish its ID only through this exact name
+        # and unguessable per-invocation token, never through a generic label scan.
+        original = owned_container(run, name, name, token, cid)
+        owned_container(run, original, name, token, original)
+    except ValueError:
+        return {"absent": False, "error": "container ownership unverified; no removal attempted"}
+    remove = run(["podman", "rm", "-f", original])
+    after_name = run(["podman", "container", "exists", name])
+    after_id = run(["podman", "container", "exists", original])
     return {
-        "absent": remove.returncode == 0 and after.returncode == 1,
+        "absent": remove.returncode == 0 and after_name.returncode == 1 and after_id.returncode == 1,
         "remove": remove.returncode,
-        "exists": after.returncode,
+        "exists": after_name.returncode,
+        "id_exists": after_id.returncode,
     }
 
 
@@ -189,6 +229,8 @@ def run_oracle_commands(run, prefix: list[str], test_name: str, environment: lis
 def execute(image: str, output: Path, scenario: str = "activation") -> dict:
     run = Recorder(output).run
     name = "syswarden-ssh-binder-" + os.urandom(16).hex()
+    token = os.urandom(32).hex()
+    cid = None
     attempted = False
     result = {"status": "fail", "image": image, "container": name, "scenario": scenario}
     try:
@@ -201,7 +243,7 @@ def execute(image: str, output: Path, scenario: str = "activation") -> dict:
             raise ValueError("rootless Podman required")
         validate_image(json.loads(must(run(["podman", "image", "inspect", image])))[0], image)
         command = [
-            "podman", "create", "--name", name,
+            "podman", "create", "--name", name, "--label", OWNER_LABEL + "=" + token,
             "--network=none", "--pid=private", "--ipc=private", "--uts=private", "--cgroupns=private",
             "--cap-add=SYS_ADMIN", "--cap-add=SYS_PTRACE", "--systemd=always",
             "--security-opt=no-new-privileges", "--security-opt=label=disable",
@@ -211,36 +253,43 @@ def execute(image: str, output: Path, scenario: str = "activation") -> dict:
             "--volume", str(output / "sshpolicy.test") + ":/oracle/sshpolicy.test:ro",
             "--volume", str(output / "setup.sh") + ":/oracle/setup.sh:ro", image,
         ]
+        if run(["podman", "container", "exists", name]).returncode != 1:
+            raise ValueError("new oracle container name must be absent")
         attempted = True
-        must(run(command))
-        validate_isolation(json.loads(must(run(["podman", "inspect", name])))[0], image, output)
-        must(run(["podman", "start", name]))
+        created = must(run(command)).strip()
+        if re.fullmatch(r"[0-9a-f]{64}", created) is None:
+            raise ValueError("create did not return an exact container ID")
+        cid = created
+        owned_container(run, name, name, token, cid)
+        owned_container(run, cid, name, token, cid)
+        validate_isolation(json.loads(must(run(["podman", "inspect", cid])))[0], image, output)
+        must(run(["podman", "start", cid]))
         for _ in range(30):
-            state = run(["podman", "exec", name, "systemctl", "is-system-running"])
+            state = run(["podman", "exec", cid, "systemctl", "is-system-running"])
             if state.stdout.strip() in {"running", "degraded"}:
                 break
             time.sleep(1)
         else:
             raise RuntimeError("systemd readiness timeout")
         prefix = [
-            "podman", "exec", name, "setpriv", "--bounding-set=-sys_admin",
+            "podman", "exec", cid, "setpriv", "--bounding-set=-sys_admin",
             "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs",
         ]
         must(run(prefix + ["/bin/sh", "/oracle/setup.sh"]))
         test, exported = run_oracle_commands(run, prefix, test_name, environment, scenario != "activation")
-        run(["podman", "exec", name, "journalctl", "--no-pager", "-u", "ssh.service", "-n", "100"])
+        run(["podman", "exec", cid, "journalctl", "--no-pager", "-u", "ssh.service", "-n", "100"])
         require_native_pass(test, test_name)
         if exported is not None:
             require_native_pass(exported, "TestSSHIsolatedSystemdJournalExport")
         result["status"] = "pass"
-    except (Exception, KeyboardInterrupt) as exc:
-        result["error"] = str(exc)
+    except (Exception, KeyboardInterrupt):
+        result["error"] = "native SSH oracle operation failed; inspect the private command records"
     finally:
         if attempted:
             try:
-                result["cleanup"] = cleanup(run, name)
-            except (Exception, KeyboardInterrupt) as exc:
-                result["cleanup"] = {"absent": False, "error": str(exc)}
+                result["cleanup"] = cleanup(run, name, token, cid)
+            except (Exception, KeyboardInterrupt):
+                result["cleanup"] = {"absent": False, "error": "cleanup failed; inspect the private command records"}
             if not result["cleanup"]["absent"]:
                 result["status"] = "fail"
         (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

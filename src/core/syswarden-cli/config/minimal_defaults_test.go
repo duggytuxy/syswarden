@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestFreshNativeProfileIsStandardOnly(t *testing.T) {
+func TestFreshNativeProfileIsUnconfigured(t *testing.T) {
 	old, state := GlobalConfig, CurrentLoadState()
 	t.Cleanup(func() { GlobalConfig = old; loadStateMu.Lock(); loadState = state; loadStateMu.Unlock() })
 	root := filepath.Join(t.TempDir(), "config")
@@ -20,8 +20,8 @@ func TestFreshNativeProfileIsStandardOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := GlobalConfig
-	if c.InstallProfile != StandardInstallProfile || c.ListChoice != "1" || c.FirewallBackend != "keep" {
-		t.Fatalf("wrong standard profile: %s/%s/%s", c.InstallProfile, c.ListChoice, c.FirewallBackend)
+	if c.InstallProfile != UnconfiguredInstallProfile || c.ListChoice != "4" || c.FirewallBackend != "keep" {
+		t.Fatalf("wrong unconfigured profile: %s/%s/%s", c.InstallProfile, c.ListChoice, c.FirewallBackend)
 	}
 	for name, enabled := range map[string]bool{"OS": c.Hardening, "CIS": c.CISL2Hardening, "OSINT": c.OSINTEnabled, "WAAP": c.WAAPEnabled, "bridge": c.LogBridgeEnabled, "detection": c.DetectionEnabled, "Geo": c.EnableGeo, "ASN": c.EnableASN, "L2": c.EnableL2, "ARP": c.ArpProtect, "WG": c.EnableWG, "HA": c.HAEnabled, "BunkerWeb": c.BunkerWebEnabled, "SaaS": c.AllowSaaSMonitors, "SIEM": c.SiemEnabled, "Wazuh": c.EnableWazuh, "Abuse": c.EnableAbuse, "webhook": c.EnableWebhook} {
 		if enabled {
@@ -152,5 +152,84 @@ func TestLogBridgeRefusalPreservesInstalledConfigurationAndLastValidSnapshot(t *
 	}
 	if !GlobalConfig.WAAPEnabled || !GlobalConfig.LogBridgeEnabled || GlobalConfig.EnableWG || GlobalConfig.EnableWazuh {
 		t.Fatal("explicit pair did not remain scoped")
+	}
+}
+
+func TestExistingStandardProfileAndExplicitChoicesSurviveFreshDefaultChange(t *testing.T) {
+	preserveOperatorPolicyGlobals(t)
+	root := filepath.Join(t.TempDir(), "config")
+	if err := os.MkdirAll(filepath.Join(root, "modules"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	models, err := defaultModularFileModels(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range models {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := directoryDigest(t, root)
+	if err := EnsureDefaults(root); err != nil {
+		t.Fatal(err)
+	}
+	if got := directoryDigest(t, root); !reflect.DeepEqual(got, before) {
+		t.Fatal("fresh default change rewrote existing standard profile")
+	}
+	if err := loadModularConfig(root); err != nil {
+		t.Fatal(err)
+	}
+	if GlobalConfig.InstallProfile != StandardInstallProfile || GlobalConfig.ListChoice != "1" {
+		t.Fatal("existing standard choice changed")
+	}
+	variants, err := DefaultModularFileVariants(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range models {
+		found := false
+		for _, candidate := range variants[name] {
+			found = found || candidate == content
+		}
+		if !found {
+			t.Fatal("lost prior standard template ownership", name)
+		}
+	}
+	override := []byte("[network.blocklists]\nlist_choice='2'\n[waap]\nenabled=true\n")
+	if err := os.WriteFile(filepath.Join(root, "modules/99-user.toml"), override, 0600); err != nil {
+		t.Fatal(err)
+	}
+	before = directoryDigest(t, root)
+	if err := PrepareInstallationConfiguration(root); err != nil {
+		t.Fatal(err)
+	}
+	if GlobalConfig.ListChoice != "2" || !GlobalConfig.WAAPEnabled || GlobalConfig.EnableWG {
+		t.Fatal("existing explicit choices changed")
+	}
+	if got := directoryDigest(t, root); !reflect.DeepEqual(got, before) {
+		t.Fatal("upgrade changed administrator bytes")
+	}
+}
+
+func TestUnconfiguredProfileAcceptsOnlyExplicitScopedTOMLSelections(t *testing.T) {
+	preserveOperatorPolicyGlobals(t)
+	root := filepath.Join(t.TempDir(), "config")
+	if err := EnsureDefaults(root); err != nil {
+		t.Fatal(err)
+	}
+	override := []byte("[network.blocklists]\nlist_choice='1'\n[waap]\nenabled=true\n")
+	if err := os.WriteFile(filepath.Join(root, "modules/99-user.toml"), override, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadModularConfig(root); err != nil {
+		t.Fatal(err)
+	}
+	if GlobalConfig.InstallProfile != UnconfiguredInstallProfile || GlobalConfig.ListChoice != "1" || !GlobalConfig.WAAPEnabled || GlobalConfig.EnableWG || GlobalConfig.EnableWazuh || GlobalConfig.Hardening {
+		t.Fatal("explicit selection enabled unrelated modules")
+	}
+	t.Setenv("SYSWARDEN_NETWORK_BLOCKLISTS_LIST_CHOICE", "2")
+	if err := loadModularConfig(root); err == nil {
+		t.Fatal("environment selected a list for an unconfigured profile")
 	}
 }

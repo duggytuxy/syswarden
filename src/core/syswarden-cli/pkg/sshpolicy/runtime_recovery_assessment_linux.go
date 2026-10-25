@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"time"
 )
 
@@ -43,6 +44,20 @@ type sshRuntimeRecoveryReload struct {
 
 func assessSSHRuntimeRecovery(ctx context.Context, journal *sshJournal, original, recovery, parser string,
 	run sshParserRun, parserCheck func() error, observe sshEndpointObserver) (RecoveryAssessment, error) {
+	return withSSHRestoredAccessAssessment(ctx, journal, original, recovery, parser, run, parserCheck, observe, nil, nil, nil)
+}
+
+type sshRestoredAccessAssessment struct {
+	journal  *sshJournal
+	plan     migrationPlan
+	records  map[string]string
+	issuance *sshFileImage
+	evidence *sshFileImage
+}
+
+func withSSHRestoredAccessAssessment(ctx context.Context, journal *sshJournal, original, recovery, parser string,
+	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, issuance, evidence *sshFileImage,
+	action func(*sshRestoredAccessAssessment, RecoveryAssessment, func() error) error) (RecoveryAssessment, error) {
 	if err := validSSHRecoveryRequest(ctx, original, recovery, true); err != nil {
 		return RecoveryAssessment{}, err
 	}
@@ -54,7 +69,7 @@ func assessSSHRuntimeRecovery(ctx context.Context, journal *sshJournal, original
 	if err := errors.Join(ctx.Err(), parserCheck()); err != nil {
 		return RecoveryAssessment{}, err
 	}
-	records, err := observeSSHRuntimeRecoveryRecords(journal)
+	records, err := observeSSHRuntimeRecoveryRecordsWithAccess(journal, issuance, evidence)
 	if err != nil {
 		return RecoveryAssessment{}, err
 	}
@@ -105,8 +120,16 @@ func assessSSHRuntimeRecovery(ctx context.Context, journal *sshJournal, original
 	if err != nil || !bytes.Equal(reloadWire, want) {
 		return RecoveryAssessment{}, errors.Join(ErrInventoryChanged, err)
 	}
+	a := &sshRestoredAccessAssessment{journal: journal, plan: plan, records: records, issuance: issuance, evidence: evidence}
 	baseFence := func() error {
-		return errors.Join(ctx.Err(), parserCheck(), recheckSSHRuntimeRecoveryRecords(journal, records))
+		if err := errors.Join(ctx.Err(), parserCheck()); err != nil {
+			return err
+		}
+		currentRecords, err := observeSSHRuntimeRecoveryRecordsWithAccess(journal, a.issuance, a.evidence)
+		if err != nil || !reflect.DeepEqual(currentRecords, a.records) {
+			return errors.Join(ErrInventoryChanged, err)
+		}
+		return ctx.Err()
 	}
 	guard := sshRollbackInventoryGuard(ctx, journal, prepared.Transaction, current, parserCheck, baseFence)
 	if err := verifySSHRollbackCandidates(ctx, plan, run, guard); err != nil {
@@ -129,9 +152,34 @@ func assessSSHRuntimeRecovery(ctx context.Context, journal *sshJournal, original
 		endpoints.Listeners.Process.Manager.RuntimeActivated || endpoints.Listeners.Process.Manager.AccessVerified {
 		return RecoveryAssessment{}, ErrInventoryUnsafe
 	}
-	return RecoveryAssessment{Schema: 1, PlanSHA256: original, RecoverySHA256: recovery, Transaction: prepared.Transaction,
+	summary := RecoveryAssessment{Schema: 1, PlanSHA256: original, RecoverySHA256: recovery, Transaction: prepared.Transaction,
 		ReloadIntentSHA256: digestBytes(reloadWire), RecordedTargetSHA256: intent.Target, RestoredSHA256: restored,
-		ConfigurationRestored: true, ParserVerified: true, ReloadIntentObserved: true, RecoveryRequired: true, Endpoints: endpoints}, nil
+		ConfigurationRestored: true, ParserVerified: true, ReloadIntentObserved: true, RecoveryRequired: true, Endpoints: endpoints}
+	if action != nil {
+		// Re-observe endpoints at each publication boundary. The observer gets
+		// only the base file/parser guard, never this enclosing action guard.
+		// Snapshot equality is a drift fence, not causal policy consumption.
+		actionGuard := func() error {
+			if err := guard(); err != nil {
+				return err
+			}
+			observed, err := observeSSHEndpoints(ctx, inventory, parser, run, guard, observe)
+			if err != nil || !reflect.DeepEqual(observed, endpoints) {
+				return errors.Join(ErrInventoryChanged, err)
+			}
+			return errors.Join(ctx.Err(), guard())
+		}
+		if err := action(a, summary, actionGuard); err != nil {
+			return RecoveryAssessment{}, err
+		}
+		if err := actionGuard(); err != nil {
+			return RecoveryAssessment{}, err
+		}
+	}
+	if err := guard(); err != nil {
+		return RecoveryAssessment{}, err
+	}
+	return summary, nil
 }
 
 // AssessSystemdRecovery reopens existing fixed-path history without changing

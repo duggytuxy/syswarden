@@ -73,8 +73,9 @@ process directory, never for configuration-supplied paths.
 ## Installation and qualification
 
 The [minimal native installation contract](https://github.com/duggytuxy/syswarden/issues/422)
-is unchanged: standard-list-only fresh packages, independent explicit TOML
-choices for SSH/CIS/OS hardening and optional modules, and preservation of
+requires fresh packages to select no list and defer activation until explicit
+configuration through `syswarden config`, with independent explicit TOML choices
+for SSH/CIS/OS hardening and optional modules and preservation of
 administrator configuration and existing protection on upgrade. An installed
 or running SSH service is not consent to apply a policy. BunkerWeb remains
 independent, including source-owned temporary bans, expiry and HA.

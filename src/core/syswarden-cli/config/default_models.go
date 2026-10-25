@@ -24,10 +24,20 @@ func CheckModularRetirementState(outputDir string) error {
 // It does not load operator data, inspect the filesystem or authorize removal
 // of a modified or migrated configuration.
 func DefaultModularFileModels(outputDir string) (map[string]string, error) {
+	return defaultModularFileModels(outputDir, false)
+}
+
+// Retain the previous generated standard profile as an exact ownership model;
+// changing fresh defaults must not make its unchanged files unrecognizable.
+func defaultModularFileModels(outputDir string, standard bool) (map[string]string, error) {
 	m := &Migrator{OutputDir: outputDir}
 	data, err := m.freshDefaultConfigData()
 	if err != nil {
 		return nil, err
+	}
+	if standard {
+		data["SYSWARDEN_INSTALL_PROFILE"] = StandardInstallProfile
+		data["SYSWARDEN_LIST_CHOICE"] = "1"
 	}
 	modules, err := m.renderModules(data)
 	if err != nil {
@@ -52,6 +62,10 @@ func DefaultModularFileVariants(outputDir string) (map[string][]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	standard, err := defaultModularFileModels(outputDir, true)
+	if err != nil {
+		return nil, err
+	}
 	var historical map[string]string
 	if err := json.Unmarshal(historicalDefaultModelsV4028, &historical); err != nil || len(historical) != len(current) {
 		return nil, fmt.Errorf("historical default template inventory is invalid")
@@ -71,7 +85,7 @@ func DefaultModularFileVariants(outputDir string) (map[string][]string, error) {
 		if !exists || prior == "" {
 			return nil, fmt.Errorf("previous default template is unavailable")
 		}
-		variants[path] = []string{content, old, strings.ReplaceAll(prior, "/etc/syswarden/config", outputDir)}
+		variants[path] = []string{content, standard[path], old, strings.ReplaceAll(prior, "/etc/syswarden/config", outputDir)}
 	}
 	path := filepath.Join("modules", historicalDefaultCoreModuleName)
 	if historical[filepath.ToSlash(path)] != historicalDefaultCoreModule {

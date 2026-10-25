@@ -31,6 +31,7 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	requireSSHIsolatedSystemdFixture(t)
 	noop := os.Getenv("SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP") == "1"
 	exchange := os.Getenv("SYSWARDEN_SSH_ISOLATED_ACCESS_EXCHANGE") == "1"
+	restoredExchange := exchange || noop
 	profile := os.Getenv("SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE")
 	if (profile != "forwarding" && profile != "cis" && profile != "legacy-cis") || ((noop || exchange) && profile != "forwarding") || (noop && exchange) {
 		t.Fatal("explicit qualified recovery fixture profile required")
@@ -64,7 +65,7 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 		{"administrator", "direct", "root", "localhost", "127.0.0.1", "127.0.0.1", 22222},
 		{"unrelated", "direct", "oracle-unrelated", "localhost", "127.0.0.1", "127.0.0.1", 22222},
 	}
-	if exchange {
+	if restoredExchange {
 		declaration.Contexts = declaration.Contexts[:1]
 	}
 	original, err := os.ReadFile(MainPath)
@@ -124,6 +125,14 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 			t.Fatal("unexpected fixture authority", err)
 		}
 		if err := os.WriteFile(sshAccessAuthorityPath, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if restoredExchange {
+		if _, err := os.Lstat(sshRestoredAccessAuthorityPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("unexpected restoration authority", err)
+		}
+		if err := os.WriteFile(sshRestoredAccessAuthorityPath, nil, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -264,6 +273,9 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	}
 	if !reflect.DeepEqual(recoveredHistory, isolatedSSHRecoveryHistory(t, ctx)) {
 		t.Fatal("assessment or replay changed history")
+	}
+	if restoredExchange {
+		isolatedSSHExerciseRestoredAccessExchange(t, ctx, plan.PlanSHA256, inspection.RecoverySHA256)
 	}
 	// A rejection after accidentally signalling would otherwise look like a
 	// passing replay refusal. Require the same kernel socket generation across
@@ -433,13 +445,13 @@ func isolatedSSHExportRecoveryHistory(t *testing.T) {
 	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
-	if err != nil || len(entries) > 17 {
+	if err != nil || len(entries) > 19 {
 		t.Error("cannot export bounded fixture journal", err)
 		return
 	}
 	records := map[string][]byte{}
 	for _, entry := range entries {
-		if !entry.Type().IsRegular() || (entry.Name() != sshMarkerName && !sshRecordName(entry.Name())) {
+		if !entry.Type().IsRegular() || (entry.Name() != sshMarkerName && entry.Name() != sshRestoredAccessIssuanceName && entry.Name() != sshRestoredAccessEvidenceName && !sshRecordName(entry.Name())) {
 			t.Error("unexpected fixture journal entry")
 			return
 		}

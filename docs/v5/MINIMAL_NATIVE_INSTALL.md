@@ -5,11 +5,38 @@ does not establish a migration-ready package or release acceptance.
 
 ## Installation boundary
 
-A fresh Linux AMD64 native installation selects the standard list 1 profile.
-VPN, Wazuh, SSH hardening, CIS Level 2, OS hardening and optional integrations
-require explicit validated TOML choices and their activation checks. The base
-profile must not implicitly enable them through environment variables or
-package scripts.
+A fresh Linux AMD64 native installation activates no list, firewall policy,
+hardening, service or optional module. Its new `unconfigured-v1` TOML template
+uses `network.blocklists.list_choice = "4"` (no list), with optional modules
+false. The existing `standard-v1` profile retains its list-1 fallback; complete
+installed TOML files and explicit selections remain unchanged on upgrade.
+Neither profile name grants activation permission. The new profile appears in
+both `config.toml` and `modules/00-core.toml` as completeness metadata, not
+administrator consent. Its readers require both markers and the complete fixed
+base module inventory; conflicting profile overrides cannot bypass that check.
+
+Fresh staging publishes complete files individually, with the master last.
+This is not a whole-directory atomic transaction. An interrupted unpublished
+profile can resume only while its surviving files match the exact generated
+templates. A missing module in a published or customized policy requires
+recovery from retained configuration. Fresh staging performs no activation on
+success or failure; no rollback or deletion of administrator configuration is
+implied.
+
+Before creating defaults, fresh staging also refuses an existing historical flat
+configuration or one of its recognized retained migration copies. Creating a new
+modular profile must not silently shadow earlier administrator choices. Complete
+validated modular configuration already has precedence and remains untouched,
+including when an old recovery copy is present. Resolve ambiguous retained policy
+through explicit migration or recovery instead of deleting it to force staging.
+
+Configure the installed modules with `sudo syswarden config` or edit
+`/etc/syswarden/config/modules/99-user.toml`, then run `sudo syswarden config validate`. Validation is read-only. Once the selected policy and prerequisites
+have been reviewed, an explicit `sudo syswarden install` performs activation.
+That command can change firewall rules, services and schedules; it is not a
+validation command. SSH/CIS/OS changes continue to require their separate
+explicit configuration and migration approval boundaries. Environment variables
+cannot select a list or optional module for the unconfigured profile.
 
 Mandatory platform dependencies remain installed. On Alpine this includes the
 requirements for nftables, OpenRC, feed scheduling and the native package and
@@ -28,12 +55,23 @@ permission to disable its former behavior or remove a package.
 The standard native hooks distinguish fresh installation from upgrade using
 their package-manager arguments. APK uses separate install and upgrade hooks;
 it does not rely on inherited environment variables to identify the operation.
-An unknown operation permits staging only.
+The CLI service-activation guard defers an unknown operation. That guard does
+not make an unknown native hook invocation mutation-free: existing package
+preparation, legacy retirement and configuration migration can run before the
+CLI is reached. Their recovery and reinstall cases require separate native
+lifecycle qualification; they are outside the positively identified fresh path.
 
 Before the candidate install command loads configuration or recovers firewall
-state, it observes `syswarden-core` and `syswarden-firewall` together. A fresh
-operation can activate only an absent pair. An upgrade can refresh only an
-already active, persistently enabled pair. A stopped, disabled, masked, missing
+state, a fresh operation stages and validates configuration only, without
+preparing services or entering firewall recovery. Fresh native hooks take this
+path even when the service manager is offline. Fresh pre-install hooks perform
+only read-only ownership and removal-barrier checks; they do not retire legacy
+services, migrate old files, or prepare Cronie. Fresh post-install hooks exit
+after configuration staging without consuming retained removal barriers. The separate protected offline
+qualification workflow still defers candidate execution until package
+reattestation; it does not use ordinary fresh staging. For upgrades it observes
+`syswarden-core` and `syswarden-firewall` together. An upgrade can refresh only
+an already active, persistently enabled pair. A stopped, disabled, masked, missing
 or transitional service defers the automatic host-activation pipeline. Core
 depends on firewall, so an active core alone is insufficient authorization.
 An unavailable or malformed observation refuses the operation instead of
@@ -56,11 +94,13 @@ and cannot undo actions already performed by historical outgoing hooks. An old
 updater process may also restart services after the new package returns; this
 candidate's updated finalizer does not retrofit that already-running caller.
 Such historical entry points still require separate migration qualification.
-Native
-DEB/RPM/APK acceptance must still exercise fresh installation, active upgrades,
+Native DEB/RPM/APK acceptance must still exercise fresh installation, active upgrades,
 stopped/disabled/masked pairs, custom runlevels, offline staging, retries,
-reload and reboot. The separate RHEL package-owned lifecycle remains unchanged.
-This guard is not full migration or lifecycle acceptance.
+reload and reboot. The separate RHEL package-owned profile retains its historical
+v4 behavior. V5 generation of that profile is refused locally and omitted from
+the unsigned workflow because its fresh enablement behavior has not been
+qualified against this inactive-installation contract. This guard is not full
+migration or lifecycle acceptance.
 
 ## WireGuard credential output
 
@@ -185,7 +225,7 @@ consolidated implementation has the following boundaries:
 
 | Area | Implemented source behavior | Remaining acceptance |
 | --- | --- | --- |
-| Fresh configuration | `standard-v1` templates select list 1, list-only policy and disabled optional modules. Environment variables cannot grant fresh-profile module consent. | Qualify the complete fresh native package on every supported platform after dependency metadata is reduced safely. |
+| Fresh configuration | `unconfigured-v1` templates select no list and disable optional modules. Fresh hooks stage validated TOML without host activation; existing `standard-v1` and historical choices remain unchanged. Environment variables cannot grant fresh-profile list or module consent. | Qualify fresh native hooks on every supported platform, including offline staging and retries. The independent RHEL package-owned v5 profile remains unavailable. |
 | Installation and reload | Existing SSH, CIS and OS policy is preserved. Optional module prerequisites are checked without installing missing optional packages implicitly. | Complete the native lifecycle matrix and independent administrator-policy preservation checks. |
 | Native dependencies | Managed updaters prepare historical dependency retention; v5 signed manifests require the new transition contract. Mandatory Alpine prerequisites remain required. | Direct native and unsigned-era updater transitions remain unqualified. Package metadata still declares historical optional tools and must not be reduced before that preservation path is accepted. |
 | Dedicated SSH migration | Protected planning, publication, observation, original restoration and target-side access issuance exist. The activation/restoration binder refuses a different daemon mount view and binds explicit or verified compiled-default configuration selection. | Complete supported daemon-build qualification, guarded policy consumption, independent controller handoff, recovery acceptance and owned lifecycle before exposing forward migration. |
@@ -439,7 +479,7 @@ applicable path.
 The full native removal laboratory seeds a complete historical modular policy
 before its administrator sentinels. The historical `fresh` event labels in those
 scenarios mean first package installation into that preconfigured fixture; they
-do not prove the new standard-list-only defaults. A custom user module without
+do not prove the new unconfigured defaults. A custom user module without
 the other policy modules is an incomplete configuration and must be refused.
 
 An APK removal script's nonzero exit is not a transaction veto. Native removal

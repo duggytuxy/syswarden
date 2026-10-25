@@ -67,7 +67,8 @@ an enrolled independent controller.
 
 Causal policy-consumption acknowledgement, independently authorized fresh
 access, completed recovery, owned policy lifecycle, native package transitions
-and final v5.00.0 IVVQ remain open. Fresh packages retain Data-Shield standard
-list1 only; SSH/CIS/OS and optional modules require independent TOML selection.
+and final v5.00.0 IVVQ remain open. Fresh packages must select no list and defer
+activation until explicit configuration through `syswarden config`. SSH/CIS/OS
+and optional modules require independent TOML selection.
 Administrator settings, existing upgrade protection, mandatory Alpine
 dependencies and BunkerWeb independence remain preserved. Linux AMD64 only.

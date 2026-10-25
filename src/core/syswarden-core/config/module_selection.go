@@ -8,9 +8,13 @@ import (
 	"github.com/spf13/viper"
 )
 
-// StandardInstallProfile identifies fresh standard-list-only defaults. It is
-// not an authorization to mutate the host or to retire existing protection.
+// StandardInstallProfile retains the existing list-1 profile's missing-key
+// semantics. Neither profile authorizes host mutation or retires protection.
 const StandardInstallProfile = "standard-v1"
+
+// UnconfiguredInstallProfile is the fresh package template: no threat list or
+// optional module is selected until the administrator configures TOML.
+const UnconfiguredInstallProfile = "unconfigured-v1"
 
 var optionalModuleKeys = []string{
 	"network.blocklists.osint_enabled", "waap.enabled", "waap.log_bridge_enabled", "security.detection_enabled",
@@ -40,11 +44,11 @@ func resolveOptionalModules(v *viper.Viper) error {
 		}
 	}
 	profile := v.GetString("core.install_profile")
-	if profile != "" && profile != StandardInstallProfile {
+	if profile != "" && profile != StandardInstallProfile && profile != UnconfiguredInstallProfile {
 		return fmt.Errorf("unsupported core.install_profile %q", profile)
 	}
 	v.Set("core.install_profile", profile)
-	if profile == StandardInstallProfile {
+	if profile == StandardInstallProfile || profile == UnconfiguredInstallProfile {
 		for _, key := range freshModuleKeys {
 			env := "SYSWARDEN_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
 			if _, present := os.LookupEnv(env); present {
@@ -56,14 +60,21 @@ func resolveOptionalModules(v *viper.Viper) error {
 			}
 			v.Set(key, selected)
 		}
-		for key, value := range map[string]string{"network.blocklists.list_choice": "1", "waap.bruteforce_logs": "", "waap.modsec_logs": ""} {
+		listChoice := "1"
+		if profile == UnconfiguredInstallProfile {
+			listChoice = "4"
+			if _, present := os.LookupEnv("SYSWARDEN_NETWORK_BLOCKLISTS_LIST_CHOICE"); present {
+				return fmt.Errorf("SYSWARDEN_NETWORK_BLOCKLISTS_LIST_CHOICE is unsupported for the unconfigured profile; select a list in TOML")
+			}
+		}
+		for key, value := range map[string]string{"network.blocklists.list_choice": listChoice, "waap.bruteforce_logs": "", "waap.modsec_logs": ""} {
 			if !v.InConfig(key) {
 				v.SetDefault(key, value)
 			}
 		}
 	}
 	mode := "host"
-	if profile == StandardInstallProfile {
+	if profile == StandardInstallProfile || profile == UnconfiguredInstallProfile {
 		mode = "lists"
 	}
 	if v.IsSet("network.policy_mode") {
@@ -114,8 +125,8 @@ func validateOptionalModuleDocument(relative string, document map[string]any) er
 		}
 		if key == "core.install_profile" {
 			profile, ok := value.(string)
-			if !ok || (profile != "" && profile != StandardInstallProfile) {
-				return fmt.Errorf("%s core.install_profile must be %q or empty for historical configuration", relative, StandardInstallProfile)
+			if !ok || (profile != "" && profile != StandardInstallProfile && profile != UnconfiguredInstallProfile) {
+				return fmt.Errorf("%s core.install_profile must be %q, %q or empty for historical configuration", relative, StandardInstallProfile, UnconfiguredInstallProfile)
 			}
 		} else if key == "network.policy_mode" {
 			mode, ok := value.(string)

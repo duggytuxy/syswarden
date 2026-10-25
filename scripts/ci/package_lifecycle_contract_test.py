@@ -177,6 +177,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
         cls.workflow = PACKAGE_WORKFLOW.read_text(encoding="utf-8")
 
     def script(self, name: str) -> str:
+        if name == "preupgrade.sh":
+            return self.script("preinst.sh").replace(
+                'syswarden_set_native_install_phase preinstall "$@"',
+                'syswarden_set_native_install_phase preupgrade "$@"',
+            )
         if name == "postupgrade.sh":
             return self.script("postinst.sh").replace(
                 'syswarden_set_native_install_phase postinstall "$@"',
@@ -221,6 +226,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 prefix += WIREGUARD_PREFLIGHT_HELPER.read_text(encoding="utf-8").replace(
                     "!= 0:0", f"!= {os.getuid()}:{os.getgid()}"
                 )
+                prefix += INSTALL_PHASE_HELPER.read_text(encoding="utf-8")
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
             body = prefix + body
@@ -309,6 +315,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 )
 
     def local_build_script(self, name: str) -> str:
+        if name == "preupgrade.sh":
+            return self.local_build_script("preinst.sh").replace(
+                'syswarden_set_native_install_phase preinstall "$@"',
+                'syswarden_set_native_install_phase preupgrade "$@"',
+            )
         if name == "postupgrade.sh":
             return self.local_build_script("postinst.sh").replace(
                 'syswarden_set_native_install_phase postinstall "$@"',
@@ -353,6 +364,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 prefix += WIREGUARD_PREFLIGHT_HELPER.read_text(encoding="utf-8").replace(
                     "!= 0:0", f"!= {os.getuid()}:{os.getgid()}"
                 )
+                prefix += INSTALL_PHASE_HELPER.read_text(encoding="utf-8")
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
             body = prefix + body
@@ -1265,14 +1277,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "PACKAGE_RPM_SCRIPTS",
         ):
             self.assertEqual(normalization_step.count(f'"${{{target}}}"'), 1, target)
-        self.assertIn('prepare_rpm_changelog "${RPM_CHANGELOG}" 1', normalization_step)
+        self.assertIn('  "${RPM_CHANGELOG}"\n', normalization_step)
         self.assertIn(
             'prepare_rpm_changelog "${RHEL_PROFILE_RPM_CHANGELOG}" 1.rhelpo',
             normalization_step,
         )
-        self.assertIn('  "${RPM_CHANGELOG}" \\\n', normalization_step)
+        self.assertIn('  "${RPM_CHANGELOG}"\n', normalization_step)
         self.assertIn('  "${RHEL_PROFILE_RPM_CHANGELOG}"\n', normalization_step)
-        self.assertIn('echo "RPM_CHANGELOG=${RPM_CHANGELOG}"', normalization_step)
+        self.assertIn('  "${RPM_CHANGELOG}"\n', normalization_step)
         self.assertIn(
             'echo "RPM_CHANGELOG_EPOCH=${RPM_CHANGELOG_EPOCH}"',
             normalization_step,
@@ -1955,8 +1967,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn('export SYSWARDEN_PKG_INSTALL=1', preinstall)
         self.assertIn("syswarden_preflight_alpine_cronie", preinstall)
         self.assertLess(
-            preinstall.index("syswarden_preflight_alpine_cronie\n"),
             preinstall.index("syswarden_preflight_install_barriers\n"),
+            preinstall.index("syswarden_preflight_alpine_cronie\n"),
         )
         self.assertLess(
             preinstall.index("syswarden_preflight_install_barriers\n"),
@@ -1974,8 +1986,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("set -e", postinstall)
         self.assertIn("syswarden_preflight_alpine_cronie", postinstall)
         self.assertLess(
-            postinstall.index("syswarden_preflight_alpine_cronie\n"),
             postinstall.index("syswarden_preflight_install_barriers\n"),
+            postinstall.index("syswarden_preflight_alpine_cronie\n"),
         )
         self.assertIn('[ "$1" = "2" ]', postinstall)
         self.assertIn('[ "$1" = "configure" ]', postinstall)
@@ -2029,10 +2041,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     body = script[script.rindex("set -e\nexport SYSWARDEN_PKG_INSTALL=1\n") :]
                     self.assertEqual(body.count(guard), 1)
                     guard_index = body.index(guard)
-                    self.assertLess(
-                        body.index("syswarden_preflight_alpine_cronie\n"),
-                        guard_index,
-                    )
+                    if script_name == "preinst.sh":
+                        self.assertLess(body.index("syswarden_preflight_alpine_cronie\n"), guard_index)
+                    else:
+                        self.assertLess(guard_index, body.index("syswarden_preflight_alpine_cronie\n"))
                     self.assertLess(
                         body.index("syswarden_preflight_install_barriers\n"),
                         guard_index,
@@ -2084,7 +2096,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         rejected = validate(crond_enabled)
         self.assertNotEqual(rejected.returncode, 0, rejected)
 
-    def test_alpine_apk_hook_matrix_defers_fresh_activation_without_broken_or_partial_state(
+    def test_alpine_cronie_helper_retains_historical_deferred_activation_contract(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2127,8 +2139,12 @@ class PackageLifecycleContractTests(unittest.TestCase):
             ) -> subprocess.CompletedProcess[str]:
                 script = self.script(script_name)
                 invocation = "\nsyswarden_preflight_alpine_cronie\n"
-                end = script.index(invocation) + len(invocation)
-                prefix = script[:end].replace(
+                self.assertIn(invocation, script)
+                # Fresh hooks now exit before this historical activation helper.
+                # Exercise its preserved behavior independently; whole-hook fresh
+                # non-activation is covered by package_fresh_configuration_test.
+                self.assertIn("set -e\nexport SYSWARDEN_PKG_INSTALL=1", script)
+                prefix = ("set -e\n" + ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8") + invocation).replace(
                     "[ -f /etc/alpine-release ] || return 0",
                     '[ "${SYSWARDEN_TEST_ALPINE:-}" = 1 ] || return 0',
                 ).replace(
@@ -2191,7 +2207,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     self.assertNotIn("rc-update del crond 2>/dev/null", result.stderr)
 
             strict_upgrades = (
-                ("preinst.sh", "pre-upgrade", False, False),
+                ("preupgrade.sh", "pre-upgrade", False, False),
                 ("postupgrade.sh", "post-upgrade", True, False),
             )
             for script_name, apk_script, packages_ready, cronie_active in strict_upgrades:
@@ -2209,7 +2225,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             for script_name, apk_script in (
                 ("preinst.sh", "pre-install"),
                 ("postinst.sh", "post-install"),
-                ("preinst.sh", "pre-upgrade"),
+                ("preupgrade.sh", "pre-upgrade"),
                 ("postupgrade.sh", "post-upgrade"),
             ):
                 with self.subTest(hook=apk_script, state="ready"):
@@ -6627,13 +6643,13 @@ systemctl() {
 
     def test_apk_upgrade_hook_keeps_pre_contract_and_distinct_post_phase(self) -> None:
         workflow_preinstall = 'preinstall: "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"'
-        workflow_preupgrade = 'preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"'
+        workflow_preupgrade = 'preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preupgrade.sh"'
         workflow_postinstall = 'postinstall: "${SELECTED_PACKAGE_SCRIPTS}/postinst.sh"'
         workflow_postupgrade = 'postupgrade: "${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh"'
         workflow_apk_hook = (
             "          apk:\n"
             "            scripts:\n"
-            '              preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"\n'
+            '              preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preupgrade.sh"\n'
             '              postupgrade: "${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh"\n'
         )
         self.assertEqual(self.workflow.count(workflow_preinstall), 1)
@@ -6650,7 +6666,7 @@ systemctl() {
                 scripts = record["environment"]["PACKAGE_SCRIPTS"]
                 if version.startswith("5."):
                     scripts += "/" + record["name"]
-                for selector, hook in (("preinstall", "preinst"), ("preupgrade", "preinst"), ("postinstall", "postinst"), ("postupgrade", "postupgrade")):
+                for selector, hook in (("preinstall", "preinst"), ("preupgrade", "preupgrade"), ("postinstall", "postinst"), ("postupgrade", "postupgrade")):
                     self.assertEqual(record["config"].count(f'{selector}: "{scripts}/{hook}.sh"\n'), 1)
         self.assertIn(".pre-install$/", self.workflow)
         self.assertIn(".pre-upgrade$/", self.workflow)
@@ -6666,12 +6682,12 @@ systemctl() {
 
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(local.count('preinstall: "./preinst.sh"'), 1)
-        self.assertEqual(local.count('preupgrade: "./preinst.sh"'), 1)
+        self.assertEqual(local.count('preupgrade: "./preupgrade.sh"'), 1)
         self.assertEqual(local.count('postinstall: "./postinst.sh"'), 1)
         self.assertEqual(local.count('postupgrade: "./postupgrade.sh"'), 1)
         self.assertEqual(
             local.count(
-                'apk:\n  scripts:\n    preupgrade: "./preinst.sh"\n'
+                'apk:\n  scripts:\n    preupgrade: "./preupgrade.sh"\n'
                 '    postupgrade: "./postupgrade.sh"\n'
             ),
             1,
@@ -6747,6 +6763,8 @@ systemctl() {
             root = Path(temporary)
             expected_hooks = root / "expected-hooks"
             expected_hooks.mkdir()
+            (expected_hooks / "preinst.sh").write_bytes(hooks[".pre-install"])
+            (expected_hooks / "preupgrade.sh").write_bytes(hooks[".pre-upgrade"])
             (expected_hooks / "postinst.sh").write_bytes(hooks[".post-install"])
             (expected_hooks / "postupgrade.sh").write_bytes(hooks[".post-upgrade"])
             x86 = root / "syswarden_4.02.14_x86_64.apk"

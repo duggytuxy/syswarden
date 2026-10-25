@@ -14,7 +14,9 @@ func TestOptionalModuleSelections(t *testing.T) {
 		wantOSINT, wantWAAP, wantBridge, wantDetection bool
 	}{
 		{name: "legacy absence", wantOSINT: true, wantWAAP: true, wantBridge: true, wantDetection: true},
-		{name: "fresh absence", document: "[core]\ninstall_profile='standard-v1'\n"},
+		{name: "existing standard absence", document: "[core]\ninstall_profile='standard-v1'\n"},
+		{name: "unconfigured absence", document: "[core]\ninstall_profile='unconfigured-v1'\n"},
+		{name: "unconfigured explicit opt-in", document: "[core]\ninstall_profile='unconfigured-v1'\n[waap]\nenabled=true\n", wantWAAP: true},
 		{name: "independent fresh opt-ins", document: "[core]\ninstall_profile='standard-v1'\n[network.blocklists]\nosint_enabled=true\n[waap]\nenabled=true\n", wantOSINT: true, wantWAAP: true},
 		{name: "legacy explicit withdrawal", document: "[waap]\nenabled=false\nlog_bridge_enabled=false\n", wantOSINT: true, wantDetection: true},
 	} {
@@ -121,5 +123,62 @@ func TestLogBridgeRequiresExplicitWAAPWithoutGrantingOtherModules(t *testing.T) 
 				}
 			})
 		}
+	}
+}
+
+func TestUnconfiguredListDefaultIsSeparateFromExistingStandard(t *testing.T) {
+	for _, test := range []struct{ profile, choice string }{{StandardInstallProfile, "1"}, {UnconfiguredInstallProfile, "4"}} {
+		for _, explicit := range []bool{false, true} {
+			v := viper.New()
+			v.SetConfigType("toml")
+			v.SetDefault("network.blocklists.list_choice", "1")
+			document := "[core]\ninstall_profile='" + test.profile + "'\n"
+			want := test.choice
+			if explicit {
+				document += "[network.blocklists]\nlist_choice='2'\n"
+				want = "2"
+			}
+			if err := v.ReadConfig(strings.NewReader(document)); err != nil {
+				t.Fatal(err)
+			}
+			if err := resolveOptionalModules(v); err != nil {
+				t.Fatal(err)
+			}
+			if got := v.GetString("network.blocklists.list_choice"); got != want {
+				t.Fatal("list choice changed", test.profile, explicit, got)
+			}
+		}
+	}
+}
+
+func TestUnconfiguredMissingModuleConsentAndEnvironmentCannotActivate(t *testing.T) {
+	for _, key := range freshModuleKeys {
+		t.Run(key, func(t *testing.T) {
+			v := viper.New()
+			v.SetConfigType("toml")
+			v.SetDefault(key, true)
+			if err := v.ReadConfig(strings.NewReader("[core]\ninstall_profile='unconfigured-v1'\n")); err != nil {
+				t.Fatal(err)
+			}
+			if err := resolveOptionalModules(v); err != nil {
+				t.Fatal(err)
+			}
+			if v.GetBool(key) {
+				t.Fatal("missing TOML choice enabled module", key)
+			}
+			t.Setenv("SYSWARDEN_"+strings.ToUpper(strings.ReplaceAll(key, ".", "_")), "true")
+			if err := resolveOptionalModules(v); err == nil {
+				t.Fatal("environment enabled module", key)
+			}
+		})
+	}
+	t.Setenv("SYSWARDEN_NETWORK_BLOCKLISTS_LIST_CHOICE", "1")
+	v := viper.New()
+	v.SetConfigType("toml")
+	if err := v.ReadConfig(strings.NewReader("[core]\ninstall_profile='unconfigured-v1'\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveOptionalModules(v); err == nil {
+		t.Fatal("environment selected a threat list")
 	}
 }

@@ -18,6 +18,9 @@ except ModuleNotFoundError:
 
 
 IMAGE = "sha256:" + "a" * 64
+CID = "b" * 64
+NAME = "syswarden-ssh-binder-" + "c" * 32
+TOKEN = "d" * 64
 
 
 def image_fixture():
@@ -192,41 +195,146 @@ class OracleBoundaryTests(unittest.TestCase):
             with self.subTest(mount=key), self.assertRaises(ValueError):
                 oracle.validate_isolation(fixture, IMAGE, output)
 
-    def test_uncertain_create_is_cleaned_and_never_passes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory)
-            (output / "sshpolicy.test").write_bytes(b"synthetic binary")
-            (output / "setup.sh").write_bytes(b"synthetic setup")
-            calls = []
-            def run(argv, **_kwargs):
-                calls.append(copy.deepcopy(argv))
-                if argv[1] == "info":
-                    return subprocess.CompletedProcess(argv, 0, "true", "")
-                if argv[1:3] == ["image", "inspect"]:
-                    return subprocess.CompletedProcess(argv, 0, json.dumps([image_fixture()]), "")
-                if argv[1] == "create":
-                    raise subprocess.TimeoutExpired(argv, 90)
-                if argv[1:3] == ["container", "exists"]:
-                    code = 1 if any(c[1] == "rm" for c in calls) else 0
-                    return subprocess.CompletedProcess(argv, code, "", "")
-                if argv[1] == "rm":
-                    return subprocess.CompletedProcess(argv, 0, "", "")
-                self.fail("unexpected command")
-            with patch.object(oracle.Recorder, "run", side_effect=run):
-                result = oracle.execute(IMAGE, output)
-            self.assertEqual(result["status"], "fail")
-            self.assertTrue(result["cleanup"]["absent"])
-            create = next(c for c in calls if c[1] == "create")
-            remove = next(c for c in calls if c[1] == "rm")
-            self.assertEqual(create[create.index("--name") + 1], remove[-1])
-            self.assertEqual(json.loads((output / "result.json").read_text()), result)
+    def test_execute_binds_create_and_all_operations_to_owned_id(self):
+        for outcome in ("success", "timeout", "foreign-token", "wrong-returned-id", "occupied-name"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)
+                (output / "sshpolicy.test").write_bytes(b"synthetic binary")
+                (output / "setup.sh").write_bytes(b"synthetic setup")
+                calls = []
+                name, token = None, None
 
-    def test_cleanup_failure_is_not_absence(self):
-        for codes in ([125], [0, 125, 0], [0, 0, 125]):
-            with self.subTest(codes=codes):
-                responses = [subprocess.CompletedProcess([], c, "", "") for c in codes]
+                def run(argv, **_kwargs):
+                    nonlocal name, token
+                    calls.append(copy.deepcopy(argv))
+                    code, stdout, stderr = 0, "", ""
+                    if argv[1] == "info":
+                        stdout = "true"
+                    elif argv[1:3] == ["image", "inspect"]:
+                        stdout = json.dumps([image_fixture()])
+                    elif argv[1] == "create":
+                        name = argv[argv.index("--name") + 1]
+                        label = argv[argv.index("--label") + 1]
+                        self.assertTrue(label.startswith(oracle.OWNER_LABEL + "="))
+                        token = label.split("=", 1)[1]
+                        self.assertRegex(token, r"^[0-9a-f]{64}$")
+                        self.assertNotIn("--rm", argv)
+                        if outcome in ("timeout", "foreign-token"):
+                            raise subprocess.TimeoutExpired(argv, 90, output="private-fixture-sentinel")
+                        stdout = ("e" * 64 if outcome == "wrong-returned-id" else CID) + "\n"
+                    elif argv[1:3] == ["container", "exists"]:
+                        created = any(c[1] == "create" for c in calls)
+                        removed = any(c[1] == "rm" for c in calls)
+                        code = 0 if outcome == "occupied-name" or created and not removed else 1
+                    elif argv[1:3] == ["container", "inspect"]:
+                        labels = {oracle.OWNER_LABEL: "foreign" if outcome == "foreign-token" else token}
+                        stdout = json.dumps([{"Id": CID, "Name": name, "Config": {"Labels": labels}}])
+                    elif argv[1] == "inspect":
+                        self.assertEqual(argv[-1], CID)
+                        stdout = json.dumps([container_fixture(output)])
+                    elif argv[1] == "start":
+                        self.assertEqual(argv[-1], CID)
+                    elif argv[1] == "exec":
+                        self.assertEqual(argv[2], CID)
+                        if "is-system-running" in argv:
+                            stdout = "running"
+                        elif "-test.v" in argv:
+                            stdout = "--- PASS: TestSSHIsolatedSystemdActivationOracle (1.00s)\n"
+                    elif argv[1] == "rm":
+                        self.assertEqual(argv, ["podman", "rm", "-f", CID])
+                    else:
+                        self.fail("unexpected command: " + repr(argv))
+                    return subprocess.CompletedProcess(argv, code, stdout, stderr)
+
+                with patch.object(oracle.Recorder, "run", side_effect=run):
+                    result = oracle.execute(IMAGE, output)
+                self.assertEqual(result["status"], "pass" if outcome == "success" else "fail")
+                removed = [c for c in calls if c[1] == "rm"]
+                self.assertEqual(len(removed), int(outcome in ("success", "timeout")))
+                if outcome in ("success", "timeout"):
+                    self.assertTrue(result["cleanup"]["absent"])
+                    self.assertEqual(result["cleanup"]["exists"], 1)
+                    self.assertEqual(result["cleanup"]["id_exists"], 1)
+                elif outcome != "occupied-name":
+                    self.assertFalse(result["cleanup"]["absent"])
+                else:
+                    self.assertFalse(any(c[1] == "create" for c in calls))
+                    self.assertNotIn("cleanup", result)
+                if outcome != "success":
+                    self.assertFalse(any(c[1] in ("start", "exec") for c in calls))
+                self.assertNotIn("private-fixture-sentinel", json.dumps(result))
+                self.assertEqual(json.loads((output / "result.json").read_text()), result)
+
+    def test_cleanup_refuses_foreign_or_replaced_identity(self):
+        original = {"Id": CID, "Name": NAME, "Config": {"Labels": {oracle.OWNER_LABEL: TOKEN}}}
+        for scenario in ("wrong-label", "missing-label", "wrong-id", "wrong-name", "short-id",
+                         "duplicate-inspection", "malformed", "replacement", "renamed-original"):
+            with self.subTest(scenario=scenario):
+                calls = []
+                inspections = 0
+
+                def run(argv, **_kwargs):
+                    nonlocal inspections
+                    calls.append(argv)
+                    if argv[1:3] == ["container", "exists"]:
+                        return subprocess.CompletedProcess(argv, 0, "", "")
+                    self.assertEqual(argv[1:3], ["container", "inspect"])
+                    inspections += 1
+                    item = copy.deepcopy(original)
+                    if scenario == "wrong-label" or scenario == "replacement" and inspections == 2:
+                        item["Config"]["Labels"][oracle.OWNER_LABEL] = "foreign"
+                    elif scenario == "missing-label":
+                        item["Config"]["Labels"] = {}
+                    elif scenario == "wrong-id":
+                        item["Id"] = "e" * 64
+                    elif scenario == "short-id":
+                        item["Id"] = CID[:12]
+                    elif scenario == "wrong-name" or scenario == "renamed-original" and inspections == 2:
+                        item["Name"] = "foreign-name"
+                    wire = json.dumps([item, item] if scenario == "duplicate-inspection" else [item])
+                    if scenario == "malformed":
+                        wire = "private-fixture-sentinel"
+                    return subprocess.CompletedProcess(argv, 0, wire, "")
+
+                result = oracle.cleanup(run, NAME, TOKEN, CID)
+                self.assertFalse(result["absent"])
+                self.assertFalse(any(c[1] == "rm" for c in calls))
+                self.assertNotIn("private-fixture-sentinel", json.dumps(result))
+
+    def test_cleanup_requires_both_name_and_original_id_absent(self):
+        for original_exists in (0, 1, 125):
+            responses = [subprocess.CompletedProcess([], code, "", "") for code in (1, original_exists)]
+            with self.subTest(original_exists=original_exists), patch.object(oracle.Recorder, "run", side_effect=responses) as run:
+                result = oracle.cleanup(run, NAME, TOKEN, CID)
+                self.assertEqual(result["absent"], original_exists == 1)
+                self.assertEqual([c.args[0][-1] for c in run.call_args_list], [NAME, CID])
+        for removal, name_after, id_after in ((0, 1, 1), (125, 1, 1), (0, 0, 1), (0, 1, 0), (0, 125, 1), (0, 1, 125)):
+            with self.subTest(removal=removal, name_after=name_after, id_after=id_after):
+                ownership = json.dumps([{"Id": CID, "Name": NAME, "Config": {"Labels": {oracle.OWNER_LABEL: TOKEN}}}])
+                responses = [subprocess.CompletedProcess([], 0, "", ""),
+                             subprocess.CompletedProcess([], 0, ownership, ""),
+                             subprocess.CompletedProcess([], 0, ownership, "")]
+                responses += [subprocess.CompletedProcess([], code, "", "") for code in (removal, name_after, id_after)]
                 with patch.object(oracle.Recorder, "run", side_effect=responses) as run:
-                    self.assertFalse(oracle.cleanup(run, "owned-fixture")["absent"])
+                    result = oracle.cleanup(run, NAME, TOKEN, CID)
+                self.assertEqual(result["absent"], (removal, name_after, id_after) == (0, 1, 1))
+                self.assertEqual(run.call_args_list[1].args[0][-1], NAME)
+                self.assertEqual(run.call_args_list[2].args[0][-1], CID)
+                self.assertEqual(run.call_args_list[3].args[0], ["podman", "rm", "-f", CID])
+                self.assertEqual([c.args[0][-1] for c in run.call_args_list[-2:]], [NAME, CID])
+
+    def test_cleanup_invalid_binding_or_inspection_failure_never_removes(self):
+        for name, token, cid in (("foreign", TOKEN, CID), (NAME, "", CID), (NAME, TOKEN, CID[:12])):
+            with patch.object(oracle.Recorder, "run") as run:
+                self.assertFalse(oracle.cleanup(run, name, token, cid)["absent"])
+                run.assert_not_called()
+        for codes in ((125,), (0, 125)):
+            responses = [subprocess.CompletedProcess([], code, "private-fixture-sentinel", "") for code in codes]
+            with patch.object(oracle.Recorder, "run", side_effect=responses) as run:
+                result = oracle.cleanup(run, NAME, TOKEN, CID)
+                self.assertFalse(result["absent"])
+                self.assertFalse(any(c.args[0][1] == "rm" for c in run.call_args_list))
+                self.assertNotIn("private-fixture-sentinel", json.dumps(result))
 
 
 if __name__ == "__main__":

@@ -77,8 +77,9 @@ Protected controller-side enrollment/delivery, causal policy consumption,
 complete runtime recovery acceptance, owned updates, separate native
 uninstall/remove/purge and complete migration qualification remain open.
 There is no migration-ready package or final v5.00.0 IVVQ acceptance.
-Issue #422 still requires standard-list-only fresh native installation and
+Issue #422 requires fresh native installation to select no list and defer
+activation until explicit configuration through `syswarden config`, with
 independent TOML choices for SSH, CIS, OS hardening and optional modules.
-The source installer uses the minimal profile; [package dependency transitions
+The native hooks stage an unconfigured TOML profile; [package dependency transitions
 and native qualification](MINIMAL_NATIVE_INSTALL.md) remain incomplete. Preserve
 administrator upgrades, BunkerWeb independence and Linux AMD64 scope.

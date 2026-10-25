@@ -11,6 +11,8 @@ server campaign, paid resource or public v5 release is authorized by this text.
 
 The [minimal native installation contract](MINIMAL_NATIVE_INSTALL.md) tracks
 issue #422, mandatory platform dependencies and preservation during updates.
+The [configuration lifecycle guide](CONFIGURATION_LIFECYCLE.md) distinguishes
+current TOML editing and validation from activation, removal and owned recovery.
 The [managed feed source contract](FEED_SOURCES.md) retires the additional OSINT
 supplement from standard and critical lists while keeping Data-Shield validation.
 

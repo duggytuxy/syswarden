@@ -52,11 +52,13 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	v.SetConfigType("toml")
 	setDefaults(v, configDir)
 	observed := make(map[string]struct{})
+	var profileInventory unconfiguredProfileInventory
 	merge := func(relative string, content []byte) error {
 		document, err := parseTOMLDocument(content, relative)
 		if err != nil {
 			return err
 		}
+		profileInventory.record(relative, document)
 		flattenTOMLKeys("", document, observed)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("merge %s: %w", relative, err)
@@ -126,6 +128,9 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	sort.Strings(report.UnknownKeys)
 	sort.Strings(report.DeprecatedKeys)
 
+	if err := profileInventory.validate(); err != nil {
+		return report, err
+	}
 	if err := resolveOptionalModules(v); err != nil {
 		return report, err
 	}
@@ -184,10 +189,13 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	_ = v.BindEnv("network.whitelist_ips")
 	setDefaults(v, configDir)
+	var profileInventory unconfiguredProfileInventory
 	merge := func(relative string, content []byte) error {
-		if _, err := parseTOMLDocument(content, relative); err != nil {
+		document, err := parseTOMLDocument(content, relative)
+		if err != nil {
 			return err
 		}
+		profileInventory.record(relative, document)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("merge %s: %w", relative, err)
 		}
@@ -237,6 +245,9 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 			}
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", false, err
+	}
+	if err := profileInventory.validate(); err != nil {
 		return "", false, err
 	}
 	whitelistWasSet := v.IsSet("network.whitelist_ips")

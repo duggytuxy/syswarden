@@ -97,7 +97,7 @@ func runSSHMigrationSession(ctx context.Context, approved, enrollment string,
 	}
 	if session == nil || session.root == nil || session.close == nil || session.authority == nil ||
 		session.bind == nil || session.deps.checkParser == nil || session.deps.run == nil ||
-		session.authority.plan != approved || session.authority.digest != enrollment {
+		session.authority.plan != approved || session.authority.recovery != "" || session.authority.digest != enrollment {
 		return result, ErrInventoryUnsafe
 	}
 	plan, err := inspectPlan(session.root, session.uid)

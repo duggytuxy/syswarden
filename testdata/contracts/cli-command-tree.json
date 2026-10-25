@@ -828,7 +828,7 @@
     "path": "syswarden install",
     "use": "install",
     "short": "Install SYSWARDEN and configure security modules",
-    "long": "Installs the selected firewall services and feed scheduler. Fresh packages use the standard-list-only profile. SSH, CIS and OS hardening require a separate explicit configuration operation.",
+    "long": "Installs the selected firewall services and feed scheduler. Fresh packages stage an unconfigured profile without activating lists or services. SSH, CIS and OS hardening require a separate explicit configuration operation.",
     "flags": [
       {
         "name": "config",
@@ -1689,6 +1689,312 @@
       "2": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\"",
       "3": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\"",
       "4": "unknown command \"arg-1\" for \"syswarden ssh-policy ports\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy restoration-access-inspect",
+    "use": "restoration-access-inspect",
+    "short": "Inspect approved restored SSH access records without accepting completed recovery",
+    "long": "Inspect protected restoration access issuance and, when independently approved, its recorded receipt. This command does not write or repair the journal, load general configuration, recover firewall state or reload SSH. Observed records do not establish durability, current access, policy consumption or completed recovery.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "enrollment-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved protected restoration controller enrollment SHA-256"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for restoration-access-inspect"
+      },
+      {
+        "name": "issuance-image-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original issuance image SHA-256"
+      },
+      {
+        "name": "issuance-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved durable issuance SHA-256"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original migration plan SHA-256"
+      },
+      {
+        "name": "record-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved receipt record SHA-256; omit only for issuance without a recorded receipt"
+      },
+      {
+        "name": "recovery-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved recovery plan SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-inspect\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-inspect\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-inspect\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-inspect\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy restoration-access-issue",
+    "use": "restoration-access-issue",
+    "short": "Issue one short-lived challenge for independently approved restored SSH access",
+    "long": "Exchange private restored SSH access evidence through fixed files in an existing owner-only directory. Target operations require independently approved migration and recovery plans plus a separate restoration controller enrollment. No configuration load, firewall recovery, policy publication or SSH reload is performed. Access evidence does not establish policy consumption or completed recovery. Keep controller credentials on the independently administered controller. Failed issuance/delivery must not be retried by deleting records.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "enrollment-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved protected restoration controller enrollment SHA-256"
+      },
+      {
+        "name": "exchange-dir",
+        "type": "string",
+        "default": "",
+        "usage": "Existing absolute private directory, mode 0700; fixed files use mode 0600"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for restoration-access-issue"
+      },
+      {
+        "name": "lifetime-seconds",
+        "type": "int",
+        "default": "180",
+        "usage": "Whole-second challenge validity from 1 to 300"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original migration plan SHA-256"
+      },
+      {
+        "name": "recovery-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved recovery plan SHA-256"
+      },
+      {
+        "name": "request-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently reviewed complete request SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-issue\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-issue\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-issue\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-issue\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy restoration-access-probe",
+    "use": "restoration-access-probe",
+    "short": "Authenticate approved restored SSH routes from an independent controller",
+    "long": "Exchange private restored SSH access evidence through fixed files in an existing owner-only directory. Target operations require independently approved migration and recovery plans plus a separate restoration controller enrollment. No configuration load, firewall recovery, policy publication or SSH reload is performed. Access evidence does not establish policy consumption or completed recovery. Keep controller credentials on the independently administered controller. Failed issuance/delivery must not be retried by deleting records.",
+    "flags": [
+      {
+        "name": "challenge-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved exact challenge SHA-256"
+      },
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "credentials-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved controller-local credentials file SHA-256"
+      },
+      {
+        "name": "exchange-dir",
+        "type": "string",
+        "default": "",
+        "usage": "Existing absolute private directory, mode 0700; fixed files use mode 0600"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for restoration-access-probe"
+      },
+      {
+        "name": "request-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently reviewed complete request SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-probe\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-probe\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-probe\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-probe\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy restoration-access-record",
+    "use": "restoration-access-record",
+    "short": "Record a restored SSH access receipt without accepting completed recovery",
+    "long": "Exchange private restored SSH access evidence through fixed files in an existing owner-only directory. Target operations require independently approved migration and recovery plans plus a separate restoration controller enrollment. No configuration load, firewall recovery, policy publication or SSH reload is performed. Access evidence does not establish policy consumption or completed recovery. Keep controller credentials on the independently administered controller. Failed issuance/delivery must not be retried by deleting records.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "enrollment-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved protected restoration controller enrollment SHA-256"
+      },
+      {
+        "name": "exchange-dir",
+        "type": "string",
+        "default": "",
+        "usage": "Existing absolute private directory, mode 0700; fixed files use mode 0600"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for restoration-access-record"
+      },
+      {
+        "name": "issuance-image-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original issuance image SHA-256"
+      },
+      {
+        "name": "issuance-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved durable issuance SHA-256"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original migration plan SHA-256"
+      },
+      {
+        "name": "recovery-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved recovery plan SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-record\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-record\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-record\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-record\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy restoration-access-request",
+    "use": "restoration-access-request",
+    "short": "Prepare a private restored SSH access request without issuance or networking",
+    "long": "Exchange private restored SSH access evidence through fixed files in an existing owner-only directory. Target operations require independently approved migration and recovery plans plus a separate restoration controller enrollment. No configuration load, firewall recovery, policy publication or SSH reload is performed. Access evidence does not establish policy consumption or completed recovery. Keep controller credentials on the independently administered controller. Failed issuance/delivery must not be retried by deleting records.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "enrollment-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved protected restoration controller enrollment SHA-256"
+      },
+      {
+        "name": "exchange-dir",
+        "type": "string",
+        "default": "",
+        "usage": "Existing absolute private directory, mode 0700; fixed files use mode 0600"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for restoration-access-request"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original migration plan SHA-256"
+      },
+      {
+        "name": "recovery-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved recovery plan SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-request\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-request\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-request\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy restoration-access-request\""
     }
   },
   {

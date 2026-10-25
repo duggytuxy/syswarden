@@ -220,9 +220,16 @@ func parseSSHAccessRequest(wire []byte, approved string) (sshAccessRequest, erro
 // state remains current or that the controller is enrolled. Never accept its
 // returned observations as activation completion. Production receipt handling
 // must independently recheck target state and authority before any such claim.
+type sshAccessRequestParser func([]byte, string) (sshAccessRequest, error)
+
 func probeSSHActivationAccessRequest(parent context.Context, wire []byte, approved string, credentials []sshAccessCredentials,
-	guard func() error) (result sshAccessBatchObservation, err error) {
-	if parent == nil || guard == nil {
+	guard func() error) (sshAccessBatchObservation, error) {
+	return probeSSHAccessRequestWithParser(parent, wire, approved, credentials, guard, parseSSHAccessRequest)
+}
+
+func probeSSHAccessRequestWithParser(parent context.Context, wire []byte, approved string, credentials []sshAccessCredentials,
+	guard func() error, parse sshAccessRequestParser) (result sshAccessBatchObservation, err error) {
+	if parent == nil || guard == nil || parse == nil {
 		return result, ErrInventoryUnsafe
 	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
@@ -241,7 +248,7 @@ func probeSSHActivationAccessRequest(parent context.Context, wire []byte, approv
 	if len(wire) == 0 || len(wire) > maxSSHAccessRequestBytes {
 		return result, ErrInventoryUnsafe
 	}
-	request, err := parseSSHAccessRequest(bytes.Clone(wire), approved)
+	request, err := parse(bytes.Clone(wire), approved)
 	if err != nil {
 		return result, err
 	}

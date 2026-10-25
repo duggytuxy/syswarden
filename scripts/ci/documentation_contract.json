@@ -392,9 +392,9 @@
     {
       "path": "syswarden install",
       "field": "long",
-      "reason": "Describe the standard-only fresh installation and the preserved host-hardening boundary.",
+      "reason": "Describe inactive fresh native staging and separate explicit administrator activation without changing historical upgrade selections.",
       "before": "Executes the fully automated SYSWARDEN installation pipeline.",
-      "after": "Installs the selected firewall services and feed scheduler. Fresh packages use the standard-list-only profile. SSH, CIS and OS hardening require a separate explicit configuration operation."
+      "after": "Installs the selected firewall services and feed scheduler. Fresh packages stage an unconfigured profile without activating lists or services. SSH, CIS and OS hardening require a separate explicit configuration operation."
     },
     {
       "path": "syswarden manual",
@@ -841,6 +841,41 @@
       "before": null,
       "after": "added",
       "reason": "Issue422 private SSH access exchange with explicit independent approvals; no policy publication, reload or migration acceptance."
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-request",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-issue",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-probe",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-record",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-inspect",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
     }
   ],
   "package_platform_contract": {

@@ -2,8 +2,6 @@ package config
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -155,14 +153,17 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 	v.SetConfigType("toml")
 	setDefaults(v, configDir)
 	var masterIdentity *secureFileIdentity
+	var profileInventory unconfiguredProfileInventory
 	if _, err := root.Lstat("config.toml"); err == nil {
 		content, identity, readErr := readSecureRegularFileIdentity(root, "config.toml", filepath.Join(configDir, "config.toml"))
 		if readErr != nil {
 			return nil, readErr
 		}
-		if _, err := parseTOMLDocument(content, "config.toml"); err != nil {
+		document, err := parseTOMLDocument(content, "config.toml")
+		if err != nil {
 			return nil, err
 		}
+		profileInventory.record("config.toml", document)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return nil, err
 		}
@@ -225,6 +226,7 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 		if err != nil {
 			return nil, err
 		}
+		profileInventory.record(relative, document)
 		if entry.Name() == userModuleName {
 			if err := rejectNewRetiredUnspecifiedWhitelistEntries(previousUserContent, document); err != nil {
 				return nil, err
@@ -242,12 +244,19 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 		if err != nil {
 			return nil, err
 		}
+		profileInventory.recordProfile(filepath.ToSlash(filepath.Join("modules", userModuleName)), document)
 		if err := rejectNewRetiredUnspecifiedWhitelistEntries(nil, document); err != nil {
 			return nil, err
 		}
 		if err := v.MergeConfig(bytes.NewReader(userContent)); err != nil {
 			return nil, fmt.Errorf("merge new operator module: %w", err)
 		}
+	}
+	if err := profileInventory.validate(); err != nil {
+		return nil, err
+	}
+	if err := resolveOptionalModules(v); err != nil {
+		return nil, err
 	}
 	var candidate ModularConfig
 	if err := v.Unmarshal(&candidate); err != nil {
@@ -460,255 +469,7 @@ func replaceSecureFileAtomicallyIfUnchangedValidated(
 	expected *secureFileIdentity,
 	preCommit, prePublish, postCommit func() error,
 ) error {
-	root, err := openConfigDirectory(directory, false, 0)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
-	randomSuffix := make([]byte, 16)
-	if _, err := rand.Read(randomSuffix); err != nil {
-		return err
-	}
-	suffix := hex.EncodeToString(randomSuffix)
-	temporaryName := "." + name + ".tmp-" + suffix
-	backupName := "." + name + ".rollback-" + suffix
-	temporary, err := root.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return err
-	}
-	temporaryOpen := true
-	backupExists := false
-	preserveBackup := false
-	defer func() {
-		if temporaryOpen {
-			_ = temporary.Close()
-		}
-		_ = root.Remove(temporaryName)
-		if backupExists && !preserveBackup {
-			_ = root.Remove(backupName)
-		}
-	}()
-	if expected != nil && expected.info != nil {
-		uid, gid, ok := fileOwnerUIDGID(expected.info)
-		if !ok {
-			return fmt.Errorf("capture existing secure file ownership")
-		}
-		if err := applySecureFileOwnership(temporary, int(uid), int(gid)); err != nil {
-			return fmt.Errorf("preserve existing secure file ownership: %w", err)
-		}
-		// Apply the mode after chown because some kernels clear special mode bits
-		// when ownership changes.
-		if err := temporary.Chmod(expected.info.Mode().Perm()); err != nil {
-			return err
-		}
-	}
-	if _, err := temporary.Write(content); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	temporaryInfo, err := temporary.Stat()
-	if err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	temporaryOpen = false
-
-	revalidateDestination := func() error {
-		currentContent, currentInfo, readErr := readSecureRegularFileSnapshot(root, name, filepath.Join(directory, name))
-		if expected == nil {
-			if errors.Is(readErr, fs.ErrNotExist) {
-				return nil
-			}
-			if readErr == nil {
-				return fmt.Errorf("secure file appeared before publish")
-			}
-			return readErr
-		}
-		if readErr != nil || !expected.matches(currentContent, currentInfo) {
-			return fmt.Errorf("secure file changed before publish")
-		}
-		return nil
-	}
-	if err := revalidateDestination(); err != nil {
-		return err
-	}
-	if preCommit != nil {
-		if err := preCommit(); err != nil {
-			return fmt.Errorf("pre-commit configuration CAS: %w", err)
-		}
-	}
-	if err := revalidateDestination(); err != nil {
-		return err
-	}
-
-	restoreBackup := func() error {
-		if !backupExists {
-			return nil
-		}
-		if _, err := root.Lstat(name); err == nil {
-			preserveBackup = true
-			return fmt.Errorf("destination reappeared before rollback")
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			preserveBackup = true
-			return err
-		}
-		if err := root.Link(backupName, name); err != nil {
-			preserveBackup = true
-			return err
-		}
-		if err := root.Remove(backupName); err != nil {
-			preserveBackup = true
-			return err
-		}
-		backupExists = false
-		return nil
-	}
-	restoreBackupAfterPublishConflict := func() error {
-		if !backupExists {
-			return nil
-		}
-		conflictName := "." + name + ".conflict-" + suffix
-		if _, err := root.Lstat(conflictName); err == nil {
-			preserveBackup = true
-			return fmt.Errorf("operator-module conflict quarantine already exists")
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			preserveBackup = true
-			return err
-		}
-		conflictInfo, err := root.Lstat(name)
-		if errors.Is(err, fs.ErrNotExist) {
-			return restoreBackup()
-		}
-		if err != nil {
-			preserveBackup = true
-			return err
-		}
-		if err := root.Rename(name, conflictName); err != nil {
-			preserveBackup = true
-			return fmt.Errorf("quarantine conflicting operator-module publication: %w", err)
-		}
-		quarantined, err := root.Lstat(conflictName)
-		if err != nil || !os.SameFile(conflictInfo, quarantined) {
-			preserveBackup = true
-			return fmt.Errorf("conflicting operator-module inode changed during quarantine")
-		}
-		// The previous operator inode remains authoritative until this writer has
-		// committed. In particular, a migration that observed the temporary name
-		// gap must not make its generated 99-user.toml effective.
-		if err := root.Rename(backupName, name); err != nil {
-			preserveBackup = true
-			_ = root.Rename(conflictName, name)
-			return fmt.Errorf("restore previous operator module after publication conflict: %w", err)
-		}
-		backupExists = false
-		restoredContent, restoredInfo, err := readSecureRegularFileSnapshot(root, name, filepath.Join(directory, name))
-		if err != nil || expected == nil || !expected.matches(restoredContent, restoredInfo) {
-			return fmt.Errorf("restored operator module failed identity verification")
-		}
-		if err := root.Remove(conflictName); err != nil {
-			return fmt.Errorf("remove conflicting operator-module inode: %w", err)
-		}
-		return syncRootDirectory(root)
-	}
-	if expected != nil {
-		if err := root.Rename(name, backupName); err != nil {
-			return fmt.Errorf("quarantine previous operator module: %w", err)
-		}
-		backupExists = true
-		backupContent, backupInfo, readErr := readSecureRegularFileSnapshot(root, backupName, filepath.Join(directory, backupName))
-		if readErr != nil || !expected.matches(backupContent, backupInfo) {
-			restoreErr := restoreBackup()
-			return fmt.Errorf("secure file changed while quarantining previous inode (restore: %v)", restoreErr)
-		}
-	}
-	if prePublish != nil {
-		if err := prePublish(); err != nil {
-			restoreErr := restoreBackup()
-			return fmt.Errorf("pre-publication configuration CAS: %w (restore: %v)", err, restoreErr)
-		}
-	}
-	// Link is the no-replace publication primitive. A destination created after
-	// the last CAS check is never overwritten by the candidate. When replacing
-	// an existing operator module, however, the quarantined previous inode stays
-	// authoritative until commit and is restored over the conflicting publish.
-	if err := root.Link(temporaryName, name); err != nil {
-		restoreErr := restoreBackupAfterPublishConflict()
-		return fmt.Errorf("publish operator module without replacement: %w (restore: %v)", err, restoreErr)
-	}
-
-	rollback := func() error {
-		failedName := "." + name + ".failed-" + suffix
-		if err := root.Rename(name, failedName); err != nil {
-			if backupExists {
-				preserveBackup = true
-			}
-			return fmt.Errorf("quarantine published inode for rollback: %w", err)
-		}
-		failed, statErr := root.Lstat(failedName)
-		if statErr != nil || !os.SameFile(temporaryInfo, failed) {
-			if _, err := root.Lstat(name); errors.Is(err, fs.ErrNotExist) {
-				if linkErr := root.Link(failedName, name); linkErr == nil {
-					_ = root.Remove(failedName)
-				}
-			}
-			if backupExists {
-				preserveBackup = true
-			}
-			return fmt.Errorf("published inode changed before rollback")
-		}
-		if err := restoreBackup(); err != nil {
-			return err
-		}
-		if err := root.Remove(failedName); err != nil {
-			return err
-		}
-		return syncRootDirectory(root)
-	}
-	if err := root.Remove(temporaryName); err != nil {
-		rollbackErr := rollback()
-		return fmt.Errorf("remove operator module publication link: %w (rollback: %v)", err, rollbackErr)
-	}
-	if err := syncRootDirectory(root); err != nil {
-		rollbackErr := rollback()
-		return fmt.Errorf("sync operator module replacement: %w (rollback: %v)", err, rollbackErr)
-	}
-	revalidatePublishedInode := func() error {
-		current, err := root.Lstat(name)
-		temporaryUID, temporaryGID, temporaryOwnerOK := fileOwnerUIDGID(temporaryInfo)
-		currentUID, currentGID, currentOwnerOK := fileOwnerUIDGID(current)
-		if err != nil || !os.SameFile(temporaryInfo, current) || current.Mode() != temporaryInfo.Mode() ||
-			!temporaryOwnerOK || !currentOwnerOK || temporaryUID != currentUID || temporaryGID != currentGID {
-			return fmt.Errorf("published operator-module inode changed during commit")
-		}
-		return nil
-	}
-	if err := revalidatePublishedInode(); err != nil {
-		rollbackErr := rollback()
-		return fmt.Errorf("post-publication inode CAS: %w (rollback: %v)", err, rollbackErr)
-	}
-	if postCommit != nil {
-		if err := postCommit(); err != nil {
-			rollbackErr := rollback()
-			return fmt.Errorf("post-commit configuration CAS: %w (rollback: %v)", err, rollbackErr)
-		}
-	}
-	if err := revalidatePublishedInode(); err != nil {
-		rollbackErr := rollback()
-		return fmt.Errorf("post-commit inode CAS: %w (rollback: %v)", err, rollbackErr)
-	}
-	if expected != nil {
-		if err := root.Remove(backupName); err != nil {
-			rollbackErr := rollback()
-			return fmt.Errorf("remove operator module rollback inode: %w (rollback: %v)", err, rollbackErr)
-		}
-		backupExists = false
-	}
-	_ = syncRootDirectory(root)
-	return nil
+	return replaceSecureConfigFile(directory, name, content, expected, preCommit, prePublish, postCommit)
 }
 
 func updateProfileInUserModule(content []byte, profileName string) []byte {

@@ -4,12 +4,21 @@ package system
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const apkRetentionFixtureChecksum = "Q1AAECAwQFBgcICQoLDA0ODxAREhM="
@@ -426,7 +435,7 @@ func TestAPKRetentionNativePlanner(t *testing.T) {
 	}
 	paths := productionOpenRCWireGuardDefinitionPaths()
 	for _, executable := range []string{"/sbin/apk", "/usr/sbin/apk"} {
-		target := packageTarget{format: packageFormatAPK, installer: executable}
+		target := packageTarget{os: "linux", architecture: "amd64", packageName: "syswarden", format: packageFormatAPK, installer: executable}
 		path := "/var/tmp/syswarden-update-oracle/package.apk"
 		_, offline := target.qualificationInstallCommand(path)
 		for _, args := range [][]string{target.installArguments(path), offline} {
@@ -441,4 +450,252 @@ func TestAPKRetentionNativePlanner(t *testing.T) {
 		}
 	}
 	fmt.Println("APK_RETENTION_NATIVE_PASS=" + expected)
+}
+
+// This oracle executes only synthetic, unsigned APK files in a separately
+// verified rootless fixture. No production installer or base-update gate is
+// bypassed, changed or exposed by the test-only unsigned trust override.
+func TestAPKSelectedRetentionNativeTransaction(t *testing.T) {
+	if os.Getenv("SYSWARDEN_APK_SELECTED_RETENTION_NATIVE") != "1" {
+		t.Skip("requires the isolated selected APK transaction laboratory")
+	}
+	requireAPKSelectedNativeFixture(t)
+	var packageName string
+	switch os.Getenv("SYSWARDEN_APK_SELECTED_PACKAGE") {
+	case "syswarden":
+		packageName = "syswarden"
+	case "syswarden-base":
+		packageName = "syswarden-base"
+	default:
+		t.Fatal("exact selected fixture package identity required")
+	}
+	var scenario string
+	switch os.Getenv("SYSWARDEN_APK_SELECTED_CASE") {
+	case "native-selected-upgrade":
+		scenario = "native-selected-upgrade"
+	case "native-selected-pinned-refusal":
+		scenario = "native-selected-pinned-refusal"
+	case "native-selected-tagged-refusal":
+		scenario = "native-selected-tagged-refusal"
+	default:
+		t.Fatal("exact selected fixture case required")
+	}
+	const candidate = "/var/tmp/syswarden-update-oracle/package.apk"
+	candidateBytes := readAPKOracleProtectedFile(t, candidate, 16<<20, true)
+	if len(candidateBytes) == 0 {
+		t.Fatal("empty fixture candidate")
+	}
+	if string(readAPKOracleProtectedFile(t, "/opt/sw-apk-lab/model", 128, false)) != "model-1.0.0\n" {
+		t.Fatal("installed fixture payload differs from the inert old generation")
+	}
+	world := readAPKOracleProtectedFile(t, "/etc/apk/world", 1<<20, false)
+	database := readAPKOracleProtectedFile(t, "/lib/apk/db/installed", maximumAPKInstalledDatabaseSize, false)
+	paths := productionOpenRCWireGuardDefinitionPaths()
+	target := packageTarget{os: "linux", architecture: "amd64", packageName: packageName, format: packageFormatAPK, installer: "/sbin/apk"}
+	_, offline := target.qualificationInstallCommand(candidate)
+	var planned []string
+	for _, arguments := range [][]string{target.installArguments(candidate), offline} {
+		got, err := apkPreservedInstallArgumentsForName(packageName, "/sbin/apk", arguments, paths)
+		if scenario != "native-selected-upgrade" {
+			if err == nil || !strings.Contains(err.Error(), "product root") || got != nil {
+				t.Fatalf("constrained selected product root did not refuse for its world constraint: %q, %v", got, err)
+			}
+			continue
+		}
+		want := append([]string(nil), arguments...)
+		if packageName == "syswarden" {
+			want = append(want, "rsyslog")
+		}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("selected native planner: %q, %v; want %q", got, err, want)
+		}
+		planned = got
+	}
+	if !bytes.Equal(world, readAPKOracleProtectedFile(t, "/etc/apk/world", 1<<20, false)) ||
+		!bytes.Equal(database, readAPKOracleProtectedFile(t, "/lib/apk/db/installed", maximumAPKInstalledDatabaseSize, false)) {
+		t.Fatal("read-only selected planner changed native inventory")
+	}
+	if scenario == "native-selected-upgrade" {
+		// The actual offline planner vector reaches native execution. Only the
+		// inert laboratory permits unsigned fixtures, with no additional roots.
+		want := []string{"--no-network", "--no-cache", "--repositories-file", "/dev/null", "add", candidate}
+		if packageName == "syswarden" {
+			want = append(want, "rsyslog")
+		}
+		if !reflect.DeepEqual(planned, want) {
+			t.Fatal("offline planner changed the exact native execution contract")
+		}
+		if !bytes.Equal(candidateBytes, readAPKOracleProtectedFile(t, candidate, 16<<20, true)) {
+			t.Fatal("fixture candidate changed before execution")
+		}
+		readAPKOracleProtectedFile(t, "/sbin/apk", 16<<20, false)
+		wire, err := json.Marshal(planned)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Println("APK_SELECTED_RETENTION_ARGUMENTS=" + string(wire))
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		defer cancel()
+		arguments := append([]string{"--allow-untrusted"}, planned...)
+		command := exec.CommandContext(ctx, "/sbin/apk", arguments...) // #nosec G204 -- fixed binary and exact offline argument vector checked above, restricted to the remapped disposable fixture
+		command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "HOME=/root"}
+		output, err := command.CombinedOutput()
+		if err != nil || ctx.Err() != nil {
+			t.Fatalf("inert native transaction failed: %v, %v, %s", err, ctx.Err(), output)
+		}
+		fmt.Print(string(output))
+	}
+	fmt.Println("APK_SELECTED_RETENTION_NATIVE_PASS=" + packageName + ":" + scenario)
+}
+
+func requireAPKSelectedNativeFixture(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() != 0 || os.Getegid() != 0 {
+		t.Fatal("selected native oracle requires Linux AMD64 namespace root")
+	}
+	for _, name := range []string{"/proc/self/uid_map", "/proc/self/gid_map"} {
+		file, err := os.Open(name) // #nosec G304 -- closed pair of kernel namespace-map paths, never caller input
+		if err != nil {
+			t.Fatal(err)
+		}
+		mapping, readErr := io.ReadAll(io.LimitReader(file, 4097))
+		closeErr := file.Close()
+		if readErr != nil || closeErr != nil || !apkOracleRemappedRoot(mapping) {
+			t.Fatal("initial or ambiguous namespace mapping is prohibited", name, readErr, closeErr)
+		}
+	}
+	// Podman can publish an empty engine marker without --privileged. Its
+	// optional text is not rootless authority. Require protected file presence;
+	// the independent kernel UID and GID remaps above exclude initial host
+	// namespaces. The runner separately requires Podman Rootless=true, and the
+	// exact private fixture marker below binds this test to its disposable lab.
+	_ = readAPKOracleProtectedFile(t, "/run/.containerenv", 64<<10, false)
+	for _, directory := range []string{"/tmp/sw-apk-lab", "/var/tmp/syswarden-update-oracle"} {
+		var state unix.Stat_t
+		if err := unix.Lstat(directory, &state); err != nil || state.Mode&unix.S_IFMT != unix.S_IFDIR || state.Mode&07777 != 0700 || state.Uid != 0 || state.Gid != 0 {
+			t.Fatal("private native fixture directory is unsafe", directory, err)
+		}
+	}
+	marker := readAPKOracleProtectedFile(t, "/tmp/sw-apk-lab/.selected-retention-oracle-v1", 128, true)
+	if string(marker) != "SYSWARDEN-ISOLATED-APK-RETENTION-V1\n" {
+		t.Fatal("selected native fixture marker missing")
+	}
+}
+
+func apkOracleRemappedRoot(mapping []byte) bool {
+	if len(mapping) == 0 || len(mapping) > 4096 {
+		return false
+	}
+	lines := strings.Split(strings.TrimSuffix(string(mapping), "\n"), "\n")
+	if len(lines) == 0 || len(lines) > 5 {
+		return false
+	}
+	var next uint64
+	for index, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			return false
+		}
+		var values [3]uint64
+		for i, field := range fields {
+			value, err := strconv.ParseUint(field, 10, 32)
+			if err != nil || strconv.FormatUint(value, 10) != field {
+				return false
+			}
+			values[i] = value
+		}
+		inside, outside, length := values[0], values[1], values[2]
+		if (index == 0 && inside != 0) || inside < next || outside == 0 || inside == outside || length == 0 || inside+length > 1<<32 || outside+length > 1<<32 {
+			return false
+		}
+		next = inside + length
+	}
+	return true
+}
+
+func readAPKOracleProtectedFile(t *testing.T, name string, maximum int64, private bool) []byte {
+	t.Helper()
+	fd, err := unix.Open(name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal("cannot open protected native fixture input", name, err)
+	}
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	var before, after unix.Stat_t
+	if err := unix.Fstat(fd, &before); err != nil || !apkOracleProtectedFileMetadata(before, maximum, private) {
+		t.Fatal("unsafe native fixture input", name, err)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil || int64(len(data)) > maximum {
+		t.Fatal("unbounded native fixture input", name, err)
+	}
+	if err := unix.Fstat(fd, &after); err != nil {
+		t.Fatal(err)
+	}
+	before.Atim, after.Atim = unix.Timespec{}, unix.Timespec{}
+	if before != after {
+		t.Fatal("native fixture input changed while reading", name)
+	}
+	return data
+}
+
+func apkOracleProtectedFileMetadata(state unix.Stat_t, maximum int64, private bool) bool {
+	return maximum >= 0 && state.Mode&unix.S_IFMT == unix.S_IFREG && state.Nlink == 1 && state.Uid == 0 && state.Gid == 0 &&
+		state.Mode&0022 == 0 && (!private || state.Mode&07777 == 0600) && state.Size >= 0 && state.Size <= maximum
+}
+
+func TestAPKSelectedOracleContainerMarkerMetadata(t *testing.T) {
+	const maximum = 64 << 10
+	// An empty engine marker is native Podman behavior without --privileged.
+	// Contents do not grant authority, but the held descriptor must retain all
+	// existing protected-file checks independently of both namespace maps.
+	valid := unix.Stat_t{Mode: unix.S_IFREG | 0644, Nlink: 1}
+	for _, size := range []int64{0, 1, maximum} {
+		state := valid
+		state.Size = size
+		if !apkOracleProtectedFileMetadata(state, maximum, false) {
+			t.Fatalf("protected marker size %d refused", size)
+		}
+	}
+	for name, mutate := range map[string]func(*unix.Stat_t){
+		"symlink":        func(state *unix.Stat_t) { state.Mode = unix.S_IFLNK | 0644 },
+		"directory":      func(state *unix.Stat_t) { state.Mode = unix.S_IFDIR | 0644 },
+		"fifo":           func(state *unix.Stat_t) { state.Mode = unix.S_IFIFO | 0644 },
+		"socket":         func(state *unix.Stat_t) { state.Mode = unix.S_IFSOCK | 0644 },
+		"foreign-owner":  func(state *unix.Stat_t) { state.Uid = 1 },
+		"foreign-group":  func(state *unix.Stat_t) { state.Gid = 1 },
+		"group-writable": func(state *unix.Stat_t) { state.Mode |= 0020 },
+		"other-writable": func(state *unix.Stat_t) { state.Mode |= 0002 },
+		"multiple-links": func(state *unix.Stat_t) { state.Nlink = 2 },
+		"negative-size":  func(state *unix.Stat_t) { state.Size = -1 },
+		"oversized":      func(state *unix.Stat_t) { state.Size = maximum + 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := valid
+			mutate(&state)
+			if apkOracleProtectedFileMetadata(state, maximum, false) {
+				t.Fatal("unsafe engine marker accepted")
+			}
+		})
+	}
+	if apkOracleProtectedFileMetadata(valid, -1, false) || apkOracleProtectedFileMetadata(valid, maximum, true) {
+		t.Fatal("invalid bound or nonprivate fixture marker accepted")
+	}
+	valid.Mode = unix.S_IFREG | 0600
+	if !apkOracleProtectedFileMetadata(valid, maximum, true) {
+		t.Fatal("protected private fixture marker refused")
+	}
+}
+
+func TestAPKSelectedOracleRequiresRemappedRoot(t *testing.T) {
+	for _, mapping := range []string{"0 1000 1\n1 100000 65536\n", "         0       1000          1\n"} {
+		if !apkOracleRemappedRoot([]byte(mapping)) {
+			t.Fatalf("valid isolated mapping rejected: %q", mapping)
+		}
+	}
+	for _, mapping := range []string{"", "0 0 4294967295\n", "0 0 1\n", "0 1000\n", "1 1000 1\n", "0 1000 0\n", "0 1000 1\n0 2000 1\n", "0 1000 1\n1 1 65536\n", "0 1000 4294967295\n", "0 01000 1\n", "0 -1 1\n"} {
+		if apkOracleRemappedRoot([]byte(mapping)) {
+			t.Fatalf("unsafe mapping accepted: %q", mapping)
+		}
+	}
 }

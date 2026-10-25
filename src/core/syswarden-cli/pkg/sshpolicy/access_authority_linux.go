@@ -52,6 +52,7 @@ type sshAccessAuthority struct {
 	root       *os.File
 	uid        int
 	plan       string
+	recovery   string
 	pins       []sshAccessRoutePins
 	controller ed25519.PublicKey
 	image      sshFileImage
@@ -106,13 +107,17 @@ func decodeSSHAccessAuthority(wire []byte, plan string) (sshAccessAuthorityDocum
 	return document, pins, nil
 }
 
-func readSSHAccessAuthority(root *os.File, uid int) (sshFileImage, map[string]sshDirectoryIdentity, error) {
+func readSSHAccessAuthorityForPurpose(root *os.File, uid int, restored bool) (sshFileImage, map[string]sshDirectoryIdentity, error) {
+	name := sshAccessAuthorityPath
+	if restored {
+		name = sshRestoredAccessAuthorityPath
+	}
 	reader := inventoryReader{root: root, uid: uid, state: inventorySnapshot{nodes: make(map[string]inventoryStamp)}}
-	parent, err := reader.openDirectory(path.Dir(sshAccessAuthorityPath))
+	parent, err := reader.openDirectory(path.Dir(name))
 	if err != nil || parent == nil {
 		return sshFileImage{}, nil, errors.Join(ErrInventoryUnsafe, err)
 	}
-	image, readErr := readSSHPrivateChild(parent, path.Base(sshAccessAuthorityPath), uid, maxSSHAccessAuthorityBytes)
+	image, readErr := readSSHPrivateChild(parent, path.Base(name), uid, maxSSHAccessAuthorityBytes)
 	if err := errors.Join(readErr, parent.Close()); err != nil {
 		return sshFileImage{}, nil, errors.Join(ErrInventoryUnsafe, err)
 	}
@@ -129,6 +134,17 @@ func readSSHAccessAuthority(root *os.File, uid int) (sshFileImage, map[string]ss
 // Production callers use / and UID 0; no path or environment override exists.
 // The approved digest must arrive independently of the enrollment and receipt.
 func openSSHAccessAuthority(root *os.File, uid int, plan, approvedSHA string, clock func() time.Time) (*sshAccessAuthority, error) {
+	return openSSHAccessAuthorityForPurpose(root, uid, plan, "", approvedSHA, clock)
+}
+
+func openSSHRestoredAccessAuthority(root *os.File, uid int, plan, recovery, approvedSHA string, clock func() time.Time) (*sshAccessAuthority, error) {
+	if !lowerDigest.MatchString(recovery) {
+		return nil, ErrInventoryUnsafe
+	}
+	return openSSHAccessAuthorityForPurpose(root, uid, plan, recovery, approvedSHA, clock)
+}
+
+func openSSHAccessAuthorityForPurpose(root *os.File, uid int, plan, recovery, approvedSHA string, clock func() time.Time) (*sshAccessAuthority, error) {
 	if root == nil || uid < 0 || uid > math.MaxUint32 || clock == nil ||
 		!lowerDigest.MatchString(plan) || !lowerDigest.MatchString(approvedSHA) {
 		return nil, ErrInventoryUnsafe
@@ -145,14 +161,18 @@ func openSSHAccessAuthority(root *os.File, uid int, plan, approvedSHA string, cl
 	if err != nil || openErr != nil {
 		return nil, errors.Join(ErrInventoryUnsafe, err, openErr)
 	}
-	authority := &sshAccessAuthority{root: os.NewFile(uintptr(fd), "ssh-access-authority-root"), uid: uid, plan: plan, clock: clock}
-	authority.image, authority.ancestors, err = readSSHAccessAuthority(authority.root, uid)
+	authority := &sshAccessAuthority{root: os.NewFile(uintptr(fd), "ssh-access-authority-root"), uid: uid, plan: plan, recovery: recovery, clock: clock}
+	authority.image, authority.ancestors, err = readSSHAccessAuthorityForPurpose(authority.root, uid, recovery != "")
 	if err == nil && digestBytes(authority.image.data) != approvedSHA {
 		err = ErrInventoryUnsafe
 	}
 	if err == nil {
 		var document sshAccessAuthorityDocument
-		document, authority.pins, err = decodeSSHAccessAuthority(authority.image.data, plan)
+		if recovery == "" {
+			document, authority.pins, err = decodeSSHAccessAuthority(authority.image.data, plan)
+		} else {
+			document, authority.pins, err = decodeSSHRestoredAccessAuthority(authority.image.data, plan, recovery)
+		}
 		if err == nil {
 			authority.controller = bytes.Clone(document.Controller)
 			authority.digest = approvedSHA
@@ -188,7 +208,7 @@ func (authority *sshAccessAuthority) recheck() error {
 			(!last.IsZero() && (now.Before(last) || now.Round(0).Before(last.Round(0)))) {
 			return ErrInventoryChanged
 		}
-		image, ancestors, err := readSSHAccessAuthority(authority.root, authority.uid)
+		image, ancestors, err := readSSHAccessAuthorityForPurpose(authority.root, authority.uid, authority.recovery != "")
 		if err != nil || !reflect.DeepEqual(image, authority.image) || !reflect.DeepEqual(ancestors, authority.ancestors) {
 			return errors.Join(ErrInventoryChanged, err)
 		}

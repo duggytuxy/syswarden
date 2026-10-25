@@ -51,7 +51,7 @@ type sshAccessIssuanceResult struct {
 func issueSSHAuthorizedAccessChallenge(ctx context.Context, journal *sshJournal, approved, parser string,
 	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, authority *sshAccessAuthority,
 	approvedRequest string, lifetime time.Duration, clock func() time.Time) (result sshAccessIssuanceResult, err error) {
-	if ctx == nil || authority == nil || authority.plan != approved || clock == nil || parserCheck == nil || !lowerDigest.MatchString(approvedRequest) {
+	if ctx == nil || authority == nil || authority.plan != approved || authority.recovery != "" || clock == nil || parserCheck == nil || !lowerDigest.MatchString(approvedRequest) {
 		return result, ErrInventoryUnsafe
 	}
 	last := clock()
@@ -142,7 +142,7 @@ func decodeSSHAccessIssuance(wire []byte, approved string, authority *sshAccessA
 	fail := func(err error) (sshAccessIssuance, error) {
 		return sshAccessIssuance{}, errors.Join(ErrInventoryUnsafe, err)
 	}
-	if authority == nil || len(wire) == 0 || len(wire) > maxSSHAccessIssuanceBytes || !lowerDigest.MatchString(approved) || digestBytes(wire) != approved {
+	if authority == nil || authority.recovery != "" || len(wire) == 0 || len(wire) > maxSSHAccessIssuanceBytes || !lowerDigest.MatchString(approved) || digestBytes(wire) != approved {
 		return fail(nil)
 	}
 	if err := authority.recheck(); err != nil {
@@ -179,7 +179,7 @@ func decodeSSHAccessIssuance(wire []byte, approved string, authority *sshAccessA
 func recordSSHAuthorizedAccessEvidence(ctx context.Context, journal *sshJournal, approved, parser string,
 	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, authority *sshAccessAuthority,
 	approvedIssuance, approvedImage string, receipt []byte, clock func() time.Time) (sshAccessEvidenceResult, error) {
-	if ctx == nil || journal == nil || authority == nil || authority.plan != approved || clock == nil || parserCheck == nil || len(receipt) == 0 || len(receipt) > maxSSHAccessReceiptBytes || !lowerDigest.MatchString(approvedImage) {
+	if ctx == nil || journal == nil || authority == nil || authority.plan != approved || authority.recovery != "" || clock == nil || parserCheck == nil || len(receipt) == 0 || len(receipt) > maxSSHAccessReceiptBytes || !lowerDigest.MatchString(approvedImage) {
 		return sshAccessEvidenceResult{}, ErrInventoryUnsafe
 	}
 	receipt = bytes.Clone(receipt)

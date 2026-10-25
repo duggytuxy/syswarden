@@ -1,0 +1,165 @@
+# Configuration, activation and recovery
+
+Development guide for issue #422 and Linux AMD64. This describes the current
+CLI and the remaining configuration workflow, not a migration-ready release.
+
+The required fresh-install outcome is no selected threat list and no implicit
+module activation before an administrator makes explicit TOML choices through
+`syswarden config`. Significant SSH and system changes require validation,
+review of their effects and explicit approval. That complete configuration-led
+activation flow is not implemented yet. Track fresh defaults and native
+activation separately in [minimal native installation](MINIMAL_NATIVE_INSTALL.md).
+Existing installations must retain their administrator-selected behavior.
+
+## TOML organization
+
+The normal root is `/etc/syswarden/config`. Keep each setting in its relevant
+domain rather than copying a complete configuration into several files.
+
+| File relative to the root | Purpose |
+| --- | --- |
+| `config.toml` | Master metadata, including the supported `schema_version = 1`. |
+| `modules/00-core.toml` | Core profile, firewall backend and host settings. |
+| `modules/05-ssh.toml` | Dedicated SSH selection with its separate ownership and approval rules. |
+| `modules/10-network.toml` | Lists, address policies, WireGuard and network choices. |
+| `modules/20-security.toml` | Detection, Layer 2 and compliance settings. |
+| `modules/30-waap.toml` | WAAP and its optional log bridge. |
+| `modules/40-integrations.toml` | HA, SIEM, Wazuh, reporting and BunkerWeb integration. |
+| `modules/99-user.toml` | Deliberate administrator overrides permitted by each setting's contract. |
+
+The loader reads the master first, then all `.toml` modules in lexical filename
+order. Later values override earlier ones where the setting permits it. The
+dedicated SSH and operator-policy declarations have stricter file-placement
+rules; `99-user.toml` is not a way around them. Preserve protected file ownership
+and permissions. See [explicit SSH selection](SSH_SELECTION.md) for the exact
+`05-ssh.toml` requirements.
+
+Use TOML tables, typed booleans and arrays instead of shell assignments. Network
+prefixes use CIDR notation, for example `192.0.2.0/24`, with network host bits
+clear; a dotted netmask is not the accepted prefix form. Examples are syntax,
+not recommended trust grants. `network.whitelist_ips` accepts bounded addresses
+or prefixes, while `network.lan_subnets` requires canonical prefixes. Persistent
+block/allow/SSH-bypass lists reject IPv4 prefixes broader than `/24`, IPv6
+prefixes broader than `/64`, and their prohibited special-use ranges.
+
+Allow and block have opposite effects: product whitelist rules accept matching
+incoming source addresses before product block rules. They do not override
+independent firewall protection. LAN policy has a different validator and can
+accept broader explicitly configured networks, including shared-address space
+that persistent lists reject. An accepted LAN prefix is not evidence that its
+members are trusted. Do not infer blanket trust from a private, shared or other
+special-use classification, and do not treat the two validators as identical.
+
+Country/ASN allow selections are restrictive policies. The application guard
+requires nonempty merged allow populations for both IPv4 and IPv6 and identifies
+the missing family on refusal. An incomplete selection cannot publish a new
+policy; existing live and persistent policy stays unchanged by that refused
+application. Recovery of an earlier transaction is a separate operation. This
+check does not change rule ordering or the existing country/ASN union semantics.
+
+## Commands available now
+
+| Command | Current boundary |
+| --- | --- |
+| `syswarden config` | Opens an external editor for existing modules; also offers profile-name and file-import operations. It does not provide a review-and-activate transaction. |
+| `syswarden config validate --path /etc/syswarden/config` | Reads and validates the merged TOML, prints the selected module plan and reports unknown/deprecated keys without changing configuration or runtime. |
+| `syswarden config-get KEY` | Reads one validated effective modular value. Some legacy-compatible settings can still reflect environment overrides, unlike file-only validation. |
+| `syswarden config migrate --dry-run` | Validates historical flat-file migration without source or destination writes. `--source` and `--output` select its paths. |
+| `syswarden config migrate` | Performs transactional configuration migration; normal preflight can recover pending firewall state. `syswarden migrate-config` is its compatibility alias. It does not activate the migrated choices. |
+| `syswarden reload` | Reapplies policy and integrations, reconciles scheduling and normally restarts the core. It changes the host. |
+| `syswarden install` | Runs the installation/activation pipeline subject to its native service, configuration and prerequisite guards. It changes the host. |
+
+The global `--config` option selects the legacy flat-file fallback; it does not
+redirect the normal modular root or the protected SSH transaction inputs.
+
+The current editor writes directly through the selected external editor. Its
+success message only reports the editor process result. It does not establish
+that the edited configuration is valid. Opening the menu also uses the existing
+command preflight, including pending firewall recovery and normal configuration
+loading, which can perform compatibility normalization. Use `config validate`
+for read-only inspection. Import and profile-name operations already validate
+the complete merged candidate before an atomic `99-user.toml` replacement.
+
+The Linux publisher exchanges an existing file atomically and uses a no-replace
+operation for a new file. It rechecks the captured configuration before
+publication, so readers do not encounter an intentionally missing live filename.
+Unsupported atomic operations are refused. An in-process rollback restores the
+original only when both file identities still match; a concurrent administrator
+edit is preserved and the original private file is retained for inspection.
+This single-file boundary is not a durable recovery journal or a transaction
+covering the entire configuration directory. A failed write must be investigated
+before activation, even when a candidate file remains present.
+
+After editing, run validation and review every reported selection and warning.
+Unknown keys are reported but do not by themselves make validation fail. A
+successful validation is neither approval to mutate the host nor proof of
+effective kernel, service or access behavior. `reload` currently has no separate
+confirmation or digest-bound preview. Its `--no-restart` flag suppresses only
+the core restart; policy, integrations and scheduling can still change.
+
+## Significant changes and missing activation steps
+
+The configuration-led workflow still needs a candidate edit, merged validation,
+reviewable effects, explicit confirmation and guarded activation of that exact
+candidate. Reuse the existing `config.WriteValidatedUserModule` publication
+primitive for applicable editor changes; do not write invalid live policy and
+then attempt a generic repair. The dedicated SSH module needs its own protected
+publication boundary. There are currently no `config apply` or `config preview`
+commands, the menu has no dedicated `05-ssh.toml` item, and editor exit is not
+confirmation of a host change.
+
+For SSH, `ssh-policy ports`, `plan` and `verify` expose bounded observation and
+parser checks. Explicit TOML selection is separate from ownership, access
+contexts and approval of an exact migration plan. Forward SSH application is
+not available through the CLI, installer or generic reload. Existing SSH/CIS/OS
+policy is preserved by install/reload; a changed selection does not undo it.
+See [SSH selection](SSH_SELECTION.md) and [access commands](SSH_ACCESS_COMMANDS.md)
+for the remaining independent access and policy-consumption boundaries.
+
+## Upgrades, removal and restoration
+
+Upgrades must preserve administrator TOML, existing protection, native package
+identity, dependency choices and stopped/disabled/masked service state. Missing
+historical modules do not authorize replacement with fresh defaults. Package
+staging and a successful native transaction do not prove runtime activation.
+The current identity guards, historical-caller limitations and remaining native
+qualification are recorded in [package identities](NATIVE_PACKAGE_IDENTITIES.md)
+and the [installation contract](MINIMAL_NATIVE_INSTALL.md).
+
+Standalone `syswarden uninstall`, native package removal and native purge are
+distinct entry points requiring separate verification. Standard registered
+`syswarden` or `syswarden-base` installations use their owning package manager;
+standalone uninstall refuses to erase their registered payload. Debian remove
+and purge differ, Alpine has `del` and `del --purge`, and RPM erase has no
+separate purge operation. None is a general rollback of prior host settings.
+
+Complete removal means removing proven product-owned state while preserving
+administrator configuration and unrelated protection. A refusal or retained
+ambiguous artifact is incomplete removal. Keep its ownership records and
+private recovery data. Review the relevant `recover-removal --help` inventory,
+inspect it first, and apply only its exact plan with every required confirmation.
+After bounded recovery, retry the original removal entry point so its native
+registration and cleanup contract remain consistent.
+
+Restoration requires attributable original state and a supported recovery path.
+Do not overwrite a live configuration tree with an arbitrary backup or delete
+journals to make a retry proceed. `recover-wireguard` offers specific inspected
+recovery operations; it is not a whole-host restore. SSH
+[`restore-original`](SSH_OPERATOR_RECOVERY.md) requires an existing owned
+activation history and separately approved recovery digest. Its restored-access
+exchange still reports `recovery_required=true`; restored files or a fresh login
+alone do not establish consumed policy or completed recovery. Deliberately
+retained private backups remain separate from active configuration.
+
+## Source basis
+
+The current behavior is implemented in the CLI
+[`config`](../../src/core/syswarden-cli/cmd/config_cmd.go),
+[`preflight`](../../src/core/syswarden-cli/cmd/root.go),
+[`reload`](../../src/core/syswarden-cli/cmd/reload.go) and
+[`removal recovery`](../../src/core/syswarden-cli/cmd/recover_removal.go) paths,
+the [merged validator](../../src/core/syswarden-cli/config/validation_report.go),
+the [validated publisher](../../src/core/syswarden-cli/config/user_module.go),
+and the [network value boundaries](../../src/core/syswarden-cli/pkg/firewall/policy_values.go).
+This guide does not replace their required native lifecycle and v5.00.0 IVVQ
+acceptance.

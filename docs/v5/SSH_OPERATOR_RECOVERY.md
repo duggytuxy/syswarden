@@ -76,7 +76,8 @@ completion, protected independent fresh access evidence, consumed
 policy qualification and lifecycle retirement remain under integration.
 
 The native service-manager, upgrade and removal matrix and final v5.00.0 IVVQ
-remain open. Fresh APK/DEB/RPM packages retain standard Data-Shield list1 only;
-SSH/CIS/OS and optional integrations require independent TOML selection.
+remain open. Fresh APK/DEB/RPM packages must select no list and defer activation
+until explicit configuration through `syswarden config`. SSH/CIS/OS and optional
+integrations require independent TOML selection.
 Administrator configuration, existing protection on upgrades, required Alpine
 dependencies and BunkerWeb independence remain mandatory. Linux AMD64 only.

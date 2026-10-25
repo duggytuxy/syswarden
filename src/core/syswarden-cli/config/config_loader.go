@@ -82,6 +82,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 
 	setDefaults(v, configDir)
 	var sources []modularConfigSource
+	var profileInventory unconfiguredProfileInventory
 	observed := make(map[string]struct{})
 
 	// Load master config
@@ -95,6 +96,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 		if err != nil {
 			return err
 		}
+		profileInventory.record("config.toml", document)
 		flattenTOMLKeys("", document, observed)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("failed to load master config: %w", err)
@@ -140,6 +142,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 			if err != nil {
 				return err
 			}
+			profileInventory.record(filepath.ToSlash(filepath.Join("modules", entry.Name())), document)
 			flattenTOMLKeys("", document, observed)
 			if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 				return fmt.Errorf("failed to load module %s: %w", file, err)
@@ -153,6 +156,9 @@ func loadModularConfig(configDir string) (loadErr error) {
 		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("inspect modules directory: %w", err)
+	}
+	if err := profileInventory.validate(); err != nil {
+		return err
 	}
 	resolveModularSaaSAlias(v, observed)
 

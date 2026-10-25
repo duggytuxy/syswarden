@@ -81,6 +81,7 @@ var (
 		netip.MustParsePrefix("2001:db8::/32"),
 		netip.MustParsePrefix("2002::/16"),
 		netip.MustParsePrefix("2620:4f:8000::/48"),
+		netip.MustParsePrefix("3ffe::/16"), // Retired 6bone allocation, RFC 3701.
 		netip.MustParsePrefix("3fff::/20"),
 		netip.MustParsePrefix("5f00::/16"),
 		netip.MustParsePrefix("fc00::/7"),
@@ -879,6 +880,11 @@ func parseCanonicalFeedPrefix(line string, policy cidrFeedPolicy) (netip.Prefix,
 		return netip.Prefix{}, fmt.Errorf("ambiguous or zoned address")
 	}
 	prefix = prefix.Masked()
+	// Universal routes are never feed entries, even when a caller relaxes its
+	// prefix floor or special-use filtering. Mask before testing host-bit forms.
+	if prefix.Bits() == 0 {
+		return netip.Prefix{}, fmt.Errorf("universal prefixes are not accepted in CIDR feeds")
+	}
 	family := 6
 	minimumBits := policy.minimumIPv6PrefixBits
 	if prefix.Addr().Is4() {

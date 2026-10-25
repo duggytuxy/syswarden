@@ -2,9 +2,11 @@
 
 Development contract, pending the v5.00.0 IVVQ acceptance campaign.
 
-List 1 (standard) and list 2 (critical) use only their selected Data-Shield IPv4
-feed. SysWarden no longer downloads or merges the former CINS and blocklist.de
-supplement in these modes. The existing independent mirror quorum, canonical
+Fresh native installation selects no list and defers activation until explicit
+configuration through `syswarden config`. When selected, list 1 (standard) and
+list 2 (critical) use only their selected Data-Shield IPv4 feed. SysWarden no
+longer downloads or merges the former CINS and blocklist.de supplement in these
+modes. The existing independent mirror quorum, canonical
 address validation, provenance and protected publication checks remain required.
 No replacement provider or single-origin exception is introduced.
 

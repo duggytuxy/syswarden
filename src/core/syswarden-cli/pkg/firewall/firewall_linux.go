@@ -985,10 +985,19 @@ func prepareNftSetPopulations(
 }
 
 func validateStrictAllowPopulations(configured bool, ipv4, ipv6 nftSetPopulation) error {
-	if !configured || len(ipv4.entries) > 0 || len(ipv6.entries) > 0 {
+	if !configured || len(ipv4.entries) > 0 && len(ipv6.entries) > 0 {
 		return nil
 	}
-	return fmt.Errorf("strict allow policy is configured but the merged GeoIP and ASN allow populations are empty for both IPv4 and IPv6")
+	// Strict allow emits a restriction for each family. An empty population
+	// would silently deny that entire family rather than enforce a usable
+	// dual-stack selection. Refuse preparation before the policy transaction.
+	missingFamily := "both IPv4 and IPv6"
+	if len(ipv4.entries) > 0 {
+		missingFamily = "IPv6"
+	} else if len(ipv6.entries) > 0 {
+		missingFamily = "IPv4"
+	}
+	return fmt.Errorf("strict allow policy is configured but the merged GeoIP and ASN allow populations are empty for %s; both address families require a nonempty allow selection", missingFamily)
 }
 
 type strictAllowConfiguration struct {

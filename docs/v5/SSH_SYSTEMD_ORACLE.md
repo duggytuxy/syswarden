@@ -175,8 +175,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
   scripts.ci.ssh_systemd_oracle_test
 ```
 
-Fresh native packages still require standard-list-only defaults. SSH/CIS/OS and
-other optional modules require independent explicit TOML choices. Administrator
+Fresh native packages must select no list and defer activation until explicit
+configuration through `syswarden config`. SSH/CIS/OS and other optional modules
+require independent explicit TOML choices. Administrator
 upgrade state, mandatory Alpine prerequisites and BunkerWeb independence remain
 part of the separate, incomplete #422 migration qualification.
 
@@ -192,8 +193,17 @@ authentication produces a signed fixture receipt. Issuance and receipt replay
 are refused. Revoking the enrollment blocks a new request, while the subsequent
 original restoration must still succeed and retain both access records.
 
+After restoration, a separate synthetic enrollment binds the approved recovery
+as well as the original plan. The fixture exercises restored request, issuance,
+fresh authentication, receipt recording and read-only inspection through the
+fixed-path target adapters. Activation/restoration exchange substitution and
+replay are refused. The `recovery-noop` scenario also records restored access
+while its forwarding behavior remains stale, retaining `recovery_required=true`
+and demonstrating that successful authentication alone cannot accept recovery.
+
 The fixture controller executes in the same disposable container and process,
 using generated test credentials. This validates target composition and actual
 transport, not independent-host controller trust, operational key provisioning
 or full migration acceptance. Its private export accepts the resulting maximum
-17-entry recovery history; no controller or SSH private key is exported.
+19-entry recovery history, including exactly the two restoration access records;
+no controller or SSH private key is exported.

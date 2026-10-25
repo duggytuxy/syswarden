@@ -112,7 +112,8 @@ container; it is not independent-host enrollment qualification.
 Causal policy-consumption acknowledgement, independently operated controller
 handoff, complete recovery acceptance, owned updates and the full separate
 native uninstall/remove/purge and migration matrix remain open. There is no
-migration-ready package or final v5.00.0 IVVQ acceptance. Fresh packages still
-require standard-list-only defaults, independent TOML opt-in, preserved
+migration-ready package or final v5.00.0 IVVQ acceptance. Fresh packages must
+select no list and defer activation until explicit configuration through
+`syswarden config`, with independent TOML opt-in for optional modules, preserved
 administrator upgrades and mandatory Alpine prerequisites. BunkerWeb independence
 and Linux AMD64-only scope remain unchanged.

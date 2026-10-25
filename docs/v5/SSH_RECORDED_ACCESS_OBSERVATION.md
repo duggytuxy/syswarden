@@ -88,7 +88,8 @@ production enrollment, physical crash durability and full migration acceptance.
 Protected controller-side enrollment/delivery, causal policy-consumption
 acknowledgement, complete runtime recovery acceptance, owned
 updates and separate native uninstall/remove/purge remain open. There is no
-migration-ready package or final v5.00.0 IVVQ acceptance. Issue #422 production
-installer wiring remains open: standard-list-only fresh packages, independent
-TOML selection of SSH/CIS/OS and optional modules, and preservation of
-administrator upgrades. BunkerWeb independence and Linux AMD64 are unchanged.
+migration-ready package or final v5.00.0 IVVQ acceptance. Issue #422 native
+qualification remains open: fresh packages must select no list and defer
+activation until explicit configuration through `syswarden config`, with
+independent TOML selection of SSH/CIS/OS and optional modules and preservation
+of administrator upgrades. BunkerWeb independence and Linux AMD64 are unchanged.

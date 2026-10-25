@@ -108,13 +108,74 @@ This records one receipt under the existing protected journal lock after current
 state, enrollment and signature checks. It does not connect to SSH or select a
 key from the receipt. Replay and changed enrollment are refused.
 
+## Access after restoring the original policy
+
+Restoration uses a separate controller enrollment at
+`/etc/syswarden/ssh-restoration-access-controller-v1.json`. Its schema-1 domain
+is `syswarden-ssh-restoration-access-controller-v1` and its scope is
+`restoration-access`. It binds the independently approved original plan and
+recovery digests as well as the controller key, complete route pins and validity
+interval. An activation enrollment cannot authorize restoration access. Provision
+this public document through the same protected administrator channel, using a
+new independently approved enrollment digest.
+
+The target must already have a complete recorded original-file restoration and
+reload intent. Preparing these requests does not restore files or retry reload.
+The request binds the original plan, recovery, restored graph, recorded reload
+and target lineage, plus the current parser and endpoint assessment. The
+recorded target identifies restoration history; it is not proof that the daemon
+consumed the restored policy. Historical activation records remain unchanged.
+
+Use a separate empty private exchange directory for restoration so that earlier
+activation files remain intact. The four commands use the same protected file
+names, output reservation, independent controller credentials and transport
+rules described above:
+
+| Command | Additional restoration input |
+| --- | --- |
+| `restoration-access-request` | Original `--plan-sha256`, approved `--recovery-sha256` and restoration `--enrollment-sha256`. |
+| `restoration-access-issue` | The same target approvals, the reviewed restored `--request-sha256` and a 1 to 300 second lifetime. |
+| `restoration-access-probe` | Independently approved restored request and challenge hashes, plus the controller-local credentials hash. |
+| `restoration-access-record` | The target approvals and original writer's issuance and issuance-image hashes, with `receipt.json` transferred back privately. |
+
+For example, target request preparation is:
+
+```sh
+syswarden ssh-policy restoration-access-request \
+  --exchange-dir /root/ssh-restoration-exchange \
+  --plan-sha256 "$APPROVED_PLAN" \
+  --recovery-sha256 "$APPROVED_RECOVERY" \
+  --enrollment-sha256 "$APPROVED_RESTORATION_ENROLLMENT"
+```
+
+Do not reuse an activation request, enrollment, challenge or receipt. Restoration
+has its own request and record domains; the signed request digest binds that
+purpose to the controller exchange. Both request families retain their original
+canonical byte contracts. Unknown records, incomplete inverse transitions,
+changed parser/files/endpoints, replaced enrollment and uncertain issuance remain
+refusals. Lost delivery never frees an occupied issuance slot.
+
+The new read-only `restoration-access-inspect` command requires the original plan,
+recovery, restoration enrollment, issuance and original issuance-image approvals.
+Supply `--record-sha256` when inspecting an independently approved recorded
+receipt. It does not use an exchange directory, write records or authenticate a
+new connection. Its output describes observed records only, never reconstructed
+write durability or completed recovery. Keep the original writer's result and
+all private history. The ordinary `assess-restoration` command retains its
+original strict history contract; purpose-specific access records require this
+separate inspection path. Inspection conservatively requires enrollment and the
+original short-lived challenge to remain valid. Expired records are retained but
+are not accepted by this live-state inspection path.
+
 ## Limits
 
 A successful login proves fresh access for the declared routes. It does not prove
 all server restrictions or exclusive causation by a particular reload signal.
 Stock OpenSSH's parser, process and listener evidence must not be described as a
-daemon-emitted acknowledgement. Runtime acceptance, restored-policy access,
-owned lifecycle operations and native migration qualification remain incomplete.
+daemon-emitted acknowledgement. The restored-policy exchange adds scoped
+fresh-access evidence. Runtime acceptance, owned lifecycle operations and native migration qualification remain
+incomplete.
 These commands do not make the package ready for migration testing or establish
-final v5.00.0 IVVQ acceptance. Fresh installation remains standard-list-only;
+final v5.00.0 IVVQ acceptance. Fresh native installation selects no list and
+leaves activation deferred until explicit configuration through `syswarden config`.
 SSH hardening still requires its independent explicit TOML selection.

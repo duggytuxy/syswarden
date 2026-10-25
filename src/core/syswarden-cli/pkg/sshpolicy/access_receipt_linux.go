@@ -66,7 +66,14 @@ type sshAccessReceiptAssessment struct {
 }
 
 func newSSHAccessChallenge(request []byte, approved string, controller ed25519.PublicKey, now time.Time, lifetime time.Duration) ([]byte, error) {
-	if _, err := parseSSHAccessRequest(request, approved); err != nil {
+	return newSSHAccessChallengeWithParser(request, approved, controller, now, lifetime, parseSSHAccessRequest)
+}
+
+func newSSHAccessChallengeWithParser(request []byte, approved string, controller ed25519.PublicKey, now time.Time, lifetime time.Duration, parse sshAccessRequestParser) ([]byte, error) {
+	if parse == nil {
+		return nil, ErrInventoryUnsafe
+	}
+	if _, err := parse(request, approved); err != nil {
 		return nil, err
 	}
 	if len(controller) != ed25519.PublicKeySize || now.Unix() <= 0 || lifetime < time.Second || lifetime > 5*time.Minute || lifetime%time.Second != 0 {
@@ -104,8 +111,13 @@ func parseSSHAccessChallenge(wire []byte, approved string, now time.Time) (sshAc
 // The clock and authorization guard are trusted, promptly returning dependencies.
 // No controller secret or authentication credential is sent to target preparation.
 func probeSSHAccessChallenge(parent context.Context, requestWire, challengeWire []byte, approved string,
-	key ed25519.PrivateKey, credentials []sshAccessCredentials, clock func() time.Time, guard func() error) (wire []byte, err error) {
-	if parent == nil || clock == nil || guard == nil || len(key) != ed25519.PrivateKeySize ||
+	key ed25519.PrivateKey, credentials []sshAccessCredentials, clock func() time.Time, guard func() error) ([]byte, error) {
+	return probeSSHAccessChallengeWithParser(parent, requestWire, challengeWire, approved, key, credentials, clock, guard, parseSSHAccessRequest)
+}
+
+func probeSSHAccessChallengeWithParser(parent context.Context, requestWire, challengeWire []byte, approved string,
+	key ed25519.PrivateKey, credentials []sshAccessCredentials, clock func() time.Time, guard func() error, parse sshAccessRequestParser) (wire []byte, err error) {
+	if parent == nil || clock == nil || guard == nil || parse == nil || len(key) != ed25519.PrivateKeySize ||
 		len(requestWire) == 0 || len(requestWire) > maxSSHAccessRequestBytes || len(challengeWire) == 0 || len(challengeWire) > maxSSHAccessChallengeBytes {
 		return nil, ErrInventoryUnsafe
 	}
@@ -148,7 +160,7 @@ func probeSSHAccessChallenge(parent context.Context, requestWire, challengeWire 
 	if err := check(); err != nil {
 		return nil, err
 	}
-	batch, err := probeSSHActivationAccessRequest(parent, requestWire, challenge.Request, credentials, check)
+	batch, err := probeSSHAccessRequestWithParser(parent, requestWire, challenge.Request, credentials, check, parse)
 	if err != nil {
 		return nil, err
 	}
@@ -178,15 +190,19 @@ func copySSHAccessReceiptInput(input sshAccessReceiptInput) (sshAccessReceiptInp
 }
 
 func verifySSHAccessReceipt(input sshAccessReceiptInput, now time.Time) (sshAccessReceiptAssessment, error) {
+	return verifySSHAccessReceiptWithParser(input, now, parseSSHAccessRequest)
+}
+
+func verifySSHAccessReceiptWithParser(input sshAccessReceiptInput, now time.Time, parse sshAccessRequestParser) (sshAccessReceiptAssessment, error) {
 	empty := sshAccessReceiptAssessment{}
-	if len(input.Receipt) == 0 || len(input.Receipt) > maxSSHAccessReceiptBytes || len(input.Controller) != ed25519.PublicKeySize {
+	if parse == nil || len(input.Receipt) == 0 || len(input.Receipt) > maxSSHAccessReceiptBytes || len(input.Controller) != ed25519.PublicKeySize {
 		return empty, ErrInventoryUnsafe
 	}
 	challenge, err := parseSSHAccessChallenge(input.Challenge, input.ApprovedChallenge, now)
 	if err != nil || challenge.Controller != digestBytes(input.Controller) {
 		return empty, errors.Join(ErrInventoryUnsafe, err)
 	}
-	request, err := parseSSHAccessRequest(input.Request, challenge.Request)
+	request, err := parse(input.Request, challenge.Request)
 	if err != nil {
 		return empty, err
 	}

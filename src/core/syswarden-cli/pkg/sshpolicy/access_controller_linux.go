@@ -30,10 +30,22 @@ type ControllerAccessCredential struct {
 // consumption. The guard must recheck the controller's protected local inputs.
 func ProbeAccessChallenge(ctx context.Context, request, challenge []byte, requestSHA, challengeSHA string,
 	secret []byte, guard func() error) ([]byte, error) {
-	if ctx == nil || guard == nil || len(secret) == 0 || len(secret) > 1<<20 {
+	return probeAccessChallengeWithParser(ctx, request, challenge, requestSHA, challengeSHA, secret, guard, parseSSHAccessRequest)
+}
+
+// ProbeRestoredAccessChallenge accepts only independently approved restoration
+// requests. Authentication is an observation and never completes recovery.
+func ProbeRestoredAccessChallenge(ctx context.Context, request, challenge []byte, requestSHA, challengeSHA string,
+	secret []byte, guard func() error) ([]byte, error) {
+	return probeAccessChallengeWithParser(ctx, request, challenge, requestSHA, challengeSHA, secret, guard, normalizedSSHRestoredAccessRequest)
+}
+
+func probeAccessChallengeWithParser(ctx context.Context, request, challenge []byte, requestSHA, challengeSHA string,
+	secret []byte, guard func() error, parse sshAccessRequestParser) ([]byte, error) {
+	if ctx == nil || guard == nil || parse == nil || len(secret) == 0 || len(secret) > 1<<20 {
 		return nil, ErrInventoryUnsafe
 	}
-	if _, err := parseSSHAccessRequest(request, requestSHA); err != nil {
+	if _, err := parse(request, requestSHA); err != nil {
 		return nil, err
 	}
 	var document ControllerAccessCredentials
@@ -57,7 +69,7 @@ func ProbeAccessChallenge(ctx context.Context, request, challenge []byte, reques
 	}
 	key := ed25519.NewKeyFromSeed(document.SigningSeed)
 	defer clear(key)
-	return probeSSHAccessChallenge(ctx, request, challenge, challengeSHA, key, credentials, time.Now, guard)
+	return probeSSHAccessChallengeWithParser(ctx, request, challenge, challengeSHA, key, credentials, time.Now, guard, parse)
 }
 
 func clearControllerCredentials(document *ControllerAccessCredentials) {

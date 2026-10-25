@@ -19,10 +19,17 @@ var preflightLegacyWireGuardForInstall = network.PreflightLegacyWireGuardConflic
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install SYSWARDEN and configure security modules",
-	Long:  "Installs the selected firewall services and feed scheduler. Fresh packages use the standard-list-only profile. SSH, CIS and OS hardening require a separate explicit configuration operation.",
+	Long:  "Installs the selected firewall services and feed scheduler. Fresh packages stage an unconfigured profile without activating lists or services. SSH, CIS and OS hardening require a separate explicit configuration operation.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := preflightWireGuardPolicyTransition(); err != nil {
 			return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
+		}
+		if freshNativePackageInstallation() && !system.OfflineQualificationPackageInstall() {
+			if err := stageFreshNativeConfiguration("/etc/syswarden/config"); err != nil {
+				return installStageError("fresh package configuration staging failed", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "[INFO] Package installed without activating lists, modules, hardening, services or firewall rules. Configure TOML with 'syswarden config', run 'syswarden config validate', then explicitly run 'syswarden install' when ready.")
+			return nil
 		}
 		plan := nativeServicePlanForInstall(cmd)
 		if plan.Deferred() {

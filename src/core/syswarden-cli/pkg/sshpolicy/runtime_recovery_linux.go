@@ -54,10 +54,26 @@ func sshRuntimeRecoveryPhase(step int, done bool) string {
 // Only original activation history and this operation's fixed phase names are
 // accepted. Every record is pinned by inode, bytes, metadata and attributes.
 func observeSSHRuntimeRecoveryRecords(journal *sshJournal) (map[string]string, error) {
+	return observeSSHRuntimeRecoveryRecordsWithAccess(journal, nil, nil)
+}
+
+// New purpose records require explicit pinned images. They never enter the
+// original recovery history digest or widen the ordinary recovery observer.
+func observeSSHRuntimeRecoveryRecordsWithAccess(journal *sshJournal, issuance, evidence *sshFileImage) (map[string]string, error) {
+	if evidence != nil && issuance == nil {
+		return nil, ErrInventoryUnsafe
+	}
+	limit := 17
+	if issuance != nil {
+		limit++
+	}
+	if evidence != nil {
+		limit++
+	}
 	if err := journal.recheck(); err != nil {
 		return nil, err
 	}
-	names, err := sshDirectoryNames(journal.directory, 17)
+	names, err := sshDirectoryNames(journal.directory, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +87,12 @@ func observeSSHRuntimeRecoveryRecords(journal *sshJournal) (map[string]string, e
 	for step := 1; step <= 2; step++ {
 		allowed[sshRuntimeRecoveryPhase(step, false)], allowed[sshRuntimeRecoveryPhase(step, true)] = true, true
 	}
+	if issuance != nil {
+		allowed[sshRestoredAccessIssuanceName] = true
+	}
+	if evidence != nil {
+		allowed[sshRestoredAccessEvidenceName] = true
+	}
 	for _, name := range names {
 		if !allowed[name] {
 			return nil, ErrInventoryUnsafe
@@ -80,6 +102,12 @@ func observeSSHRuntimeRecoveryRecords(journal *sshJournal) (map[string]string, e
 			return nil, err
 		}
 		records[name] = sshImageDigest(image)
+	}
+	for name, expected := range map[string]*sshFileImage{sshRestoredAccessIssuanceName: issuance, sshRestoredAccessEvidenceName: evidence} {
+		if expected != nil && records[name] != sshImageDigest(*expected) {
+			return nil, ErrInventoryChanged
+		}
+		delete(records, name)
 	}
 	return records, journal.recheck()
 }

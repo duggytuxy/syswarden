@@ -95,7 +95,10 @@ func decodeSSHRestoredRetirement(data []byte, uid int) (sshRestoredRetirement, e
 }
 
 func restoredSSHRecordName(name string) bool {
-	return name == sshMarkerName || (sshRecordName(name) && name != sshPreparationAbortName && name != sshActivationIntentName)
+	// Generic journal publication names do not grant file-only retirement
+	// authority for the separately approved restoration access exchange.
+	return name == sshMarkerName || (sshRecordName(name) && name != sshPreparationAbortName && name != sshActivationIntentName &&
+		name != sshRestoredAccessIssuanceName && name != sshRestoredAccessEvidenceName)
 }
 
 func observeSSHRestoredFiles(directory *os.File, uid int) (map[string]string, sshPreparation, error) {

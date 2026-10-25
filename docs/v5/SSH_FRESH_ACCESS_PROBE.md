@@ -94,9 +94,10 @@ causal policy-consumption acknowledgement, transaction-bound receipt handling,
 runtime-aware recovery, owned updates and separate native uninstall, remove and
 purge validation. Final v5.00.0 IVVQ acceptance remains open.
 
-Issue #422 still requires standard-list-only fresh native installation, with
+Issue #422 requires fresh native installation to select no list and defer
+activation until explicit configuration through `syswarden config`, with
 independent explicit TOML choices for SSH, CIS, OS hardening and optional
-modules. The source installer uses the minimal profile; [native dependency
+modules. The native hooks stage an unconfigured TOML profile; [native dependency
 transitions and package qualification](MINIMAL_NATIVE_INSTALL.md) remain open. This
 transport changes no installation defaults or administrator upgrade settings.
 BunkerWeb independence is preserved; product scope remains Linux AMD64 only.
