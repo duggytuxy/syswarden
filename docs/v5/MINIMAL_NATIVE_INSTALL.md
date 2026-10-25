@@ -120,13 +120,35 @@ status script to infer them, and records this limitation as a blocker.
 
 This mode cannot be combined with `--apply`, `--plan-sha256` or historical
 recovery modes. It prints no apply command and grants no migration authority.
-Existing v1 policy still needs a recoverable server/manifest replacement, a
-service-start fence, a successor record for any sealed predecessor, and exact
-runtime retirement. Do not disable an access tunnel merely to clear a diagnostic
+Existing v1 policy still needs a qualified production service-start fence,
+exact runtime retirement and a host acceptance path around the internal
+server/manifest transaction. Do not disable an access tunnel merely to clear a diagnostic
 blocker. The activation and recovery workflow must be qualified first. The
 assessment does not establish migration-ready packages or final IVVQ acceptance.
 The `scoped-v2` state identifies the validated file policy only. It does not
 establish complete runtime health, peer reachability or encrypted traffic flow.
+
+## Internal owned policy file transaction
+
+The candidate contains an internal recoverable replacement for an exactly owned
+v1 server and its manifest. It preserves the original files in private archives
+and records an immutable successor relationship to any existing sealed migration
+receipt. Only the generated server hook and its manifest identity change. Client
+credentials, peer settings, OpenRC link ownership and forwarding persistence are
+preserved. Interrupted publication continues only from recognized original and
+target identities; ambiguous state is retained and refused.
+
+File commitment leaves pending recovery evidence in place. Installation, reload,
+updating and removal refuse before configuration repair or runtime preparation
+while that evidence remains. Forwarding and filesystem-binding recovery also
+refuse before changing their own files. Explicit internal finalization is separate
+from file publication and requires a future caller to establish host acceptance.
+There is no CLI apply command or installer route to this transaction. It does not
+prove service-start exclusion, encrypted traffic, restored access or migration
+readiness. Do not manually delete pending evidence to bypass these guards.
+Retained successor archives also block fresh publication over that generation.
+A separately qualified lineage-retirement and reinstall path remains open; the
+prototype never deletes private recovery evidence to make a new install proceed.
 
 ## Dynamic observations and ban lifetime
 

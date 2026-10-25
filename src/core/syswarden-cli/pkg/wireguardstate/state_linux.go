@@ -1057,6 +1057,12 @@ func StageOwnedArtifacts(root string, contents map[string][]byte, expectedUID, e
 	if err := preflightLegacyMigration(root); err != nil {
 		return nil, err
 	}
+	// Fixed private successor archives cannot be rebound to a new generation.
+	// Reinstallation needs a separately reviewed lineage-retirement plan; never
+	// delete recovery evidence or begin publication to make it appear absent.
+	if present, err := inventoryLogicalExists(root, PolicyTransitionReceiptPath); err != nil || present {
+		return nil, errors.Join(fmt.Errorf("retained WireGuard policy lineage blocks fresh publication; preserve private recovery archives"), err)
+	}
 	if len(contents) != len(canonicalArtifactPaths) {
 		return nil, fmt.Errorf("WireGuard staging requires the exact generated-artifact inventory")
 	}
@@ -1848,6 +1854,9 @@ func removeTransactionJournal(root string, expected Artifact, expectedUID, expec
 
 // CaptureManifest records the exact current identities of all generated files.
 func CaptureManifest(root string, expectedUID, expectedGID uint32) (Manifest, error) {
+	if err := RefusePendingPolicyTransition(root); err != nil {
+		return Manifest{}, err
+	}
 	manifest := Manifest{Schema: manifestSchema, Artifacts: make([]Artifact, 0, len(canonicalArtifactPaths))}
 	for _, path := range canonicalArtifactPaths {
 		record, _, err := captureLogical(root, path, expectedUID, expectedGID, maximumOwnedArtifactBytes)
@@ -1889,6 +1898,9 @@ func readManifestWithRecord(root string, expectedUID, expectedGID uint32) (Manif
 // ReadManifest reads and validates the canonical manifest envelope and its own
 // root-owned 0600 regular-file identity. It does not verify artifact contents.
 func ReadManifest(root string, expectedUID, expectedGID uint32) (Manifest, error) {
+	if err := RefusePendingPolicyTransition(root); err != nil {
+		return Manifest{}, err
+	}
 	manifest, _, err := readManifestWithRecord(root, expectedUID, expectedGID)
 	return manifest, err
 }
@@ -1952,6 +1964,9 @@ func ReadAndVerify(root string, expectedUID, expectedGID uint32) (Manifest, erro
 		return Manifest{}, err
 	}
 	if err := VerifyManifest(root, manifest, expectedUID, expectedGID); err != nil {
+		return Manifest{}, err
+	}
+	if err := verifyFinalizedPolicyManifest(root, manifest, expectedUID, expectedGID); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil
@@ -2632,6 +2647,9 @@ func beginOwnedArtifactRemoval(
 		return err
 	}
 	if err := VerifyManifest(root, manifest, expectedUID, expectedGID); err != nil {
+		return err
+	}
+	if err := verifyFinalizedPolicyManifest(root, manifest, expectedUID, expectedGID); err != nil {
 		return err
 	}
 	manifestQuarantine, err := randomTemporaryName(filepath.Base(ManifestPath), "quarantine")

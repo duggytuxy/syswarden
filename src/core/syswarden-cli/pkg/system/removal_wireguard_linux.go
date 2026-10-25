@@ -8,7 +8,12 @@ import (
 	"syswarden-cli/pkg/wireguardstate"
 )
 
+var refusePendingWireGuardPolicyForRemoval = func() error {
+	return wireguardstate.RefusePendingPolicyTransition("/")
+}
+
 type wireGuardRemovalTail struct {
+	refusePolicyTransition func() error
 	requireBarrier         func() error
 	reattestServices       func() error
 	recoverForwarding      func() error
@@ -31,12 +36,13 @@ func productionWireGuardRemovalTail(
 	cleanupOrphanedNFT func() error,
 ) wireGuardRemovalTail {
 	return wireGuardRemovalTail{
-		requireBarrier:     RequireRemovalTombstone,
-		reattestServices:   ReattestFirewallStatePreparedForRemoval,
-		recoverForwarding:  recoverForwarding,
-		cleanupOwnedNFT:    cleanupOwnedNFT,
-		cleanupStaleNFT:    cleanupStaleNFT,
-		cleanupOrphanedNFT: cleanupOrphanedNFT,
+		refusePolicyTransition: refusePendingWireGuardPolicyForRemoval,
+		requireBarrier:         RequireRemovalTombstone,
+		reattestServices:       ReattestFirewallStatePreparedForRemoval,
+		recoverForwarding:      recoverForwarding,
+		cleanupOwnedNFT:        cleanupOwnedNFT,
+		cleanupStaleNFT:        cleanupStaleNFT,
+		cleanupOrphanedNFT:     cleanupOrphanedNFT,
 		inspectTransaction: func() (wireguardstate.TransactionOperation, bool, error) {
 			return wireguardstate.InspectTransaction("/", 0, 0)
 		},
@@ -73,7 +79,7 @@ func productionWireGuardRemovalTail(
 }
 
 func (tail wireGuardRemovalTail) validate() error {
-	if tail.requireBarrier == nil || tail.reattestServices == nil || tail.cleanupOwnedNFT == nil ||
+	if tail.refusePolicyTransition == nil || tail.requireBarrier == nil || tail.reattestServices == nil || tail.cleanupOwnedNFT == nil ||
 		tail.cleanupStaleNFT == nil ||
 		tail.cleanupOrphanedNFT == nil ||
 		tail.recoverForwarding == nil ||
@@ -89,6 +95,9 @@ func (tail wireGuardRemovalTail) validate() error {
 func (tail wireGuardRemovalTail) remove() error {
 	if err := tail.validate(); err != nil {
 		return err
+	}
+	if err := tail.refusePolicyTransition(); err != nil {
+		return fmt.Errorf("WireGuard policy transition requires recovery before removal: %w", err)
 	}
 	if err := tail.requireBarrier(); err != nil {
 		return fmt.Errorf("WireGuard removal requires the durable removal tombstone: %w", err)

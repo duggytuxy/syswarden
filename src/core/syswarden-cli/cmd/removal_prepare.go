@@ -50,6 +50,9 @@ var retireCreatedUISnapshotsForRemoval = system.RetireCreatedUISnapshotsForRemov
 var removeEmptyFirewallWrapperStateForRemoval = system.RemoveEmptyFirewallWrapperStateForRemoval
 
 func prepareVerifiedFirewallRemoval() error {
+	if err := preflightWireGuardPolicyTransition(); err != nil {
+		return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
+	}
 	if err := preflightKnownNFTPersistenceForRemoval(); err != nil {
 		return fmt.Errorf("persistent firewall recovery is required before removal starts; this read-only preflight has not stopped services or published a new removal barrier: %w", err)
 	}

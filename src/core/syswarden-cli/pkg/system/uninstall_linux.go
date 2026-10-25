@@ -927,6 +927,9 @@ func (host firewallRemovalPreparationHost) reattest() error {
 // intentionally leaves owned services disabled; callers must report that
 // recoverable state if a later cleanup phase fails.
 func PrepareFirewallStateForRemoval() error {
+	if err := refusePendingWireGuardPolicyForRemoval(); err != nil {
+		return err
+	}
 	if err := RequireRemovalTombstone(); err != nil {
 		return fmt.Errorf("firewall removal preparation requires the durable removal tombstone: %w", err)
 	}

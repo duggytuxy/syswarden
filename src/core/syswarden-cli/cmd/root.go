@@ -29,6 +29,9 @@ var rootCmd = &cobra.Command{
 			// APK pre-commit must never load policy or recover firewall state.
 			return nil
 		}
+		if err := enforceWireGuardPolicyTransition(cmd); err != nil {
+			return err
+		}
 		if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "uninstall" {
 			if err := preflightUninstall(); err != nil {
 				return err

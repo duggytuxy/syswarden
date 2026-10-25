@@ -575,6 +575,9 @@ func forwardingManifestMatchesTarget(wire []byte, prior wireguardstate.Manifest,
 }
 
 func recoverWireGuardForwardingTransition() (bool, error) {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return false, err
+	}
 	journal, journalIdentity, present, err := readWireGuardForwardingTransitionJournal()
 	if err != nil || !present {
 		return present, err
@@ -938,6 +941,9 @@ func recoverWireGuardForwardingTransitionGuarded() (resultErr error) {
 }
 
 func recoverPendingWireGuardForwardingStateLocked() error {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	if err := recoverWireGuardFilesystemBinding(); err != nil {
 		return fmt.Errorf("recover attested WireGuard filesystem binding: %w", err)
 	}

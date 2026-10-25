@@ -21,6 +21,9 @@ var installCmd = &cobra.Command{
 	Short: "Install SYSWARDEN and configure security modules",
 	Long:  "Installs the selected firewall services and feed scheduler. Fresh packages use the standard-list-only profile. SSH, CIS and OS hardening require a separate explicit configuration operation.",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := preflightWireGuardPolicyTransition(); err != nil {
+			return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
+		}
 		plan := nativeServicePlanForInstall(cmd)
 		if plan.Deferred() {
 			fmt.Println("[INFO] Package staged without automatic host activation; existing service state is preserved. Review the service pair and configuration before an explicit online install.")

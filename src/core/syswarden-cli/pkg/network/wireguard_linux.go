@@ -1694,6 +1694,9 @@ func cleanupAttestedInactiveWireGuardNFTTable(expected wireguardstate.ServerConf
 // manifest, transaction, or generated WireGuard artifact remains. Historical
 // unmarked tables and every table with additional state remain fail-closed.
 func CleanupAttestedOrphanedWireGuardNFTStateForRemoval() (resultErr error) {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	release, err := wireGuardNFTActivationGuard()
 	if err != nil {
 		return fmt.Errorf("acquire orphaned WireGuard nftables cleanup guard: %w", err)
@@ -1715,6 +1718,9 @@ func CleanupAttestedOrphanedWireGuardNFTStateForRemoval() (resultErr error) {
 // shared activation guard and the inactive service and interface checks keep
 // this fallback bounded to the stale-table recovery case.
 func CleanupAttestedStaleWireGuardNFTStateForRemoval() (resultErr error) {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	release, err := wireGuardNFTActivationGuard()
 	if err != nil {
 		return fmt.Errorf("acquire stale WireGuard nftables cleanup guard: %w", err)
@@ -1735,6 +1741,9 @@ func CleanupAttestedStaleWireGuardNFTStateForRemoval() (resultErr error) {
 // exact ownership manifest and server-configuration token while holding the
 // shared firewall lock. A same-name replacement is preserved.
 func CleanupOwnedWireGuardNFTState() (resultErr error) {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	release, err := wireGuardNFTActivationGuard()
 	if err != nil {
 		return fmt.Errorf("acquire WireGuard nftables cleanup guard: %w", err)
@@ -2359,6 +2368,9 @@ func stageAndPublishWireGuardState(
 }
 
 func SetupWireguard() (resultErr error) {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	if config.GlobalConfig == nil {
 		return fmt.Errorf("WireGuard setup requires a loaded configuration")
 	}

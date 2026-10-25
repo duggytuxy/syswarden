@@ -19,6 +19,7 @@ type OwnedPolicySnapshot struct {
 	Source             ServerConfigurationIdentity `json:"source"`
 	Target             ServerConfigurationIdentity `json:"target"`
 	TargetServerSHA256 string                      `json:"target_server_sha256"`
+	SuccessorReceipt   *Artifact                   `json:"successor_receipt,omitempty"`
 	PredecessorReceipt *Artifact                   `json:"predecessor_receipt,omitempty"`
 }
 
@@ -27,6 +28,9 @@ type OwnedPolicySnapshot struct {
 // predecessors are refused. Original receipts and private backups stay intact.
 func InspectOwnedPolicy(root string, uid, gid uint32) (OwnedPolicySnapshot, error) {
 	var result OwnedPolicySnapshot
+	if err := policyOtherTransactionsAbsent(root); err != nil {
+		return result, err
+	}
 	inventory, err := Inspect(root)
 	if err != nil {
 		return result, err
@@ -70,6 +74,16 @@ func InspectOwnedPolicy(root string, uid, gid uint32) (OwnedPolicySnapshot, erro
 			return result, errors.Join(fmt.Errorf("owned policy predecessor evidence is incomplete or changed"), err)
 		}
 	}
+	successor, _, err := captureMigrationOptional(root, PolicyTransitionReceiptPath, uid, gid)
+	if err != nil {
+		return result, err
+	}
+	if successor != nil {
+		lineage, err := InspectPolicyTransition(root, uid, gid)
+		if err != nil || !lineage.Complete || lineage.State != "complete" || !reflect.DeepEqual(lineage.Receipt, successor) {
+			return result, errors.Join(fmt.Errorf("owned policy successor evidence is incomplete or changed"), err)
+		}
+	}
 	again, againRecord, err := readManifestWithRecord(root, uid, gid)
 	if err != nil || !sameArtifact(againRecord, record) || !reflect.DeepEqual(again, manifest) {
 		return result, errors.Join(fmt.Errorf("owned WireGuard manifest changed during assessment"), err)
@@ -88,8 +102,15 @@ func InspectOwnedPolicy(root string, uid, gid uint32) (OwnedPolicySnapshot, erro
 	if pending, err := inventoryLogicalExists(root, ForwardingTransitionPath); err != nil || pending {
 		return result, errors.Join(fmt.Errorf("owned WireGuard forwarding transition appeared during assessment"), err)
 	}
+	againSuccessor, _, err := captureMigrationOptional(root, PolicyTransitionReceiptPath, uid, gid)
+	if err != nil || !reflect.DeepEqual(successor, againSuccessor) {
+		return result, errors.Join(fmt.Errorf("owned policy successor changed during assessment"), err)
+	}
+	if err := policyOtherTransactionsAbsent(root); err != nil {
+		return result, err
+	}
 	result = OwnedPolicySnapshot{Manifest: manifest, ManifestArtifact: record,
 		Source: source, Target: target, TargetServerSHA256: plannedArtifact(ServerConfigurationPath, targetBytes, uid, gid).SHA256,
-		PredecessorReceipt: receipt}
+		PredecessorReceipt: receipt, SuccessorReceipt: successor}
 	return result, nil
 }

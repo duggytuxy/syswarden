@@ -27,6 +27,9 @@ var reloadCmd = &cobra.Command{
 	Use:   "reload",
 	Short: "Reapply policy and normally restart syswarden-core",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := preflightWireGuardPolicyTransition(); err != nil {
+			return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
+		}
 		if err := preflightConfiguredCronScheduling(); err != nil {
 			return fmt.Errorf("cron scheduling preflight failed before reload mutation: %w", err)
 		}
