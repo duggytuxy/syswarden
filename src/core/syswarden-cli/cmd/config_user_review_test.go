@@ -156,7 +156,7 @@ func TestConfigUserMenuRechecksRecoveryAfterApproval(t *testing.T) {
 			if !reflect.DeepEqual(before, after) {
 				t.Fatal("refused publication changed live configuration")
 			}
-			if strings.Contains(output.String(), "Validated user configuration published.") {
+			if strings.Contains(output.String(), "Validated configuration file published.") {
 				t.Fatal("refusal printed success")
 			}
 		})
@@ -172,5 +172,66 @@ func TestConfigUserMenuEOFDoesNotApprove(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, snapshotRegularFiles(t, root)) {
 		t.Fatal("EOF changed live configuration")
+	}
+}
+
+func TestConfigMenuUsesReviewedPrivateCopiesForEveryOrdinaryFile(t *testing.T) {
+	for _, choice := range []string{"1", "2", "3", "4", "5", "9"} {
+		for _, approve := range []bool{false, true} {
+			t.Run(choice+map[bool]string{true: "/approve", false: "/cancel"}[approve], func(t *testing.T) {
+				root, output := configUserReviewFixture(t)
+				before := snapshotRegularFiles(t, root)
+				var stage string
+				launchConfigEditor = func(_ string, path string, _ io.Reader, _ io.Writer, _ io.Writer) error {
+					stage = path
+					if strings.HasPrefix(path, root+string(filepath.Separator)) {
+						t.Fatal("ordinary editor received live path")
+					}
+					privateRoot, err := os.OpenRoot(filepath.Dir(path))
+					if err != nil {
+						return err
+					}
+					defer func() { _ = privateRoot.Close() }()
+					content, err := privateRoot.ReadFile(filepath.Base(path))
+					if err != nil {
+						return err
+					}
+					if !reflect.DeepEqual(before, snapshotRegularFiles(t, root)) {
+						t.Fatal("configuration changed before editor")
+					}
+					return privateRoot.WriteFile(filepath.Base(path), append(content, []byte("\n# operator edit\n")...), 0600)
+				}
+				reply := ""
+				if approve {
+					reply = "APPROVE"
+				}
+				configCmd.SetIn(&configReviewInput{output: output, lines: []string{choice, reply, "0"}})
+				if err := configCmd.RunE(configCmd, nil); err != nil {
+					t.Fatal(err)
+				}
+				after := snapshotRegularFiles(t, root)
+				if !approve {
+					if !reflect.DeepEqual(before, after) {
+						t.Fatal("cancel changed live configuration")
+					}
+				} else {
+					changed := 0
+					for name, content := range before {
+						if after[name] != content {
+							changed++
+							if after[name] != content+"\n# operator edit\n" {
+								t.Fatal("unreviewed content published")
+							}
+						}
+					}
+					if changed != 1 || len(after) != len(before) {
+						t.Fatalf("publication changed %d files or changed inventory", changed)
+					}
+				}
+				if _, err := os.Lstat(filepath.Dir(stage)); !os.IsNotExist(err) {
+					t.Fatal("private working copy remains")
+				}
+			})
+		}
 	}
 }

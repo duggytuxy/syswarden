@@ -10,7 +10,10 @@ import (
 
 // PrepareImport reads a bounded regular source through a descriptor-rooted path.
 // Importing creates only a proposal; the source path is never publication authority.
-func (edit *UserModuleEdit) PrepareImport(ctx context.Context, sourcePath string) (*UserModuleProposal, error) {
+func (edit *ModuleEdit) PrepareImport(ctx context.Context, sourcePath string) (*ModuleProposal, error) {
+	if edit == nil || edit.state == nil || edit.state.target.relative != "modules/"+userModuleName {
+		return nil, errors.New("this operation requires the user override target")
+	}
 	if ctx == nil {
 		return nil, errors.New("configuration import requires a context")
 	}
@@ -29,7 +32,10 @@ func (edit *UserModuleEdit) PrepareImport(ctx context.Context, sourcePath string
 
 // PrepareProfileName retains unrelated operator bytes and validates the full
 // candidate. The caller must still review and approve its publication.
-func (edit *UserModuleEdit) PrepareProfileName(ctx context.Context, name string) (*UserModuleProposal, error) {
+func (edit *ModuleEdit) PrepareProfileName(ctx context.Context, name string) (*ModuleProposal, error) {
+	if edit == nil || edit.state == nil || edit.state.target.relative != "modules/"+userModuleName {
+		return nil, errors.New("this operation requires the user override target")
+	}
 	if len(name) == 0 || len(name) > 15 {
 		return nil, errors.New("profile name must contain between 1 and 15 ASCII characters")
 	}
@@ -43,13 +49,14 @@ func (edit *UserModuleEdit) PrepareProfileName(ctx context.Context, name string)
 
 // PrepareWithEditor gives the operator-selected editor a private working copy.
 // This is not an editor sandbox: the editor runs with the operator's privileges.
-func (edit *UserModuleEdit) PrepareWithEditor(ctx context.Context, editor func(string) error) (proposal *UserModuleProposal, resultErr error) {
+func (edit *ModuleEdit) PrepareWithEditor(ctx context.Context, editor func(string) error) (proposal *ModuleProposal, resultErr error) {
 	if edit == nil || edit.state == nil || ctx == nil || editor == nil {
 		return nil, errors.New("configuration editing requires a captured edit, context and editor")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	name := edit.state.target.name
 	directory, err := os.MkdirTemp("", "syswarden-config-edit-")
 	if err != nil {
 		return nil, err
@@ -66,7 +73,7 @@ func (edit *UserModuleEdit) PrepareWithEditor(ctx context.Context, editor func(s
 	defer func() {
 		// Remove only the fixed working file through the original directory handle.
 		// Editor swap/recovery files are retained; never recursively delete the tree.
-		cleanupErr := root.Remove(userModuleName)
+		cleanupErr := root.Remove(name)
 		if errors.Is(cleanupErr, os.ErrNotExist) {
 			cleanupErr = nil
 		}
@@ -81,7 +88,7 @@ func (edit *UserModuleEdit) PrepareWithEditor(ctx context.Context, editor func(s
 			resultErr = errors.Join(resultErr, fmt.Errorf("private editor files require inspection in %s: %w", directory, cleanupErr))
 		}
 	}()
-	file, err := root.OpenFile(userModuleName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +97,7 @@ func (edit *UserModuleEdit) PrepareWithEditor(ctx context.Context, editor func(s
 	if err := errors.Join(writeErr, closeErr); err != nil {
 		return nil, err
 	}
-	if err := editor(filepath.Join(directory, userModuleName)); err != nil {
+	if err := editor(filepath.Join(directory, name)); err != nil {
 		return nil, fmt.Errorf("editor execution failed: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -100,7 +107,7 @@ func (edit *UserModuleEdit) PrepareWithEditor(ctx context.Context, editor func(s
 	if err != nil || !sameFileAndMode(identity, current) {
 		return nil, errors.New("private edit directory changed while the editor was running")
 	}
-	content, err := readSecureRegularFile(root, userModuleName, filepath.Join(directory, userModuleName))
+	content, _, err := readSecureRegularFileSnapshotBounded(root, name, filepath.Join(directory, name), maximumUserModuleSize)
 	if err != nil {
 		return nil, fmt.Errorf("read private editor result: %w", err)
 	}

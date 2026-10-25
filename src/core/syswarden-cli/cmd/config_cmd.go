@@ -87,7 +87,7 @@ var configCmd = &cobra.Command{
 
 			targetFile := configEditorTarget(choice)
 
-			targetPath := filepath.Join(configDir, targetFile)
+			relativeTarget := filepath.ToSlash(filepath.Clean(filepath.Join("modules", targetFile)))
 
 			// Detect editor
 			editor := os.Getenv("EDITOR")
@@ -101,29 +101,21 @@ var configCmd = &cobra.Command{
 				}
 			}
 
-			if choice == 6 {
-				edit, err := config.BeginUserModuleEdit(cmd.Context(), configRoot)
-				if err != nil {
-					return err
-				}
-				proposal, err := edit.PrepareWithEditor(cmd.Context(), func(path string) error {
-					_, _ = fmt.Fprintln(output, "Opening a private working copy of 99-user.toml.")
-					return launchConfigEditor(editor, path, cmd.InOrStdin(), output, cmd.ErrOrStderr())
-				})
-				if err != nil {
-					return err
-				}
-				if err := reviewUserModuleProposal(cmd, reader, output, proposal); err != nil {
-					return err
-				}
-				continue
+			edit, err := config.BeginModuleEdit(cmd.Context(), configRoot, relativeTarget)
+			if err != nil {
+				return err
+			}
+			proposal, err := edit.PrepareWithEditor(cmd.Context(), func(path string) error {
+				_, _ = fmt.Fprintf(output, "Opening a private working copy of %s.\n", relativeTarget)
+				return launchConfigEditor(editor, path, cmd.InOrStdin(), output, cmd.ErrOrStderr())
+			})
+			if err != nil {
+				return err
+			}
+			if err := reviewUserModuleProposal(cmd, reader, output, proposal); err != nil {
+				return err
 			}
 
-			_, _ = fmt.Fprintf(output, "\n[*] Opening %s with %s...\n", targetPath, editor)
-			if err := launchConfigEditor(editor, targetPath, cmd.InOrStdin(), output, cmd.ErrOrStderr()); err != nil {
-				return fmt.Errorf("[ERROR] editor execution failed: %w", err)
-			}
-			_, _ = fmt.Fprintln(output, "[*] Editor closed. Changes have not been validated or activated; run 'syswarden config validate' before activation.")
 		}
 	},
 }
@@ -224,7 +216,7 @@ func importConfiguration(cmd *cobra.Command, reader *bufio.Reader, output io.Wri
 	return reviewUserModuleProposal(cmd, reader, output, proposal)
 }
 
-func reviewUserModuleProposal(cmd *cobra.Command, reader *bufio.Reader, output io.Writer, proposal *config.UserModuleProposal) error {
+func reviewUserModuleProposal(cmd *cobra.Command, reader *bufio.Reader, output io.Writer, proposal *config.ModuleProposal) error {
 	review := proposal.Review()
 	_, _ = fmt.Fprintf(output, "\nValidated candidate for %s.\n", review.Target)
 	for _, line := range review.ModulePlan {
@@ -232,7 +224,7 @@ func reviewUserModuleProposal(cmd *cobra.Command, reader *bufio.Reader, output i
 	}
 	_, _ = fmt.Fprintf(output, "Unknown keys: %d. Deprecated entries: %d.\n", review.UnknownKeyCount, review.DeprecatedKeyCount)
 	_, _ = fmt.Fprintln(output, "Configuration values are private and are not printed in this summary. Review the edited or imported TOML before approving.")
-	_, _ = fmt.Fprintln(output, "Publishing replaces only the user TOML. Host policy and services are not activated.")
+	_, _ = fmt.Fprintln(output, "Publishing replaces only the reviewed TOML file. Host policy and services are not activated.")
 	_, _ = fmt.Fprintf(output, "Approval expires at %s.\n", review.ExpiresAt.Format("15:04:05 MST"))
 	expected := "publish " + review.ApprovalID
 	_, _ = fmt.Fprintf(output, "Type '%s' to publish, or press Enter to cancel: ", expected)
@@ -255,7 +247,7 @@ func reviewUserModuleProposal(cmd *cobra.Command, reader *bufio.Reader, output i
 	}); err != nil {
 		return fmt.Errorf("configuration publication refused: %w", err)
 	}
-	_, _ = fmt.Fprintln(output, "Validated user configuration published. Host activation remains a separate explicit operation.")
+	_, _ = fmt.Fprintln(output, "Validated configuration file published. Host activation remains a separate explicit operation.")
 	return nil
 }
 

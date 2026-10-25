@@ -17,36 +17,43 @@ import (
 	"syswarden-cli/pkg/sshselection"
 )
 
+// User-specific aliases preserve callers of the initial bounded publication API.
+type UserModuleEdit = ModuleEdit
+type UserModuleProposal = ModuleProposal
+type UserModuleReview = ModuleReview
+
 const userModuleReviewLifetime = 10 * time.Minute
 
-// UserModuleEdit pins the configuration observed before an external edit. Copies
-// share state; callers receive no mutable snapshot or authoritative file bytes.
-type UserModuleEdit struct{ state *userModuleEditState }
+// ModuleEdit pins configuration before editing one allowed ordinary TOML file.
+// Copies share state; callers receive no mutable snapshot or authoritative bytes.
+type ModuleEdit struct{ state *moduleEditState }
 
-type userModuleEditState struct {
+type moduleEditState struct {
 	mu       sync.Mutex
 	root     string
+	target   tomlEditTarget
 	original []byte
 	snapshot *mergedConfigSnapshot
 	prepared bool
 }
 
-// UserModuleProposal is an in-process, single-use publication proposal. It is
+// ModuleProposal is an in-process, single-use publication proposal. It is
 // neither durable recovery evidence nor permission to activate host policy.
-type UserModuleProposal struct{ state *userModuleProposalState }
+type ModuleProposal struct{ state *moduleProposalState }
 
-type userModuleProposalState struct {
+type moduleProposalState struct {
 	mu       sync.Mutex
 	root     string
+	target   tomlEditTarget
 	content  []byte
 	snapshot *mergedConfigSnapshot
-	review   UserModuleReview
+	review   ModuleReview
 	used     bool
 }
 
-// UserModuleReview contains no configuration values except the fixed, validated
+// ModuleReview contains no configuration values except the fixed, validated
 // module-selection summary. Unknown/deprecated keys are represented by counts.
-type UserModuleReview struct {
+type ModuleReview struct {
 	Target             string
 	ApprovalID         string
 	ExpiresAt          time.Time
@@ -55,9 +62,18 @@ type UserModuleReview struct {
 	DeprecatedKeyCount int
 }
 
-// BeginUserModuleEdit reads identities without parsing the existing user file,
-// so invalid operator TOML can be repaired without writing it first.
-func BeginUserModuleEdit(ctx context.Context, configDir string) (*UserModuleEdit, error) {
+// BeginUserModuleEdit selects the user override file through the common editor.
+func BeginUserModuleEdit(ctx context.Context, configDir string) (*ModuleEdit, error) {
+	return BeginModuleEdit(ctx, configDir, "modules/"+userModuleName)
+}
+
+// BeginModuleEdit reads identities without parsing the target, so invalid TOML
+// can be repaired without writing unvalidated bytes into live configuration.
+func BeginModuleEdit(ctx context.Context, configDir, relative string) (*ModuleEdit, error) {
+	target, err := ordinaryTOMLTarget(relative)
+	if err != nil {
+		return nil, err
+	}
 	if ctx == nil {
 		return nil, errors.New("configuration edit requires a context")
 	}
@@ -73,18 +89,18 @@ func BeginUserModuleEdit(ctx context.Context, configDir string) (*UserModuleEdit
 	if err := rejectOperatorPolicyEnvironment(); err != nil {
 		return nil, err
 	}
-	snapshot, content, err := captureUserModuleEdit(configDir)
+	snapshot, content, err := captureModuleEdit(configDir, target)
 	if err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &UserModuleEdit{state: &userModuleEditState{root: configDir, original: content, snapshot: snapshot}}, nil
+	return &ModuleEdit{state: &moduleEditState{root: configDir, target: target, original: content, snapshot: snapshot}}, nil
 }
 
 // Content returns a disposable copy for the private editor, never the live path.
-func (edit *UserModuleEdit) Content() []byte {
+func (edit *ModuleEdit) Content() []byte {
 	if edit == nil || edit.state == nil {
 		return nil
 	}
@@ -95,7 +111,7 @@ func (edit *UserModuleEdit) Content() []byte {
 
 // Prepare validates the candidate against the originally captured configuration.
 // It never recaptures a newer baseline to replace the operator's original view.
-func (edit *UserModuleEdit) Prepare(ctx context.Context, content []byte) (*UserModuleProposal, error) {
+func (edit *ModuleEdit) Prepare(ctx context.Context, content []byte) (*ModuleProposal, error) {
 	if edit == nil || edit.state == nil || ctx == nil {
 		return nil, errors.New("configuration edit is unavailable")
 	}
@@ -109,15 +125,15 @@ func (edit *UserModuleEdit) Prepare(ctx context.Context, content []byte) (*UserM
 		return nil, err
 	}
 	if int64(len(content)) > maximumUserModuleSize {
-		return nil, fmt.Errorf("operator user module exceeds the %d-byte limit", maximumUserModuleSize)
+		return nil, fmt.Errorf("configuration candidate exceeds the %d-byte limit", maximumUserModuleSize)
 	}
 	candidate := bytes.Clone(content)
 	if err := state.snapshot.revalidate(state.root, false, nil); err != nil {
 		return nil, fmt.Errorf("configuration changed since editing began: %w", err)
 	}
-	validated, err := validateModularUserCandidate(state.root, candidate, state.snapshot.user)
+	validated, err := validateModuleCandidate(state.root, state.target, candidate, state.snapshot.identity(state.target))
 	if err != nil {
-		return nil, fmt.Errorf("validate proposed user configuration: %w", err)
+		return nil, fmt.Errorf("validate proposed configuration: %w", err)
 	}
 	if !sameUserModuleBaseline(state.snapshot, validated) {
 		return nil, errors.New("proposal validation observed a different configuration baseline")
@@ -135,26 +151,28 @@ func (edit *UserModuleEdit) Prepare(ctx context.Context, content []byte) (*UserM
 	// The random identity selects this exact opaque proposal and its captured
 	// inode snapshot, rather than serving as a reusable content-hash authority.
 	hash := sha256.New()
-	_, _ = hash.Write([]byte("syswarden-user-module-review-v1\x00"))
+	_, _ = hash.Write([]byte("syswarden-toml-module-review-v2\x00"))
 	_, _ = hash.Write(nonce[:])
 	_, _ = hash.Write([]byte(state.root))
 	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(state.target.relative))
+	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write(candidate)
-	review := UserModuleReview{
-		Target: "modules/" + userModuleName, ApprovalID: hex.EncodeToString(hash.Sum(nil)),
+	review := ModuleReview{
+		Target: state.target.relative, ApprovalID: hex.EncodeToString(hash.Sum(nil)),
 		ExpiresAt:       time.Now().Add(userModuleReviewLifetime),
 		ModulePlan:      append([]string(nil), validated.report.ModulePlan...),
 		UnknownKeyCount: len(validated.report.UnknownKeys), DeprecatedKeyCount: len(validated.report.DeprecatedKeys),
 	}
 	state.prepared = true
-	return &UserModuleProposal{state: &userModuleProposalState{
-		root: state.root, content: candidate, snapshot: state.snapshot, review: review,
+	return &ModuleProposal{state: &moduleProposalState{
+		root: state.root, target: state.target, content: candidate, snapshot: state.snapshot, review: review,
 	}}, nil
 }
 
-func (proposal *UserModuleProposal) Review() UserModuleReview {
+func (proposal *ModuleProposal) Review() ModuleReview {
 	if proposal == nil || proposal.state == nil {
-		return UserModuleReview{}
+		return ModuleReview{}
 	}
 	proposal.state.mu.Lock()
 	defer proposal.state.mu.Unlock()
@@ -166,7 +184,7 @@ func (proposal *UserModuleProposal) Review() UserModuleReview {
 // Publish requires exact approval and a caller-supplied read-only lifecycle
 // barrier. It rechecks that barrier and the original snapshot around publication.
 // Every attempt is single-use, including refused, interrupted or ambiguous ones.
-func (proposal *UserModuleProposal) Publish(ctx context.Context, approvalID string, preflight func() error) error {
+func (proposal *ModuleProposal) Publish(ctx context.Context, approvalID string, preflight func() error) error {
 	if proposal == nil || proposal.state == nil {
 		return errors.New("configuration publication requires a proposal, context and lifecycle preflight")
 	}
@@ -219,13 +237,13 @@ func (proposal *UserModuleProposal) Publish(ctx context.Context, approvalID stri
 		if err := guard(); err != nil {
 			return err
 		}
-		return state.snapshot.revalidate(state.root, true, state.content)
+		return state.snapshot.revalidateTarget(state.root, state.target, state.content)
 	}
-	return publishValidatedUserModule(filepath.Join(state.root, "modules"), userModuleName,
-		state.content, state.snapshot.user, preCommit, guard, postCommit)
+	return publishValidatedUserModule(state.target.directory(state.root), state.target.name,
+		state.content, state.snapshot.identity(state.target), preCommit, guard, postCommit)
 }
 
-func captureUserModuleEdit(configDir string) (*mergedConfigSnapshot, []byte, error) {
+func captureModuleEdit(configDir string, target tomlEditTarget) (*mergedConfigSnapshot, []byte, error) {
 	root, err := openConfigDirectory(configDir, false, 0)
 	if err != nil {
 		return nil, nil, err
@@ -235,17 +253,22 @@ func captureUserModuleEdit(configDir string) (*mergedConfigSnapshot, []byte, err
 	if err != nil {
 		return nil, nil, err
 	}
-	marker, err := readOptionalSecureFileIdentity(root, migrationMarkerName, filepath.Join(configDir, migrationMarkerName))
-	if err != nil {
-		return nil, nil, err
-	}
-	if marker != nil {
+	if _, err := root.Lstat(migrationMarkerName); err == nil {
 		return nil, nil, errors.New("configuration migration must be resolved before editing")
-	}
-	master, err := readOptionalSecureFileIdentity(root, "config.toml", filepath.Join(configDir, "config.toml"))
-	if err != nil {
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, nil, err
 	}
+	var master *secureFileIdentity
+	var masterContent []byte
+	if _, err := root.Lstat("config.toml"); err == nil {
+		masterContent, master, err = readEditFileIdentity(root, "config.toml", filepath.Join(configDir, "config.toml"))
+		if err != nil {
+			return nil, nil, err
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, err
+	}
+
 	modulesDir := filepath.Join(configDir, "modules")
 	modules, err := openConfigDirectory(modulesDir, false, 0)
 	if err != nil {
@@ -268,19 +291,25 @@ func captureUserModuleEdit(configDir string) (*mergedConfigSnapshot, []byte, err
 	snapshot := &mergedConfigSnapshot{configRootInfo: rootInfo, modulesRootInfo: modulesInfo,
 		master: master, modules: make(map[string]*secureFileIdentity)}
 	var original []byte
+	if target.master {
+		original = masterContent
+	}
 	for _, entry := range entries {
 		if filepath.Ext(entry.Name()) != ".toml" {
 			continue
 		}
 		snapshot.moduleNames = append(snapshot.moduleNames, entry.Name())
-		content, identity, err := readSecureRegularFileIdentity(modules, entry.Name(), filepath.Join(modulesDir, entry.Name()))
+		content, identity, err := readEditFileIdentity(modules, entry.Name(), filepath.Join(modulesDir, entry.Name()))
 		if err != nil {
 			return nil, nil, err
 		}
 		if entry.Name() == userModuleName {
-			original, snapshot.user = content, identity
+			snapshot.user = identity
 		} else {
 			snapshot.modules[entry.Name()] = identity
+		}
+		if !target.master && entry.Name() == target.name {
+			original = content
 		}
 	}
 	sort.Strings(snapshot.moduleNames)
