@@ -220,9 +220,6 @@ func main() {
 			fwManager,
 			telemetryLogger.LogAllowed,
 			func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
-				telemetryLogger.LogBanWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
-			},
-			func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
 				telemetryLogger.LogShadowAlertWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
 			},
 			func(ip, jail, payload string, evidence telemetry.RuleEvidence) {

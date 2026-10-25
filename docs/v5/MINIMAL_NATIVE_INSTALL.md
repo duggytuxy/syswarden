@@ -62,6 +62,63 @@ stopped/disabled/masked pairs, custom runlevels, offline staging, retries,
 reload and reboot. The separate RHEL package-owned lifecycle remains unchanged.
 This guard is not full migration or lifecycle acceptance.
 
+## WireGuard credential output
+
+Installation and reactivation never render a client configuration or its QR
+code. Output identifies only the protected client file. This also applies when
+an existing TOML configuration has explicitly enabled WireGuard and a native
+package hook invokes the installer. Reusing attested state preserves its keys.
+Reading or transferring the client file is a separate administrator operation;
+its private key and preshared key must not be copied into package logs, support
+reports or shared terminal recordings.
+
+Removing automatic output does not invalidate older copies or rotate existing
+keys. Previously disclosed credentials require a separate planned replacement
+of the affected client key and preshared key. Do not erase diagnostic logs as a
+substitute for revoking exposed credentials.
+
+## WireGuard forwarding scope
+
+Newly generated WireGuard policy uses a separately attested v2 rule shape.
+Masquerading requires the tunnel ingress interface, configured IPv4 subnet and
+selected egress interface together. Forwarding permits that outbound path and
+established or related replies from the selected egress toward the tunnel.
+Remaining forwarded traffic involving the tunnel is dropped, including new
+connections from another local network. This does not add IPv6 tunnel routing.
+
+The owned table leaves unrelated forwarding to administrator policy. It does
+not change a shared chain's default policy or bypass another table's drops.
+Explicit legacy migration uses equally scoped, token-bound permits when it
+must preserve an existing shared forwarding chain. Runtime verification binds
+rule content and order before cleanup; a matching name or comment alone does
+not authorize deletion.
+
+Historical v1 ownership remains readable for exact recovery and removal.
+Existing v1 configurations are not silently rewritten, and an already sealed
+v1 migration target remains recoverable. Their forwarding policy is not
+upgraded merely by installing this candidate. Guarded v1-to-v2 policy migration,
+encrypted client traffic, administrator routing preservation, reload and reboot
+remain explicit native acceptance gates.
+
+## Dynamic observations and ban lifetime
+
+Kernel packet-log observations retain their detection and threshold telemetry
+without authority to ban a source address. A packet source alone does not prove
+who sent it. This boundary keeps the configured kernel packet filtering and
+existing policy entries; it does not remove existing bans. Post-threshold L3
+events explicitly record an unverified packet source and no source ban.
+
+Logging a successful dynamic ban does not append it to the permanent operator
+blocklist. The runtime lifecycle and HA ownership paths retain responsibility
+for its expiry. Explicit permanent policy writers remain separate. Historical
+static entries are preserved until their ownership and recovery are established;
+this change does not infer that any existing entry is disposable.
+
+Original log-producer authentication, independent collector qualification and
+historical policy migration remain required before full acceptance of enabled
+detection paths. A root-owned file or authenticated relay is insufficient to
+establish the original producer of every contained message.
+
 ## Consolidated implementation status
 
 Source integration and native package acceptance are distinct. The current

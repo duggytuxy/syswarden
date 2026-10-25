@@ -57,6 +57,13 @@ func LegacyMigrationBackupPath(path string) string {
 func (snapshot LegacyMigrationSnapshot) OwnershipToken() string { return snapshot.journal.Token }
 func (snapshot LegacyMigrationSnapshot) Completed() bool        { return snapshot.Receipt != nil }
 
+// MatchesTargetServer compares a candidate to the already sealed target.
+// It never grants permission to replace a journal or its original evidence.
+func (snapshot LegacyMigrationSnapshot) MatchesTargetServer(server []byte) bool {
+	return (snapshot.Journal != nil || snapshot.Receipt != nil) &&
+		plannedArtifact(ServerConfigurationPath, server, 0, 0).SHA256 == snapshot.journal.ServerSHA256
+}
+
 func (snapshot LegacyMigrationSnapshot) OriginalArtifacts() []Artifact {
 	if snapshot.Journal == nil && snapshot.Receipt == nil {
 		return append([]Artifact(nil), snapshot.Live...)

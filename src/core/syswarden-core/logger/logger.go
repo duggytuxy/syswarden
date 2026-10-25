@@ -31,8 +31,6 @@ import (
 )
 
 const (
-	persistentBlacklistIPv4File = "/etc/syswarden/lists/syswarden_blacklist.ipv4"
-	persistentBlacklistIPv6File = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
 	maxPersistentBlocklistBytes = 1024 * 1024
 	maxTelemetryLogBytes        = 16 * 1024 * 1024
 	asyncOperationQueueCapacity = 128
@@ -72,24 +70,10 @@ func newInternalProcessHMACKey() []byte {
 	return random
 }
 
-// persistBanToDisk writes WAF/WAAP bans synchronously. The production paths
-// are fixed; UpdatePersistentBlocklist provides the shared HA/WAAP atomic RMW
-// primitive while retaining strict rooted-path validation.
-func persistBanToDisk(entry string) error {
-	canonical, ipv6, err := canonicalPersistentBlocklistEntry(entry)
-	if err != nil {
-		return err
-	}
-	path := persistentBlacklistIPv4File
-	if ipv6 {
-		path = persistentBlacklistIPv6File
-	}
-	return UpdatePersistentBlocklist(path, canonical, true)
-}
-
 // UpdatePersistentBlocklist atomically adds or removes one canonical IP/CIDR.
-// It is shared by the HA API and the WAAP logger so both processes coordinate
-// on the same parent-directory flock and cannot lose each other's updates.
+// Explicit policy writers coordinate on the same parent-directory flock and
+// cannot lose each other's updates. Event logging must never call this writer:
+// dynamic bans retain their runtime source ownership and expiry.
 func UpdatePersistentBlocklist(path, entry string, present bool) error {
 	canonical, _, err := canonicalPersistentBlocklistEntry(entry)
 	if err != nil {
@@ -595,10 +579,22 @@ func validRuleContextForEvent(eventAction, jail string, rule *RuleContext) bool 
 	if _, err := hex.DecodeString(rule.SignatureCatalogSHA256); err != nil {
 		return false
 	}
-	if rule.ObservationDisposition != "" &&
-		(rule.ObservationDisposition != "kernel-packet-dropped" || eventAction != "DETECTED" ||
-			rule.RuleID != "L2-ARP-FLOOD" || !strings.HasPrefix(rule.ObservationModel, "kernel-log-observation")) {
-		return false
+	if rule.ObservationDisposition != "" {
+		if eventAction != "DETECTED" || !strings.HasPrefix(rule.ObservationModel, "kernel-log-observation") {
+			return false
+		}
+		switch rule.ObservationDisposition {
+		case "kernel-packet-dropped":
+			if rule.RuleID != "L2-ARP-FLOOD" {
+				return false
+			}
+		case "packet-source-unverified":
+			if rule.RuleID != "L3-PORTSCAN" && rule.RuleID != "L3-HONEYPORT-SCAN" {
+				return false
+			}
+		default:
+			return false
+		}
 	}
 	switch eventAction {
 	case "BANNED", "SIMULATED-BAN", "SHADOW-ALERT":
@@ -1101,16 +1097,15 @@ func (l *Logger) LogBan(ip, jail, payload string) {
 	l.LogBanWithRule(ip, jail, payload, RuleContext{})
 }
 
-// LogBanWithRule records a ban together with the exact rule policy used.
+// LogBanWithRule records an already successful ban with its exact rule policy.
+// The caller owns enforcement and its lifetime. Logging must not promote a
+// temporary runtime claim into independent permanent blocklist policy.
 func (l *Logger) LogBanWithRule(ip, jail, payload string, rule RuleContext) {
 	event := newTelemetryEvent("BANNED", ip, jail, payload, 10, &rule)
 	telemetry.ReportAbuseAsync(ip, jail, payload)
 	l.runAsyncWebhookContextKey(webhookDeduplicationKey("ban", ip, jail, payload), func(ctx context.Context) {
 		webhook.SendBanAlertContext(ctx, ip, jail, "WAF Drop (L7)")
 	}, ip, jail)
-	if err := persistBanToDisk(ip); err != nil {
-		log.Printf("[Logger] Failed to persist WAF ban: %v", err)
-	}
 
 	l.writeTelemetry(event)
 
@@ -1137,8 +1132,11 @@ func (l *Logger) LogDetected(ip, jail, payload string) {
 func (l *Logger) LogDetectedWithRule(ip, jail, payload string, rule RuleContext) {
 	event := newTelemetryEvent("DETECTED", ip, jail, payload, 7, &rule)
 	description := "Detection Only (No Drop)"
-	if event.ObservationDisposition == "kernel-packet-dropped" {
+	switch event.ObservationDisposition {
+	case "kernel-packet-dropped":
 		description = "Kernel Packet Dropped (No Source Ban)"
+	case "packet-source-unverified":
+		description = "Packet Source Unverified (No Source Ban)"
 	}
 	l.runAsyncWebhookContextKey(webhookDeduplicationKey("detect", ip, jail, payload, description), func(ctx context.Context) {
 		webhook.SendDetectedAlertContext(ctx, ip, jail, description)

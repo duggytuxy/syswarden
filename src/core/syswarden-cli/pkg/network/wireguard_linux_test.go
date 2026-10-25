@@ -313,7 +313,7 @@ func TestWireGuardRendererUsesValidatedContextValues_SW_CFG_002(t *testing.T) {
 	for _, fragment := range []string{
 		"Address = 10.66.0.1/16",
 		"AllowedIPs = 10.66.0.2/32",
-		`oifname "ens3.100" masquerade`,
+		`iifname "wg-syswarden" oifname "ens3.100" ip saddr 10.66.0.0/16 masquerade`,
 	} {
 		if !strings.Contains(server, fragment) {
 			t.Fatalf("server configuration missing %q:\n%s", fragment, server)
@@ -474,73 +474,59 @@ func TestWireGuardCommandWaitDelayBoundsChildRetainedDescriptors_SW2_WGSTATE_001
 }
 
 func TestWireGuardCommandReattestsExecutableIdentityImmediatelyBeforeStart_SW2_WGSTATE_001(t *testing.T) {
-	for _, streaming := range []bool{false, true} {
-		t.Run(fmt.Sprintf("streaming-%v", streaming), func(t *testing.T) {
-			directory := t.TempDir()
-			executable := filepath.Join(directory, "wireguard-helper")
-			backup := executable + ".original"
-			marker := filepath.Join(directory, "replacement-ran")
-			original := []byte("#!/bin/sh\nexit 0\n")
-			replacement := []byte("#!/bin/sh\nprintf replaced > '" + marker + "'\n")
-			if err := os.WriteFile(executable, original, 0700); err != nil { // #nosec G306 -- owner-only executable is an isolated test fixture
+	t.Run("bounded", func(t *testing.T) {
+		directory := t.TempDir()
+		executable := filepath.Join(directory, "wireguard-helper")
+		backup := executable + ".original"
+		marker := filepath.Join(directory, "replacement-ran")
+		original := []byte("#!/bin/sh\nexit 0\n")
+		replacement := []byte("#!/bin/sh\nprintf replaced > '" + marker + "'\n")
+		if err := os.WriteFile(executable, original, 0700); err != nil { // #nosec G306 -- owner-only executable is an isolated test fixture
+			t.Fatal(err)
+		}
+		previousResolver := wireGuardExecutableResolver
+		previousCapture := wireGuardExecutableIdentityCapture
+		previousPreStart := wireGuardExecutablePreStartAttestor
+		wireGuardExecutableResolver = func(name string) (string, error) {
+			if name != "identity-swap-helper" {
+				return "", fmt.Errorf("unexpected helper command %s", name)
+			}
+			return executable, nil
+		}
+		wireGuardExecutableIdentityCapture = func(path string) (wireGuardExecutableIdentity, error) {
+			return captureWireGuardExecutableIdentityForOwner(path, networkTestUID(t), false)
+		}
+		swapped := false
+		wireGuardExecutablePreStartAttestor = func(identity wireGuardExecutableIdentity) error {
+			if err := os.Rename(executable, backup); err != nil {
 				t.Fatal(err)
 			}
-			previousResolver := wireGuardExecutableResolver
-			previousCapture := wireGuardExecutableIdentityCapture
-			previousPreStart := wireGuardExecutablePreStartAttestor
-			wireGuardExecutableResolver = func(name string) (string, error) {
-				if name != "identity-swap-helper" {
-					return "", fmt.Errorf("unexpected helper command %s", name)
-				}
-				return executable, nil
+			if err := os.WriteFile(executable, replacement, 0700); err != nil { // #nosec G306 -- owner-only replacement is an isolated adversarial fixture
+				t.Fatal(err)
 			}
-			wireGuardExecutableIdentityCapture = func(path string) (wireGuardExecutableIdentity, error) {
-				return captureWireGuardExecutableIdentityForOwner(path, networkTestUID(t), false)
-			}
-			swapped := false
-			wireGuardExecutablePreStartAttestor = func(identity wireGuardExecutableIdentity) error {
-				if err := os.Rename(executable, backup); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(executable, replacement, 0700); err != nil { // #nosec G306 -- owner-only replacement is an isolated adversarial fixture
-					t.Fatal(err)
-				}
-				swapped = true
-				return previousPreStart(identity)
-			}
-			t.Cleanup(func() {
-				wireGuardExecutableResolver = previousResolver
-				wireGuardExecutableIdentityCapture = previousCapture
-				wireGuardExecutablePreStartAttestor = previousPreStart
-			})
-
-			var err error
-			if streaming {
-				stdout, openErr := os.OpenFile(filepath.Join(directory, "stdout"), os.O_CREATE|os.O_WRONLY, 0600) // #nosec G304 -- fixed output name is beneath the private test root
-				if openErr != nil {
-					t.Fatal(openErr)
-				}
-				err = runWireGuardStreamingCommand("identity-swap-helper", nil, "", stdout, time.Second)
-				if closeErr := stdout.Close(); closeErr != nil {
-					t.Fatal(closeErr)
-				}
-			} else {
-				_, err = runBoundedWireGuardCommand(
-					"identity-swap-helper", nil, "", 1024, time.Second,
-				)
-			}
-			if err == nil || !strings.Contains(err.Error(), "changed identity before start") || !swapped {
-				t.Fatalf("executable swap result: swapped=%v err=%v", swapped, err)
-			}
-			if _, statErr := os.Lstat(marker); !errors.Is(statErr, os.ErrNotExist) {
-				t.Fatalf("replacement executable ran despite failed attestation: %v", statErr)
-			}
-			content, readErr := os.ReadFile(backup) // #nosec G304 -- backup is a fixed path beneath the private test root
-			if readErr != nil || !bytes.Equal(content, original) {
-				t.Fatalf("original executable identity was not preserved: bytes=%q err=%v", content, readErr)
-			}
+			swapped = true
+			return previousPreStart(identity)
+		}
+		t.Cleanup(func() {
+			wireGuardExecutableResolver = previousResolver
+			wireGuardExecutableIdentityCapture = previousCapture
+			wireGuardExecutablePreStartAttestor = previousPreStart
 		})
-	}
+
+		_, err := runBoundedWireGuardCommand(
+			"identity-swap-helper", nil, "", 1024, time.Second,
+		)
+		if err == nil || !strings.Contains(err.Error(), "changed identity before start") || !swapped {
+			t.Fatalf("executable swap result: swapped=%v err=%v", swapped, err)
+		}
+		if _, statErr := os.Lstat(marker); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("replacement executable ran despite failed attestation: %v", statErr)
+		}
+		content, readErr := os.ReadFile(backup) // #nosec G304 -- backup is a fixed path beneath the private test root
+		if readErr != nil || !bytes.Equal(content, original) {
+			t.Fatalf("original executable identity was not preserved: bytes=%q err=%v", content, readErr)
+		}
+	})
 }
 
 func TestWireGuardExecutableCaptureRejectsNonRootBaseline_SW2_WGSTATE_001(t *testing.T) {

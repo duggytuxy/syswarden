@@ -77,6 +77,9 @@ type ServerConfigurationIdentity struct {
 	OwnershipToken  string
 	ActiveInterface string
 	SharedForward   bool
+	// Zero identifies the original v1 policy for backward-compatible recovery.
+	PolicyVersion int
+	IPv4Subnet    string
 }
 
 // Artifact records the exact file identity accepted as SysWarden-owned.
@@ -340,7 +343,12 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 	if err != nil {
 		return ServerConfigurationIdentity{}, err
 	}
+	policyVersion := 0
 	tokenMarker := `comment "syswarden-wg-v1:`
+	if strings.Contains(postUp, `comment "syswarden-wg-v2:`) {
+		policyVersion = 2
+		tokenMarker = `comment "syswarden-wg-v2:`
+	}
 	tokenStart := strings.Index(postUp, tokenMarker)
 	if tokenStart < 0 {
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp has no ownership token")
@@ -355,12 +363,19 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp ownership token is invalid")
 	}
 	interfaceMarker := `add rule inet syswarden_wg postrouting oifname "`
+	if policyVersion == 2 {
+		interfaceMarker = `add rule inet syswarden_wg postrouting iifname "wg-syswarden" oifname "`
+	}
 	interfaceStart := strings.Index(postUp, interfaceMarker)
 	if interfaceStart < 0 {
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp has no exact masquerade rule")
 	}
 	interfaceStart += len(interfaceMarker)
-	interfaceEnd := strings.Index(postUp[interfaceStart:], `" masquerade;`)
+	interfaceSuffix := `" masquerade;`
+	if policyVersion == 2 {
+		interfaceSuffix = `" ip saddr `
+	}
+	interfaceEnd := strings.Index(postUp[interfaceStart:], interfaceSuffix)
 	if interfaceEnd < 0 {
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp has no canonical masquerade interface")
 	}
@@ -369,7 +384,19 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp has an invalid masquerade interface")
 	}
 	expectedPostUp := fmt.Sprintf(`%s 'create table inet syswarden_wg { comment "syswarden-wg-v1:%s"; }; add chain inet syswarden_wg prerouting { type nat hook prerouting priority dstnat; }; add chain inet syswarden_wg postrouting { type nat hook postrouting priority srcnat; }; add chain inet syswarden_wg forward { type filter hook forward priority 0; policy accept; }; add rule inet syswarden_wg postrouting oifname "%s" masquerade; add rule inet syswarden_wg forward iifname "wg-syswarden" accept; add rule inet syswarden_wg forward oifname "wg-syswarden" accept'`, nftPath, ownershipToken, activeInterface)
-	sharedForward := postUp == strings.TrimSuffix(expectedPostUp, "'")+SharedForwardPostUpSuffix(ownershipToken)+"'"
+	sharedSuffix := SharedForwardPostUpSuffix(ownershipToken)
+	ipv4Subnet := ""
+	if policyVersion == 2 {
+		if activeInterface == "wg-syswarden" {
+			return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard egress cannot be its tunnel interface")
+		}
+		ipv4Subnet = networkPrefix.String()
+		identity := ServerConfigurationIdentity{NFTPath: nftPath, OwnershipToken: ownershipToken,
+			ActiveInterface: activeInterface, IPv4Subnet: ipv4Subnet, PolicyVersion: 2}
+		expectedPostUp = ScopedServerPostUp(identity)
+		sharedSuffix = ScopedSharedForwardPostUpSuffix(identity)
+	}
+	sharedForward := postUp == strings.TrimSuffix(expectedPostUp, "'")+sharedSuffix+"'"
 	if postUp != expectedPostUp && !sharedForward {
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp is not the exact owned nftables hook")
 	}
@@ -408,6 +435,7 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 	}
 	return ServerConfigurationIdentity{
 		NFTPath: nftPath, TruePath: truePath, OwnershipToken: ownershipToken, ActiveInterface: activeInterface, SharedForward: sharedForward,
+		PolicyVersion: policyVersion, IPv4Subnet: ipv4Subnet,
 	}, nil
 }
 

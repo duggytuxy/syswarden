@@ -284,7 +284,11 @@ func TestForwardingRecoverySurvivesDeviceRenumbering(t *testing.T) {
 			if manifest.Artifacts[0].FilesystemUUID == "" {
 				t.Skip("filesystem UUID unavailable")
 			}
-			target, err := canonicalWireGuardForwardingContent(exactWireGuardNFTIdentity(), false, true, "0")
+			identity, err := readConfiguredWireGuardServerIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, err := canonicalWireGuardForwardingContent(identity, false, true, "0")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -307,7 +311,7 @@ func TestForwardingRecoverySurvivesDeviceRenumbering(t *testing.T) {
 					}
 					return nil
 				}
-				if err := transitionWireGuardForwardingPersistenceGuarded(exactWireGuardNFTIdentity(), target); err != nil {
+				if err := transitionWireGuardForwardingPersistenceGuarded(identity, target); err != nil {
 					t.Fatal(err)
 				}
 			}()
@@ -359,7 +363,7 @@ func TestForwardingRecoverySurvivesDeviceRenumbering(t *testing.T) {
 			if state.BootEnabled != (point != "manifest-exchanged") {
 				t.Fatal("recovery chose the wrong side of commit")
 			}
-			if err := transitionWireGuardForwardingPersistenceGuarded(exactWireGuardNFTIdentity(), target); err != nil {
+			if err := transitionWireGuardForwardingPersistenceGuarded(identity, target); err != nil {
 				t.Fatal("forwarding retry", err)
 			}
 			if pending, err := wireGuardForwardingTransitionPending(); err != nil || pending {

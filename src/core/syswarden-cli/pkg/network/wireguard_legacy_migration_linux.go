@@ -96,6 +96,14 @@ func (host legacyWireGuardRecoveryHost) inspectMigration() (LegacyWireGuardMigra
 	if err != nil {
 		return plan, err
 	}
+	if snapshot.Journal != nil {
+		input := generated.input
+		input.SharedForward = true
+		input.NFTPath, input.TruePath, input.OwnershipToken = nftPath, truePath, snapshot.OwnershipToken()
+		if _, _, err := renderWireGuardMigrationConfigurations(input, snapshot); err != nil {
+			return plan, err
+		}
+	}
 	state := "pending"
 	if snapshot.Journal != nil {
 		state = "in-progress"
@@ -125,7 +133,7 @@ func (host legacyWireGuardRecoveryHost) inspectMigration() (LegacyWireGuardMigra
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), wireGuardCommandTimeout)
 	defer cancel()
-	plan.SharedForward, err = inspectWireGuardSharedForward(ctx, host.nftRunner, snapshot.OwnershipToken())
+	plan.SharedForward, err = inspectWireGuardSharedForward(ctx, host.nftRunner, snapshot.OwnershipToken(), currentIdentities...)
 	if err != nil {
 		return plan, err
 	}
@@ -279,7 +287,7 @@ func (host legacyWireGuardRecoveryHost) applyMigration(digest string) (result Le
 			return result, err
 		}
 	}
-	server, client, err := renderWireGuardConfigurations(input)
+	server, client, err := renderWireGuardMigrationConfigurations(input, snapshot)
 	if err != nil {
 		return result, err
 	}

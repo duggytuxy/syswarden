@@ -6436,24 +6436,69 @@ systemctl() {
             self.assertIn(f'"{dependency}"', plan)
         self.assertIn("operator-approved repositories", source)
 
-    def test_packaged_legacy_dynamic_quarantine_precedes_network_without_implicit_hardening(self) -> None:
-        source = INSTALL_COMMAND_SOURCE.read_text(encoding="utf-8")
+    def assert_packaged_install_recovery_order(self, source: str) -> None:
         self.assertIn("var installDependenciesForInstall = system.InstallDependencies", source)
         for retired in ("configureSSHForInstall", "system.ConfigureSSH", "ApplyCIS", "ApplyOS"):
             self.assertNotIn(retired, source)
-        dependency_check = source.rindex("installDependenciesForInstall()")
-        wireguard_recovery = source.index("recoverPendingWireGuardForInstall()")
-        wireguard_preflight = source.index("preflightWireGuardForInstall()")
-        module_preflight = source.index("preflightModuleDependencies()")
-        package_guard = source.index('os.Getenv("SYSWARDEN_PKG_INSTALL") == "1"')
-        quarantine = source.index("preparePackagedLegacyDynamicBanUpgrade()")
-        feeds = source.index("prepareNetworkIntelligenceForInstall()")
+        # Inspect the actual command body so a retained helper declaration cannot
+        # satisfy a missing call or change the apparent installation order.
+        opener = "RunE: func(cmd *cobra.Command, args []string) error {"
+        self.assertEqual(source.count(opener), 1)
+        pipeline = source.split(opener, 1)[1].split("\n\t},\n}", 1)[0]
+        stages = (
+            "installDependenciesForInstall()",
+            "recoverPendingWireGuardForInstall()",
+            "preflightWireGuardForInstall()",
+            "preflightModuleDependencies()",
+            'os.Getenv("SYSWARDEN_PKG_INSTALL") == "1"',
+            "preparePackagedLegacyDynamicBanUpgradeWithRestart(restart)",
+            "prepareNetworkIntelligenceForInstall()",
+        )
+        for stage in stages:
+            self.assertIn(stage, pipeline)
+        dependency_check = pipeline.rindex(stages[0])
+        wireguard_recovery, wireguard_preflight, module_preflight, package_guard, quarantine, feeds = (
+            pipeline.index(stage) for stage in stages[1:]
+        )
         self.assertLess(dependency_check, wireguard_recovery)
         self.assertLess(wireguard_recovery, wireguard_preflight)
         self.assertLess(wireguard_preflight, module_preflight)
         self.assertLess(module_preflight, package_guard)
         self.assertLess(package_guard, quarantine)
         self.assertLess(quarantine, feeds)
+        guarded_recovery = pipeline[package_guard:quarantine]
+        revalidation = "if err := plan.Revalidate(); err != nil {"
+        conditional_restart = "if plan != nil {\n\t\t\t\trestart = plan.RestartExistingCore\n\t\t\t}"
+        self.assertIn(revalidation, guarded_recovery)
+        self.assertIn(conditional_restart, guarded_recovery)
+        self.assertLess(guarded_recovery.index(revalidation), guarded_recovery.index(conditional_restart))
+        self.assertNotIn("preparePackagedLegacyDynamicBanUpgrade()", pipeline)
+
+    def test_packaged_legacy_dynamic_quarantine_precedes_network_without_implicit_hardening(self) -> None:
+        self.assert_packaged_install_recovery_order(INSTALL_COMMAND_SOURCE.read_text(encoding="utf-8"))
+
+    def test_packaged_legacy_dynamic_recovery_contract_rejects_missing_reordered_or_unguarded_calls(self) -> None:
+        source = INSTALL_COMMAND_SOURCE.read_text(encoding="utf-8")
+        recovery = "preparePackagedLegacyDynamicBanUpgradeWithRestart(restart)"
+        feeds = "prepareNetworkIntelligenceForInstall()"
+        marker = "CONTRACT_REORDER_PLACEHOLDER"
+        self.assertNotIn(marker, source)
+        mutations = {
+            "missing-call-with-helper-retained": source.replace(recovery, "removedRecoveryCall()", 1),
+            "feeds-before-recovery": source.replace(recovery, marker, 1).replace(feeds, recovery, 1).replace(marker, feeds, 1),
+            "unconditional-helper": source.replace(recovery, "preparePackagedLegacyDynamicBanUpgrade()", 1),
+            "unconditional-restart-callback": source.replace("restart = plan.RestartExistingCore", "restart = restartCoreServiceForInstall", 1),
+            "missing-pair-revalidation": source.replace(
+                'if os.Getenv("SYSWARDEN_PKG_INSTALL") == "1" {\n\t\t\tif err := plan.Revalidate(); err != nil {',
+                'if os.Getenv("SYSWARDEN_PKG_INSTALL") == "1" {\n\t\t\tif err := skippedRevalidation(); err != nil {',
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, source)
+                with self.assertRaises(AssertionError):
+                    self.assert_packaged_install_recovery_order(mutated)
 
     def local_compatibility_dependencies(self) -> dict[str, list[str]]:
         metadata = subprocess.run(
