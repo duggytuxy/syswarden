@@ -114,19 +114,7 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 		return report, fmt.Errorf("inspect modules directory: %w", err)
 	}
 
-	known := make(map[string]struct{})
-	collectMapstructureKeys(reflect.TypeOf(ModularConfig{}), "", known)
-	for key := range observed {
-		if replacement, deprecated := deprecatedModularKeys[key]; deprecated {
-			report.DeprecatedKeys = append(report.DeprecatedKeys, key+" (use "+replacement+")")
-			continue
-		}
-		if _, ok := known[key]; !ok {
-			report.UnknownKeys = append(report.UnknownKeys, key)
-		}
-	}
-	sort.Strings(report.UnknownKeys)
-	sort.Strings(report.DeprecatedKeys)
+	classifyModularKeys(observed, &report)
 
 	if err := profileInventory.validate(); err != nil {
 		return report, err
@@ -155,6 +143,23 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	}
 	report.ModulePlan = ModulePlan(mapModularToLegacy(&validationCandidate))
 	return report, nil
+}
+
+func classifyModularKeys(observed map[string]struct{}, report *ValidationReport) {
+	known := make(map[string]struct{})
+	collectMapstructureKeys(reflect.TypeOf(ModularConfig{}), "", known)
+	for key := range observed {
+		if replacement, deprecated := deprecatedModularKeys[key]; deprecated {
+			report.DeprecatedKeys = append(report.DeprecatedKeys, key+" (use "+replacement+")")
+			continue
+		}
+		if _, ok := known[key]; !ok {
+			report.UnknownKeys = append(report.UnknownKeys, key)
+		}
+	}
+	sort.Strings(report.UnknownKeys)
+	sort.Strings(report.DeprecatedKeys)
+
 }
 
 // GetValidatedModularValue reads one effective value only after the same typed

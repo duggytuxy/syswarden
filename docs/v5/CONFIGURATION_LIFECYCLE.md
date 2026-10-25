@@ -61,7 +61,7 @@ check does not change rule ordering or the existing country/ASN union semantics.
 
 | Command | Current boundary |
 | --- | --- |
-| `syswarden config` | Opens an external editor for existing modules; also offers profile-name and file-import operations. It does not provide a review-and-activate transaction. |
+| `syswarden config` | Provides private candidate editing, validation and explicit publication review for the user module, profile name and file import. Other module editors still write directly. It does not provide a review-and-activate transaction. |
 | `syswarden config validate --path /etc/syswarden/config` | Reads and validates the merged TOML, prints the selected module plan and reports unknown/deprecated keys without changing configuration or runtime. |
 | `syswarden config-get KEY` | Reads one validated effective modular value. Some legacy-compatible settings can still reflect environment overrides, unlike file-only validation. |
 | `syswarden config migrate --dry-run` | Validates historical flat-file migration without source or destination writes. `--source` and `--output` select its paths. |
@@ -79,11 +79,27 @@ the menu. Firewall journal absence is a point-in-time observation, not activatio
 authority or a lock against a later transaction. Invalid TOML can still be
 opened for repair when the existing module directory is available.
 
-The current editor writes directly through the selected external editor. Its
+Menu options 6 (user overrides), 7 (profile name) and 8 (import) now capture the
+original configuration before editing or requesting input. Option 6 opens a
+private working copy rather than the live file. The merged candidate must pass
+validation before the menu displays its module-selection summary, warning
+counts and a unique publication phrase. Configuration values are not printed
+in that summary; review the edited or imported TOML before approving. Empty or
+incorrect input cancels publication. EOF, expired approval, changed TOML or a
+new recovery barrier refuses it. An approval is limited to that exact proposal
+and cannot be reused. Publishing does not activate host policy or services.
+
+The private editor directory and initial working file use modes 0700 and 0600.
+The selected editor retains the operator's privileges; this is not a sandbox.
+Only the fixed working file and an empty directory are cleaned up. Unexpected
+editor recovery files are retained for inspection, and publication is refused.
+An incomplete fresh-install inventory remains blocked, including a missing
+user module; the editor cannot silently recreate its lost administrator state.
+
+Options 1 through 5 and 9 still edit their selected live files directly. Their
 completion message reports only that the editor closed; it does not establish
-validation or activation. Use `config validate` for read-only inspection. Import
-and profile-name operations already validate the complete merged candidate
-before an atomic `99-user.toml` replacement.
+validation or activation. Use `config validate` for read-only inspection.
+Extending guarded candidate editing to those modules remains an issue #422 gate.
 
 The Linux publisher exchanges an existing file atomically and uses a no-replace
 operation for a new file. It rechecks the captured configuration before
@@ -104,11 +120,14 @@ the core restart; policy, integrations and scheduling can still change.
 
 ## Significant changes and missing activation steps
 
-The configuration-led workflow still needs a candidate edit, merged validation,
-reviewable effects, explicit confirmation and guarded activation of that exact
-candidate. Reuse the existing `config.WriteValidatedUserModule` publication
-primitive for applicable editor changes; do not write invalid live policy and
-then attempt a generic repair. The dedicated SSH module needs its own protected
+The configuration-led workflow still needs guarded candidate editing for all
+modules, complete reviewable host effects and explicit activation of the exact
+approved policy. The user-module proposal retains the original configuration
+identities across human review and rechecks read-only WireGuard, removal and
+firewall barriers around its existing atomic publication primitive. Those
+barriers are point-in-time checks, not cross-process locks or host activation
+authority. Do not replace this original snapshot with a newly captured baseline
+after approval, or write invalid live policy and then attempt a generic repair. The dedicated SSH module needs its own protected
 publication boundary. There are currently no `config apply` or `config preview`
 commands, the menu has no dedicated `05-ssh.toml` item, and editor exit is not
 confirmation of a host change.

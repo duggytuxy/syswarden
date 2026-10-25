@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"syswarden-cli/pkg/sshselection"
+
 	"github.com/spf13/viper"
 )
 
@@ -33,6 +35,7 @@ var (
 )
 
 type mergedConfigSnapshot struct {
+	report          ValidationReport
 	configRootInfo  os.FileInfo
 	modulesRootInfo os.FileInfo
 	marker          *secureFileIdentity
@@ -125,6 +128,9 @@ func writeValidatedUserModuleLocked(configDir string, content []byte, expected *
 }
 
 func validateModularUserCandidate(configDir string, userContent []byte, expectedUser *secureFileIdentity) (*mergedConfigSnapshot, error) {
+	if err := sshselection.RejectEnvironment(); err != nil {
+		return nil, err
+	}
 	if err := rejectOperatorPolicyEnvironment(); err != nil {
 		return nil, err
 	}
@@ -154,6 +160,7 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 	setDefaults(v, configDir)
 	var masterIdentity *secureFileIdentity
 	var profileInventory unconfiguredProfileInventory
+	observed := make(map[string]struct{})
 	if _, err := root.Lstat("config.toml"); err == nil {
 		content, identity, readErr := readSecureRegularFileIdentity(root, "config.toml", filepath.Join(configDir, "config.toml"))
 		if readErr != nil {
@@ -164,6 +171,7 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 			return nil, err
 		}
 		profileInventory.record("config.toml", document)
+		flattenTOMLKeys("", document, observed)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return nil, err
 		}
@@ -227,6 +235,7 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 			return nil, err
 		}
 		profileInventory.record(relative, document)
+		flattenTOMLKeys("", document, observed)
 		if entry.Name() == userModuleName {
 			if err := rejectNewRetiredUnspecifiedWhitelistEntries(previousUserContent, document); err != nil {
 				return nil, err
@@ -245,6 +254,7 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 			return nil, err
 		}
 		profileInventory.recordProfile(filepath.ToSlash(filepath.Join("modules", userModuleName)), document)
+		flattenTOMLKeys("", document, observed)
 		if err := rejectNewRetiredUnspecifiedWhitelistEntries(nil, document); err != nil {
 			return nil, err
 		}
@@ -262,13 +272,20 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 	if err := v.Unmarshal(&candidate); err != nil {
 		return nil, err
 	}
-	neutralizeRetiredUnspecifiedWhitelistConfig(&candidate)
+	classifyModularKeys(observed, &snapshot.report)
+	snapshot.report.SchemaVersion = candidate.SchemaVersion
+	snapshot.report.Historical = candidate.SchemaVersion == 0
+	for _, entry := range neutralizeRetiredUnspecifiedWhitelistConfig(&candidate) {
+		snapshot.report.DeprecatedKeys = append(snapshot.report.DeprecatedKeys, retiredUnspecifiedWhitelistDiagnostic(entry))
+	}
+	sort.Strings(snapshot.report.DeprecatedKeys)
 	if err := validateConfig(&candidate); err != nil {
 		return nil, err
 	}
 	if err := snapshot.revalidate(configDir, false, nil); err != nil {
 		return nil, fmt.Errorf("configuration changed during merged validation: %w", err)
 	}
+	snapshot.report.ModulePlan = ModulePlan(mapModularToLegacy(&candidate))
 	return snapshot, nil
 }
 
@@ -490,7 +507,8 @@ func updateProfileInUserModule(content []byte, profileName string) []byte {
 				inUserBlock = false
 			}
 		}
-		if inUserBlock && strings.HasPrefix(trimmed, "profile_name") {
+		key, _, assignment := strings.Cut(trimmed, "=")
+		if inUserBlock && assignment && strings.TrimSpace(key) == "profile_name" {
 			updated = append(updated, fmt.Sprintf("profile_name = %q", profileName))
 			profileSet = true
 			continue

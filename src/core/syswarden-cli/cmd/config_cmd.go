@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -73,14 +72,14 @@ var configCmd = &cobra.Command{
 			}
 
 			if choice == 7 {
-				if err := setProfileName(reader, output, configRoot); err != nil {
+				if err := setProfileName(cmd, reader, output, configRoot); err != nil {
 					return fmt.Errorf("[ERROR] set profile name: %w", err)
 				}
 				continue
 			}
 
 			if choice == 8 {
-				if err := importConfiguration(reader, output, configRoot); err != nil {
+				if err := importConfiguration(cmd, reader, output, configRoot); err != nil {
 					return fmt.Errorf("[ERROR] import configuration: %w", err)
 				}
 				continue
@@ -100,6 +99,24 @@ var configCmd = &cobra.Command{
 				} else {
 					return fmt.Errorf("[ERROR] no suitable editor found (nano/vi); set EDITOR")
 				}
+			}
+
+			if choice == 6 {
+				edit, err := config.BeginUserModuleEdit(cmd.Context(), configRoot)
+				if err != nil {
+					return err
+				}
+				proposal, err := edit.PrepareWithEditor(cmd.Context(), func(path string) error {
+					_, _ = fmt.Fprintln(output, "Opening a private working copy of 99-user.toml.")
+					return launchConfigEditor(editor, path, cmd.InOrStdin(), output, cmd.ErrOrStderr())
+				})
+				if err != nil {
+					return err
+				}
+				if err := reviewUserModuleProposal(cmd, reader, output, proposal); err != nil {
+					return err
+				}
+				continue
 			}
 
 			_, _ = fmt.Fprintf(output, "\n[*] Opening %s with %s...\n", targetPath, editor)
@@ -173,44 +190,72 @@ func configEditorTarget(choice int) string {
 	}
 }
 
-func setProfileName(reader *bufio.Reader, output io.Writer, configRoot string) error {
-	_, _ = fmt.Fprint(output, "\nEnter Profile Name (max 15 chars, no accents): ")
+func setProfileName(cmd *cobra.Command, reader *bufio.Reader, output io.Writer, configRoot string) error {
+	edit, err := config.BeginUserModuleEdit(cmd.Context(), configRoot)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprint(output, "\nEnter Profile Name (max 15 ASCII characters): ")
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("read profile name: %w", err)
 	}
-	profileName := strings.TrimSpace(input)
-	if len(profileName) == 0 {
-		return fmt.Errorf("profile name cannot be empty")
-	}
-	if len(profileName) > 15 {
-		return fmt.Errorf("profile name exceeds 15 characters")
-	}
-	validRegex := regexp.MustCompile(`^[a-zA-Z0-9_\-\s]+$`)
-	if !validRegex.MatchString(profileName) {
-		return fmt.Errorf("profile name contains invalid characters")
-	}
-	if err := config.SetValidatedProfileName(configRoot, profileName); err != nil {
+	proposal, err := edit.PrepareProfileName(cmd.Context(), strings.TrimSpace(input))
+	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(output, "[SUCCESS] Profile name set to '%s'.\n", profileName)
-	return nil
+	return reviewUserModuleProposal(cmd, reader, output, proposal)
 }
 
-func importConfiguration(reader *bufio.Reader, output io.Writer, configRoot string) error {
+func importConfiguration(cmd *cobra.Command, reader *bufio.Reader, output io.Writer, configRoot string) error {
+	edit, err := config.BeginUserModuleEdit(cmd.Context(), configRoot)
+	if err != nil {
+		return err
+	}
 	_, _ = fmt.Fprint(output, "\nEnter the absolute path to the TOML configuration file to import: ")
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("read import path: %w", err)
 	}
-	sourcePath := strings.TrimSpace(input)
-	if !filepath.IsAbs(sourcePath) {
-		return fmt.Errorf("import path must be absolute")
-	}
-	if err := config.ImportValidatedUserModule(configRoot, sourcePath); err != nil {
+	proposal, err := edit.PrepareImport(cmd.Context(), strings.TrimSpace(input))
+	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(output, "[SUCCESS] Configuration successfully imported to User Overrides.")
+	return reviewUserModuleProposal(cmd, reader, output, proposal)
+}
+
+func reviewUserModuleProposal(cmd *cobra.Command, reader *bufio.Reader, output io.Writer, proposal *config.UserModuleProposal) error {
+	review := proposal.Review()
+	_, _ = fmt.Fprintf(output, "\nValidated candidate for %s.\n", review.Target)
+	for _, line := range review.ModulePlan {
+		_, _ = fmt.Fprintln(output, line)
+	}
+	_, _ = fmt.Fprintf(output, "Unknown keys: %d. Deprecated entries: %d.\n", review.UnknownKeyCount, review.DeprecatedKeyCount)
+	_, _ = fmt.Fprintln(output, "Configuration values are private and are not printed in this summary. Review the edited or imported TOML before approving.")
+	_, _ = fmt.Fprintln(output, "Publishing replaces only the user TOML. Host policy and services are not activated.")
+	_, _ = fmt.Fprintf(output, "Approval expires at %s.\n", review.ExpiresAt.Format("15:04:05 MST"))
+	expected := "publish " + review.ApprovalID
+	_, _ = fmt.Fprintf(output, "Type '%s' to publish, or press Enter to cancel: ", expected)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read publication approval; configuration was not published: %w", err)
+	}
+	if strings.TrimSpace(input) != expected {
+		_, _ = fmt.Fprintln(output, "Publication cancelled. Live configuration was preserved.")
+		return nil
+	}
+	if err := proposal.Publish(cmd.Context(), review.ApprovalID, func() error {
+		if err := preflightWireGuardPolicyTransition(); err != nil {
+			return err
+		}
+		if err := enforceRemovalState(cmd); err != nil {
+			return err
+		}
+		return refusePendingFirewallTransactionHook()
+	}); err != nil {
+		return fmt.Errorf("configuration publication refused: %w", err)
+	}
+	_, _ = fmt.Fprintln(output, "Validated user configuration published. Host activation remains a separate explicit operation.")
 	return nil
 }
 
