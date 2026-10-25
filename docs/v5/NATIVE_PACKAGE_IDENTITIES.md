@@ -2,8 +2,9 @@
 
 Development design for issue #422 and consolidated PR452. This document does not
 establish production package support, migration readiness or v5.00.0 IVVQ
-acceptance. Public release package metadata and the signed asset inventory remain
-unchanged. Local opt-in metadata generation is an intermediate implementation.
+acceptance. Published v4 release package metadata and canonical signatures remain unchanged.
+Local opt-in metadata generation and the v5 signed identity contract are
+intermediate implementations.
 SysWarden supports Linux AMD64 only.
 
 ## Identity boundary
@@ -65,8 +66,8 @@ They do not establish native install, update or removal acceptance.
 
 Public workflow generation deliberately remains on the historical `syswarden`
 contract. It does not publish `syswarden-base` or use this local metadata helper.
-The signed update inventory, candidate package attestations and unsigned-era
-discovery still need identity support. Do not deploy the opt-in base artifacts as
+Public dual-identity generation, candidate payload metadata attestation and
+unsigned-era discovery still need coordinated qualification. Do not deploy the opt-in base artifacts as
 supported packages until those paths and the native lifecycle are qualified.
 
 Standalone uninstall now checks both native names on DEB, RPM and APK. It refuses
@@ -82,7 +83,8 @@ recovery exception also remains limited to `syswarden`.
 Online and offline updaters require one fully installed compatibility package
 before reading release metadata or opening a qualification bundle, then recheck
 the identity before installation. `syswarden-base` is explicitly refused until
-the authenticated inventory supports it. Unregistered/manual installations are
+identity-aware dependency retention, native attestation and public generation
+are qualified together. Unregistered/manual installations are
 also refused and must use their documented installation procedure. Package
 registration checks are bounded read-only queries; they do not authorize an
 automatic variant switch or implement base updates. Native lifecycle qualification
@@ -96,8 +98,30 @@ current-version integrity check uses the same binding. Immediately before an
 online or offline installation, the package name, installed state and authority
 must still match the original observation. This comparison detects observed
 identity drift; it is not a native package database lock or permission to convert
-between the two package names. Existing signed manifest bytes and artifact names
-remain unchanged.
+between the two package names. Published v4 signed manifest bytes and artifact names remain unchanged.
+
+## Signed identity and installed ownership
+
+The v5 producer and consumer use `syswarden-update-manifest/v3`. Its exact ordered
+inventory is compatibility DEB/RPM/APK followed by base DEB/RPM/APK, with explicit
+`package_name` values, format-specific filenames and Linux AMD64 identities.
+Missing variants, duplicates, unknown names, reordered records or a filename for
+the other variant are refused. The dependency-retention contract remains
+mandatory. V4 retains its exact three-artifact v1 encoding and signatures.
+
+Artifact matching compares the attested native name as well as platform, format
+and filename. Installed-package version and CLI ownership queries also use the
+selected native name; another variant cannot satisfy their owner proof. Queries
+are restricted to the two known names and fixed read-only native operations.
+This source-level ownership check is not full payload-header, dependency, runtime
+or migration acceptance. In particular, DEB/APK installed architecture proof and
+the remaining native transaction matrix still need qualification.
+
+Production base updates remain explicitly refused. The new signed inventory
+does not enable compatibility-package substitution, switch package identity,
+relax native signature verification or bypass historical dependency retention.
+Public workflows continue the stable v4 three-artifact contract until v5
+production generation and the lifecycle matrix are completed together.
 
 ## Payload handoff boundary
 

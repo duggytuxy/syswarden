@@ -2498,6 +2498,14 @@ func recoverRemovalTransaction(
 	expectedUID, expectedGID uint32,
 	retainReloadDebt bool,
 ) error {
+	proofs, err := removalIdentityProofs(root, journal, expectedUID, expectedGID)
+	if err != nil {
+		return err
+	}
+	if err := preflightRemovalIdentities(root, proofs, expectedUID, expectedGID); err != nil {
+		return err
+	}
+	journal = proofs
 	if journal.OpenRCServiceLink != nil {
 		if err := removeJournalSymlink(
 			root, *journal.OpenRCServiceLink, false, expectedUID, expectedGID,
@@ -2651,6 +2659,14 @@ func beginOwnedArtifactRemoval(
 	}
 	if err := verifyFinalizedPolicyManifest(root, manifest, expectedUID, expectedGID); err != nil {
 		return err
+	}
+	manifest, err = captureRemovalIdentities(root, manifest, expectedUID, expectedGID)
+	if err != nil {
+		return err
+	}
+	_, currentManifestRecord, err := readManifestWithRecord(root, expectedUID, expectedGID)
+	if err != nil || !sameArtifact(currentManifestRecord, manifestRecord) {
+		return errors.Join(fmt.Errorf("ownership manifest changed before removal journal publication"), err)
 	}
 	manifestQuarantine, err := randomTemporaryName(filepath.Base(ManifestPath), "quarantine")
 	if err != nil {

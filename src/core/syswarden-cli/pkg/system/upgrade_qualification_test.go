@@ -362,7 +362,7 @@ func TestInstalledVersionAttestationRejectsPackageAndBinaryDisagreement(t *testi
 	}
 	_, err := attestInstalledQualificationVersionWith(
 		t.Context(),
-		packageTarget{format: packageFormatRPM, installer: "/usr/bin/dnf"},
+		packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/dnf"},
 		os.Geteuid(),
 		binaryPath,
 		query,
@@ -495,7 +495,7 @@ func TestInstalledBinaryAttestationRejectsConcurrentContentMutation(t *testing.T
 		}
 	}
 	_, err := attestInstalledQualificationVersionWith(
-		t.Context(), packageTarget{format: packageFormatDEB}, os.Geteuid(), binaryPath, query,
+		t.Context(), packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, os.Geteuid(), binaryPath, query,
 	)
 	if err == nil || !strings.Contains(err.Error(), "changed during package attestation") {
 		t.Fatalf("concurrent installed CLI mutation error = %v", err)
@@ -512,7 +512,7 @@ func TestInstalledVersionParsersRequireExactPackageAndBinaryIdentity(t *testing.
 	}{
 		{
 			name:   "deb",
-			target: packageTarget{format: packageFormatDEB},
+			target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB},
 			query: func(_ context.Context, name string, args ...string) ([]byte, error) {
 				switch {
 				case name == "/usr/bin/dpkg-query" && args[0] == "--show":
@@ -527,7 +527,7 @@ func TestInstalledVersionParsersRequireExactPackageAndBinaryIdentity(t *testing.
 		},
 		{
 			name:   "rpm",
-			target: packageTarget{format: packageFormatRPM},
+			target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM},
 			query: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 				if args[0] == "--verify" {
 					return []byte("S.5....T.  c /etc/syswarden/config/modules/99-user.toml\n"),
@@ -539,7 +539,7 @@ func TestInstalledVersionParsersRequireExactPackageAndBinaryIdentity(t *testing.
 		},
 		{
 			name:   "apk",
-			target: packageTarget{format: packageFormatAPK, installer: "/sbin/apk"},
+			target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK, installer: "/sbin/apk"},
 			query: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 				if args[1] == "--verbose" {
 					return []byte("syswarden-4.04.2-r0\n"), nil
@@ -750,8 +750,8 @@ func TestQualificationPackagePayloadBindsExpectedCLIDigestForEveryFormat(t *test
 		packageIn []byte
 		converter qualificationRPMPayloadConverter
 	}{
-		{name: "deb", target: packageTarget{format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", tarPayload)},
-		{name: "rpm", target: packageTarget{format: packageFormatRPM}, packageIn: rpmPackage, converter: func(ctx context.Context, packageFile *os.File, output io.Writer) error {
+		{name: "deb", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", tarPayload)},
+		{name: "rpm", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM}, packageIn: rpmPackage, converter: func(ctx context.Context, packageFile *os.File, output io.Writer) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -765,7 +765,7 @@ func TestQualificationPackagePayloadBindsExpectedCLIDigestForEveryFormat(t *test
 			_, err = output.Write(rpmPayload)
 			return err
 		}},
-		{name: "apk", target: packageTarget{format: packageFormatAPK}, packageIn: tarPayload},
+		{name: "apk", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK}, packageIn: tarPayload},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -840,9 +840,9 @@ func TestQualificationPackagePayloadRejectsUnsafeCLIInventoryForEveryFormat(t *t
 				packageIn []byte
 				converter qualificationRPMPayloadConverter
 			}{
-				{name: "deb", target: packageTarget{format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", tarPayload)},
-				{name: "rpm", target: packageTarget{format: packageFormatRPM}, packageIn: []byte("rpm"), converter: func(context.Context, *os.File, io.Writer) error { return nil }},
-				{name: "apk", target: packageTarget{format: packageFormatAPK}, packageIn: tarPayload},
+				{name: "deb", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", tarPayload)},
+				{name: "rpm", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM}, packageIn: []byte("rpm"), converter: func(context.Context, *os.File, io.Writer) error { return nil }},
+				{name: "apk", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK}, packageIn: tarPayload},
 			}
 			formats[1].converter = func(_ context.Context, _ *os.File, output io.Writer) error {
 				_, err := output.Write(cpioPayload)
@@ -865,7 +865,7 @@ func TestQualificationDEBPayloadCompressionIsFailClosed(t *testing.T) {
 		name: qualificationPackageCLIPath, payload: []byte("cli"), mode: 0750,
 	}})
 	file := openQualificationPayloadFixture(t, "candidate.deb", qualificationDEBFixture(t, "data.tar.xz", payload))
-	_, err := attestQualificationPackageCLIWith(t.Context(), packageTarget{format: packageFormatDEB}, file, nil)
+	_, err := attestQualificationPackageCLIWith(t.Context(), packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, file, nil)
 	if err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("unsupported DEB data member error = %v", err)
 	}
@@ -883,9 +883,9 @@ func TestQualificationPayloadAttestationHonorsCanceledContextForEveryFormat(t *t
 		packageIn []byte
 		converter qualificationRPMPayloadConverter
 	}{
-		{name: "deb", target: packageTarget{format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", payload)},
-		{name: "rpm", target: packageTarget{format: packageFormatRPM}, packageIn: []byte("rpm"), converter: func(ctx context.Context, _ *os.File, _ io.Writer) error { return ctx.Err() }},
-		{name: "apk", target: packageTarget{format: packageFormatAPK}, packageIn: payload},
+		{name: "deb", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", payload)},
+		{name: "rpm", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM}, packageIn: []byte("rpm"), converter: func(ctx context.Context, _ *os.File, _ io.Writer) error { return ctx.Err() }},
+		{name: "apk", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK}, packageIn: payload},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file := openQualificationPayloadFixture(t, "candidate."+test.name, test.packageIn)
@@ -1260,7 +1260,7 @@ func TestQualificationDependencyPreflightAttestsEveryDeclaredPackage(t *testing.
 }
 
 func TestQualificationDependencyPreflightRejectsMissingPackage(t *testing.T) {
-	target := packageTarget{format: packageFormatRPM, installer: "/usr/bin/dnf"}
+	target := packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/dnf"}
 	err := attestOfflineQualificationPackageDependenciesWith(
 		t.Context(),
 		target,
@@ -1340,19 +1340,19 @@ func TestQualificationInstallCommandsCannotResolveRepositoryDependencies(t *test
 		want      []string
 	}{
 		{
-			name: "deb", target: packageTarget{format: packageFormatDEB, installer: "/usr/bin/apt-get"}, installer: "/usr/bin/dpkg",
+			name: "deb", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB, installer: "/usr/bin/apt-get"}, installer: "/usr/bin/dpkg",
 			want: []string{"--install", packagePath},
 		},
 		{
-			name: "rpm dnf", target: packageTarget{format: packageFormatRPM, installer: "/usr/bin/dnf"}, installer: "/usr/bin/dnf",
+			name: "rpm dnf", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/dnf"}, installer: "/usr/bin/dnf",
 			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "--setopt=install_weak_deps=False", "--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False", "install", "-y", packagePath},
 		},
 		{
-			name: "rpm yum", target: packageTarget{format: packageFormatRPM, installer: "/usr/bin/yum"}, installer: "/usr/bin/yum",
+			name: "rpm yum", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/yum"}, installer: "/usr/bin/yum",
 			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "--setopt=install_weak_deps=False", "--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False", "install", "-y", packagePath},
 		},
 		{
-			name: "apk", target: packageTarget{format: packageFormatAPK, installer: "/sbin/apk"}, installer: "/sbin/apk",
+			name: "apk", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK, installer: "/sbin/apk"}, installer: "/sbin/apk",
 			want: []string{"--no-network", "--no-cache", "--repositories-file", "/dev/null", "add", packagePath},
 		},
 	}

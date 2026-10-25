@@ -18,7 +18,7 @@ import (
 
 const (
 	updateManifestSchema              = "syswarden-update-manifest/v1"
-	updateManifestRetentionSchema     = "syswarden-update-manifest/v2"
+	updateManifestIdentitySchema      = "syswarden-update-manifest/v3"
 	nativeDependencyRetentionContract = "syswarden-native-dependency-retention/v1"
 	updateManifestAssetName           = "syswarden-update-manifest-v1.json"
 	updateManifestSignatureAssetName  = updateManifestAssetName + ".sig"
@@ -55,6 +55,7 @@ type updateManifest struct {
 }
 
 type updateArtifact struct {
+	PackageName  string `json:"package_name,omitempty"`
 	OS           string `json:"os"`
 	Architecture string `json:"architecture"`
 	Format       string `json:"format"`
@@ -64,6 +65,7 @@ type updateArtifact struct {
 }
 
 type packageTarget struct {
+	packageName  string
 	os           string
 	architecture string
 	format       string
@@ -281,7 +283,7 @@ func parseCanonicalSignature(data []byte) ([]byte, error) {
 }
 
 // manifestSchemaForVersion makes the dependency-retaining updater a requirement
-// for v5 and later. Legacy verifiers reject v2 before downloading package bytes.
+// for v5 and later. Legacy verifiers reject v3 before downloading package bytes.
 // The fixed asset locator is retained so an old updater sees an explicit refusal.
 func manifestSchemaForVersion(version string) (string, error) {
 	parsed, err := parseReleaseVersion(version)
@@ -289,7 +291,7 @@ func manifestSchemaForVersion(version string) (string, error) {
 		return "", fmt.Errorf("invalid manifest version: %w", err)
 	}
 	if parsed.major >= 5 {
-		return updateManifestRetentionSchema, nil
+		return updateManifestIdentitySchema, nil
 	}
 	return updateManifestSchema, nil
 }
@@ -303,7 +305,7 @@ func (manifest *updateManifest) validate() error {
 		return fmt.Errorf("update manifest schema %q is not %q required for %s", manifest.Schema, expectedSchema, manifest.Version)
 	}
 	wantTransition := ""
-	if expectedSchema == updateManifestRetentionSchema {
+	if expectedSchema == updateManifestIdentitySchema {
 		wantTransition = nativeDependencyRetentionContract
 	}
 	if manifest.NativeTransition != wantTransition {
@@ -312,20 +314,27 @@ func (manifest *updateManifest) validate() error {
 	if !validKeyID(manifest.KeyID) {
 		return fmt.Errorf("invalid manifest key ID %q", manifest.KeyID)
 	}
-	expected := expectedManifestIdentities()
+	expected, err := expectedManifestIdentities(manifest.Version)
+	if err != nil {
+		return err
+	}
 	if len(manifest.Artifacts) != len(expected) {
 		return fmt.Errorf("manifest contains %d artifacts, want %d", len(manifest.Artifacts), len(expected))
 	}
 	for index, identity := range expected {
 		artifact := manifest.Artifacts[index]
-		if artifact.OS != identity.os || artifact.Architecture != identity.architecture || artifact.Format != identity.format {
+		packageName := ""
+		if expectedSchema == updateManifestIdentitySchema {
+			packageName = identity.packageName
+		}
+		if artifact.PackageName != packageName || artifact.OS != identity.os || artifact.Architecture != identity.architecture || artifact.Format != identity.format {
 			return fmt.Errorf(
-				"manifest artifact %d identity is %s/%s/%s, want %s/%s/%s",
-				index, artifact.OS, artifact.Architecture, artifact.Format,
-				identity.os, identity.architecture, identity.format,
+				"manifest artifact %d identity is %s/%s/%s/%s, want %s/%s/%s/%s",
+				index, artifact.PackageName, artifact.OS, artifact.Architecture, artifact.Format,
+				packageName, identity.os, identity.architecture, identity.format,
 			)
 		}
-		expectedFilename, err := packageFilename(manifest.Version, artifact.Format, artifact.Architecture)
+		expectedFilename, err := packageFilenameForName(manifest.Version, artifact.Format, artifact.Architecture, identity.packageName)
 		if err != nil {
 			return fmt.Errorf("manifest artifact %d: %w", index, err)
 		}
@@ -342,12 +351,22 @@ func (manifest *updateManifest) validate() error {
 	return nil
 }
 
-func expectedManifestIdentities() []packageTarget {
-	return []packageTarget{
-		{os: "linux", architecture: "amd64", format: packageFormatDEB},
-		{os: "linux", architecture: "amd64", format: packageFormatRPM},
-		{os: "linux", architecture: "amd64", format: packageFormatAPK},
+func expectedManifestIdentities(version string) ([]packageTarget, error) {
+	parsed, err := parseReleaseVersion(version)
+	if err != nil {
+		return nil, err
 	}
+	names := []string{compatibilityNativePackageName}
+	if parsed.major >= 5 {
+		names = append(names, baseNativePackageName)
+	}
+	identities := make([]packageTarget, 0, len(names)*3)
+	for _, name := range names {
+		for _, format := range []string{packageFormatDEB, packageFormatRPM, packageFormatAPK} {
+			identities = append(identities, packageTarget{packageName: name, os: "linux", architecture: "amd64", format: format})
+		}
+	}
+	return identities, nil
 }
 
 func validKeyID(value string) bool {
@@ -413,11 +432,12 @@ func detectPackageTarget(
 		if !trustedPackageManagerPath(candidate.name, resolved) {
 			return packageTarget{}, fmt.Errorf("package manager %q resolved to untrusted path %q", candidate.name, resolved)
 		}
-		filename, err := packageFilename(version, candidate.format, goarch)
+		filename, err := packageFilenameForName(version, candidate.format, goarch, identity.name)
 		if err != nil {
 			return packageTarget{}, err
 		}
 		return packageTarget{
+			packageName:  identity.name,
 			os:           goos,
 			architecture: goarch,
 			format:       candidate.format,
@@ -444,22 +464,30 @@ func trustedPackageManagerPath(name, resolved string) bool {
 }
 
 func packageFilename(version, format, goarch string) (string, error) {
-	if _, err := parseReleaseVersion(version); err != nil {
+	return packageFilenameForName(version, format, goarch, compatibilityNativePackageName)
+}
+
+func packageFilenameForName(version, format, goarch, packageName string) (string, error) {
+	parsed, err := parseReleaseVersion(version)
+	if err != nil {
 		return "", err
+	}
+	if !validNativeProductPackageName(packageName) || (parsed.major < 5 && packageName != compatibilityNativePackageName) {
+		return "", fmt.Errorf("unsupported native package identity %q for %s", packageName, version)
 	}
 	cleanVersion := strings.TrimPrefix(version, "v")
 	switch format {
 	case packageFormatDEB:
 		if goarch == "amd64" {
-			return fmt.Sprintf("syswarden_%s_amd64.deb", cleanVersion), nil
+			return fmt.Sprintf("%s_%s_amd64.deb", packageName, cleanVersion), nil
 		}
 	case packageFormatRPM:
 		if goarch == "amd64" {
-			return fmt.Sprintf("syswarden-%s-1.x86_64.rpm", cleanVersion), nil
+			return fmt.Sprintf("%s-%s-1.x86_64.rpm", packageName, cleanVersion), nil
 		}
 	case packageFormatAPK:
 		if goarch == "amd64" {
-			return fmt.Sprintf("syswarden_%s_x86_64.apk", cleanVersion), nil
+			return fmt.Sprintf("%s_%s_x86_64.apk", packageName, cleanVersion), nil
 		}
 	}
 	return "", fmt.Errorf("unsupported package target format=%q architecture=%q", format, goarch)
@@ -487,13 +515,26 @@ func (target packageTarget) installArguments(packagePath string) []string {
 }
 
 func (manifest *updateManifest) artifactFor(target packageTarget) (updateArtifact, error) {
+	if err := manifest.validate(); err != nil {
+		return updateArtifact{}, err
+	}
+	filename, err := packageFilenameForName(manifest.Version, target.format, target.architecture, target.packageName)
+	if err != nil || filename != target.filename {
+		return updateArtifact{}, fmt.Errorf("package target filename does not match its native identity")
+	}
 	for _, artifact := range manifest.Artifacts {
-		if artifact.OS == target.os && artifact.Architecture == target.architecture && artifact.Format == target.format {
+		packageName := artifact.PackageName
+		if manifest.Schema == updateManifestSchema {
+			// The legacy schema has exactly the compatibility artifacts and
+			// forbids an explicit package_name field.
+			packageName = compatibilityNativePackageName
+		}
+		if packageName == target.packageName && artifact.OS == target.os && artifact.Architecture == target.architecture && artifact.Format == target.format {
 			if artifact.Filename != target.filename {
 				return updateArtifact{}, fmt.Errorf("manifest selected filename %q, want %q", artifact.Filename, target.filename)
 			}
 			return artifact, nil
 		}
 	}
-	return updateArtifact{}, fmt.Errorf("manifest has no artifact for %s/%s/%s", target.os, target.architecture, target.format)
+	return updateArtifact{}, fmt.Errorf("manifest has no artifact for %s/%s/%s/%s", target.packageName, target.os, target.architecture, target.format)
 }

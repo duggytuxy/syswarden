@@ -27,12 +27,13 @@ func TestSignedManifestRequiresVersionedRetentionContract(t *testing.T) {
 	}{
 		{"v4.10.4", "syswarden-update-manifest/v1", true},
 		{"v4.10.4", "syswarden-update-manifest/v2", false},
-		{"v5.00.0", "syswarden-update-manifest/v2", true},
+		{"v5.00.0", "syswarden-update-manifest/v3", true},
 		{"v5.00.0", "syswarden-update-manifest/v1", false},
-		{"v5.00.1", "syswarden-update-manifest/v2", true},
+		{"v5.00.1", "syswarden-update-manifest/v3", true},
 		{"v5.01.0", "syswarden-update-manifest/v1", false},
-		{"v6.00.0", "syswarden-update-manifest/v2", true},
-		{"v5.00.0", "syswarden-update-manifest/v3", false},
+		{"v6.00.0", "syswarden-update-manifest/v3", true},
+		{"v5.00.0", "syswarden-update-manifest/v2", false},
+		{"v5.00.0", "syswarden-update-manifest/v4", false},
 		{"v5.00.0", "", false},
 	} {
 		t.Run(tc.version+"/"+tc.schema, func(t *testing.T) {
@@ -75,8 +76,9 @@ func TestSignedManifestRejectsIncompatibleRetentionRequirement(t *testing.T) {
 func TestQualificationRefusesIncompatibleTransitionBeforeHostInspection(t *testing.T) {
 	for _, tc := range []struct{ name, schema, transition string }{
 		{"legacy schema", "syswarden-update-manifest/v1", ""},
-		{"missing retention", "syswarden-update-manifest/v2", ""},
-		{"unknown retention", "syswarden-update-manifest/v2", "unknown"},
+		{"retention-only schema", "syswarden-update-manifest/v2", "syswarden-native-dependency-retention/v1"},
+		{"missing retention", "syswarden-update-manifest/v3", ""},
+		{"unknown retention", "syswarden-update-manifest/v3", "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const version = "v5.00.0"
@@ -188,7 +190,7 @@ func TestUpdaterRefusesWrongTransitionSchemaBeforePackageAccess(t *testing.T) {
 	for _, tc := range []struct{ version, schema string }{
 		{"v5.00.0", "syswarden-update-manifest/v1"},
 		{"v4.10.4", "syswarden-update-manifest/v2"},
-		{"v5.00.1", "syswarden-update-manifest/v3"},
+		{"v5.00.1", "syswarden-update-manifest/v2"},
 	} {
 		t.Run(tc.version, func(t *testing.T) {
 			manifest := testUpdateManifest(t, tc.version, []byte("package must not be requested"))

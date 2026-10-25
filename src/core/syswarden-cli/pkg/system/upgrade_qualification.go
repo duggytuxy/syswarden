@@ -213,7 +213,13 @@ func (u *updater) attestQualificationInstallation(
 ) (installedQualificationEvidence, error) {
 	attestationCtx, cancelAttestation := context.WithTimeout(ctx, u.attestTimeout)
 	defer cancelAttestation()
+	if err := attestationCtx.Err(); err != nil {
+		return installedQualificationEvidence{}, fmt.Errorf("attest %s SysWarden version: %w", label, err)
+	}
 	evidence, err := u.attestInstalled(attestationCtx, target, u.effectiveUID)
+	if ctxErr := attestationCtx.Err(); ctxErr != nil {
+		return installedQualificationEvidence{}, fmt.Errorf("attest %s SysWarden version: %w", label, ctxErr)
+	}
 	if err != nil {
 		return installedQualificationEvidence{}, fmt.Errorf("attest %s SysWarden version: %w", label, err)
 	}
@@ -618,8 +624,11 @@ func attestInstalledQualificationVersionWith(
 	binaryPath string,
 	output qualificationCommandOutput,
 ) (evidence installedQualificationEvidence, returnErr error) {
-	if output == nil || binaryPath == "" || !filepath.IsAbs(binaryPath) || filepath.Clean(binaryPath) != binaryPath {
+	if ctx == nil || output == nil || !validNativeProductPackageName(target.packageName) || binaryPath == "" || !filepath.IsAbs(binaryPath) || filepath.Clean(binaryPath) != binaryPath {
 		return installedQualificationEvidence{}, errors.New("invalid installed-version attestation configuration")
+	}
+	if err := ctx.Err(); err != nil {
+		return installedQualificationEvidence{}, err
 	}
 	binaryRoot, binary, identity, err := openInstalledQualificationBinary(binaryPath, expectedUID)
 	if err != nil {
@@ -637,11 +646,11 @@ func attestInstalledQualificationVersionWith(
 	var version string
 	switch target.format {
 	case packageFormatDEB:
-		version, err = attestInstalledDEBVersion(ctx, binaryPath, output)
+		version, err = attestInstalledDEBVersionForName(ctx, target.packageName, binaryPath, output)
 	case packageFormatRPM:
-		version, err = attestInstalledRPMVersion(ctx, binaryPath, output)
+		version, err = attestInstalledRPMVersionForName(ctx, target.packageName, binaryPath, output)
 	case packageFormatAPK:
-		version, err = attestInstalledAPKVersion(ctx, target.installer, binaryPath, output)
+		version, err = attestInstalledAPKVersionForName(ctx, target.packageName, target.installer, binaryPath, output)
 	default:
 		err = fmt.Errorf("unsupported qualification package format %q", target.format)
 	}
@@ -649,6 +658,9 @@ func attestInstalledQualificationVersionWith(
 		return installedQualificationEvidence{}, err
 	}
 	if err := revalidateInstalledQualificationBinary(binaryRoot, binary, filepath.Base(binaryPath), identity, expectedUID); err != nil {
+		return installedQualificationEvidence{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return installedQualificationEvidence{}, err
 	}
 	return installedQualificationEvidence{
@@ -1346,13 +1358,26 @@ func qualificationAPKPayloadCLISHA256WithContext(ctx context.Context, packageFil
 }
 
 func attestInstalledDEBVersion(ctx context.Context, binaryPath string, output qualificationCommandOutput) (string, error) {
+	return attestInstalledDEBVersionForName(ctx, compatibilityNativePackageName, binaryPath, output)
+}
+
+func attestInstalledDEBVersionForName(ctx context.Context, packageName, binaryPath string, output qualificationCommandOutput) (string, error) {
+	if ctx == nil || output == nil || !validNativeProductPackageName(packageName) {
+		return "", errors.New("installed package attestation requires an exact native identity")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	versionOutput, err := output(
 		ctx,
 		"/usr/bin/dpkg-query",
 		"--show",
 		"--showformat=${db:Status-Abbrev}\t${Version}\n",
-		"syswarden",
+		packageName,
 	)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", fmt.Errorf("query installed DEB version: %w", err)
 	}
@@ -1366,13 +1391,19 @@ func attestInstalledDEBVersion(ctx context.Context, binaryPath string, output qu
 		return "", err
 	}
 	ownerOutput, err := output(ctx, "/usr/bin/dpkg-query", "--search", binaryPath)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", fmt.Errorf("query installed CLI DEB ownership: %w", err)
 	}
-	if string(ownerOutput) != "syswarden: "+binaryPath+"\n" {
-		return "", errors.New("installed CLI DEB ownership does not match the syswarden package")
+	if string(ownerOutput) != packageName+": "+binaryPath+"\n" {
+		return "", errors.New("installed CLI DEB ownership does not match the selected package")
 	}
-	verification, err := output(ctx, "/usr/bin/dpkg", "--verify", "--verify-format=rpm", "syswarden")
+	verification, err := output(ctx, "/usr/bin/dpkg", "--verify", "--verify-format=rpm", packageName)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err := validateQualificationPackageVerificationResult(verification, err); err != nil {
 		return "", fmt.Errorf("installed DEB package integrity verification: %w", err)
 	}
@@ -1380,12 +1411,28 @@ func attestInstalledDEBVersion(ctx context.Context, binaryPath string, output qu
 }
 
 func attestInstalledRPMVersion(ctx context.Context, binaryPath string, output qualificationCommandOutput) (string, error) {
+	return attestInstalledRPMVersionForName(ctx, compatibilityNativePackageName, binaryPath, output)
+}
+
+func attestInstalledRPMVersionForName(ctx context.Context, packageName, binaryPath string, output qualificationCommandOutput) (string, error) {
+	if ctx == nil || output == nil || !validNativeProductPackageName(packageName) {
+		return "", errors.New("installed package attestation requires an exact native identity")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	const queryFormat = "%{NAME}\t%{VERSION}\t%{ARCH}\n"
-	packageOutput, err := output(ctx, "/usr/bin/rpm", "--query", "syswarden", "--queryformat", queryFormat)
+	packageOutput, err := output(ctx, "/usr/bin/rpm", "--query", packageName, "--queryformat", queryFormat)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", fmt.Errorf("query installed RPM version: %w", err)
 	}
 	ownerOutput, err := output(ctx, "/usr/bin/rpm", "--query", "--file", binaryPath, "--queryformat", queryFormat)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", fmt.Errorf("query installed CLI RPM ownership: %w", err)
 	}
@@ -1393,14 +1440,17 @@ func attestInstalledRPMVersion(ctx context.Context, binaryPath string, output qu
 		return "", errors.New("installed RPM package and CLI ownership versions disagree")
 	}
 	fields := strings.Split(strings.TrimSuffix(string(packageOutput), "\n"), "\t")
-	if len(fields) != 3 || fields[0] != "syswarden" || fields[2] != "x86_64" || bytes.Count(packageOutput, []byte{'\n'}) != 1 {
+	if len(fields) != 3 || fields[0] != packageName || fields[2] != "x86_64" || bytes.Count(packageOutput, []byte{'\n'}) != 1 {
 		return "", errors.New("installed RPM identity is ambiguous")
 	}
 	version, err := canonicalInstalledSyswardenVersion(fields[1], packageFormatRPM)
 	if err != nil {
 		return "", err
 	}
-	verification, err := output(ctx, "/usr/bin/rpm", "--verify", "syswarden", "--noscripts")
+	verification, err := output(ctx, "/usr/bin/rpm", "--verify", packageName, "--noscripts")
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err := validateQualificationPackageVerificationResult(verification, err); err != nil {
 		return "", fmt.Errorf("installed RPM package integrity verification: %w", err)
 	}
@@ -1450,14 +1500,27 @@ func validateQualificationPackageVerificationResult(output []byte, commandErr er
 }
 
 func attestInstalledAPKVersion(ctx context.Context, apkPath, binaryPath string, output qualificationCommandOutput) (string, error) {
+	return attestInstalledAPKVersionForName(ctx, compatibilityNativePackageName, apkPath, binaryPath, output)
+}
+
+func attestInstalledAPKVersionForName(ctx context.Context, packageName, apkPath, binaryPath string, output qualificationCommandOutput) (string, error) {
+	if ctx == nil || output == nil || !validNativeProductPackageName(packageName) {
+		return "", errors.New("installed package attestation requires an exact native identity")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if apkPath != "/sbin/apk" && apkPath != "/usr/sbin/apk" {
 		return "", fmt.Errorf("untrusted APK package manager path %q", apkPath)
 	}
-	packageOutput, err := output(ctx, apkPath, "info", "--verbose", "syswarden")
+	packageOutput, err := output(ctx, apkPath, "info", "--verbose", packageName)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", fmt.Errorf("query installed APK version: %w", err)
 	}
-	const packagePrefix = "syswarden-"
+	packagePrefix := packageName + "-"
 	if !bytes.HasPrefix(packageOutput, []byte(packagePrefix)) || bytes.Count(packageOutput, []byte{'\n'}) != 1 || packageOutput[len(packageOutput)-1] != '\n' {
 		return "", errors.New("installed APK version is ambiguous")
 	}
@@ -1467,10 +1530,13 @@ func attestInstalledAPKVersion(ctx context.Context, apkPath, binaryPath string, 
 		return "", err
 	}
 	ownerOutput, err := output(ctx, apkPath, "info", "--who-owns", binaryPath)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", fmt.Errorf("query installed CLI APK ownership: %w", err)
 	}
-	if string(ownerOutput) != binaryPath+" is owned by syswarden-"+rawVersion+"\n" {
+	if string(ownerOutput) != binaryPath+" is owned by "+packagePrefix+rawVersion+"\n" {
 		return "", errors.New("installed APK package and CLI ownership versions disagree")
 	}
 	return version, nil
@@ -1874,20 +1940,20 @@ func allowedQualificationQuery(name string, args []string) bool {
 	}
 	switch name {
 	case "/usr/bin/dpkg-query":
-		return same("--show", "--showformat=${db:Status-Abbrev}\t${Version}\n", "syswarden") ||
+		return (len(args) == 3 && args[0] == "--show" && args[1] == "--showformat=${db:Status-Abbrev}\t${Version}\n" && validNativeProductPackageName(args[2])) ||
 			same("--search", installedSyswardenCLIPath) ||
 			(len(args) == 3 && args[0] == "--show" && args[1] == "--showformat=${db:Status-Abbrev}\n" &&
 				qualificationRequiredPackage(packageFormatDEB, args[2]))
 	case "/usr/bin/dpkg":
-		return same("--verify", "--verify-format=rpm", "syswarden")
+		return (len(args) == 3 && args[0] == "--verify" && args[1] == "--verify-format=rpm" && validNativeProductPackageName(args[2]))
 	case "/usr/bin/rpm":
-		return same("--query", "syswarden", "--queryformat", "%{NAME}\t%{VERSION}\t%{ARCH}\n") ||
+		return (len(args) == 4 && args[0] == "--query" && validNativeProductPackageName(args[1]) && args[2] == "--queryformat" && args[3] == "%{NAME}\t%{VERSION}\t%{ARCH}\n") ||
 			same("--query", "--file", installedSyswardenCLIPath, "--queryformat", "%{NAME}\t%{VERSION}\t%{ARCH}\n") ||
-			same("--verify", "syswarden", "--noscripts") ||
+			(len(args) == 3 && args[0] == "--verify" && validNativeProductPackageName(args[1]) && args[2] == "--noscripts") ||
 			(len(args) == 3 && args[0] == "--query" && args[1] == "--quiet" &&
 				qualificationRequiredPackage(packageFormatRPM, args[2]))
 	case "/sbin/apk", "/usr/sbin/apk":
-		return same("info", "--verbose", "syswarden") || same("info", "--who-owns", installedSyswardenCLIPath) ||
+		return (len(args) == 3 && args[0] == "info" && args[1] == "--verbose" && validNativeProductPackageName(args[2])) || same("info", "--who-owns", installedSyswardenCLIPath) ||
 			(len(args) == 4 && args[0] == "info" && args[1] == "--quiet" && args[2] == "-e" &&
 				qualificationRequiredPackage(packageFormatAPK, args[3]))
 	default:

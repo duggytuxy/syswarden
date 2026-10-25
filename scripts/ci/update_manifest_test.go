@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
@@ -9,6 +10,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -147,10 +149,10 @@ func TestVerifyAcceptsDeterministicSignedManifest(t *testing.T) {
 func TestVersionedManifestPreventsLegacyTransitionAcceptance(t *testing.T) {
 	for _, tc := range []struct{ version, schema string }{
 		{"v4.10.4", "syswarden-update-manifest/v1"},
-		{"v5.00.0", "syswarden-update-manifest/v2"},
-		{"v5.00.1", "syswarden-update-manifest/v2"},
-		{"v5.01.0", "syswarden-update-manifest/v2"},
-		{"v6.00.0", "syswarden-update-manifest/v2"},
+		{"v5.00.0", "syswarden-update-manifest/v3"},
+		{"v5.00.1", "syswarden-update-manifest/v3"},
+		{"v5.01.0", "syswarden-update-manifest/v3"},
+		{"v6.00.0", "syswarden-update-manifest/v3"},
 	} {
 		t.Run(tc.version, func(t *testing.T) {
 			fixture := makeVersionedManifestFixture(t, tc.version)
@@ -161,7 +163,7 @@ func TestVersionedManifestPreventsLegacyTransitionAcceptance(t *testing.T) {
 			if err := verify(fixture.repository, tc.version, fixture.packages, fixture.manifest, fixture.signature); err != nil {
 				t.Fatal(err)
 			}
-			for _, schema := range []string{"", "syswarden-update-manifest/v1", "syswarden-update-manifest/v2", "syswarden-update-manifest/v3"} {
+			for _, schema := range []string{"", "syswarden-update-manifest/v1", "syswarden-update-manifest/v2", "syswarden-update-manifest/v3", "syswarden-update-manifest/v4"} {
 				if schema == tc.schema {
 					continue
 				}
@@ -359,6 +361,36 @@ func TestVersionedManifestPreservesLegacyCanonicalBytes(t *testing.T) {
 	}
 }
 
+func TestV3ManifestMatchesSharedWireVector(t *testing.T) {
+	t.Parallel()
+
+	// PUBLIC TEST vector: the existing deterministic test key signs metadata
+	// for six synthetic payloads. These are not release packages or release keys.
+	// The consumer verifies these same files without constructing a replacement.
+	fixture := makeVersionedManifestFixture(t, "v5.00.0")
+	_, sourcePath, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve producer test source path")
+	}
+	vectorDirectory := filepath.Join(filepath.Dir(sourcePath), "testdata", "native-identity-v3")
+	for _, file := range []struct{ name, generatedPath string }{
+		{manifestName, fixture.manifest},
+		{signatureName, fixture.signature},
+	} {
+		want, err := os.ReadFile(filepath.Join(vectorDirectory, file.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(file.generatedPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("generated %s differs from the shared v3 public test vector", file.name)
+		}
+	}
+}
+
 func TestVersionedManifestRejectsMissingOrUnsupportedRetention(t *testing.T) {
 	for _, version := range []string{"v4.10.4", "v5.00.0"} {
 		for _, transition := range []string{"", "unknown", "syswarden-native-dependency-retention/v1"} {
@@ -374,6 +406,92 @@ func TestVersionedManifestRejectsMissingOrUnsupportedRetention(t *testing.T) {
 					t.Fatal("accepted incompatible signed retention contract")
 				}
 			})
+		}
+	}
+}
+
+func TestV3ManifestBindsExactlyBothNativePackageIdentities(t *testing.T) {
+	const version = "v5.00.0"
+	fixture := makeVersionedManifestFixture(t, version)
+	if err := verify(fixture.repository, version, fixture.packages, fixture.manifest, fixture.signature); err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ name, format, filename string }{
+		{"syswarden", "deb", "syswarden_5.00.0_amd64.deb"},
+		{"syswarden", "rpm", "syswarden-5.00.0-1.x86_64.rpm"},
+		{"syswarden", "apk", "syswarden_5.00.0_x86_64.apk"},
+		{"syswarden-base", "deb", "syswarden-base_5.00.0_amd64.deb"},
+		{"syswarden-base", "rpm", "syswarden-base-5.00.0-1.x86_64.rpm"},
+		{"syswarden-base", "apk", "syswarden-base_5.00.0_x86_64.apk"},
+	}
+	candidate := fixture.parsed(t)
+	if candidate.Schema != "syswarden-update-manifest/v3" || candidate.NativeTransition != nativeRetentionContract || len(candidate.Artifacts) != len(want) {
+		t.Fatalf("unexpected signed identity contract: %#v", candidate)
+	}
+	for index, expected := range want {
+		actual := candidate.Artifacts[index]
+		if actual.PackageName != expected.name || actual.Format != expected.format || actual.Filename != expected.filename || actual.OS != "linux" || actual.Architecture != "amd64" {
+			t.Fatalf("artifact %d = %#v, want %#v", index, actual, expected)
+		}
+	}
+}
+
+func TestV3ManifestRejectsSignedIdentitySubstitution(t *testing.T) {
+	tests := map[string]func(*manifest){
+		"missing artifact": func(candidate *manifest) { candidate.Artifacts = candidate.Artifacts[:5] },
+		"extra artifact": func(candidate *manifest) {
+			candidate.Artifacts = append(candidate.Artifacts, candidate.Artifacts[0])
+		},
+		"duplicate identity":     func(candidate *manifest) { candidate.Artifacts[3] = candidate.Artifacts[0] },
+		"missing package name":   func(candidate *manifest) { candidate.Artifacts[3].PackageName = "" },
+		"unknown package name":   func(candidate *manifest) { candidate.Artifacts[3].PackageName = "syswarden-custom" },
+		"cross package name":     func(candidate *manifest) { candidate.Artifacts[3].PackageName = "syswarden" },
+		"cross package filename": func(candidate *manifest) { candidate.Artifacts[3].Filename = candidate.Artifacts[0].Filename },
+		"noncanonical order": func(candidate *manifest) {
+			candidate.Artifacts[0], candidate.Artifacts[3] = candidate.Artifacts[3], candidate.Artifacts[0]
+		},
+		"downgraded schema": func(candidate *manifest) { candidate.Schema = "syswarden-update-manifest/v2" },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := makeVersionedManifestFixture(t, "v5.00.0")
+			candidate := fixture.parsed(t)
+			mutate(candidate)
+			fixture.resign(t, candidate)
+			if err := verify(fixture.repository, "v5.00.0", fixture.packages, fixture.manifest, fixture.signature); err == nil {
+				t.Fatal("accepted a signed identity contract violation")
+			}
+		})
+	}
+}
+
+func TestV3PackageDirectoryRequiresBothCompleteVariants(t *testing.T) {
+	for _, extra := range []bool{false, true} {
+		fixture := makeVersionedManifestFixture(t, "v5.00.0")
+		if extra {
+			if err := os.WriteFile(filepath.Join(fixture.packages, "syswarden-custom_5.00.0_amd64.deb"), []byte("extra"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.Remove(filepath.Join(fixture.packages, "syswarden-base_5.00.0_amd64.deb")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadPackages(fixture.packages, "v5.00.0", false); err == nil {
+			t.Fatalf("accepted incomplete or extended v3 package inventory, extra=%v", extra)
+		}
+	}
+}
+
+func TestLegacyManifestRejectsPackageIdentityExtension(t *testing.T) {
+	fixture := makeManifestFixture(t)
+	candidate := fixture.parsed(t)
+	candidate.Artifacts[0].PackageName = "syswarden"
+	fixture.resign(t, candidate)
+	if err := verify(fixture.repository, firstSignedVersion, fixture.packages, fixture.manifest, fixture.signature); err == nil {
+		t.Fatal("accepted package_name in the historical manifest schema")
+	}
+	for _, name := range []string{"", "syswarden-base", "syswarden-custom"} {
+		if _, err := packageFilenameForName("v4.10.4", "deb", "amd64", name); err == nil {
+			t.Fatalf("accepted historical package identity %q", name)
 		}
 	}
 }

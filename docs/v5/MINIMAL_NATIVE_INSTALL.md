@@ -150,6 +150,15 @@ Retained successor archives also block fresh publication over that generation.
 A separately qualified lineage-retirement and reinstall path remains open; the
 prototype never deletes private recovery evidence to make a new install proceed.
 
+New owned-removal journals capture available verified filesystem UUID evidence
+for each file and owned OpenRC link without rewriting the original ownership manifest. An older
+journal without UUID fields can use stronger evidence only when a finalized,
+immutable successor binds that exact original record. A present UUID is never
+replaced or ignored. Recovery checks all surviving original and quarantine paths
+before deleting any owned entry; altered or contradictory evidence stops the
+continuation. These filesystem checks do not by themselves qualify native
+remove, purge, reinstall or recovery after reboot.
+
 ## Dynamic observations and ban lifetime
 
 Kernel packet-log observations retain their detection and threshold telemetry
@@ -335,16 +344,24 @@ sufficient evidence of preservation across a later maintenance operation.
 
 The manifest producer selects its contract from the target release version.
 Targets before v5 keep `syswarden-update-manifest/v1` without a transition field.
-Targets starting at v5 require `syswarden-update-manifest/v2` and the exact
-`native_transition` value `syswarden-native-dependency-retention/v1`. Current
-online and offline verifiers reject missing, unknown or version-inconsistent
-contracts. This requirement cannot be disabled by an installer argument.
+Targets starting at v5 require `syswarden-update-manifest/v3`, the exact
+`native_transition` value `syswarden-native-dependency-retention/v1`, and six
+explicitly named package artifacts. The fixed inventory contains `syswarden`
+DEB/RPM/APK followed by `syswarden-base` DEB/RPM/APK, all Linux AMD64. Each signed
+`package_name` must match its exact filename, format and position. Current
+online and offline verifiers reject missing, duplicate, unknown, reordered or
+version-inconsistent identities and contracts. This requirement cannot be disabled by an installer argument.
 
 The discovery filenames remain `syswarden-update-manifest-v1.json` and its `.sig`
 companion. Their names are stable locators; the authenticated document's `schema`
 controls interpretation. Signature, trusted key, canonical encoding, target
 version, complete AMD64 package inventory, size and checksum checks still apply.
 Existing canonical v4 manifests and their signatures remain byte-compatible.
+Their three artifacts retain the original omitted package-name field. A v5
+retention-only v2 document cannot authorize the newer dual-identity inventory.
+The producer refuses to sign an incomplete six-package v5 directory. Current
+public workflows still build the three v4 compatibility artifacts; v5 publication
+requires separately completing and qualifying generation of both identities.
 
 Historical signed updaters recognize only the original contract. They refuse the
 new schema or field before requesting package bytes or invoking the installer.

@@ -95,7 +95,7 @@ func (host legacyWireGuardRecoveryHost) observeOwnedPolicy() (OwnedWireGuardPoli
 	}
 	if files.Source.PolicyVersion == 0 {
 		result.State = "v1-transition-required"
-		result.Blockers = append(result.Blockers, "transactional server and manifest replacement with recovery is not available")
+		result.Blockers = append(result.Blockers, "production policy migration requires a durable service-start fence and runtime acceptance beyond the internal file transaction")
 		if serviceManager == "systemd" {
 			result.Blockers = append(result.Blockers, retirementServiceBlockers("owned wg-syswarden", service, present)...)
 		} else if present {
@@ -105,7 +105,7 @@ func (host legacyWireGuardRecoveryHost) observeOwnedPolicy() (OwnedWireGuardPoli
 			result.Blockers = append(result.Blockers, "owned v1 runtime requires separately reviewed retirement before publication")
 		}
 		if files.PredecessorReceipt != nil {
-			result.Blockers = append(result.Blockers, "sealed predecessor requires a successor receipt without rewriting historical evidence")
+			result.Blockers = append(result.Blockers, "sealed predecessor must remain immutable and be bound to its exact successor during coordinated migration")
 		}
 	}
 	return result, nil
