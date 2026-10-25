@@ -130,6 +130,7 @@ jobs:
             scripts/ci/native_release_evidence_workflow_test.py \
             scripts/ci/package_qualification_matrix_test.py \
             scripts/ci/package_lifecycle_contract_test.py \
+            scripts/ci/package_install_phase_test.py \
             scripts/ci/package_lifecycle_lab_test.py \
             scripts/ci/package_v5_apk_removal_test.py \
             scripts/ci/package_stage_gate_test.py \
@@ -864,9 +865,11 @@ jobs:
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > "${PACKAGE_SCRIPTS}/postinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> "${PACKAGE_SCRIPTS}/postinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> "${PACKAGE_SCRIPTS}/postinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_install_phase.sh" >> "${PACKAGE_SCRIPTS}/postinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/postinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
+          syswarden_set_native_install_phase postinstall "$@"
           syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
           if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
@@ -1120,9 +1123,15 @@ jobs:
           printf '%s\n' 'Root crontab bytes and ambiguous legacy host artifacts were preserved for manual recovery.' >&2
           EOF
 
+          # APK upgrade has a fixed selector even when apk-tools supplies no phase environment.
+          [ "$(grep -Fxc 'syswarden_set_native_install_phase postinstall "$@"' "${PACKAGE_SCRIPTS}/postinst.sh")" -eq 1 ]
+          sed 's/^syswarden_set_native_install_phase postinstall "\$@"$/syswarden_set_native_install_phase postupgrade "$@"/' \
+            "${PACKAGE_SCRIPTS}/postinst.sh" > "${PACKAGE_SCRIPTS}/postupgrade.sh"
+          [ "$(grep -Fxc 'syswarden_set_native_install_phase postupgrade "$@"' "${PACKAGE_SCRIPTS}/postupgrade.sh")" -eq 1 ]
           chmod 0755 \
             "${PACKAGE_SCRIPTS}/preinst.sh" \
             "${PACKAGE_SCRIPTS}/postinst.sh" \
+            "${PACKAGE_SCRIPTS}/postupgrade.sh" \
             "${PACKAGE_SCRIPTS}/postrm.sh" \
             "${PACKAGE_SCRIPTS}/prerm.sh"
 
@@ -1356,7 +1365,7 @@ jobs:
           apk:
             scripts:
               preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"
-              postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"
+              postupgrade: "${PACKAGE_SCRIPTS}/postupgrade.sh"
           EOF
 
           "${TOOL_DIR}/nfpm" pkg \
@@ -1481,7 +1490,10 @@ jobs:
               <(tar --extract --to-stdout --file "${path}" "${preinstall_members[0]}") \
               <(tar --extract --to-stdout --file "${path}" "${preupgrade_members[0]}")
             cmp -s \
-              <(tar --extract --to-stdout --file "${path}" "${postinstall_members[0]}") \
+              "${PACKAGE_SCRIPTS}/postinst.sh" \
+              <(tar --extract --to-stdout --file "${path}" "${postinstall_members[0]}")
+            cmp -s \
+              "${PACKAGE_SCRIPTS}/postupgrade.sh" \
               <(tar --extract --to-stdout --file "${path}" "${postupgrade_members[0]}")
             package_version="$(sed -n 's/^pkgver = //p' <<< "${metadata}")"
             package_architecture="$(sed -n 's/^arch = //p' <<< "${metadata}")"

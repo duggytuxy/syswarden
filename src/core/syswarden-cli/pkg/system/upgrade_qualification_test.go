@@ -1458,6 +1458,7 @@ func TestQualificationActivationEnvironmentIsExactAndDistinct(t *testing.T) {
 		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
 		offlineQualificationEnvironment + "=" + offlineQualificationActivationValue,
 		"SYSWARDEN_PKG_INSTALL=1",
+		nativeInstallPhaseEnvironment + "=upgrade",
 	}
 	if got := qualificationActivationEnvironment(); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("qualification activation environment = %#v, want %#v", got, want)

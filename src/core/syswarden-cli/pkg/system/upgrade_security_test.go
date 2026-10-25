@@ -709,67 +709,26 @@ func TestAPKNativeSignatureVerificationIsReachableOnlyAfterManifestAndPackageVer
 	}
 }
 
-func TestFinishUpgradeReturnsPartialAndMultipleActivationFailures(t *testing.T) {
+func TestFinishUpgradeNeverOverridesNativeActivationDisposition(t *testing.T) {
 	t.Parallel()
-
-	tests := []struct {
-		name       string
-		failures   map[string]error
-		wantErrors []string
-	}{
-		{
-			name: "partial service failure",
-			failures: map[string]error{
-				"/usr/bin/systemctl daemon-reload": errors.New("reload failed"),
-			},
-			wantErrors: []string{"reload systemd manager configuration", "reload failed"},
-		},
-		{
-			name: "multiple activation failures",
-			failures: map[string]error{
-				"/usr/bin/systemctl daemon-reload":          errors.New("reload failed"),
-				"/usr/bin/systemctl restart syswarden-core": errors.New("core failed"),
-			},
-			wantErrors: []string{
-				"reload systemd manager configuration", "reload failed",
-				"restart syswarden-core", "core failed",
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
+	for _, format := range []string{packageFormatDEB, packageFormatRPM, packageFormatAPK} {
+		t.Run(string(format), func(t *testing.T) {
 			var output bytes.Buffer
-			var calls atomic.Int32
+			cleanups := 0
 			u := &updater{
-				stdout: &output,
-				lookPath: func(name string) (string, error) {
-					if name == "systemctl" {
-						return "/usr/bin/systemctl", nil
-					}
-					return "", os.ErrNotExist
+				stdout:   &output,
+				lookPath: func(string) (string, error) { t.Fatal("unexpected service-manager lookup"); return "", nil },
+				runCommand: func(context.Context, string, ...string) error {
+					t.Fatal("unexpected service-manager mutation")
+					return nil
 				},
-				runCommand: func(_ context.Context, name string, args ...string) error {
-					calls.Add(1)
-					key := strings.Join(append([]string{name}, args...), " ")
-					return test.failures[key]
-				},
+				retireWebTUI: func() error { cleanups++; return nil },
 			}
-			err := u.finishUpgrade(t.Context(), packageTarget{os: "linux", format: packageFormatDEB})
-			if err == nil {
-				t.Fatal("finishUpgrade() accepted failed activation")
+			if err := u.finishUpgrade(t.Context(), packageTarget{os: "linux", format: format}); err != nil {
+				t.Fatal(err)
 			}
-			for _, expected := range test.wantErrors {
-				if !strings.Contains(err.Error(), expected) {
-					t.Errorf("finishUpgrade() error %q does not contain %q", err, expected)
-				}
-			}
-			if calls.Load() != 2 {
-				t.Errorf("activation command calls = %d, want 2", calls.Load())
-			}
-			if strings.Contains(output.String(), "completed successfully") {
-				t.Fatalf("failed activation printed a success message: %q", output.String())
+			if cleanups != 1 || !strings.Contains(output.String(), "does not establish service or firewall health") {
+				t.Fatalf("cleanup or outcome reporting failed: %d, %q", cleanups, output.String())
 			}
 		})
 	}

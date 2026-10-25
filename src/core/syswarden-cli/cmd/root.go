@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -57,6 +58,18 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 		if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "install" {
+			plan, err := prepareNativeServicesForInstall()
+			if err != nil {
+				return installStageError("native service-state preflight failed before command preparation", err)
+			}
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			cmd.SetContext(context.WithValue(ctx, installServicePlanKey{}, plan))
+			if plan.Deferred() {
+				return nil
+			}
 			if err := preflightLegacyWireGuardForInstall(); err != nil {
 				return installStageError("historical WireGuard conflict detected before command preparation", err)
 			}

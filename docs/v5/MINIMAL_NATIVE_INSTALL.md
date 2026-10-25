@@ -23,6 +23,45 @@ Upgrades preserve administrator configuration, selected protection and existing
 dependencies. A missing new TOML switch in a historical configuration is not
 permission to disable its former behavior or remove a package.
 
+## Native service activation choices
+
+The standard native hooks distinguish fresh installation from upgrade using
+their package-manager arguments. APK uses separate install and upgrade hooks;
+it does not rely on inherited environment variables to identify the operation.
+An unknown operation permits staging only.
+
+Before the candidate install command loads configuration or recovers firewall
+state, it observes `syswarden-core` and `syswarden-firewall` together. A fresh
+operation can activate only an absent pair. An upgrade can refresh only an
+already active, persistently enabled pair. A stopped, disabled, masked, missing
+or transitional service defers the automatic host-activation pipeline. Core
+depends on firewall, so an active core alone is insufficient authorization.
+An unavailable or malformed observation refuses the operation instead of
+assuming an inactive or fresh host.
+
+For an eligible upgrade, service-definition publication leaves enablement
+artifacts unchanged, including custom OpenRC runlevels. The installer rechecks
+the pair before host mutation and before its conditional core restart. The
+updater does not perform a second unconditional restart after package hooks.
+Offline qualification activation explicitly retains upgrade semantics.
+
+Package staging or a successful native transaction does not prove that the new
+runtime is active. A deferred installation requires administrator review of
+the configuration and both services before an explicit online `syswarden
+install`. That explicit command can activate services; it is not a read-only
+inspection. Preserve masks and existing protection until that decision is made.
+
+These observations do not lock out concurrent administrator manager operations
+and cannot undo actions already performed by historical outgoing hooks. An old
+updater process may also restart services after the new package returns; this
+candidate's updated finalizer does not retrofit that already-running caller.
+Such historical entry points still require separate migration qualification.
+Native
+DEB/RPM/APK acceptance must still exercise fresh installation, active upgrades,
+stopped/disabled/masked pairs, custom runlevels, offline staging, retries,
+reload and reboot. The separate RHEL package-owned lifecycle remains unchanged.
+This guard is not full migration or lifecycle acceptance.
+
 ## Consolidated implementation status
 
 Source integration and native package acceptance are distinct. The current

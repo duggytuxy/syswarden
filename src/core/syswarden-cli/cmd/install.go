@@ -21,6 +21,14 @@ var installCmd = &cobra.Command{
 	Short: "Install SYSWARDEN and configure security modules",
 	Long:  "Installs the selected firewall services and feed scheduler. Fresh packages use the standard-list-only profile. SSH, CIS and OS hardening require a separate explicit configuration operation.",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		plan := nativeServicePlanForInstall(cmd)
+		if plan.Deferred() {
+			fmt.Println("[INFO] Package staged without automatic host activation; existing service state is preserved. Review the service pair and configuration before an explicit online install.")
+			return nil
+		}
+		if err := plan.Revalidate(); err != nil {
+			return installStageError("native service state changed before installation", err)
+		}
 		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
 		if err := preflightSystemdFirewallOrderingForInstall(); err != nil {
 			return installStageError("systemd firewall ordering preflight failed before host mutation", err)
@@ -107,7 +115,14 @@ var installCmd = &cobra.Command{
 			return installStageError("selected module prerequisite failed", err)
 		}
 		if os.Getenv("SYSWARDEN_PKG_INSTALL") == "1" {
-			if err := preparePackagedLegacyDynamicBanUpgrade(); err != nil {
+			if err := plan.Revalidate(); err != nil {
+				return installStageError("native service state changed before legacy recovery", err)
+			}
+			restart := restartCoreServiceForInstall
+			if plan != nil {
+				restart = plan.RestartExistingCore
+			}
+			if err := preparePackagedLegacyDynamicBanUpgradeWithRestart(restart); err != nil {
 				return installStageError("legacy dynamic firewall recovery failed", err)
 			}
 		}
@@ -127,6 +142,9 @@ var installCmd = &cobra.Command{
 		// Phase 2: Firewall Orchestration
 		fmt.Println("[SYSWARDEN] Starting Firewall Engine...")
 
+		if err := plan.Revalidate(); err != nil {
+			return installStageError("native service state changed before firewall mutation", err)
+		}
 		if err := system.OptimizeHostFirewall(); err != nil {
 			return installStageError("host firewall optimization failed", err)
 		}
@@ -168,7 +186,7 @@ var installCmd = &cobra.Command{
 
 		// Phase 5: Deployment Orchestration
 		fmt.Println("[SYSWARDEN] Starting Systemd Orchestration...")
-		if err := system.SetupService(); err != nil {
+		if err := system.SetupServiceWithInstallation(plan); err != nil {
 			return installStageError("service setup failed", err)
 		}
 		if err := removeExactLegacyCompletionAfterInstall(); err != nil {
@@ -178,6 +196,18 @@ var installCmd = &cobra.Command{
 		fmt.Println("[SYSWARDEN] v4.10.4 native installation complete.")
 		return nil
 	},
+}
+
+type installServicePlanKey struct{}
+
+var prepareNativeServicesForInstall = system.PrepareNativeServiceInstallation
+
+func nativeServicePlanForInstall(cmd *cobra.Command) *system.NativeServiceInstallation {
+	if cmd == nil || cmd.Context() == nil {
+		return nil
+	}
+	plan, _ := cmd.Context().Value(installServicePlanKey{}).(*system.NativeServiceInstallation)
+	return plan
 }
 
 var installConfigPreflight = prepareInstallConfiguration
@@ -367,6 +397,10 @@ func preflightConfiguredFirewallBackend() error {
 }
 
 func preparePackagedLegacyDynamicBanUpgrade() error {
+	return preparePackagedLegacyDynamicBanUpgradeWithRestart(restartCoreServiceForInstall)
+}
+
+func preparePackagedLegacyDynamicBanUpgradeWithRestart(restart func() error) error {
 	repaired, err := quarantineLegacyDynamicBanIntervals()
 	if err != nil {
 		return err
@@ -374,7 +408,7 @@ func preparePackagedLegacyDynamicBanUpgrade() error {
 	if !repaired {
 		return nil
 	}
-	if err := restartCoreServiceForInstall(); err != nil {
+	if err := restart(); err != nil {
 		return fmt.Errorf("restart the packaged core after legacy dynamic-ban quarantine: %w", err)
 	}
 	// A final pass closes the narrow race in which the historical process had

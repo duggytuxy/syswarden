@@ -37,6 +37,7 @@ DEFERRED_PURGE_POSTINSTALL_HELPER = (
 ALPINE_CRONIE_PREFLIGHT_HELPER = (
     REPOSITORY / "scripts" / "ci" / "package_alpine_cronie_preflight.sh"
 )
+INSTALL_PHASE_HELPER = REPOSITORY / "scripts" / "ci" / "package_install_phase.sh"
 SYSTEMD_ORDERING_PREFLIGHT_HELPER = (
     REPOSITORY / "scripts" / "ci" / "package_systemd_ordering_preflight.sh"
 )
@@ -111,6 +112,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
         cls.workflow = PACKAGE_WORKFLOW.read_text(encoding="utf-8")
 
     def script(self, name: str) -> str:
+        if name == "postupgrade.sh":
+            return self.script("postinst.sh").replace(
+                'syswarden_set_native_install_phase postinstall "$@"',
+                'syswarden_set_native_install_phase postupgrade "$@"',
+            )
         destination = f"${{PACKAGE_SCRIPTS}}/{name}"
         opener = re.compile(
             rf"^\s*cat\s+<<\s*'(?P<delimiter>[A-Z][A-Z0-9_]*)'\s+>>?\s+"
@@ -143,6 +149,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
             if name in {"preinst.sh", "postinst.sh"}:
                 prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+            if name == "postinst.sh":
+                prefix += INSTALL_PHASE_HELPER.read_text(encoding="utf-8")
             if name == "preinst.sh":
                 prefix += SYSTEMD_ORDERING_PREFLIGHT_HELPER.read_text(encoding="utf-8")
                 prefix += WIREGUARD_PREFLIGHT_HELPER.read_text(encoding="utf-8").replace(
@@ -236,6 +244,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 )
 
     def local_build_script(self, name: str) -> str:
+        if name == "postupgrade.sh":
+            return self.local_build_script("postinst.sh").replace(
+                'syswarden_set_native_install_phase postinstall "$@"',
+                'syswarden_set_native_install_phase postupgrade "$@"',
+            )
         source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         opener = re.compile(
             rf"^\s*cat\s+<<\s*'(?P<delimiter>[A-Z][A-Z0-9_]*)'\s+>>?\s+"
@@ -268,6 +281,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
             if name in {"preinst.sh", "postinst.sh"}:
                 prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+            if name == "postinst.sh":
+                prefix += INSTALL_PHASE_HELPER.read_text(encoding="utf-8")
             if name == "preinst.sh":
                 prefix += SYSTEMD_ORDERING_PREFLIGHT_HELPER.read_text(encoding="utf-8")
                 prefix += WIREGUARD_PREFLIGHT_HELPER.read_text(encoding="utf-8").replace(
@@ -2074,7 +2089,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
 
             strict_upgrades = (
                 ("preinst.sh", "pre-upgrade", False, False),
-                ("postinst.sh", "post-upgrade", True, False),
+                ("postupgrade.sh", "post-upgrade", True, False),
             )
             for script_name, apk_script, packages_ready, cronie_active in strict_upgrades:
                 with self.subTest(hook=apk_script, state="strict"):
@@ -2092,7 +2107,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 ("preinst.sh", "pre-install"),
                 ("postinst.sh", "post-install"),
                 ("preinst.sh", "pre-upgrade"),
-                ("postinst.sh", "post-upgrade"),
+                ("postupgrade.sh", "post-upgrade"),
             ):
                 with self.subTest(hook=apk_script, state="ready"):
                     result = run_hook(
@@ -6487,16 +6502,16 @@ systemctl() {
         self.assertEqual(local_sets, workflow_sets)
         self.assertEqual(lab_sets, workflow_sets)
 
-    def test_apk_fresh_and_upgrade_hooks_share_exact_pre_and_post_contracts(self) -> None:
+    def test_apk_upgrade_hook_keeps_pre_contract_and_distinct_post_phase(self) -> None:
         workflow_preinstall = 'preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"'
         workflow_preupgrade = 'preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"'
         workflow_postinstall = 'postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"'
-        workflow_postupgrade = 'postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"'
+        workflow_postupgrade = 'postupgrade: "${PACKAGE_SCRIPTS}/postupgrade.sh"'
         workflow_apk_hook = (
             "          apk:\n"
             "            scripts:\n"
             '              preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"\n'
-            '              postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"\n'
+            '              postupgrade: "${PACKAGE_SCRIPTS}/postupgrade.sh"\n'
         )
         self.assertEqual(self.workflow.count(workflow_preinstall), 1)
         self.assertEqual(self.workflow.count(workflow_preupgrade), 1)
@@ -6522,11 +6537,11 @@ systemctl() {
         self.assertEqual(local.count('preinstall: "./preinst.sh"'), 1)
         self.assertEqual(local.count('preupgrade: "./preinst.sh"'), 1)
         self.assertEqual(local.count('postinstall: "./postinst.sh"'), 1)
-        self.assertEqual(local.count('postupgrade: "./postinst.sh"'), 1)
+        self.assertEqual(local.count('postupgrade: "./postupgrade.sh"'), 1)
         self.assertEqual(
             local.count(
                 'apk:\n  scripts:\n    preupgrade: "./preinst.sh"\n'
-                '    postupgrade: "./postinst.sh"\n'
+                '    postupgrade: "./postupgrade.sh"\n'
             ),
             1,
         )
@@ -6548,7 +6563,7 @@ systemctl() {
             ".pre-install": b"#!/bin/sh\nprintf pre\n",
             ".pre-upgrade": b"#!/bin/sh\nprintf pre\n",
             ".post-install": b"#!/bin/sh\nprintf post\n",
-            ".post-upgrade": b"#!/bin/sh\nprintf post\n",
+            ".post-upgrade": b"#!/bin/sh\nprintf upgrade\n",
         }
 
         def write_apk(
@@ -6585,12 +6600,13 @@ systemctl() {
                 [
                     "/bin/bash",
                     "-c",
-                    "set -euo pipefail\nVERSION=4.02.14\n"
+                    'set -euo pipefail\nVERSION=4.02.14\nPACKAGE_SCRIPTS="$3"\n'
                     + validate_function
                     + '\nvalidate_apk "$1" "$2"',
                     "apk-archive-contract",
                     str(path),
                     architecture,
+                    str(path.parent / "expected-hooks"),
                 ],
                 check=False,
                 capture_output=True,
@@ -6598,6 +6614,10 @@ systemctl() {
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            expected_hooks = root / "expected-hooks"
+            expected_hooks.mkdir()
+            (expected_hooks / "postinst.sh").write_bytes(hooks[".post-install"])
+            (expected_hooks / "postupgrade.sh").write_bytes(hooks[".post-upgrade"])
             x86 = root / "syswarden_4.02.14_x86_64.apk"
             write_apk(x86, "x86_64", hooks)
             accepted = validate(x86, "x86_64")
@@ -6645,6 +6665,14 @@ systemctl() {
                     name: content
                     for name, content in hooks.items()
                     if name != ".post-upgrade"
+                },
+                "fresh-hook-used-for-upgrade": {
+                    **hooks,
+                    ".post-upgrade": hooks[".post-install"],
+                },
+                "drifted-postinstall": {
+                    **hooks,
+                    ".post-install": b"#!/bin/sh\nprintf drift\n",
                 },
             }
             for name, mutated_hooks in mutations.items():

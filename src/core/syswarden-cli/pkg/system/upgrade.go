@@ -20,17 +20,16 @@ import (
 var Version = "v4.10.4"
 
 const (
-	latestReleaseAPI             = "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
-	releaseDownloadBase          = "https://github.com/duggytuxy/syswarden/releases/download"
-	firstSignedUpdaterMajor      = 4
-	firstSignedUpdaterMinor      = 2
-	firstSignedUpdaterPatch      = 9
-	metadataDownloadTimeout      = 30 * time.Second
-	packageDownloadTimeout       = 10 * time.Minute
-	packageInstallationTimeout   = 30 * time.Minute
-	qualificationAttestTimeout   = 2 * time.Minute
-	postInstallationCommandLimit = 2 * time.Minute
-	productionTempBase           = "/var/tmp"
+	latestReleaseAPI           = "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
+	releaseDownloadBase        = "https://github.com/duggytuxy/syswarden/releases/download"
+	firstSignedUpdaterMajor    = 4
+	firstSignedUpdaterMinor    = 2
+	firstSignedUpdaterPatch    = 9
+	metadataDownloadTimeout    = 30 * time.Second
+	packageDownloadTimeout     = 10 * time.Minute
+	packageInstallationTimeout = 30 * time.Minute
+	qualificationAttestTimeout = 2 * time.Minute
+	productionTempBase         = "/var/tmp"
 )
 
 // The public baseline predates this manifest contract. Its one-time transition
@@ -136,6 +135,7 @@ func productionExternalCommandEnvironment() []string {
 	privatePrefixes := []string{
 		offlineQualificationEnvironment + "=",
 		"SYSWARDEN_PKG_INSTALL=",
+		nativeInstallPhaseEnvironment + "=",
 	}
 	for _, entry := range environment {
 		private := false
@@ -435,7 +435,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	}
 
 	if err := u.finishUpgrade(ctx, target); err != nil {
-		return fmt.Errorf("package installed but post-install activation failed: %w", err)
+		return fmt.Errorf("package installed but post-install finalization failed: %w", err)
 	}
 	return nil
 }
@@ -532,46 +532,25 @@ func releaseAssetURL(baseURL, version, assetName string) (string, error) {
 	return parsed.String(), nil
 }
 
-func (u *updater) finishUpgrade(ctx context.Context, target packageTarget) error {
+func (u *updater) finishUpgrade(_ context.Context, target packageTarget) error {
 	if target.os != "linux" {
 		return errors.New("package target operating system is not supported")
 	}
-	fmt.Fprintln(u.stdout, "[INFO] Restarting services to apply the new version...")
-	errorsFound := make([]error, 0, 3)
+	// Native hooks own activation and may deliberately stage a package while
+	// preserving stopped, disabled or masked services. Never override that
+	// disposition with a second restart here.
+	errorsFound := make([]error, 0, 1)
 	if u.retireWebTUI != nil {
 		if err := u.retireWebTUI(); err != nil {
 			errorsFound = append(errorsFound, fmt.Errorf("retire Web-TUI configuration: %w", err))
 		}
 	}
-	if target.format == packageFormatAPK {
-		if err := u.runResolvedCommand(ctx, "rc-service", "syswarden-core", "restart"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("restart syswarden-core: %w", err))
-		}
-	} else {
-		if err := u.runResolvedCommand(ctx, "systemctl", "daemon-reload"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("reload systemd manager configuration: %w", err))
-		}
-		if err := u.runResolvedCommand(ctx, "systemctl", "restart", "syswarden-core"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("restart syswarden-core: %w", err))
-		}
-	}
 	if err := errors.Join(errorsFound...); err != nil {
 		return err
 	}
-	fmt.Fprintln(u.stdout, "\n[+] In-place upgrade completed successfully!")
-	fmt.Fprintln(u.stdout, "[INFO] Please restart your terminal session to use the new version.")
+	fmt.Fprintln(u.stdout, "\n[+] Native package transaction completed successfully!")
+	fmt.Fprintln(u.stdout, "[INFO] Native hooks control activation; package success does not establish service or firewall health.")
 	return nil
-}
-
-func (u *updater) runResolvedCommand(ctx context.Context, name string, args ...string) error {
-	resolved, err := u.lookPath(name)
-	if err != nil {
-		return fmt.Errorf("locate %s: %w", name, err)
-	}
-	commandCtx, cancel := context.WithTimeout(ctx, postInstallationCommandLimit)
-	err = u.runCommand(commandCtx, resolved, args...)
-	cancel()
-	return err
 }
 
 func safeAssetName(name string) bool {

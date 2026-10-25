@@ -724,9 +724,11 @@ EOF
 cat "${SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > postinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> postinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> postinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_install_phase.sh" >> postinst.sh
 cat << 'EOF' >> postinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
+syswarden_set_native_install_phase postinstall "$@"
 syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
 if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
@@ -984,7 +986,12 @@ for package_hook in preinst.sh postinst.sh prerm.sh postrm.sh; do
     syswarden_render_local_package_hook "${package_hook}" > "${package_hook}.variant"
     mv -- "${package_hook}.variant" "${package_hook}"
 done
-chmod +x preinst.sh postinst.sh postrm.sh prerm.sh
+# APK upgrade has a fixed selector even when apk-tools supplies no phase environment.
+[ "$(grep -Fxc 'syswarden_set_native_install_phase postinstall "$@"' postinst.sh)" -eq 1 ]
+sed 's/^syswarden_set_native_install_phase postinstall "\$@"$/syswarden_set_native_install_phase postupgrade "$@"/' \
+    postinst.sh > postupgrade.sh
+[ "$(grep -Fxc 'syswarden_set_native_install_phase postupgrade "$@"' postupgrade.sh)" -eq 1 ]
+chmod +x preinst.sh postinst.sh postupgrade.sh postrm.sh prerm.sh
 
 RPM_SCRIPTS="${PACKAGE_WORKSPACE}/rpm-scripts"
 install -d -m 0700 "${RPM_SCRIPTS}"
@@ -1053,6 +1060,7 @@ normalize_package_mtimes \
     staging-apk \
     preinst.sh \
     postinst.sh \
+    postupgrade.sh \
     prerm.sh \
     postrm.sh \
     "${RPM_SCRIPTS}" \
@@ -1195,7 +1203,7 @@ scripts:
 apk:
   scripts:
     preupgrade: "./preinst.sh"
-    postupgrade: "./postinst.sh"
+    postupgrade: "./postupgrade.sh"
 EOF
 "${NFPM_BIN}" pkg \
     --config nfpm_alpine_amd64.yaml \
@@ -1304,6 +1312,22 @@ validate_local_apk_homepage() {
     local metadata
     metadata="$(LC_ALL=C tar -xOzf "${apk_path}" .PKGINFO)" || return 1
     [ "$(grep -Fxc 'url = https://github.com/duggytuxy/syswarden' <<< "${metadata}")" -eq 1 ]
+}
+
+validate_local_apk_install_hooks() {
+    local apk_path="$1"
+    local hook expected
+    local -a members=()
+    for hook in post-install post-upgrade; do
+        expected=postinst.sh
+        if [ "${hook}" = post-upgrade ]; then expected=postupgrade.sh; fi
+        mapfile -t members < <(
+            tar --list --file "${apk_path}" | awk -v hook=".${hook}" '$0 == hook || $0 == "./" hook { print }'
+        )
+        [ "${#members[@]}" -eq 1 ] || return 1
+        cmp -s "${PACKAGE_WORKSPACE}/${expected}" \
+            <(tar --extract --to-stdout --file "${apk_path}" "${members[0]}") || return 1
+    done
 }
 
 validate_local_rpm_scriptlet() {
@@ -1429,6 +1453,11 @@ if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
         "${REPOSITORY_ROOT}/extensions/rhel-package-owned/verify-rpm.py" \
         --rpm "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" \
         --sha256 "${RPM_PROFILE_SHA256}"
+fi
+if ! validate_local_apk_install_hooks \
+    "${PACKAGE_WORKSPACE}/${APK_PACKAGE_FILENAME}"; then
+    echo "[-] Local APK install hook validation failed." >&2
+    exit 1
 fi
 if ! validate_local_apk_license \
     "${PACKAGE_WORKSPACE}/${APK_PACKAGE_FILENAME}"; then

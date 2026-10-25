@@ -1680,6 +1680,7 @@ func qualificationActivationEnvironment() []string {
 		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
 		offlineQualificationEnvironment + "=" + offlineQualificationActivationValue,
 		"SYSWARDEN_PKG_INSTALL=1",
+		nativeInstallPhaseEnvironment + "=upgrade",
 	}
 }
 
