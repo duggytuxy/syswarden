@@ -1,7 +1,8 @@
 # Fresh SSH access transport
 
 Status: private development component for v5.00.0. Refs #235, #337 and #422.
-This component is not exposed through the CLI or installer and does not make a
+The private [controller command](SSH_ACCESS_COMMANDS.md) exposes this component.
+It is not called by the installer and does not make a
 migration-ready package available.
 
 ## Input and authority boundary

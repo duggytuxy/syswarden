@@ -43,10 +43,13 @@ package dependency boundary and the runtime migration/lifecycle gates pass.
 A green generic build or isolated SSH oracle does not replace those gates.
 
 The selected package design separates a fresh `syswarden-base` identity from the
-retained `syswarden` compatibility root. The [native identity design and
-laboratory](NATIVE_PACKAGE_IDENTITIES.md) distinguish dependency-graph evidence
-from production payload handoff, signed updater integration and lifecycle
-acceptance. Production dependency metadata remains unchanged at this stage.
+retained full `syswarden` compatibility package. Each owns the complete runtime
+payload, conflicts with the other and supports same-identity upgrades only.
+The local builder's opt-in `--minimal-package` generates base metadata without
+changing the public release inventory. The [native identity design and
+laboratory](NATIVE_PACKAGE_IDENTITIES.md) distinguish this intermediate generation
+support from signed updater integration and native lifecycle acceptance. Public
+package generation retains the historical dependency set at this stage.
 
 ## Incomplete configuration recovery
 

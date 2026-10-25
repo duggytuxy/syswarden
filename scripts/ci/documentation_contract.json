@@ -813,6 +813,34 @@
       "before": null,
       "after": "added",
       "reason": "Inspect complete original-restoration history with the original and independently approved recovery digests, pinned parser and current endpoints. This read-only command preserves uncertainty after a visible reload intent, does not repair durability or replay dispatch, and does not establish consumed policy, authenticated access or completed recovery."
+    },
+    {
+      "path": "syswarden ssh-policy access-request",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Issue422 private SSH access exchange with explicit independent approvals; no policy publication, reload or migration acceptance."
+    },
+    {
+      "path": "syswarden ssh-policy access-issue",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Issue422 private SSH access exchange with explicit independent approvals; no policy publication, reload or migration acceptance."
+    },
+    {
+      "path": "syswarden ssh-policy access-record",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Issue422 private SSH access exchange with explicit independent approvals; no policy publication, reload or migration acceptance."
+    },
+    {
+      "path": "syswarden ssh-policy access-probe",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Issue422 private SSH access exchange with explicit independent approvals; no policy publication, reload or migration acceptance."
     }
   ],
   "package_platform_contract": {

@@ -2,8 +2,9 @@
 
 Development design for issue #422 and consolidated PR452. This document does not
 establish production package support, migration readiness or v5.00.0 IVVQ
-acceptance. Production package metadata remains unchanged during this laboratory
-stage. SysWarden supports Linux AMD64 only.
+acceptance. Public release package metadata and the signed asset inventory remain
+unchanged. Local opt-in metadata generation is an intermediate implementation.
+SysWarden supports Linux AMD64 only.
 
 ## Identity boundary
 
@@ -14,9 +15,11 @@ their separate prerequisite checks. Mandatory Alpine components, including
 nftables, OpenRC, Cronie, `cronie-openrc`, process tools and account tools, remain
 required.
 
-Existing installations retain the `syswarden` identity as a compatibility root.
-That root continues to require their historical optional dependencies and the
-base runtime. Keeping the dependency graph rooted avoids converting every
+Existing installations retain the full `syswarden` compatibility package. It
+continues to require its historical dependencies and owns the complete runtime
+payload. The fresh `syswarden-base` package owns the same complete runtime paths
+with only base prerequisites. Neither variant depends on the other. Keeping the
+historical dependency graph rooted avoids converting every
 installed optional package into a manual administrator selection. Existing
 manual, group, hold, version-pin and repository-tag choices must survive.
 Unrelated automatically installed packages must remain eligible for their normal
@@ -24,16 +27,58 @@ native cleanup.
 
 The fresh installation command must explicitly select the new identity. Two
 artifacts with the same native name but different dependency promises are not a
-safe substitute. Removing the compatibility root is a separate prepared migration:
-native dependency retention must succeed before its requirements disappear.
-Keeping that root after a claimed complete product removal is not acceptable.
+safe substitute. Same-identity upgrades preserve ownership: `syswarden` stays
+`syswarden`, and `syswarden-base` stays `syswarden-base`. There is no automatic
+cross-variant transition. Removing the compatibility package is a separate
+prepared operation: native dependency retention must succeed before its
+requirements disappear. Keeping that package after a claimed complete product
+removal is not acceptable.
+
+## Local builder support
+
+`./build_packages.sh` retains the compatibility identity and historical dependency
+sets. `./build_packages.sh --minimal-package` generates the base identity in
+`dist/packages/minimal`, with its own `SHA256SUMS.txt`. It cannot be combined with
+`--rhel-package-owned-profile`. Both modes build an exact committed source snapshot
+using the existing pinned toolchain. Commit the metadata helper and builder
+together before a complete local build.
+
+The helper `scripts/ci/package_variant_metadata.sh` selects the local name,
+dependencies and mutual conflict. It declares no provider alias, replacement,
+obsoletion or dependency between the two identities. The runtime staging paths,
+service names, launchers and recovery hook path remain unchanged. The generated
+Debian changelog uses its native package name. Alpine install, upgrade and removal
+context selectors are bound to the selected identity during script generation.
+
+| Native format | Direct base dependencies |
+| --- | --- |
+| DEB | `bash-completion`, `cron`, `curl`, `jq`, `nftables`, `procps`, `wget` |
+| RPM | `bash-completion`, `cronie`, `curl`, `jq`, `nftables`, `procps-ng`, `wget` |
+| APK | `bash-completion`, `cronie`, `cronie-openrc`, `curl`, `jq`, `nftables`, `openrc`, `procps-ng`, `shadow`, `wget` |
+
+These sets match the manual base resolver. They are direct requirements, not a
+claim about a distribution's transitive dependency graph. Local metadata tests
+execute the builder's FPM argument generation with a stub and its nfpm
+configuration generation without installing packages. They verify exact names,
+dependencies, conflicts, unchanged staging selections and hook context routing.
+They do not establish native install, update or removal acceptance.
+
+Public workflow generation deliberately remains on the historical `syswarden`
+contract. It does not publish `syswarden-base` or use this local metadata helper.
+The updater, package attestations, unsigned-era discovery and Go removal paths
+still need identity support. Do not deploy the opt-in base artifacts as supported
+packages until those paths and the native lifecycle are qualified.
 
 ## Payload handoff boundary
 
-Different package names do not solve shared-file ownership. The production design
-must account for every executable, service, completion, configuration entry and
-recovery artifact during ownership transfer. An automatically replaced legacy
-package can lose the dependency root that makes preservation possible.
+The selected design avoids ownership handoff during supported upgrades. Mutual
+`Conflicts` expresses that the variants cannot coexist, but does not promise that
+a package frontend will refuse every request to switch. A frontend can plan
+removal of the installed variant to satisfy a request for the other one. Such
+removal invokes the existing lifecycle and can lose the historical dependency
+root. No untouched-state guarantee is made for an operator-authorized switch,
+forced install or erasure transaction. Same-path collisions are not a substitute
+for qualification of default APT, dpkg, DNF, RPM and APK entry points.
 
 Do not treat `Conflicts`, `Breaks`, `Replaces`, `Obsoletes`, force-overwrite flags
 or an incoming package script as proof of safe refusal. Native solvers and package
@@ -41,7 +86,8 @@ script failure semantics differ. In particular, an APK `preupgrade` error can be
 followed by payload and registration changes. A hook installed by the incoming
 package cannot guard that transaction's earlier planning boundary.
 
-The initial laboratory therefore has two distinct scopes:
+The existing laboratory characterizes an earlier compatibility-to-base graph.
+Its fixtures have two distinct scopes:
 
 1. A disjoint payload layout tests the package graph without overlapping runtime
    paths. The historical runtime belongs to the old package. After a successful
@@ -52,9 +98,9 @@ The initial laboratory therefore has two distinct scopes:
    erasure overrides. It records registration, file content and native ownership,
    including partial outcomes after a nonzero transaction exit.
 
-Success for the disjoint synthetic layout does not validate transfer of the
-current production paths. Coexistence also needs a runtime activation boundary
-that preserves the existing daemon and administrator protections.
+Success for the disjoint synthetic layout does not validate the selected full
+package variants or transfer of current production paths. The selected variants
+do not support coexistence, and the laboratory is not their acceptance matrix.
 
 ## Inert native laboratory
 
@@ -121,12 +167,18 @@ cannot become a successful qualification result.
 
 ## Production work still required
 
-Before production metadata changes, qualify the ownership handoff and fresh
-identity contract on every supported native platform. Update artifact naming,
-signed manifest inventory, package ownership attestations, dependency attestations,
-updater selection and legacy unsigned-era discovery together. An old updater's
-refusal is not successful migration. Raw native callers need their own prepared
-path and failure evidence.
+Before publication, qualify fresh base installation, historical compatibility
+upgrades, base-to-base upgrades and attempted conflicting installation on every
+supported native platform. Test frontend and raw native entry points separately.
+The selected design must preserve historical package reasons, holds, pins and
+unrelated automatic cleanup without any ownership transfer. Cross-variant
+transition remains unsupported and requires its own explicit design if requested.
+
+Update artifact naming, signed manifest inventory, package ownership attestations,
+dependency attestations, updater selection and legacy unsigned-era discovery
+together. An old updater's refusal is not successful migration. The current
+updater and Go uninstall discovery still target `syswarden`; packaging metadata
+alone cannot make `syswarden-base` safe to update or completely remove.
 
 Preserve administrator policy and runtime behavior through install, upgrade,
 failure, retry, reload, reboot and maintenance. Qualify standalone uninstall,

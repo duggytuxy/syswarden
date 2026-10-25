@@ -62,6 +62,10 @@ func newSSHPolicyCommand(inspect func() (sshpolicy.PlanSummary, error), verify f
 
 func init() {
 	command := newSSHPolicyCommand(sshpolicy.InspectPlan, sshpolicy.VerifyPlan, sshpolicy.InspectPorts)
+	command.AddCommand(newSSHAccessCommands(sshAccessOperations{
+		sshpolicy.PrepareSystemdAccessRequest, sshpolicy.IssueSystemdAccessChallenge,
+		sshpolicy.RecordSystemdAccessReceipt, sshpolicy.ProbeAccessChallenge,
+	})...)
 	command.AddCommand(newSSHOwnedCommand(sshpolicy.VerifyOwned))
 	command.AddCommand(newSSHActivationAssessmentCommand(sshpolicy.AssessSystemdActivation))
 	command.AddCommand(newSSHRestoreOriginalCommand(sshpolicy.InspectSystemdRecovery, sshpolicy.RestoreOriginalSystemd))

@@ -1328,6 +1328,228 @@
     }
   },
   {
+    "path": "syswarden ssh-policy access-issue",
+    "use": "access-issue",
+    "short": "Issue one short-lived SSH challenge from independently approved inputs",
+    "long": "Exchange private SSH evidence through fixed files in an existing owner-only directory. No configuration load, firewall recovery, policy publication or SSH reload is performed. Access evidence does not establish policy consumption or completed migration. Keep controller credentials on the independently administered controller. Failed issuance/delivery must not be retried by deleting records.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "enrollment-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved protected public enrollment SHA-256"
+      },
+      {
+        "name": "exchange-dir",
+        "type": "string",
+        "default": "",
+        "usage": "Existing absolute private directory, mode 0700; fixed files use mode 0600"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for access-issue"
+      },
+      {
+        "name": "lifetime-seconds",
+        "type": "int",
+        "default": "180",
+        "usage": "Whole-second challenge validity from 1 to 300"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original migration plan SHA-256"
+      },
+      {
+        "name": "request-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently reviewed complete request SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy access-issue\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy access-issue\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy access-issue\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy access-issue\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy access-probe",
+    "use": "access-probe",
+    "short": "Authenticate approved SSH routes from an independent controller",
+    "long": "Exchange private SSH evidence through fixed files in an existing owner-only directory. No configuration load, firewall recovery, policy publication or SSH reload is performed. Access evidence does not establish policy consumption or completed migration. Keep controller credentials on the independently administered controller. Failed issuance/delivery must not be retried by deleting records.",
+    "flags": [
+      {
+        "name": "challenge-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved exact challenge SHA-256"
+      },
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "credentials-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved controller-local credentials file SHA-256"
+      },
+      {
+        "name": "exchange-dir",
+        "type": "string",
+        "default": "",
+        "usage": "Existing absolute private directory, mode 0700; fixed files use mode 0600"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for access-probe"
+      },
+      {
+        "name": "request-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently reviewed complete request SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy access-probe\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy access-probe\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy access-probe\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy access-probe\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy access-record",
+    "use": "access-record",
+    "short": "Record an independently signed access receipt without accepting migration",
+    "long": "Exchange private SSH evidence through fixed files in an existing owner-only directory. No configuration load, firewall recovery, policy publication or SSH reload is performed. Access evidence does not establish policy consumption or completed migration. Keep controller credentials on the independently administered controller. Failed issuance/delivery must not be retried by deleting records.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "enrollment-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved protected public enrollment SHA-256"
+      },
+      {
+        "name": "exchange-dir",
+        "type": "string",
+        "default": "",
+        "usage": "Existing absolute private directory, mode 0700; fixed files use mode 0600"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for access-record"
+      },
+      {
+        "name": "issuance-image-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original issuance image SHA-256"
+      },
+      {
+        "name": "issuance-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved durable issuance SHA-256"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original migration plan SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy access-record\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy access-record\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy access-record\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy access-record\""
+    }
+  },
+  {
+    "path": "syswarden ssh-policy access-request",
+    "use": "access-request",
+    "short": "Prepare a private SSH access request without issuance or networking",
+    "long": "Exchange private SSH evidence through fixed files in an existing owner-only directory. No configuration load, firewall recovery, policy publication or SSH reload is performed. Access evidence does not establish policy consumption or completed migration. Keep controller credentials on the independently administered controller. Failed issuance/delivery must not be retried by deleting records.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "enrollment-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved protected public enrollment SHA-256"
+      },
+      {
+        "name": "exchange-dir",
+        "type": "string",
+        "default": "",
+        "usage": "Existing absolute private directory, mode 0700; fixed files use mode 0600"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for access-request"
+      },
+      {
+        "name": "plan-sha256",
+        "type": "string",
+        "default": "",
+        "usage": "Independently approved original migration plan SHA-256"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ssh-policy access-request\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ssh-policy access-request\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ssh-policy access-request\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ssh-policy access-request\""
+    }
+  },
+  {
     "path": "syswarden ssh-policy assess-activation",
     "use": "assess-activation",
     "short": "Inspect an interrupted SSH activation without recovering or retrying it",

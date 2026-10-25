@@ -1,7 +1,8 @@
 # Protected SSH access request and controller execution
 
 Status: private v5.00.0 integration component. Refs #235, #337 and #422.
-No CLI command, installer call or activation-completion path is enabled.
+The private [exchange commands](SSH_ACCESS_COMMANDS.md) expose request preparation
+and controller execution. No installer call or activation-completion path is enabled.
 
 ## Separate target and controller inputs
 

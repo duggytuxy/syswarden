@@ -1,8 +1,9 @@
 # Protected SSH controller enrollment and challenge issuance
 
 Status: v5.00.0 development component in consolidated PR452. Refs #235, #337
-and #422. Root-only target adapters are implemented; no CLI, automatic installer
-activation or migration-completion path is enabled by this component.
+and #422. Root-only target adapters are implemented and exposed through the private
+[exchange commands](SSH_ACCESS_COMMANDS.md). No automatic installer activation or
+migration-completion path is enabled by this component.
 
 ## Independent target enrollment
 
@@ -77,9 +78,10 @@ older component records, preserving their canonical bytes. Replaying a receipt
 or replacing an issuance inode is refused. No target-side network authentication
 or reload occurs in this adapter.
 
-The [controller protocol](SSH_CONTROLLER_RECEIPTS.md) still needs protected
-controller-side enrollment, credential delivery and operational handoff before
-an end-to-end operator workflow is exposed. A local target adapter or a signed
+The [controller protocol](SSH_CONTROLLER_RECEIPTS.md) is exposed through the
+private exchange commands. Controller-side credentials and delivery require
+independent operator provisioning; independently administered native qualification
+is still required. A local target adapter or a signed
 receipt alone does not establish independent controller execution.
 
 ## Recovery and historical inspection

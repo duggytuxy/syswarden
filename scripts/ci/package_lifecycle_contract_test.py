@@ -599,7 +599,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
             + '\nVERSION="$1"\n'
             + 'PACKAGE_WORKSPACE="$2"\n'
             + 'LOCAL_PACKAGE_OUTPUT="$3"\n'
+            + 'DEB_PACKAGE_FILENAME="syswarden_${VERSION}_amd64.deb"\n'
             + 'RPM_PACKAGE_FILENAME="syswarden-${VERSION}-1.x86_64.rpm"\n'
+            + 'APK_PACKAGE_FILENAME="syswarden_${VERSION}_x86_64.apk"\n'
             + "publish_local_artifacts\n"
         )
         command = [
@@ -1599,8 +1601,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
             '$1 == "-rw-r--r--" && $2 == "0/0"', source
         )
         self.assertIn(
-            '$6 == "./usr/share/doc/syswarden/changelog.gz"', source
+            'local changelog_path="./usr/share/doc/${PACKAGE_NAME}/changelog.gz"',
+            source,
         )
+        self.assertIn('$6 == expected', source)
 
         self.assertIn("prepare_rpm_build_id_links()", source)
         self.assertIn("LC_ALL=C readelf --notes", source)
@@ -6364,15 +6368,20 @@ systemctl() {
         self.assertLess(revalidate, offline_branch)
 
     def test_linux_packages_declare_every_runtime_dependency(self) -> None:
+        local = self.local_compatibility_dependencies()
         for dependency in ("wireguard-tools", "jq"):
             self.assertGreaterEqual(
                 self.workflow.count(f'-d "{dependency}"'),
                 2,
                 dependency,
             )
+            for family in ("deb", "rpm", "apk"):
+                self.assertEqual(local[family].count(dependency), 1, (family, dependency))
         self.assertEqual(self.workflow.count('-d "qrencode"'), 1)
+        self.assertEqual(local["deb"].count("qrencode"), 1)
         for dependency in ("checkpolicy", "policycoreutils-python-utils"):
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 2)
+            self.assertEqual(local["rpm"].count(dependency), 1, dependency)
         for dependency in (
             "wireguard-tools",
             "libqrencode-tools",
@@ -6386,19 +6395,18 @@ systemctl() {
                 1,
                 dependency,
             )
+            self.assertEqual(local["apk"].count(dependency), 1, dependency)
 
-        local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
-        self.assertEqual(local.count('-d "qrencode"'), 1)
         for dependency in ("unattended-upgrades", "apt-listchanges", "procps"):
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 1, dependency)
-            self.assertEqual(local.count(f'-d "{dependency}"'), 1, dependency)
+            self.assertEqual(local["deb"].count(dependency), 1, dependency)
         for dependency in ("dnf-automatic", "procps-ng"):
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 2, dependency)
-            self.assertEqual(local.count(f'-d "{dependency}"'), 1, dependency)
+            self.assertEqual(local["rpm"].count(dependency), 1, dependency)
         self.assertEqual(self.workflow.count("            - procps-ng\n"), 1)
-        self.assertEqual(local.count("  - procps-ng\n"), 1)
+        self.assertEqual(local["apk"].count("procps-ng"), 1)
         self.assertEqual(self.workflow.count("            - shadow\n"), 1)
-        self.assertEqual(local.count("  - shadow\n"), 1)
+        self.assertEqual(local["apk"].count("shadow"), 1)
 
     def test_manual_dependency_resolution_excludes_optional_packages(self) -> None:
         source = DEPENDENCIES_SOURCE.read_text(encoding="utf-8")
@@ -6432,9 +6440,27 @@ systemctl() {
         self.assertLess(package_guard, quarantine)
         self.assertLess(quarantine, feeds)
 
-    def test_runtime_dependency_sets_match_all_package_generators_and_lab(self) -> None:
-        local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+    def local_compatibility_dependencies(self) -> dict[str, list[str]]:
+        metadata = subprocess.run(
+            [
+                "/bin/bash", "-eu", "-c",
+                'source "$1"\n'
+                'syswarden_select_local_package_variant compatibility\n'
+                'printf "deb=%s\\n" "${DEB_PACKAGE_DEPENDENCIES[@]}"\n'
+                'printf "rpm=%s\\n" "${RPM_PACKAGE_DEPENDENCIES[@]}"\n'
+                'printf "apk=%s\\n" "${APK_PACKAGE_DEPENDENCIES[@]}"\n',
+                "package-metadata-test",
+                str(REPOSITORY / "scripts/ci/package_variant_metadata.sh"),
+            ],
+            check=True, capture_output=True, text=True, timeout=5,
+        )
+        dependencies: dict[str, list[str]] = {family: [] for family in ("deb", "rpm", "apk")}
+        for line in metadata.stdout.splitlines():
+            family, dependency = line.split("=", 1)
+            dependencies[family].append(dependency)
+        return dependencies
 
+    def test_runtime_dependency_sets_match_all_package_generators_and_lab(self) -> None:
         def fpm_dependencies(source: str) -> set[str]:
             return set(re.findall(r'-d "([A-Za-z0-9+_.-]+)"', source))
 
@@ -6447,11 +6473,7 @@ systemctl() {
             "rpm": fpm_dependencies(workflow_step_script(self.workflow, "Build RHEL Family Package (.rpm)")),
             "apk": yaml_dependencies(workflow_step_script(self.workflow, "Build Alpine Package (.apk)")),
         }
-        local_sets = {
-            "deb": fpm_dependencies(local.split("# Generate DEB", 1)[1].split("# Generate RPM", 1)[0]),
-            "rpm": fpm_dependencies(local.split("# Generate RPM", 1)[1].split("# Generate Alpine APK", 1)[0]),
-            "apk": yaml_dependencies(local.split("cat << EOF > nfpm_alpine_amd64.yaml", 1)[1]),
-        }
+        local_sets = {family: set(values) for family, values in self.local_compatibility_dependencies().items()}
         dependency_contract = package_lifecycle_lab.LIFECYCLE_SCRIPT.split(
             "expected_runtime_dependencies() {", 1
         )[1].split("\n}\n\npackage_runtime_dependencies() {", 1)[0]
@@ -6508,9 +6530,7 @@ systemctl() {
             ),
             1,
         )
-        self.assertEqual(local.count("  - openrc\n"), 1)
-        self.assertEqual(local.count("  - cronie\n"), 1)
-        self.assertEqual(local.count("  - cronie-openrc\n"), 1)
+        self.assertEqual(local.count("depends:\n${APK_PACKAGE_DEPENDENCIES_YAML}\n"), 1)
 
     def test_apk_archive_hook_validation_rejects_missing_drift_and_arch_mismatch(
         self,

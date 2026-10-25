@@ -70,5 +70,5 @@ func sshRestoreOriginalCommand(cmd *cobra.Command) bool {
 // Input isolation is not read-only authority. Application still passes the
 // removal barrier; both modes validate their own exact protected SSH inputs.
 func isolatedSSHPolicyCommand(cmd *cobra.Command) bool {
-	return readOnlySSHPolicyCommand(cmd) || sshRestoreOriginalCommand(cmd)
+	return readOnlySSHPolicyCommand(cmd) || sshRestoreOriginalCommand(cmd) || sshAccessExchangeCommand(cmd)
 }
