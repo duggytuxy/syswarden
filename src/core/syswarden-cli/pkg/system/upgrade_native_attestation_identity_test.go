@@ -24,7 +24,7 @@ func selectedNativeAttestationSteps(format, name, binary string) []selectedNativ
 	switch format {
 	case packageFormatDEB:
 		return []selectedNativeAttestationStep{
-			{"/usr/bin/dpkg-query", []string{"--show", "--showformat=${db:Status-Abbrev}\t${Version}\n", name}, "ii \t5.00.0\n"},
+			{"/usr/bin/dpkg-query", []string{"--show", "--showformat=${Package}\t${db:Status-Abbrev}\t${Version}\t${Architecture}\n", name}, name + "\tii \t5.00.0\tamd64\n"},
 			{"/usr/bin/dpkg-query", []string{"--search", binary}, name + ": " + binary + "\n"},
 			{"/usr/bin/dpkg", []string{"--verify", "--verify-format=rpm", name}, ""},
 		}
@@ -36,7 +36,7 @@ func selectedNativeAttestationSteps(format, name, binary string) []selectedNativ
 		}
 	case packageFormatAPK:
 		return []selectedNativeAttestationStep{
-			{"/sbin/apk", []string{"info", "--verbose", name}, name + "-5.00.0-r0\n"},
+			{"/sbin/apk", []string{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", name}, name + "-5.00.0-r0 x86_64 {" + name + "} (AGPL-3.0-only) [installed]\n"},
 			{"/sbin/apk", []string{"info", "--who-owns", binary}, binary + " is owned by " + name + "-5.00.0-r0\n"},
 		}
 	default:
@@ -196,12 +196,12 @@ func TestSelectedNativeAttestationRefusesMalformedOrForeignEvidence(t *testing.T
 					label string
 					index int
 					wire  string
-				}{"unconfigured", 0, "iU \t5.00.0\n"},
+				}{"unconfigured", 0, name + "\tiU \t5.00.0\tamd64\n"},
 					struct {
 						label string
 						index int
 						wire  string
-					}{"unexpected-architecture-field", 0, "ii \t5.00.0\tarm64\n"})
+					}{"unexpected-architecture-field", 0, name + "\tii \t5.00.0\tamd64\tarm64\n"})
 			case packageFormatRPM:
 				cases = append(cases, struct {
 					label string
@@ -223,12 +223,12 @@ func TestSelectedNativeAttestationRefusesMalformedOrForeignEvidence(t *testing.T
 						label string
 						index int
 						wire  string
-					}{"foreign-name", 0, other + "-5.00.0-r0\n"},
+					}{"foreign-name", 0, other + "-5.00.0-r0 x86_64 {" + other + "} (AGPL-3.0-only) [installed]\n"},
 					struct {
 						label string
 						index int
 						wire  string
-					}{"unexpected-architecture-field", 0, name + "-5.00.0-r0 aarch64\n"})
+					}{"unexpected-architecture-field", 0, name + "-5.00.0-r0 x86_64 aarch64 {" + name + "} (AGPL-3.0-only) [installed]\n"})
 			}
 			for _, tc := range cases {
 				t.Run(format+"/"+name+"/"+tc.label, func(t *testing.T) {
@@ -263,6 +263,73 @@ func TestSelectedNativeAttestationRefusesMalformedOrForeignEvidence(t *testing.T
 						selectedNativeAttestationOutput(t, steps, &calls))
 					if err == nil || version != "" || calls != 2 {
 						t.Fatalf("foreign architecture accepted: %q calls=%d error=%v", version, calls, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSelectedNativeAttestationRejectsArchitectureAndStatusBeforeOwnership(t *testing.T) {
+	for _, format := range []string{packageFormatDEB, packageFormatAPK} {
+		for _, name := range []string{"syswarden", "syswarden-base"} {
+			steps := selectedNativeAttestationSteps(format, name, installedSyswardenCLIPath)
+			valid := steps[0].wire
+			other := "syswarden-base"
+			if name == other {
+				other = "syswarden"
+			}
+			wireForArchitecture := func(architecture string) string {
+				if format == packageFormatDEB {
+					return name + "\tii \t5.00.0\t" + architecture + "\n"
+				}
+				return name + "-5.00.0-r0 " + architecture + " {" + name + "} (AGPL-3.0-only) [installed]\n"
+			}
+			type invalidEvidence struct{ label, wire string }
+			cases := []invalidEvidence{
+				{"empty-record", ""},
+				{"duplicate-records", valid + valid},
+				{"contradictory-records", valid + wireForArchitecture("aarch64")},
+				{"missing-final-newline", strings.TrimSuffix(valid, "\n")},
+				{"crlf-record", strings.ReplaceAll(valid, "\n", "\r\n")},
+				{"empty-version", strings.ReplaceAll(valid, "5.00.0", "")},
+			}
+			for _, architecture := range []string{"arm64", "aarch64", "noarch", "all", "", "amd64 x86_64", "x86_64/amd64", "x86_64\tamd64", "amd64\x00"} {
+				cases = append(cases, invalidEvidence{"architecture-" + strconv.Quote(architecture), wireForArchitecture(architecture)})
+			}
+			if format == packageFormatDEB {
+				cases = append(cases,
+					invalidEvidence{"foreign-name", other + "\tii \t5.00.0\tamd64\n"},
+					invalidEvidence{"foreign-architecture-spelling", wireForArchitecture("x86_64")},
+					invalidEvidence{"extra-architecture-field", wireForArchitecture("amd64\tarm64")},
+					invalidEvidence{"architecture-free-record", "ii \t5.00.0\n"},
+				)
+				for _, status := range []string{"iU ", "ii", "iiR", "hi ", "rc ", "", "ii \tiU "} {
+					cases = append(cases, invalidEvidence{"status-" + strconv.Quote(status), name + "\t" + status + "\t5.00.0\tamd64\n"})
+				}
+			} else {
+				cases = append(cases,
+					invalidEvidence{"foreign-name", other + "-5.00.0-r0 x86_64 {" + other + "} (AGPL-3.0-only) [installed]\n"},
+					invalidEvidence{"foreign-architecture-spelling", wireForArchitecture("amd64")},
+					invalidEvidence{"architecture-free-record", name + "-5.00.0-r0\n"},
+					invalidEvidence{"oversized-display-metadata", strings.ReplaceAll(valid, "AGPL-3.0-only", strings.Repeat("A", 64<<10))},
+					invalidEvidence{"invalid-utf8-display-metadata", strings.ReplaceAll(valid, "AGPL-3.0-only", "license\xff")},
+					invalidEvidence{"terminal-control-display-metadata", strings.ReplaceAll(valid, "AGPL-3.0-only", "license\x1b[0m")},
+					invalidEvidence{"line-separator-display-metadata", strings.ReplaceAll(valid, "AGPL-3.0-only", "license\u2028suffix")},
+				)
+				for _, status := range []string{"", "[available]", "[upgradable]", "[installed] [available]", "[installed] [installed]", "[installed", "installed"} {
+					cases = append(cases, invalidEvidence{"status-" + strconv.Quote(status), strings.ReplaceAll(valid, "[installed]", status)})
+				}
+			}
+			for _, tc := range cases {
+				t.Run(format+"/"+name+"/"+tc.label, func(t *testing.T) {
+					first := []selectedNativeAttestationStep{steps[0]}
+					first[0].wire = tc.wire
+					calls := 0
+					version, err := runSelectedNativeAttestation(t.Context(), format, name, installedSyswardenCLIPath,
+						selectedNativeAttestationOutput(t, first, &calls))
+					if err == nil || version != "" || calls != 1 {
+						t.Fatalf("invalid installed identity reached ownership or succeeded: version=%q calls=%d error=%v", version, calls, err)
 					}
 				})
 			}

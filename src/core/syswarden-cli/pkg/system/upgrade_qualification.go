@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"syswarden-cli/config"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 )
@@ -37,6 +39,10 @@ const qualificationCommandTerminationGrace = 2 * time.Second
 const maximumQualificationPackageExpandedBytes = 2 * maxPackageBytes
 
 const maximumQualificationDecoderDiagnostics = 4 * 1024
+
+const maximumQualificationQueryOutputBytes = 64 << 10
+
+const installedDEBIdentityShowFormat = "--showformat=${Package}\t${db:Status-Abbrev}\t${Version}\t${Architecture}\n"
 
 func qualificationTarHeaderIsRegular(typeflag byte) bool {
 	return typeflag == tar.TypeReg || typeflag == 0
@@ -1361,6 +1367,22 @@ func attestInstalledDEBVersion(ctx context.Context, binaryPath string, output qu
 	return attestInstalledDEBVersionForName(ctx, compatibilityNativePackageName, binaryPath, output)
 }
 
+func installedPackageIdentityLine(output []byte, allowTabs bool) (string, error) {
+	if len(output) == 0 || len(output) > maximumQualificationQueryOutputBytes || output[len(output)-1] != '\n' || !utf8.Valid(output) {
+		return "", errors.New("installed package identity output is malformed or exceeds its bound")
+	}
+	line := string(output[:len(output)-1])
+	for _, character := range line {
+		if allowTabs && character == '\t' {
+			continue
+		}
+		if unicode.IsControl(character) || character == '\u2028' || character == '\u2029' {
+			return "", errors.New("installed package identity output contains extra records or control characters")
+		}
+	}
+	return line, nil
+}
+
 func attestInstalledDEBVersionForName(ctx context.Context, packageName, binaryPath string, output qualificationCommandOutput) (string, error) {
 	if ctx == nil || output == nil || !validNativeProductPackageName(packageName) {
 		return "", errors.New("installed package attestation requires an exact native identity")
@@ -1372,7 +1394,7 @@ func attestInstalledDEBVersionForName(ctx context.Context, packageName, binaryPa
 		ctx,
 		"/usr/bin/dpkg-query",
 		"--show",
-		"--showformat=${db:Status-Abbrev}\t${Version}\n",
+		installedDEBIdentityShowFormat,
 		packageName,
 	)
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -1381,12 +1403,15 @@ func attestInstalledDEBVersionForName(ctx context.Context, packageName, binaryPa
 	if err != nil {
 		return "", fmt.Errorf("query installed DEB version: %w", err)
 	}
-	const prefix = "ii \t"
-	if !bytes.HasPrefix(versionOutput, []byte(prefix)) || bytes.Count(versionOutput, []byte{'\n'}) != 1 || versionOutput[len(versionOutput)-1] != '\n' {
-		return "", errors.New("installed DEB status and version are ambiguous")
+	line, err := installedPackageIdentityLine(versionOutput, true)
+	if err != nil {
+		return "", fmt.Errorf("installed DEB identity is ambiguous: %w", err)
 	}
-	rawVersion := strings.TrimSuffix(strings.TrimPrefix(string(versionOutput), prefix), "\n")
-	version, err := canonicalInstalledSyswardenVersion(rawVersion, packageFormatDEB)
+	fields := strings.Split(line, "\t")
+	if len(fields) != 4 || fields[0] != packageName || fields[1] != "ii " || fields[3] != "amd64" {
+		return "", errors.New("installed DEB name, status, version or architecture is ambiguous")
+	}
+	version, err := canonicalInstalledSyswardenVersion(fields[2], packageFormatDEB)
 	if err != nil {
 		return "", err
 	}
@@ -1513,18 +1538,35 @@ func attestInstalledAPKVersionForName(ctx context.Context, packageName, apkPath,
 	if apkPath != "/sbin/apk" && apkPath != "/usr/sbin/apk" {
 		return "", fmt.Errorf("untrusted APK package manager path %q", apkPath)
 	}
-	packageOutput, err := output(ctx, apkPath, "info", "--verbose", packageName)
+	// APK 2.14 and APK 3 list the installed package architecture at normal
+	// verbosity. Fixed offline options exclude configured repository metadata.
+	packageOutput, err := output(ctx, apkPath, "--no-network", "--repositories-file", "/dev/null", "list", "--installed", packageName)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return "", ctxErr
 	}
 	if err != nil {
 		return "", fmt.Errorf("query installed APK version: %w", err)
 	}
-	packagePrefix := packageName + "-"
-	if !bytes.HasPrefix(packageOutput, []byte(packagePrefix)) || bytes.Count(packageOutput, []byte{'\n'}) != 1 || packageOutput[len(packageOutput)-1] != '\n' {
-		return "", errors.New("installed APK version is ambiguous")
+	line, err := installedPackageIdentityLine(packageOutput, false)
+	if err != nil {
+		return "", fmt.Errorf("installed APK identity is ambiguous: %w", err)
 	}
-	rawVersion := strings.TrimSuffix(strings.TrimPrefix(string(packageOutput), packagePrefix), "\n")
+	fields := strings.SplitN(line, " ", 3)
+	packagePrefix := packageName + "-"
+	if len(fields) != 3 || !strings.HasPrefix(fields[0], packagePrefix) || fields[1] != "x86_64" {
+		return "", errors.New("installed APK name, version or architecture is ambiguous")
+	}
+	metadata := fields[2]
+	if !strings.HasPrefix(metadata, "{") || !strings.HasSuffix(metadata, ") [installed]") {
+		return "", errors.New("installed APK metadata or status is ambiguous")
+	}
+	origin, _, hasLicense := strings.Cut(strings.TrimSuffix(metadata[1:], ") [installed]"), "} (")
+	if !hasLicense || strings.ContainsAny(origin, "{}") {
+		return "", errors.New("installed APK display metadata is malformed")
+	}
+	// Origin and license are display metadata, not package identity. Their
+	// values may vary, and licenses may contain spaces or nested parentheses.
+	rawVersion := strings.TrimPrefix(fields[0], packagePrefix)
 	version, err := canonicalInstalledSyswardenVersion(rawVersion, packageFormatAPK)
 	if err != nil {
 		return "", err
@@ -1895,7 +1937,7 @@ func runQualificationCommandOutput(ctx context.Context, name string, args ...str
 	}
 	command := exec.Command(name, args...) // #nosec G204 -- executable and arguments passed allowedQualificationQuery
 	command.Env = []string{"LC_ALL=C", "LANG=C", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
-	stdout := qualificationBoundedBuffer{limit: 64 << 10}
+	stdout := qualificationBoundedBuffer{limit: maximumQualificationQueryOutputBytes}
 	stderr := qualificationBoundedBuffer{limit: 4 << 10}
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -1940,7 +1982,7 @@ func allowedQualificationQuery(name string, args []string) bool {
 	}
 	switch name {
 	case "/usr/bin/dpkg-query":
-		return (len(args) == 3 && args[0] == "--show" && args[1] == "--showformat=${db:Status-Abbrev}\t${Version}\n" && validNativeProductPackageName(args[2])) ||
+		return (len(args) == 3 && args[0] == "--show" && args[1] == installedDEBIdentityShowFormat && validNativeProductPackageName(args[2])) ||
 			same("--search", installedSyswardenCLIPath) ||
 			(len(args) == 3 && args[0] == "--show" && args[1] == "--showformat=${db:Status-Abbrev}\n" &&
 				qualificationRequiredPackage(packageFormatDEB, args[2]))
@@ -1953,7 +1995,8 @@ func allowedQualificationQuery(name string, args []string) bool {
 			(len(args) == 3 && args[0] == "--query" && args[1] == "--quiet" &&
 				qualificationRequiredPackage(packageFormatRPM, args[2]))
 	case "/sbin/apk", "/usr/sbin/apk":
-		return (len(args) == 3 && args[0] == "info" && args[1] == "--verbose" && validNativeProductPackageName(args[2])) || same("info", "--who-owns", installedSyswardenCLIPath) ||
+		return (len(args) == 6 && args[0] == "--no-network" && args[1] == "--repositories-file" && args[2] == "/dev/null" &&
+			args[3] == "list" && args[4] == "--installed" && validNativeProductPackageName(args[5])) || same("info", "--who-owns", installedSyswardenCLIPath) ||
 			(len(args) == 4 && args[0] == "info" && args[1] == "--quiet" && args[2] == "-e" &&
 				qualificationRequiredPackage(packageFormatAPK, args[3]))
 	default:

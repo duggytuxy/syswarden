@@ -487,7 +487,7 @@ func TestInstalledBinaryAttestationRejectsConcurrentContentMutation(t *testing.T
 		}
 		switch {
 		case name == "/usr/bin/dpkg-query" && args[0] == "--show":
-			return []byte("ii \t4.04.2\n"), nil
+			return []byte("syswarden\tii \t4.04.2\tamd64\n"), nil
 		case name == "/usr/bin/dpkg-query" && args[0] == "--search":
 			return []byte("syswarden: " + binaryPath + "\n"), nil
 		default:
@@ -516,7 +516,7 @@ func TestInstalledVersionParsersRequireExactPackageAndBinaryIdentity(t *testing.
 			query: func(_ context.Context, name string, args ...string) ([]byte, error) {
 				switch {
 				case name == "/usr/bin/dpkg-query" && args[0] == "--show":
-					return []byte("ii \t4.04.2\n"), nil
+					return []byte("syswarden\tii \t4.04.2\tamd64\n"), nil
 				case name == "/usr/bin/dpkg-query" && args[0] == "--search":
 					return []byte("syswarden: " + binaryPath + "\n"), nil
 				default:
@@ -541,10 +541,14 @@ func TestInstalledVersionParsersRequireExactPackageAndBinaryIdentity(t *testing.
 			name:   "apk",
 			target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK, installer: "/sbin/apk"},
 			query: func(_ context.Context, _ string, args ...string) ([]byte, error) {
-				if args[1] == "--verbose" {
-					return []byte("syswarden-4.04.2-r0\n"), nil
+				if strings.Join(args, " ") == "--no-network --repositories-file /dev/null list --installed syswarden" {
+					return []byte("syswarden-4.04.2-r0 x86_64 {syswarden} (AGPL-3.0-only) [installed]\n"), nil
 				}
-				return []byte(binaryPath + " is owned by syswarden-4.04.2-r0\n"), nil
+				if strings.Join(args, " ") == "info --who-owns "+binaryPath {
+					return []byte(binaryPath + " is owned by syswarden-4.04.2-r0\n"), nil
+				}
+				t.Fatalf("unexpected installed APK query: %q", args)
+				return nil, nil
 			},
 			want: "v4.04.2",
 		},
@@ -992,7 +996,7 @@ func TestQualificationPackageVerificationHandlesRPMAndDPKGDriftExitSeparately(t 
 func TestAllowedQualificationQueriesAreClosed(t *testing.T) {
 	if !allowedQualificationQuery(
 		"/usr/bin/dpkg-query",
-		[]string{"--show", "--showformat=${db:Status-Abbrev}\t${Version}\n", "syswarden"},
+		[]string{"--show", "--showformat=${Package}\t${db:Status-Abbrev}\t${Version}\t${Architecture}\n", "syswarden"},
 	) {
 		t.Fatal("exact installed-version query was rejected")
 	}
@@ -1002,8 +1006,13 @@ func TestAllowedQualificationQueriesAreClosed(t *testing.T) {
 	}{
 		{name: "/tmp/dpkg-query", args: []string{"--show", "syswarden"}},
 		{name: "/usr/bin/dpkg-query", args: []string{"--show", "operator-package"}},
+		{name: "/usr/bin/dpkg-query", args: []string{"--show", "--showformat=${db:Status-Abbrev}\t${Version}\n", "syswarden"}},
 		{name: "/usr/bin/rpm", args: []string{"--erase", "syswarden"}},
 		{name: "/sbin/apk", args: []string{"add", "syswarden"}},
+		{name: "/sbin/apk", args: []string{"info", "--verbose", "syswarden"}},
+		{name: "/sbin/apk", args: []string{"list", "--installed", "syswarden"}},
+		{name: "/sbin/apk", args: []string{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", "--quiet", "syswarden"}},
+		{name: "/sbin/apk", args: []string{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", "--verbose", "syswarden"}},
 	} {
 		if allowedQualificationQuery(query.name, query.args) {
 			t.Fatalf("unsafe query accepted: %s %#v", query.name, query.args)

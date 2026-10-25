@@ -31,6 +31,60 @@ func TestAPKQualificationQueriesUsePortableQuietInstalledOption(t *testing.T) {
 	}
 }
 
+// APK 2.14 and APK 3 print package architecture in the normal installed-list
+// output. Origin and license are display fields, not selected-package authority.
+func TestAPKInstalledIdentityUsesPortableOfflineList(t *testing.T) {
+	for _, apkPath := range []string{"/sbin/apk", "/usr/sbin/apk"} {
+		for _, name := range []string{"syswarden", "syswarden-base"} {
+			t.Run(apkPath+"/"+name, func(t *testing.T) {
+				calls := 0
+				query := func(_ context.Context, path string, args ...string) ([]byte, error) {
+					calls++
+					if path != apkPath || !allowedQualificationQuery(path, args) {
+						t.Fatalf("unapproved APK identity query: %s %v", path, args)
+					}
+					switch calls {
+					case 1:
+						want := []string{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", name}
+						if !reflect.DeepEqual(args, want) {
+							t.Fatalf("APK identity query = %v, want %v", args, want)
+						}
+						return []byte(name + "-5.00.0-r0 x86_64 {source-package} ((AGPL-3.0-only OR MIT) AND BSD-2-Clause) [installed]\n"), nil
+					case 2:
+						if !reflect.DeepEqual(args, []string{"info", "--who-owns", installedSyswardenCLIPath}) {
+							t.Fatalf("APK ownership query = %v", args)
+						}
+						return []byte(installedSyswardenCLIPath + " is owned by " + name + "-5.00.0-r0\n"), nil
+					default:
+						t.Fatalf("unexpected APK query: %v", args)
+						return nil, nil
+					}
+				}
+				version, err := attestInstalledAPKVersionForName(t.Context(), name, apkPath, installedSyswardenCLIPath, query)
+				if err != nil || version != "v5.00.0" || calls != 2 {
+					t.Fatalf("APK identity = %q, calls=%d, error=%v", version, calls, err)
+				}
+			})
+		}
+	}
+
+	for _, args := range [][]string{
+		{"list", "--installed", "syswarden"},
+		{"--no-network", "list", "--installed", "syswarden"},
+		{"--repositories-file", "/dev/null", "list", "--installed", "syswarden"},
+		{"--no-network", "--repositories-file", "/etc/apk/repositories", "list", "--installed", "syswarden"},
+		{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", "syswarden*"},
+		{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", "syswarden", "syswarden-base"},
+		{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", "--quiet", "syswarden"},
+		{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", "--verbose", "syswarden"},
+		{"info", "--verbose", "syswarden"},
+	} {
+		if allowedQualificationQuery("/sbin/apk", args) {
+			t.Fatalf("unbounded or architecture-free APK identity query authorized: %v", args)
+		}
+	}
+}
+
 func TestAPKStandaloneRemovalUsesPortableQuietInstalledOption(t *testing.T) {
 	for _, installed := range []string{"syswarden", "syswarden-base"} {
 		calls := 0

@@ -113,9 +113,21 @@ Artifact matching compares the attested native name as well as platform, format
 and filename. Installed-package version and CLI ownership queries also use the
 selected native name; another variant cannot satisfy their owner proof. Queries
 are restricted to the two known names and fixed read-only native operations.
-This source-level ownership check is not full payload-header, dependency, runtime
-or migration acceptance. In particular, DEB/APK installed architecture proof and
-the remaining native transaction matrix still need qualification.
+DEB installed evidence must contain exactly the selected name, fully installed
+status, canonical version and `amd64`. APK uses a bounded offline installed-list
+query and requires one exact selected-name/version record with `x86_64` and
+installed status before querying CLI ownership. Its origin and license are
+display metadata, not identity authority. Duplicate records, malformed output,
+foreign names and unsupported architecture values are refused. RPM retains its
+exact selected-name/version/`x86_64` binding to CLI ownership.
+
+The DEB and APK query formats have been observed on existing
+packages in isolated Linux AMD64 Debian 13 and Alpine 3.22/3.24 containers.
+Those observations validate query compatibility only. Regression fixtures bind
+both SysWarden names and prove that invalid DEB/APK identity evidence cannot
+reach the ownership query. Neither proves downloaded payload headers,
+dependency retention, runtime behavior or migration acceptance. The production
+native transaction matrix remains open.
 
 Production base updates remain explicitly refused. The new signed inventory
 does not enable compatibility-package substitution, switch package identity,
