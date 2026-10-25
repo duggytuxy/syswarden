@@ -721,10 +721,10 @@ func TestFinishUpgradeNeverOverridesNativeActivationDisposition(t *testing.T) {
 			u := &updater{
 				stdout:   &output,
 				lookPath: func(string) (string, error) { t.Fatal("unexpected service-manager lookup"); return "", nil },
-				runCommand: func(context.Context, string, ...string) error {
+				installPackage: guardedTestNativeInstaller(false, func(context.Context, string, ...string) error {
 					t.Fatal("unexpected service-manager mutation")
 					return nil
-				},
+				}),
 				retireWebTUI: func() error { cleanups++; return nil },
 			}
 			if err := u.finishUpgrade(t.Context(), packageTarget{os: "linux", format: format}); err != nil {
@@ -749,7 +749,7 @@ func TestFinishUpgradeReportsRetiredConfigurationCleanupFailure(t *testing.T) {
 			}
 			return "", os.ErrNotExist
 		},
-		runCommand: func(context.Context, string, ...string) error { return nil },
+		installPackage: guardedTestNativeInstaller(false, func(context.Context, string, ...string) error { return nil }),
 		retireWebTUI: func() error {
 			return errors.New("injected cleanup failure")
 		},
@@ -793,6 +793,30 @@ func testUpdater(
 	return testUpdaterForPlatform(client, tempBase, "linux", goarch, keys, runner)
 }
 
+// Existing runner fixtures observe the native command only after the updater's
+// required final descriptor guard. No test-only fallback exists in production.
+func guardedTestNativeInstaller(offline bool, runner commandRunner) nativePackageInstaller {
+	if runner == nil {
+		return nil
+	}
+	return func(ctx context.Context, target packageTarget, path string, beforeExecute func(context.Context) error) error {
+		if beforeExecute == nil {
+			return errors.New("test installer requires the final authenticated package guard")
+		}
+		if err := beforeExecute(ctx); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name, args := target.installer, target.installArguments(path)
+		if offline {
+			name, args = target.qualificationInstallCommand(path)
+		}
+		return runner(ctx, name, args...)
+	}
+}
+
 func testUpdaterForPlatform(
 	client *http.Client,
 	tempBase, goos, goarch string,
@@ -800,6 +824,9 @@ func testUpdaterForPlatform(
 	runner commandRunner,
 ) *updater {
 	return &updater{
+		// Transport/workspace tests inject their own package bytes. Native
+		// header parsing and the mandatory production gate have separate tests.
+		attestPackageIdentity: func(context.Context, packageTarget, string, *os.File) error { return nil },
 		preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {
 			return testCompatibilityUpdateIdentity("dpkg-query"), nil
 		},
@@ -820,7 +847,7 @@ func testUpdaterForPlatform(
 			}
 			return "", os.ErrNotExist
 		},
-		runCommand:      runner,
+		installPackage:  guardedTestNativeInstaller(false, runner),
 		effectiveUID:    os.Geteuid(),
 		stdout:          io.Discard,
 		metadataTimeout: time.Second,

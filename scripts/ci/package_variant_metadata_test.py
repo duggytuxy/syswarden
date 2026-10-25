@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import textwrap
 import unittest
 
 
@@ -154,6 +155,7 @@ class PackageVariantMetadataTests(unittest.TestCase):
                 generated = (Path(directory) / "nfpm_alpine_amd64.yaml").read_text()
                 expected = metadata(variant)
                 self.assertIn(f'name: "{expected["name"][0]}"\n', generated)
+                self.assert_exact_nfpm_version(generated, "5.00.0")
                 dependencies = generated.split("depends:\n", 1)[1].split("conflicts:\n", 1)[0]
                 self.assertEqual(dependencies.splitlines(), [f"  - {value}" for value in expected["apk"]])
                 self.assertEqual(generated.split("conflicts:\n", 1)[1].split("contents:\n", 1)[0], f'  - "{expected["conflict"][0]}"\n')
@@ -162,6 +164,34 @@ class PackageVariantMetadataTests(unittest.TestCase):
                     self.assertNotIn(forbidden, generated)
                 payloads.append(generated.split("contents:\n", 1)[1])
         self.assertEqual(payloads[0], payloads[1])
+
+    def assert_exact_nfpm_version(self, generated: str, version: str) -> None:
+        self.assertEqual(re.findall(r"^version:.*$", generated, re.MULTILINE), [f'version: "{version}"'])
+        # nfpm's default semver schema would strip the release's zero padding.
+        self.assertEqual(re.findall(r"^version_schema:.*$", generated, re.MULTILINE), ["version_schema: none"])
+
+    def test_workflow_nfpm_configuration_preserves_exact_release_version(self) -> None:
+        workflow = (ROOT / ".github/workflows/package.yml").read_text(encoding="utf-8")
+        step = workflow.split("      - name: Build Alpine Package (.apk)\n", 1)[1].split("\n      - name:", 1)[0]
+        start = '          cat << EOF > "${PACKAGE_CONFIGS}/nfpm_alpine_x86_64.yaml"'
+        block = textwrap.dedent(start + step.split(start, 1)[1].split("\n          EOF\n", 1)[0] + "\n          EOF\n")
+        # Supply an inert value for the runner's expression substitution, then
+        # execute the actual heredoc without invoking a package builder.
+        block = block.replace("${{ github.repository }}", "public-test/syswarden")
+        with tempfile.TemporaryDirectory() as directory:
+            for version in ("4.10.4", "5.00.0", "5.01.0"):
+                with self.subTest(version=version):
+                    result = bash(
+                        'PACKAGE_CONFIGS="$1"\nVERSION="$2"\n'
+                        + 'STAGING_APK_AMD64=/synthetic/staging\nPACKAGE_SCRIPTS=/synthetic/scripts\n'
+                        + block,
+                        directory, version,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    generated = (Path(directory) / "nfpm_alpine_x86_64.yaml").read_text(encoding="utf-8")
+                    self.assertIn('name: "syswarden"\n', generated)
+                    self.assertIn('arch: "amd64"\n', generated)
+                    self.assert_exact_nfpm_version(generated, version)
 
     def render_hook(self, source: str, variant: str) -> str:
         with tempfile.TemporaryDirectory() as directory:

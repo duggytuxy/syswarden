@@ -66,7 +66,7 @@ They do not establish native install, update or removal acceptance.
 
 Public workflow generation deliberately remains on the historical `syswarden`
 contract. It does not publish `syswarden-base` or use this local metadata helper.
-Public dual-identity generation, candidate payload metadata attestation and
+Public dual-identity generation, native payload qualification and
 unsigned-era discovery still need coordinated qualification. Do not deploy the opt-in base artifacts as
 supported packages until those paths and the native lifecycle are qualified.
 
@@ -128,6 +128,41 @@ both SysWarden names and prove that invalid DEB/APK identity evidence cannot
 reach the ownership query. Neither proves downloaded payload headers,
 dependency retention, runtime behavior or migration acceptance. The production
 native transaction matrix remains open.
+
+## Downloaded native identity
+
+Online and offline updaters inspect the already authenticated package descriptor
+before handing it to a native installer. The selected package name, release
+version and native architecture must match its actual header, not just its
+filename or signed inventory entry. Both paths refuse a missing verifier,
+malformed or ambiguous metadata, cancellation and an expired inspection deadline.
+The offline path performs this check before extracting the candidate CLI.
+
+The bounded readers support the current builder profiles: gzip control metadata
+in DEB ar archives, V4 RPM typed headers and APK v2 gzip/tar streams. APK accepts
+the optional signature stream but requires exactly one control metadata record
+and one data stream. RPM requires the standard release `1` and absent or zero
+epoch. APK requires revision `r0`. Alpine generation disables nfpm's semantic
+version normalization so `5.00.0` remains `5.00.0-r0`, matching the release
+contract. Unsupported framing or alternative package profiles fail closed.
+
+Inspection does not execute package tools, scripts or payloads. It preserves the
+descriptor position and bounds metadata sizes and archive traversal. The signed
+digest and private file identity are checked again after inspection and after the
+last installed-package preflight. A mandatory execution guard repeats this check
+after native dependency retention and APK argument preparation, using the actual
+installation deadline, immediately before native handoff. Regression cases
+refuse same-inode mutations and cancellation during these boundaries. Sparse tar
+entries are refused before draining synthesized holes, so they cannot bypass
+the expanded archive budget.
+Pathname handoff is still not an atomic native transaction or a package database
+lock. Header parsing does not replace native signatures, payload validation,
+dependency retention or lifecycle qualification.
+
+Inert packages built with dpkg-deb, rpmbuild and pinned nfpm exercise both native
+names without installation. These format observations and component regressions
+are intermediate evidence only; they do not establish product migration or
+v5.00.0 IVVQ acceptance. Production base updates remain refused.
 
 Production base updates remain explicitly refused. The new signed inventory
 does not enable compatibility-package substitution, switch package identity,

@@ -57,7 +57,7 @@ type updater struct {
 	tempBase                string
 	trustedKeys             map[string]ed25519.PublicKey
 	lookPath                func(string) (string, error)
-	runCommand              commandRunner
+	installPackage          nativePackageInstaller
 	effectiveUID            int
 	requireRoot             bool
 	stdout                  io.Writer
@@ -71,6 +71,7 @@ type updater struct {
 	attestInstalled         installedVersionAttestor
 	attestDependencies      qualificationDependencyAttestor
 	attestCandidateCLI      qualificationCandidateCLIAttestor
+	attestPackageIdentity   nativePackageHeaderAttestor
 	activateCandidate       qualificationActivator
 }
 
@@ -102,13 +103,6 @@ func productionHTTPClient() *http.Client {
 		},
 		Timeout: packageDownloadTimeout + time.Minute,
 	}
-}
-
-func runExternalCommand(ctx context.Context, name string, args ...string) error {
-	return runWithNativeDependencyRetention(ctx, name, args, false, preserveNativeDependencyReasons,
-		func(ctx context.Context, name string, args ...string) error {
-			return executeExternalCommand(ctx, name, productionCommandEnvironment(name), args...)
-		})
 }
 
 func productionCommandEnvironment(name string) []string {
@@ -154,13 +148,6 @@ func productionExternalCommandEnvironment() []string {
 }
 
 func executeExternalCommand(ctx context.Context, name string, environment []string, args ...string) error {
-	if name == "/sbin/apk" || name == "/usr/sbin/apk" {
-		preserved, err := apkPreservedInstallArguments(name, args, productionOpenRCWireGuardDefinitionPaths())
-		if err != nil {
-			return fmt.Errorf("preserve installed APK dependencies before update: %w", err)
-		}
-		args = preserved
-	}
 	cmd, err := productionExternalCommand(ctx, name, environment, args...)
 	if err != nil {
 		return err
@@ -281,7 +268,7 @@ func newProductionUpdater() (*updater, error) {
 		tempBase:                productionTempBase,
 		trustedKeys:             trustedKeys,
 		lookPath:                exec.LookPath,
-		runCommand:              runExternalCommand,
+		installPackage:          runAuthenticatedNativeInstall,
 		effectiveUID:            os.Geteuid(),
 		requireRoot:             true,
 		stdout:                  os.Stdout,
@@ -291,6 +278,7 @@ func newProductionUpdater() (*updater, error) {
 		attestRPM:               attestInstalledStandardRPMRelease,
 		preflightNativeIdentity: preflightStandardNativeUpdate,
 		attestInstalled:         attestInstalledQualificationVersion,
+		attestPackageIdentity:   attestNativePackageHeader,
 		retireWebTUI: func() error {
 			return config.RemoveRetiredWebTUIConfiguration("/etc/syswarden/config")
 		},
@@ -298,7 +286,7 @@ func newProductionUpdater() (*updater, error) {
 }
 
 // UpgradeSystem checks for a newer release and installs only a package bound to
-// an authenticated v1 update manifest.
+// an authenticated release manifest.
 func UpgradeSystem() error {
 	u, err := newProductionUpdater()
 	if err != nil {
@@ -419,6 +407,12 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
 		return fmt.Errorf("verify package immediately before installation: %w", err)
 	}
+	if err := u.attestAuthenticatedPackageIdentity(ctx, target, latestVersion, packageFile, u.metadataTimeout); err != nil {
+		return fmt.Errorf("attest authenticated native package identity before installation: %w", err)
+	}
+	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
+		return fmt.Errorf("reverify package after native header attestation: %w", err)
+	}
 	if err := u.attestStandardRPMChannel(ctx, target, "immediately before package installation"); err != nil {
 		return err
 	}
@@ -426,10 +420,21 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	if err := u.recheckStandardNativeIdentity(ctx, u.metadataTimeout, identity); err != nil {
 		return fmt.Errorf("native package identity changed before installation: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
+		return fmt.Errorf("reverify package after native installation preflight: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(u.stdout, "[INFO] Installing authenticated %s package...\n", target.format)
 	installCtx, cancelInstall := context.WithTimeout(ctx, u.installTimeout)
-	err = u.runCommand(installCtx, target.installer, target.installArguments(packagePath)...)
+	err = u.installPackage(installCtx, target, packagePath, func(ctx context.Context) error {
+		return verifyPackageAtNativeExecution(ctx, packageFile, packagePath, artifact, u.effectiveUID)
+	})
 	cancelInstall()
 	if err != nil {
 		return fmt.Errorf("install %s package: %w", target.format, err)
@@ -442,7 +447,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 }
 
 func (u *updater) validateConfiguration() error {
-	if u.client == nil || u.lookPath == nil || u.runCommand == nil || u.stdout == nil || u.preflightNativeIdentity == nil {
+	if u.client == nil || u.lookPath == nil || u.installPackage == nil || u.stdout == nil || u.preflightNativeIdentity == nil || u.attestPackageIdentity == nil {
 		return errors.New("updater dependencies are incomplete")
 	}
 	if u.metadataTimeout <= 0 || u.packageTimeout <= 0 || u.installTimeout <= 0 {

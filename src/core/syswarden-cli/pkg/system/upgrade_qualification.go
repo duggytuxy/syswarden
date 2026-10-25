@@ -144,7 +144,7 @@ func newQualificationUpdater() (*updater, error) {
 		tempBase:                productionTempBase,
 		trustedKeys:             trustedKeys,
 		lookPath:                exec.LookPath,
-		runCommand:              runQualificationExternalCommand,
+		installPackage:          runAuthenticatedQualificationInstall,
 		effectiveUID:            os.Geteuid(),
 		requireRoot:             true,
 		stdout:                  os.Stdout,
@@ -154,6 +154,7 @@ func newQualificationUpdater() (*updater, error) {
 		preflightNativeIdentity: preflightStandardNativeUpdate,
 		attestDependencies:      attestOfflineQualificationPackageDependencies,
 		attestCandidateCLI:      attestQualificationPackageCLI,
+		attestPackageIdentity:   attestNativePackageHeader,
 		activateCandidate:       runQualificationActivationCommand,
 		retireWebTUI: func() error {
 			return config.RemoveRetiredWebTUIConfiguration("/etc/syswarden/config")
@@ -162,8 +163,8 @@ func newQualificationUpdater() (*updater, error) {
 }
 
 func (u *updater) validateQualificationConfiguration() error {
-	if u.lookPath == nil || u.runCommand == nil || u.stdout == nil || u.attestInstalled == nil ||
-		u.attestDependencies == nil || u.attestCandidateCLI == nil || u.activateCandidate == nil || u.preflightNativeIdentity == nil {
+	if u.lookPath == nil || u.installPackage == nil || u.stdout == nil || u.attestInstalled == nil ||
+		u.attestDependencies == nil || u.attestCandidateCLI == nil || u.activateCandidate == nil || u.preflightNativeIdentity == nil || u.attestPackageIdentity == nil {
 		return errors.New("offline qualification updater dependencies are incomplete")
 	}
 	if u.installTimeout <= 0 {
@@ -347,6 +348,9 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
 		return fmt.Errorf("verify package immediately before installation: %w", err)
 	}
+	if err := u.attestAuthenticatedPackageIdentity(ctx, target, candidateVersion, packageFile, u.attestTimeout); err != nil {
+		return fmt.Errorf("attest authenticated native package identity before qualification installation: %w", err)
+	}
 	payloadAttestationCtx, cancelPayloadAttestation := context.WithTimeout(ctx, u.attestTimeout)
 	expectedCandidateCLISHA256, err := u.attestCandidateCLI(payloadAttestationCtx, target, packageFile)
 	cancelPayloadAttestation()
@@ -364,11 +368,21 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 	if err := u.recheckStandardNativeIdentity(ctx, u.attestTimeout, identity); err != nil {
 		return fmt.Errorf("native package identity changed before qualification installation: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
+		return fmt.Errorf("reverify package after qualification installation preflight: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(u.stdout, "[INFO] Installing authenticated %s qualification package without repository access...\n", target.format)
 	installCtx, cancelInstall := context.WithTimeout(ctx, u.installTimeout)
-	qualificationInstaller, qualificationArguments := target.qualificationInstallCommand(packagePath)
-	err = u.runCommand(installCtx, qualificationInstaller, qualificationArguments...)
+	err = u.installPackage(installCtx, target, packagePath, func(ctx context.Context) error {
+		return verifyPackageAtNativeExecution(ctx, packageFile, packagePath, artifact, u.effectiveUID)
+	})
 	cancelInstall()
 	if err != nil {
 		return fmt.Errorf("install %s qualification package: %w", target.format, err)
@@ -1793,18 +1807,7 @@ func qualificationActivationEnvironment() []string {
 	}
 }
 
-func runQualificationExternalCommand(ctx context.Context, name string, args ...string) error {
-	return runWithNativeDependencyRetention(ctx, name, args, true, preserveNativeDependencyReasons, executeQualificationExternalCommand)
-}
-
 func executeQualificationExternalCommand(ctx context.Context, name string, args ...string) error {
-	if name == "/sbin/apk" || name == "/usr/sbin/apk" {
-		preserved, err := apkPreservedInstallArguments(name, args, productionOpenRCWireGuardDefinitionPaths())
-		if err != nil {
-			return fmt.Errorf("preserve installed APK dependencies before offline update: %w", err)
-		}
-		args = preserved
-	}
 	command := exec.Command(name, args...) // #nosec G204 -- executable and arguments passed the wrapper exact allowlist
 	command.Env = qualificationExternalCommandEnvironment()
 	command.Dir = "/"

@@ -82,6 +82,9 @@ func qualificationTestUpdater(
 	output := new(bytes.Buffer)
 	var attestationCalls atomic.Int32
 	u := &updater{
+		// Bundle/workspace tests model attestors independently; real native
+		// header parsing and refusal before installation have separate tests.
+		attestPackageIdentity: func(context.Context, packageTarget, string, *os.File) error { return nil },
 		preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {
 			return testCompatibilityUpdateIdentity("dpkg-query"), nil
 		},
@@ -110,7 +113,7 @@ func qualificationTestUpdater(
 				return "", os.ErrNotExist
 			}
 		},
-		runCommand: func(_ context.Context, name string, arguments ...string) error {
+		installPackage: guardedTestNativeInstaller(true, func(_ context.Context, name string, arguments ...string) error {
 			if name != "/usr/bin/dpkg" {
 				return nil
 			}
@@ -126,7 +129,7 @@ func qualificationTestUpdater(
 				t.Fatalf("installer package = %q", content)
 			}
 			return nil
-		},
+		}),
 		effectiveUID:   os.Geteuid(),
 		stdout:         output,
 		installTimeout: time.Second,
@@ -1083,11 +1086,7 @@ func TestQualificationBundleRejectsFalseInstallSuccessBeforeActivation(t *testin
 		}, nil
 	}
 	serviceCalls := atomic.Int32{}
-	originalRunner := u.runCommand
-	u.runCommand = func(ctx context.Context, name string, args ...string) error {
-		if name == "/usr/bin/dpkg" {
-			return originalRunner(ctx, name, args...)
-		}
+	u.activateCandidate = func(context.Context, installedQualificationEvidence) error {
 		serviceCalls.Add(1)
 		return nil
 	}

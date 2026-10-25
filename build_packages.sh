@@ -1177,6 +1177,7 @@ name: "${PACKAGE_NAME}"
 arch: "amd64"
 platform: "linux"
 version: "${VERSION}"
+version_schema: none
 maintainer: "SysWarden Engineering"
 description: "SysWarden Host-based Security Orchestrator for Alpine Linux"
 vendor: "SysWarden Security"

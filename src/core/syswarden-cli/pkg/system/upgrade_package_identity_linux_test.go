@@ -252,7 +252,7 @@ func TestNativeUpdateAuthoritySelectsOnlineAndOfflineArtifacts(t *testing.T) {
 				}
 				u.lookPath = testAllPackageFrontends
 				u.attestRPM = func(context.Context, string) error { return nil }
-				u.runCommand = func(_ context.Context, name string, args ...string) error {
+				u.installPackage = guardedTestNativeInstaller(offline, func(_ context.Context, name string, args ...string) error {
 					wantInstaller := tc.installer
 					if offline && tc.format == packageFormatDEB {
 						wantInstaller = "/usr/bin/dpkg"
@@ -262,7 +262,7 @@ func TestNativeUpdateAuthoritySelectsOnlineAndOfflineArtifacts(t *testing.T) {
 					}
 					installs.Add(1)
 					return nil
-				}
+				})
 				if offline {
 					err = u.runQualificationBundle(t.Context(), fixture.bundle, testQualificationCandidate)
 				} else {
