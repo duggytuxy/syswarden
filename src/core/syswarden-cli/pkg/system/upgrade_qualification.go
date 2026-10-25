@@ -227,7 +227,8 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 	if err := u.validateQualificationConfiguration(); err != nil {
 		return err
 	}
-	if err := u.preflightStandardNativeIdentity(ctx, u.attestTimeout); err != nil {
+	identity, err := u.preflightStandardNativeIdentity(ctx, u.attestTimeout)
+	if err != nil {
 		return err
 	}
 	if err := validateQualificationCandidateVersion(candidateVersion); err != nil {
@@ -259,7 +260,7 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 	if err != nil {
 		return fmt.Errorf("verify qualification update manifest: %w", err)
 	}
-	target, err := detectPackageTarget(u.goos, u.goarch, candidateVersion, u.lookPath)
+	target, err := detectPackageTarget(u.goos, u.goarch, candidateVersion, identity, u.lookPath)
 	if err != nil {
 		return err
 	}
@@ -348,7 +349,7 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 	}
 	fmt.Fprintf(u.stdout, "[INFO] Verified package SHA-256 %s.\n", artifact.SHA256)
 
-	if err := u.preflightStandardNativeIdentity(ctx, u.attestTimeout); err != nil {
+	if err := u.recheckStandardNativeIdentity(ctx, u.attestTimeout, identity); err != nil {
 		return fmt.Errorf("native package identity changed before qualification installation: %w", err)
 	}
 

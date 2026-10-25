@@ -146,6 +146,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 		name          string
 		goos          string
 		manager       string
+		authority     string
 		managerPath   string
 		architecture  string
 		wantFormat    string
@@ -156,6 +157,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 			name:          "deb amd64",
 			goos:          "linux",
 			manager:       "apt-get",
+			authority:     "dpkg-query",
 			managerPath:   "/usr/bin/apt-get",
 			architecture:  "amd64",
 			wantFormat:    packageFormatDEB,
@@ -166,6 +168,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 			name:          "rpm amd64",
 			goos:          "linux",
 			manager:       "dnf",
+			authority:     "rpm",
 			managerPath:   "/usr/bin/dnf",
 			architecture:  "amd64",
 			wantFormat:    packageFormatRPM,
@@ -176,6 +179,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 			name:          "apk amd64",
 			goos:          "linux",
 			manager:       "apk",
+			authority:     "apk",
 			managerPath:   "/sbin/apk",
 			architecture:  "amd64",
 			wantFormat:    packageFormatAPK,
@@ -187,7 +191,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			target, err := detectPackageTarget(test.goos, test.architecture, testUpdateVersion, func(name string) (string, error) {
+			target, err := detectPackageTarget(test.goos, test.architecture, testUpdateVersion, testCompatibilityUpdateIdentity(test.authority), func(name string) (string, error) {
 				if name == test.manager {
 					return test.managerPath, nil
 				}
@@ -267,7 +271,7 @@ func TestDetectPackageTargetRejectsWrongOSArchitectureAndPath(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := detectPackageTarget(test.goos, test.goarch, testUpdateVersion, func(string) (string, error) {
+			_, err := detectPackageTarget(test.goos, test.goarch, testUpdateVersion, testCompatibilityUpdateIdentity("dpkg-query"), func(string) (string, error) {
 				return test.resolved, nil
 			})
 			if err == nil {

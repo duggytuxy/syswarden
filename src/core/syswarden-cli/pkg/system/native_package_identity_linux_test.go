@@ -17,6 +17,10 @@ import (
 	"time"
 )
 
+func testCompatibilityUpdateIdentity(manager string) nativeUpdateIdentity {
+	return nativeUpdateIdentity{name: "syswarden", manager: manager, state: "installed"}
+}
+
 func nativeRegistrationTestQuery(manager string, arguments []string) (string, bool) {
 	for _, name := range []string{"syswarden", "syswarden-base"} {
 		var expected []string
@@ -133,25 +137,28 @@ func TestNativePackageIdentityUpdateRequiresSingleInstalledCompatibility(t *test
 		} {
 			t.Run(manager+"/"+test.name, func(t *testing.T) {
 				executor := testNativeRegistrationExecutor(t, manager, test.states)
-				err := preflightStandardNativeUpdateWith(t.Context(), executor, func(string) (bool, error) { return false, nil })
+				identity, err := preflightStandardNativeUpdateWith(t.Context(), executor, func(string) (bool, error) { return false, nil })
 				if (err != nil) != test.wantError {
 					t.Fatalf("identity preflight: %v", err)
 				}
 				if test.name == "base" && !strings.Contains(err.Error(), "authenticated release inventory") {
 					t.Fatalf("missing base update refusal: %v", err)
 				}
+				if err == nil && identity != testCompatibilityUpdateIdentity(manager) {
+					t.Fatalf("registration authority was not retained: %#v", identity)
+				}
 			})
 		}
 	}
 	for _, state := range []string{"config-files", "half-installed", "unpacked", "half-configured", "triggers-awaited", "triggers-pending"} {
 		executor := testNativeRegistrationExecutor(t, "dpkg-query", map[string]string{"syswarden": state})
-		if err := preflightStandardNativeUpdateWith(t.Context(), executor, func(string) (bool, error) { return false, nil }); err == nil {
+		if _, err := preflightStandardNativeUpdateWith(t.Context(), executor, func(string) (bool, error) { return false, nil }); err == nil {
 			t.Fatalf("partial native state %q permitted update", state)
 		}
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := preflightStandardNativeUpdateWith(ctx, firewallManagerExecutor{}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := preflightStandardNativeUpdateWith(ctx, firewallManagerExecutor{}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation did not precede native queries: %v", err)
 	}
 }
@@ -169,7 +176,7 @@ func TestNativePackageIdentityUpdaterRefusesBeforeNetworkAndMutation(t *testing.
 		u.preflightNativeIdentity = nil
 		if !missingGuard {
 			executor := testNativeRegistrationExecutor(t, "apk", map[string]string{"syswarden-base": "installed"})
-			u.preflightNativeIdentity = func(ctx context.Context) error {
+			u.preflightNativeIdentity = func(ctx context.Context) (nativeUpdateIdentity, error) {
 				deadline, ok := ctx.Deadline()
 				if !ok || time.Until(deadline) > u.metadataTimeout {
 					t.Fatal("identity preflight lacks bounded deadline")
@@ -186,14 +193,17 @@ func TestNativePackageIdentityUpdaterRefusesBeforeNetworkAndMutation(t *testing.
 
 func TestNativePackageIdentityPreflightRequiresBoundedContext(t *testing.T) {
 	called := false
-	u := &updater{preflightNativeIdentity: func(context.Context) error { called = true; return nil }}
+	u := &updater{preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {
+		called = true
+		return testCompatibilityUpdateIdentity("dpkg-query"), nil
+	}}
 	for _, test := range []struct {
 		ctx     context.Context
 		timeout time.Duration
 	}{
 		{nil, time.Second}, {t.Context(), 0}, {t.Context(), -time.Second},
 	} {
-		if err := u.preflightStandardNativeIdentity(test.ctx, test.timeout); err == nil || called {
+		if _, err := u.preflightStandardNativeIdentity(test.ctx, test.timeout); err == nil || called {
 			t.Fatalf("invalid bounded context reached query callback: %v", err)
 		}
 	}
@@ -214,12 +224,12 @@ func TestNativePackageIdentityUpdaterRechecksBeforeInstallation(t *testing.T) {
 		})
 	calls := 0
 	sentinel := errors.New("package identity changed")
-	u.preflightNativeIdentity = func(context.Context) error {
+	u.preflightNativeIdentity = func(context.Context) (nativeUpdateIdentity, error) {
 		calls++
 		if calls == 2 {
-			return sentinel
+			return nativeUpdateIdentity{}, sentinel
 		}
-		return nil
+		return testCompatibilityUpdateIdentity("dpkg-query"), nil
 	}
 	if err := u.run(t.Context()); !errors.Is(err, sentinel) || calls != 2 || mutation.Load() != 0 {
 		t.Fatalf("late identity refusal failed: %v calls=%d mutation=%d", err, calls, mutation.Load())
@@ -234,15 +244,15 @@ func TestNativePackageIdentityQualificationRefusesBeforeBundleAndInstallation(t 
 		u, _, tempBase := qualificationTestUpdater(t, fixture, "v4.09.9", &network, &installs)
 		sentinel := errors.New("native package identity refused")
 		calls := 0
-		u.preflightNativeIdentity = func(ctx context.Context) error {
+		u.preflightNativeIdentity = func(ctx context.Context) (nativeUpdateIdentity, error) {
 			if _, ok := ctx.Deadline(); !ok {
 				t.Fatal("unbounded identity query")
 			}
 			calls++
 			if !late || calls == 2 {
-				return sentinel
+				return nativeUpdateIdentity{}, sentinel
 			}
-			return nil
+			return testCompatibilityUpdateIdentity("dpkg-query"), nil
 		}
 		bundle := fixture.bundle
 		if !late {

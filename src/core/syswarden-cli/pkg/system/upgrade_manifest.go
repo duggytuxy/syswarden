@@ -374,6 +374,7 @@ func validSHA256(value string) bool {
 
 func detectPackageTarget(
 	goos, goarch, version string,
+	identity nativeUpdateIdentity,
 	lookPath func(string) (string, error),
 ) (packageTarget, error) {
 	if goos != "linux" {
@@ -382,19 +383,26 @@ func detectPackageTarget(
 	if goarch != "amd64" {
 		return packageTarget{}, fmt.Errorf("in-place updater does not support architecture %q", goarch)
 	}
+	if err := identity.validate(); err != nil {
+		return packageTarget{}, err
+	}
 	if lookPath == nil {
 		return packageTarget{}, errors.New("package-manager lookup is unavailable")
 	}
 	managerCandidates := []struct {
-		name   string
-		format string
+		name      string
+		format    string
+		authority string
 	}{
-		{name: "apt-get", format: packageFormatDEB},
-		{name: "dnf", format: packageFormatRPM},
-		{name: "yum", format: packageFormatRPM},
-		{name: "apk", format: packageFormatAPK},
+		{name: "apt-get", format: packageFormatDEB, authority: "dpkg-query"},
+		{name: "dnf", format: packageFormatRPM, authority: "rpm"},
+		{name: "yum", format: packageFormatRPM, authority: "rpm"},
+		{name: "apk", format: packageFormatAPK, authority: "apk"},
 	}
 	for _, candidate := range managerCandidates {
+		if candidate.authority != identity.manager {
+			continue
+		}
 		resolved, err := lookPath(candidate.name)
 		if err != nil {
 			continue
@@ -417,7 +425,7 @@ func detectPackageTarget(
 			installer:    resolved,
 		}, nil
 	}
-	return packageTarget{}, errors.New("no supported package manager found (apt-get/dnf/yum/apk)")
+	return packageTarget{}, fmt.Errorf("no supported package frontend found for registered %s authority; refusing another package manager", identity.manager)
 }
 
 func trustedPackageManagerPath(name, resolved string) bool {

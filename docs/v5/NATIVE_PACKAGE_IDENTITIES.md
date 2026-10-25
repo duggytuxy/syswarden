@@ -88,6 +88,17 @@ registration checks are bounded read-only queries; they do not authorize an
 automatic variant switch or implement base updates. Native lifecycle qualification
 remains required for these source changes.
 
+The registered native database authority also determines the package format and
+frontend. An available APT frontend cannot select a DEB for an RPM-owned
+installation, and a missing matching frontend cannot fall back to another
+authority. DNF and YUM remain alternatives within the same RPM authority. The
+current-version integrity check uses the same binding. Immediately before an
+online or offline installation, the package name, installed state and authority
+must still match the original observation. This comparison detects observed
+identity drift; it is not a native package database lock or permission to convert
+between the two package names. Existing signed manifest bytes and artifact names
+remain unchanged.
+
 ## Payload handoff boundary
 
 The selected design avoids ownership handoff during supported upgrades. Mutual

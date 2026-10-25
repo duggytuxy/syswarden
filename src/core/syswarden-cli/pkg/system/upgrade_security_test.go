@@ -682,6 +682,9 @@ func TestAPKNativeSignatureVerificationIsReachableOnlyAfterManifestAndPackageVer
 					return nil
 				},
 			)
+			u.preflightNativeIdentity = func(context.Context) (nativeUpdateIdentity, error) {
+				return testCompatibilityUpdateIdentity("apk"), nil
+			}
 			u.lookPath = func(name string) (string, error) {
 				switch name {
 				case "apk":
@@ -797,15 +800,17 @@ func testUpdaterForPlatform(
 	runner commandRunner,
 ) *updater {
 	return &updater{
-		preflightNativeIdentity: func(context.Context) error { return nil },
-		client:                  client,
-		latestURL:               "https://updates.test/latest",
-		downloadBaseURL:         "https://updates.test/download",
-		currentVersion:          "v4.02.8",
-		goos:                    goos,
-		goarch:                  goarch,
-		tempBase:                tempBase,
-		trustedKeys:             keys,
+		preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {
+			return testCompatibilityUpdateIdentity("dpkg-query"), nil
+		},
+		client:          client,
+		latestURL:       "https://updates.test/latest",
+		downloadBaseURL: "https://updates.test/download",
+		currentVersion:  "v4.02.8",
+		goos:            goos,
+		goarch:          goarch,
+		tempBase:        tempBase,
+		trustedKeys:     keys,
 		lookPath: func(name string) (string, error) {
 			switch name {
 			case "apt-get":

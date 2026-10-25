@@ -67,7 +67,7 @@ type updater struct {
 	attestTimeout           time.Duration
 	retireWebTUI            func() error
 	attestRPM               installedRPMReleaseAttestor
-	preflightNativeIdentity func(context.Context) error
+	preflightNativeIdentity func(context.Context) (nativeUpdateIdentity, error)
 	attestInstalled         installedVersionAttestor
 	attestDependencies      qualificationDependencyAttestor
 	attestCandidateCLI      qualificationCandidateCLIAttestor
@@ -312,7 +312,8 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return err
 	}
 
-	if err := u.preflightStandardNativeIdentity(ctx, u.metadataTimeout); err != nil {
+	identity, err := u.preflightStandardNativeIdentity(ctx, u.metadataTimeout)
+	if err != nil {
 		return err
 	}
 
@@ -333,7 +334,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		if u.attestInstalled == nil {
 			return errors.New("current release cannot be confirmed without installed-package attestation")
 		}
-		target, err := detectPackageTarget(u.goos, u.goarch, latestVersion, u.lookPath)
+		target, err := detectPackageTarget(u.goos, u.goarch, latestVersion, identity, u.lookPath)
 		if err != nil {
 			return err
 		}
@@ -361,7 +362,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return fmt.Errorf("release %s predates the signed updater contract", latestVersion)
 	}
 
-	target, err := detectPackageTarget(u.goos, u.goarch, latestVersion, u.lookPath)
+	target, err := detectPackageTarget(u.goos, u.goarch, latestVersion, identity, u.lookPath)
 	if err != nil {
 		return err
 	}
@@ -422,7 +423,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return err
 	}
 
-	if err := u.preflightStandardNativeIdentity(ctx, u.metadataTimeout); err != nil {
+	if err := u.recheckStandardNativeIdentity(ctx, u.metadataTimeout, identity); err != nil {
 		return fmt.Errorf("native package identity changed before installation: %w", err)
 	}
 

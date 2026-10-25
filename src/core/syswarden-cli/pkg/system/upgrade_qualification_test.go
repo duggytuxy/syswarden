@@ -82,7 +82,9 @@ func qualificationTestUpdater(
 	output := new(bytes.Buffer)
 	var attestationCalls atomic.Int32
 	u := &updater{
-		preflightNativeIdentity: func(context.Context) error { return nil },
+		preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {
+			return testCompatibilityUpdateIdentity("dpkg-query"), nil
+		},
 		// A hostile client is deliberately present. The offline path must never
 		// reach it, even though the candidate CLI itself is network-capable.
 		client: staticHTTPClient(func(*http.Request) (*http.Response, error) {

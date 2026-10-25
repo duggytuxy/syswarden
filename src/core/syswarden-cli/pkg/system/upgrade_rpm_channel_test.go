@@ -173,6 +173,9 @@ func TestRHELPackageOwnedRPMIsRefusedBeforeReleaseAssetDownload(t *testing.T) {
 		return nil
 	})
 	u.currentVersion = "v4.10.4"
+	u.preflightNativeIdentity = func(context.Context) (nativeUpdateIdentity, error) {
+		return testCompatibilityUpdateIdentity("rpm"), nil
+	}
 	u.lookPath = func(name string) (string, error) {
 		if name == "dnf" {
 			return "/usr/bin/dnf", nil
@@ -239,6 +242,9 @@ func TestStandardRPMReleaseIsReattestedImmediatelyBeforeInstallation(t *testing.
 			return nil
 		},
 	)
+	u.preflightNativeIdentity = func(context.Context) (nativeUpdateIdentity, error) {
+		return testCompatibilityUpdateIdentity("rpm"), nil
+	}
 	u.lookPath = func(name string) (string, error) {
 		switch name {
 		case "dnf":
