@@ -53,13 +53,17 @@ func (snapshot *mergedConfigSnapshot) identity(target tomlEditTarget) *secureFil
 // memory at its original lexical position. Missing files never count as an
 // already complete fresh installation merely because an edit proposes them.
 func validateModuleCandidate(configDir string, target tomlEditTarget, content []byte, expected *secureFileIdentity) (*mergedConfigSnapshot, error) {
+	return validateModuleCandidateWithIntent(configDir, target, content, expected, nil)
+}
+
+func validateModuleCandidateWithIntent(configDir string, target tomlEditTarget, content []byte, expected, intent *secureFileIdentity) (*mergedConfigSnapshot, error) {
 	if err := sshselection.RejectEnvironment(); err != nil {
 		return nil, err
 	}
 	if err := rejectOperatorPolicyEnvironment(); err != nil {
 		return nil, err
 	}
-	snapshot, previous, err := captureModuleEdit(configDir, target)
+	snapshot, previous, err := captureModuleInputs(configDir, target, intent)
 	if err != nil {
 		return nil, err
 	}

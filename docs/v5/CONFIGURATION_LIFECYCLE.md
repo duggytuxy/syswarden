@@ -62,6 +62,7 @@ check does not change rule ordering or the existing country/ASN union semantics.
 | Command | Current boundary |
 | --- | --- |
 | `syswarden config` | Provides private candidate editing, merged validation and explicit publication review for ordinary TOML modules, master metadata, the profile name and file import. It does not provide a review-and-activate transaction. |
+| `syswarden config recover-edit` | Inspects an interrupted ordinary TOML publication and requires a fresh exact approval for a supported file recovery. It never activates policy. |
 | `syswarden config validate --path /etc/syswarden/config` | Reads and validates the merged TOML, prints the selected module plan and reports unknown/deprecated keys without changing configuration or runtime. |
 | `syswarden config-get KEY` | Reads one validated effective modular value. Some legacy-compatible settings can still reflect environment overrides, unlike file-only validation. |
 | `syswarden config migrate --dry-run` | Validates historical flat-file migration without source or destination writes. `--source` and `--output` select its paths. |
@@ -100,13 +101,19 @@ historical file is absent and would be created. A proposed file never counts
 as an already complete fresh installation: a missing fresh module remains a
 recovery barrier. The editor cannot silently recreate lost administrator state.
 Existing runtime loading rules are unchanged by these proposal read limits.
+The reviewed editor requires the effective operator to own its configuration
+root, modules directory and inputs. Publication recovery records support regular
+single-link TOML inputs with private mode 0600 or 0640. Foreign ownership,
+unsupported modes and shared inodes cause refusal, never automatic ownership
+or permission changes. Preserve those files for administrator review.
 
 The private editor directory and initial working file use modes 0700 and 0600.
 The selected editor retains the operator's privileges; this is not a sandbox.
 Only the fixed working file and an empty directory are cleaned up. Unexpected
 editor recovery files are retained for inspection, and publication is refused.
-After interruption, retained private files require inspection; this editor does
-not yet provide a durable edit journal or automatic crash recovery.
+Private editor working files left before publication still require inspection.
+The publication journal described below covers the recorded configuration pair;
+it does not authorize deletion of arbitrary editor recovery files.
 
 The Linux publisher exchanges an existing file atomically and uses a no-replace
 operation for a new file. It rechecks the captured configuration before
@@ -114,9 +121,31 @@ publication, so readers do not encounter an intentionally missing live filename.
 Unsupported atomic operations are refused. An in-process rollback restores the
 original only when both file identities still match; a concurrent administrator
 edit is preserved and the original private file is retained for inspection.
-This single-file boundary is not a durable recovery journal or a transaction
-covering the entire configuration directory. A failed write must be investigated
-before activation, even when a candidate file remains present.
+Reviewed menu publication records a private durable intent before exchanging
+files and records its terminal state before deleting the retained file. Its
+bounded canonical record binds the approved target, complete input inventory,
+physical directory/file identities, metadata and SHA-256 digests. It contains no
+TOML values. This remains a single-file boundary, not a transaction covering the
+whole directory or a lock against arbitrary privileged writers.
+
+An unresolved intent blocks normal editing, modular loading, default filling,
+migration and affected mutating CLI preflight. Run `syswarden config recover-edit`
+to inspect a supported recovery, then type its full `recover <approval-id>`
+phrase only after reviewing the stated effect. Blank or wrong input cancels;
+EOF, expired approval, changed evidence, a new administrator edit or a pending
+lifecycle barrier refuses the attempt. Recovery approvals are single-use.
+
+An unpublished candidate can be discarded. An exchanged but uncommitted file
+can be restored only from its exact recorded original, including restoration
+of original absence. A durably committed file can finish its recorded cleanup;
+a rolled-back file can finish candidate cleanup. Other administrator changes
+already present at recovery review are preserved. Committed cleanup revalidates
+the current complete TOML and displays its module plan and warning counts before
+approval; invalid current policy prevents cleanup. Missing, modified, unsafe or ambiguous
+evidence is retained and is not treated as completed recovery. Do not delete
+the intent to bypass the barrier. A completed file recovery still requires
+configuration validation and does not reload services or establish host,
+SSH-access, native migration or final IVVQ acceptance.
 
 After editing, run validation and review every reported selection and warning.
 Unknown keys are reported but do not by themselves make validation fail. A
@@ -128,10 +157,10 @@ the core restart; policy, integrations and scheduling can still change.
 ## Significant changes and missing activation steps
 
 The configuration-led workflow still needs complete reviewable host effects,
-explicit activation of the exact approved policy and durable edit recovery.
+explicit activation of the exact approved policy and complete native recovery qualification.
 Ordinary TOML proposals retain the original configuration identities across
 human review and recheck read-only WireGuard, removal and firewall barriers
-around the existing atomic publication primitive. Those
+around the journaled atomic publication primitive. Those
 barriers are point-in-time checks, not cross-process locks or host activation
 authority. Do not replace this original snapshot with a newly captured baseline
 after approval, or write invalid live policy and then attempt a generic repair.

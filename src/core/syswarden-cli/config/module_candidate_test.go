@@ -138,7 +138,22 @@ func TestOrdinaryModuleCandidateRestoresOriginalInodeAfterLateRefusal(t *testing
 			if !os.SameFile(before, after) {
 				t.Fatal("original inode not restored")
 			}
-			if err := edit.state.snapshot.revalidate(root, false, nil); err != nil {
+			target, err := ordinaryTOMLTarget(relative)
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory, err := openConfigDirectory(target.directory(root), false, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = directory.Close() }()
+			// Exchange and rollback legitimately change the selected inode's
+			// ctime. Its bytes, owner, mode, links, mtime and inode must still
+			// match; every untouched input keeps strict metadata comparison.
+			if err := verifyConfigReplacementFile(directory, target.name, edit.state.snapshot.identity(target)); err != nil {
+				t.Fatal(err)
+			}
+			if err := edit.state.snapshot.revalidateTarget(root, target, edit.Content()); err != nil {
 				t.Fatal("refused publication changed configuration:", err)
 			}
 		})

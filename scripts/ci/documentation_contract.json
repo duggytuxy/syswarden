@@ -215,9 +215,9 @@
     {
       "case": "help:syswarden config",
       "stream": "stdout",
-      "reason": "Approve the exact addition of the non-mutating validation and migration subcommands to configuration help.",
+      "reason": "Approve the exact configuration help additions: read-only validation, explicit historical migration and fresh-approved recovery of an interrupted TOML publication. The recovery command does not activate host policy.",
       "before": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
-      "after": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n  syswarden config [command]\n\nAvailable Commands:\n  migrate     Migrate the historical configuration to modular TOML\n  validate    Validate modular configuration without modifying it\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nUse \"syswarden config [command] --help\" for more information about a command.\n"
+      "after": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n  syswarden config [command]\n\nAvailable Commands:\n  migrate      Migrate the historical configuration to modular TOML\n  recover-edit Review and recover an interrupted TOML file publication\n  validate     Validate modular configuration without modifying it\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nUse \"syswarden config [command] --help\" for more information about a command.\n"
     },
     {
       "case": "help:syswarden whitelist",
@@ -874,6 +874,13 @@
       "path": "syswarden ssh-policy restoration-access-inspect",
       "field": "command",
       "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden config recover-edit",
+      "field": "command",
+      "reason": "Add separately reviewed recovery of interrupted ordinary TOML publication without host activation or implicit cleanup.",
       "before": null,
       "after": "added"
     }

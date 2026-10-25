@@ -25,6 +25,9 @@ type Migrator struct {
 }
 
 func (m *Migrator) Run() error {
+	if err := RefusePendingModuleEdit(m.OutputDir); err != nil {
+		return err
+	}
 	marker, err := readMigrationMarker(m.OutputDir)
 	if err != nil {
 		return fmt.Errorf("read migration transaction: %w", err)
@@ -273,6 +276,9 @@ func (m *Migrator) freshDefaultConfigData() (map[string]string, error) {
 
 // InitializeDefaults initializes the default modular configuration from the hardcoded DefaultConfig memory string.
 func InitializeDefaults(outputDir string) error {
+	if err := RefusePendingModuleEdit(outputDir); err != nil {
+		return err
+	}
 	if err := ensureConfigDirectory(outputDir, 0750); err != nil {
 		return err
 	}
@@ -304,6 +310,9 @@ func InitializeDefaults(outputDir string) error {
 // templates. Incomplete published or customized policies require recovery.
 // Existing regular files and local permissions remain untouched.
 func EnsureDefaults(outputDir string) error {
+	if err := RefusePendingModuleEdit(outputDir); err != nil {
+		return err
+	}
 	if err := ensureConfigDirectory(outputDir, 0750); err != nil {
 		return err
 	}

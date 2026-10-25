@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -37,8 +38,8 @@ type moduleEditState struct {
 	prepared bool
 }
 
-// ModuleProposal is an in-process, single-use publication proposal. It is
-// neither durable recovery evidence nor permission to activate host policy.
+// ModuleProposal is an in-process, single-use approval. Publication records
+// durable file-exchange intent, but never authorizes host-policy activation.
 type ModuleProposal struct{ state *moduleProposalState }
 
 type moduleProposalState struct {
@@ -93,6 +94,9 @@ func BeginModuleEdit(ctx context.Context, configDir, relative string) (*ModuleEd
 	if err != nil {
 		return nil, err
 	}
+	if err := snapshot.requireEditOwnership(os.Geteuid()); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -126,6 +130,9 @@ func (edit *ModuleEdit) Prepare(ctx context.Context, content []byte) (*ModulePro
 	}
 	if int64(len(content)) > maximumUserModuleSize {
 		return nil, fmt.Errorf("configuration candidate exceeds the %d-byte limit", maximumUserModuleSize)
+	}
+	if err := state.snapshot.requireEditRecoveryMetadata(); err != nil {
+		return nil, err
 	}
 	candidate := bytes.Clone(content)
 	if err := state.snapshot.revalidate(state.root, false, nil); err != nil {
@@ -239,11 +246,37 @@ func (proposal *ModuleProposal) Publish(ctx context.Context, approvalID string, 
 		}
 		return state.snapshot.revalidateTarget(state.root, state.target, state.content)
 	}
-	return publishValidatedUserModule(state.target.directory(state.root), state.target.name,
-		state.content, state.snapshot.identity(state.target), preCommit, guard, postCommit)
+	return publishReviewedModule(state, preCommit, guard, postCommit)
 }
 
 func captureModuleEdit(configDir string, target tomlEditTarget) (*mergedConfigSnapshot, []byte, error) {
+	return captureModuleInputs(configDir, target, nil)
+}
+
+// Only an internally captured, unchanged intent permits read-only recovery
+// inspection through the ordinary edit barrier. It grants no write authority.
+func captureModuleInputs(configDir string, target tomlEditTarget, intent *secureFileIdentity) (*mergedConfigSnapshot, []byte, error) {
+	checkIntent := func() error {
+		if intent == nil {
+			return RefusePendingModuleEdit(configDir)
+		}
+		opened, err := openConfigDirectory(configDir, false, 0)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = opened.Close() }()
+		raw, info, err := readSecureRegularFileSnapshotBounded(opened, moduleEditIntentName, moduleEditIntentName, maximumModuleEditIntentSize)
+		if err != nil {
+			return err
+		}
+		if !intent.matches(raw, info) || !sameSecureFileMetadata(intent.info, info) {
+			return errors.New("configuration edit intent changed during recovery input capture")
+		}
+		return nil
+	}
+	if err := checkIntent(); err != nil {
+		return nil, nil, err
+	}
 	root, err := openConfigDirectory(configDir, false, 0)
 	if err != nil {
 		return nil, nil, err
@@ -319,6 +352,9 @@ func captureModuleEdit(configDir string, target tomlEditTarget) (*mergedConfigSn
 		}
 	}
 	if err := snapshot.revalidate(configDir, false, nil); err != nil {
+		return nil, nil, err
+	}
+	if err := checkIntent(); err != nil {
 		return nil, nil, err
 	}
 	return snapshot, original, nil

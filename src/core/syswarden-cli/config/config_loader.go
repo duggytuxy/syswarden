@@ -204,6 +204,9 @@ func loadModularConfig(configDir string) (loadErr error) {
 		}
 	}
 	logRetiredUnspecifiedWhitelistEntries(retiredWhitelistEntries)
+	if err := RefusePendingModuleEdit(configDir); err != nil {
+		return err
+	}
 	commitGlobalConfig(candidate, configDir)
 	return nil
 }

@@ -316,7 +316,12 @@ func revalidatePublishedTOML(root *os.Root, name, path string, expected []byte) 
 }
 
 func sameFileAndMode(expected, current os.FileInfo) bool {
-	return expected != nil && current != nil && os.SameFile(expected, current) && expected.Mode() == current.Mode()
+	if expected == nil || current == nil {
+		return false
+	}
+	expectedUID, expectedGID, expectedOK := fileOwnerUIDGID(expected)
+	currentUID, currentGID, currentOK := fileOwnerUIDGID(current)
+	return expectedOK && currentOK && expectedUID == currentUID && expectedGID == currentGID && os.SameFile(expected, current) && expected.Mode() == current.Mode()
 }
 
 func revalidateOptionalSecureFile(root *os.Root, name, displayPath string, expected *secureFileIdentity) error {
@@ -333,7 +338,7 @@ func revalidateOptionalSecureFile(root *os.Root, name, displayPath string, expec
 	if err != nil {
 		return err
 	}
-	if !expected.matches(content, info) {
+	if !expected.matches(content, info) || !sameSecureFileMetadata(expected.info, info) {
 		return fmt.Errorf("configuration file %s changed during user-module transaction", displayPath)
 	}
 	return nil

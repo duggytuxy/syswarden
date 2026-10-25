@@ -520,6 +520,9 @@ func markerPath(outputDir string) string {
 }
 
 func rejectMigrationInProgress(outputDir string) error {
+	if err := RefusePendingModuleEdit(outputDir); err != nil {
+		return err
+	}
 	root, err := openConfigDirectory(outputDir, false, 0)
 	if err != nil {
 		return err

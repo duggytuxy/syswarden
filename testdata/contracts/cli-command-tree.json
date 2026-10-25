@@ -408,6 +408,35 @@
     }
   },
   {
+    "path": "syswarden config recover-edit",
+    "use": "recover-edit",
+    "short": "Review and recover an interrupted TOML file publication",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for recover-edit"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden config recover-edit\"",
+      "2": "unknown command \"arg-1\" for \"syswarden config recover-edit\"",
+      "3": "unknown command \"arg-1\" for \"syswarden config recover-edit\"",
+      "4": "unknown command \"arg-1\" for \"syswarden config recover-edit\""
+    }
+  },
+  {
     "path": "syswarden config validate",
     "use": "validate",
     "short": "Validate modular configuration without modifying it",

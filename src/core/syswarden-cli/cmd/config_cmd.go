@@ -237,13 +237,7 @@ func reviewUserModuleProposal(cmd *cobra.Command, reader *bufio.Reader, output i
 		return nil
 	}
 	if err := proposal.Publish(cmd.Context(), review.ApprovalID, func() error {
-		if err := preflightWireGuardPolicyTransition(); err != nil {
-			return err
-		}
-		if err := enforceRemovalState(cmd); err != nil {
-			return err
-		}
-		return refusePendingFirewallTransactionHook()
+		return readonlyConfigurationLifecyclePreflight(cmd)
 	}); err != nil {
 		return fmt.Errorf("configuration publication refused: %w", err)
 	}

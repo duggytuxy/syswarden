@@ -544,18 +544,23 @@ func TestMigrationAtomicPublicationPreservesOwnerGroupAndMode_SW_CFG_002(t *test
 func TestMigratorIsRepeatableAndPreservesUserModule(t *testing.T) {
 	outputDir := filepath.Join(t.TempDir(), "config")
 	sourceDir := t.TempDir()
+	sourceRoot, err := os.OpenRoot(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sourceRoot.Close() }()
 
 	runMigration := func(name string) {
 		t.Helper()
 		source := filepath.Join(sourceDir, name)
-		if err := os.WriteFile(source, []byte(migrationFixture), 0600); err != nil {
+		if err := sourceRoot.WriteFile(name, []byte(migrationFixture), 0600); err != nil {
 			t.Fatal(err)
 		}
 		migrator := &Migrator{SourcePath: source, OutputDir: outputDir}
 		if err := migrator.Run(); err != nil {
 			t.Fatalf("Migrator.Run() error = %v", err)
 		}
-		if _, err := os.Stat(source + ".migrated"); err != nil {
+		if _, err := sourceRoot.Stat(name + ".migrated"); err != nil {
 			t.Fatalf("migrated source was not retained: %v", err)
 		}
 	}

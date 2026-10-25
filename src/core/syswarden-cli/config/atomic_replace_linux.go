@@ -15,7 +15,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type configReplacementHooks struct {
+	prepare  func(string, *secureFileIdentity) error
+	verify   func() error
+	commit   func() error
+	rollback func() error
+	finish   func() error
+}
+
 type configReplacementOps struct {
+	hooks  *configReplacementHooks
 	rename func(*os.Root, string, string, bool) error
 	sync   func(*os.Root) error
 	remove func(*os.Root, string) error
@@ -51,10 +60,10 @@ func replaceSecureConfigFile(directory, name string, content []byte, expected *s
 	return replaceSecureConfigFileUsing(directory, name, content, expected, preCommit, prePublish, postCommit, defaultConfigReplacementOps())
 }
 
-// This is atomic name replacement with in-process rollback, not a durable
-// transaction journal. After interruption, retained private files require
-// explicit inspection. Concurrent root modification cannot be serialized by
-// pathname checks; observed ambiguous identities are retained without cleanup.
+// Default callers receive atomic replacement and in-process rollback. Reviewed
+// edits attach durable journal hooks before exchange and before cleanup. Neither
+// mode serializes arbitrary privileged writers through pathname checks; observed
+// ambiguous identities are retained without cleanup.
 func replaceSecureConfigFileUsing(directory, name string, content []byte, expected *secureFileIdentity, preCommit, prePublish, postCommit func() error, ops configReplacementOps) (resultErr error) {
 	if name == "" || filepath.Base(name) != name || name == "." || name == ".." {
 		return fmt.Errorf("invalid configuration filename")
@@ -122,6 +131,11 @@ func replaceSecureConfigFileUsing(directory, name string, content []byte, expect
 	}
 
 	checkDestination := func() error {
+		if ops.hooks != nil && ops.hooks.verify != nil {
+			if err := ops.hooks.verify(); err != nil {
+				return err
+			}
+		}
 		if expected == nil {
 			if _, err := root.Lstat(name); errors.Is(err, fs.ErrNotExist) {
 				return nil
@@ -161,6 +175,28 @@ func replaceSecureConfigFileUsing(directory, name string, content []byte, expect
 	if err := verifyConfigReplacementFile(root, stage, candidate); err != nil {
 		return fmt.Errorf("configuration stage changed before publish: %w", err)
 	}
+	if ops.hooks != nil && ops.hooks.prepare != nil {
+		// From the first durable-intent attempt onward, a failed or uncertain
+		// write must retain both data and evidence for explicit inspection.
+		cleanupStage = false
+		if err := ops.sync(root); err != nil {
+			return fmt.Errorf("sync prepared configuration stage; stage retained: %w", err)
+		}
+		if err := ops.hooks.prepare(stage, candidate); err != nil {
+			return fmt.Errorf("record configuration intent; stage retained: %w", err)
+		}
+		if preCommit != nil {
+			if err := preCommit(); err != nil {
+				return fmt.Errorf("configuration changed after intent publication; recovery required: %w", err)
+			}
+		}
+		if err := checkDestination(); err != nil {
+			return err
+		}
+		if err := verifyConfigReplacementFile(root, stage, candidate); err != nil {
+			return err
+		}
+	}
 	if err := ops.rename(root, stage, name, expected != nil); err != nil {
 		return fmt.Errorf("publish configuration with atomic exchange or no-replace operation: %w", err)
 	}
@@ -168,6 +204,11 @@ func replaceSecureConfigFileUsing(directory, name string, content []byte, expect
 	// candidate bytes. No deferred cleanup may remove it on an ambiguous error.
 	cleanupStage = false
 	checkPair := func() error {
+		if ops.hooks != nil && ops.hooks.verify != nil {
+			if err := ops.hooks.verify(); err != nil {
+				return err
+			}
+		}
 		if err := verifyConfigReplacementFile(root, name, candidate); err != nil {
 			return fmt.Errorf("published configuration identity changed: %w", err)
 		}
@@ -192,16 +233,32 @@ func replaceSecureConfigFileUsing(directory, name string, content []byte, expect
 				return fmt.Errorf("restored configuration identity changed; pair retained: %w", err)
 			}
 		}
+		if expected == nil {
+			if _, err := root.Lstat(name); !errors.Is(err, fs.ErrNotExist) {
+				return errors.New("configuration appeared during rollback; pair retained")
+			}
+		}
 		if err := verifyConfigReplacementFile(root, stage, candidate); err != nil {
 			return fmt.Errorf("rollback candidate identity changed; pair retained: %w", err)
 		}
 		if err := ops.sync(root); err != nil {
 			return fmt.Errorf("sync configuration rollback; stage retained: %w", err)
 		}
+		if ops.hooks != nil && ops.hooks.rollback != nil {
+			if err := ops.hooks.rollback(); err != nil {
+				return fmt.Errorf("record configuration rollback; pair retained: %w", err)
+			}
+		}
 		if err := removeConfigReplacementFile(root, stage, candidate, ops); err != nil {
 			return fmt.Errorf("cleanup rolled-back configuration: %w", err)
 		}
-		return ops.sync(root)
+		if err := ops.sync(root); err != nil {
+			return err
+		}
+		if ops.hooks != nil && ops.hooks.finish != nil {
+			return ops.hooks.finish()
+		}
+		return nil
 	}
 	failAfterPublish := func(cause error) error { return errors.Join(cause, rollback()) }
 	if err := checkPair(); err != nil {
@@ -218,13 +275,29 @@ func replaceSecureConfigFileUsing(directory, name string, content []byte, expect
 	if err := checkPair(); err != nil {
 		return failAfterPublish(fmt.Errorf("post-commit inode CAS: %w", err))
 	}
+	if ops.hooks != nil && ops.hooks.commit != nil {
+		// Do not roll data back after an uncertain commit-record write. The
+		// retained pair and durable state must be inspected together first.
+		if err := ops.hooks.commit(); err != nil {
+			return fmt.Errorf("record configuration commit; pair retained: %w", err)
+		}
+		if err := checkPair(); err != nil {
+			return err
+		}
+	}
 	if expected != nil {
 		if err := removeConfigReplacementFile(root, stage, expected, ops); err != nil {
+			if ops.hooks != nil {
+				return fmt.Errorf("committed configuration cleanup requires recovery: %w", err)
+			}
 			return failAfterPublish(fmt.Errorf("remove original configuration stage: %w", err))
 		}
 		if err := ops.sync(root); err != nil {
 			return fmt.Errorf("configuration published but cleanup durability is unconfirmed: %w", err)
 		}
+	}
+	if ops.hooks != nil && ops.hooks.finish != nil {
+		return ops.hooks.finish()
 	}
 	return nil
 }

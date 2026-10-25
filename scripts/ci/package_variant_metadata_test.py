@@ -30,11 +30,11 @@ BASE_DEPENDENCIES = {
 }
 
 
-def bash(script: str, *arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess[bytes]:
+def bash(script: str, *arguments: str, cwd: Path | None = None, timeout: int = 5) -> subprocess.CompletedProcess[bytes]:
     environment = {"PATH": os.environ["PATH"], "LC_ALL": "C"}
     return subprocess.run(
         ["/bin/bash", "-eu", "-c", script, "package-variant-test", *arguments],
-        cwd=cwd, env=environment, capture_output=True, check=False, timeout=5,
+        cwd=cwd, env=environment, capture_output=True, check=False, timeout=timeout,
     )
 
 
@@ -232,6 +232,9 @@ class PackageVariantMetadataTests(unittest.TestCase):
                 + names + '\nPACKAGE_WORKSPACE="$2"\nLOCAL_PACKAGE_OUTPUT="$3"\n'
                 + publication + "\npublish_local_artifacts\n",
                 str(ROOT), str(workspace), str(output),
+                # Publication synchronizes files and directories. Keep a bounded
+                # deadline without the five-second metadata-only assumption.
+                timeout=30,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual({item.name for item in output.iterdir()}, {*filenames, "SHA256SUMS.txt"})
