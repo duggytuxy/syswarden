@@ -198,6 +198,20 @@ Their presence is not reporting authority, and this preservation is not a claim
 of complete native removal or historical credential rotation. No credential is
 printed by selection validation or the configured-effect preview.
 
+Optional reports are best effort. The reporter keeps at most eight workers and
+4,096 recent addresses, retaining the existing 15-minute per-address cooldown.
+Saturation drops a report without queuing work or evicting an unexpired cooldown.
+Expired entries are periodically pruned. Invalid addresses and private, loopback,
+link-local, multicast or unspecified addresses are refused; accepted addresses
+are canonicalized before suppression and export. Bounded ASCII rule identifiers select categories locally but are not
+copied into public comments. Event text longer than 4 KiB is ignored for port
+extraction. Raw event data is not retained by a reporting worker. Response bodies,
+response headers and transport errors never enter reporting diagnostics; only a
+fixed outcome and numeric HTTP status do.
+Responses are drained by at most 4 KiB and closed under the existing ten-second
+HTTP timeout. These bounds do not authenticate the original event producer or
+prove that every report was delivered.
+
 ## Significant changes and missing activation steps
 
 The configuration-led workflow still needs complete reviewable host effects,

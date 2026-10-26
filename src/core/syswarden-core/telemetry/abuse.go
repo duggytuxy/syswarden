@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -18,11 +17,10 @@ import (
 )
 
 var (
-	abuseCache     = make(map[string]time.Time)
-	abuseCacheLock sync.Mutex
-	abuseAPIKey    string
-	abuseEnabled   bool
-	abuseOnce      sync.Once
+	abuseAPIKey  string
+	abuseEnabled bool
+	abuseOnce    sync.Once
+	abuseLimiter abuseReportLimiter
 )
 
 const (
@@ -86,6 +84,9 @@ func isL7ExploitJail(jail string) bool {
 // reportedPort returns only a canonical decimal TCP/UDP port. The payload is
 // otherwise untrusted and must never be copied into a public AbuseIPDB comment.
 func reportedPort(payload, fallback string) string {
+	if len(payload) > maximumAbuseEventPreview {
+		return fallback
+	}
 	for _, marker := range []string{"port ", "DPT="} {
 		searchFrom := 0
 		for {
@@ -156,7 +157,8 @@ func abuseCategories(jail string) string {
 
 func newAbuseReportPayload(ip, jail, payload string, now time.Time) abuseReportPayload {
 	ts := now.Format("2006-01-02 15:04:05")
-	jailLower := strings.ToLower(jail)
+	jail = safeAbuseRuleLabel(jail)
+	jailLower := jail
 	var comment string
 
 	switch {
@@ -167,9 +169,9 @@ func newAbuseReportPayload(ip, jail, payload string, now time.Time) abuseReportP
 		port := reportedPort(payload, "unknown")
 		comment = fmt.Sprintf("[%s] Attempted port scan on port %s by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, port, ip)
 	case isL7ExploitJail(jail):
-		comment = fmt.Sprintf("[%s] Attempted web exploit (%s; request target redacted) by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, strings.ToUpper(jail), ip)
+		comment = fmt.Sprintf("[%s] Attempted web exploit (request target redacted) by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, ip)
 	default:
-		comment = fmt.Sprintf("[%s] Attempted attack (%s) by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, strings.ToUpper(jail), ip)
+		comment = fmt.Sprintf("[%s] Attempted attack by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, ip)
 	}
 
 	return abuseReportPayload{
@@ -189,7 +191,11 @@ func newAbuseHTTPClient() *http.Client {
 }
 
 func newAbuseReportRequest(ip, jail, payload, apiKey string, now time.Time) (*http.Request, error) {
-	report := newAbuseReportPayload(ip, jail, payload, now)
+	canonical, ok := canonicalPublicOSINTIP(ip)
+	if !ok {
+		return nil, fmt.Errorf("external reporting requires a canonical public unicast address")
+	}
+	report := newAbuseReportPayload(canonical, jail, payload, now)
 	reqBody, err := json.Marshal(report)
 	if err != nil {
 		return nil, err
@@ -205,47 +211,35 @@ func newAbuseReportRequest(ip, jail, payload, apiKey string, now time.Time) (*ht
 	return req, nil
 }
 
-// ReportAbuseAsync asynchronously reports a banned IP to AbuseIPDB
+// ReportAbuseAsync submits best-effort reports only after explicit opt-in.
+// Resource saturation drops a report; it never blocks enforcement or queues an
+// unbounded goroutine, credential-bearing request or retry.
 func ReportAbuseAsync(ip, jail, payload string) {
 	abuseOnce.Do(initAbuse)
 	if !abuseEnabled || abuseAPIKey == "" {
 		return
 	}
-
-	abuseCacheLock.Lock()
-	lastReport, exists := abuseCache[ip]
-	if exists && time.Since(lastReport) < 15*time.Minute {
-		abuseCacheLock.Unlock()
+	canonical, ok := canonicalPublicOSINTIP(ip)
+	if !ok {
 		return
 	}
-	abuseCache[ip] = time.Now()
-	abuseCacheLock.Unlock()
-
-	if isKnownIP(ip) {
+	release := abuseLimiter.reserve(canonical, time.Now())
+	if release == nil {
 		return
 	}
-
+	// Build the bounded, redacted request before retaining asynchronous work.
+	// Raw event payloads and unvalidated rule names are not retained by a worker.
+	req, err := newAbuseReportRequest(canonical, jail, payload, abuseAPIKey, time.Now())
+	if err != nil {
+		release()
+		return
+	}
 	go func() {
-		req, err := newAbuseReportRequest(ip, jail, payload, abuseAPIKey, time.Now())
-		if err != nil {
+		defer release()
+		defer req.Body.Close()
+		if isKnownIP(canonical) {
 			return
 		}
-
-		client := newAbuseHTTPClient()
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[AbuseIPDB FAIL] Error: %v", err)
-			return
-		}
-		defer func() {
-			_ = resp.Body.Close()
-		}()
-
-		if resp.StatusCode == 200 {
-			log.Printf("[SUCCESS] Reported %s to AbuseIPDB (Jail: %s)", ip, jail)
-		} else {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			log.Printf("[API ERROR] AbuseIPDB HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-		}
+		log.Print(deliverAbuseReport(newAbuseHTTPClient(), req))
 	}()
 }
