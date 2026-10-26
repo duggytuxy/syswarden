@@ -119,6 +119,15 @@ does not prove that payload or administrator files were preserved. Direct APK
 installation and upgrade remain unqualified for this collision; the hook check
 alone must not be used as a preservation guarantee.
 
+The same failure occurs when an administrator replaces launchers after an inert
+package has already been installed: both APK generations overwrite the entries
+during a same-identity upgrade after the candidate pre-upgrade hook refuses.
+Omitting those entries from the replacement payload also fails preservation,
+because APK then removes the old package-owned paths. These observations cover
+both package identities and custom regular files or symlinks. They do not qualify
+historical product binaries or a recovery procedure. Changing unrelated global
+APK protected-path policy is not an accepted workaround.
+
 Keep an administrator customization intact while reviewing a collision. Move
 or rename it only through an explicit administrator decision. Do not retry a
 candidate APK transaction as a recovery mechanism for an overwritten entry.
@@ -588,7 +597,7 @@ core, TUI and signatures, with private parent permissions, exact file modes,
 ownership and single links. Its CLI must still execute after removal and restart.
 
 This profile exercises a preconfigured historical policy. It does not establish
-clean standard-only installation, standalone `syswarden uninstall`, complete SSH
+inactive fresh installation, standalone `syswarden uninstall`, complete SSH
 migration, another distribution's lifecycle, or final v5.00.0 IVVQ acceptance.
 
 ## APK recovery before native erasure
