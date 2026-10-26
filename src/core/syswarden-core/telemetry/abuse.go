@@ -37,8 +37,7 @@ type abuseReportPayload struct {
 }
 
 func initAbuse() {
-	abuseEnabled = viper.GetBool("integrations.abuseipdb.enabled")
-	abuseAPIKey = viper.GetString("integrations.abuseipdb.api_key")
+	abuseEnabled, abuseAPIKey = abuseReportingSelection(viper.GetViper())
 }
 
 // isKnownIP checks if the IP is already in our threat intel or blacklist files.

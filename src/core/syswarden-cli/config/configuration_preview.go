@@ -137,9 +137,9 @@ func configurationEffects(c *ModularConfig) []ConfigurationEffect {
 		add("Webhooks", "External notification endpoints are selected. Install can send a connectivity notification containing the host name; runtime events can disclose event data. Preview sends nothing.")
 	}
 	if c.Integrations.AbuseIPDB.Enabled && !c.Core.EnterpriseMode {
-		add("AbuseIPDB", "External reporting is selected. Activation can store reporting credentials, and authorized runtime events can be reported externally. Preview does not validate remote credentials or send reports.")
+		add("AbuseIPDB", "External reporting is selected. The core reads its API key from TOML and authorized runtime events can be reported externally. Install/reload do not write a separate credential file. Preview does not validate remote credentials or send reports.")
 	} else {
-		add("AbuseIPDB", "Reporting is disabled by selection or enterprise mode. Install/reload can reconcile the product credential file; this is still a filesystem effect.")
+		add("AbuseIPDB", "Reporting is disabled by selection or enterprise mode. Install/reload preserve any historical credential file; its ownership and external consumers require separate review.")
 	}
 	if c.Integrations.HA.Enabled {
 		add("HA synchronization", "Selected synchronization can add peer access rules and product scheduling, and transfer policy data. Peer identity, authentication and conflict handling require separate verification.")

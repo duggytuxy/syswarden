@@ -174,6 +174,22 @@ effective kernel, service or access behavior. `reload` currently has no separate
 confirmation or digest-bound preview. Its `--no-restart` flag suppresses only
 the core restart; policy, integrations and scheduling can still change.
 
+## Optional external reporting
+
+AbuseIPDB requires its explicit integration selection, a usable API key and
+enterprise mode disabled. The core enforces enterprise mode itself before
+retaining a reporting key. Missing or invalid selections and unusable keys
+cannot enable reports. This selection is captured when the reporting component
+initializes; changing TOML alone does not attest a running process or hot reload.
+
+Install/reload validate the selected key without creating, replacing or deleting
+`/etc/syswarden/secrets.env`. The core reads the TOML configuration directly;
+it does not consume that historical duplicate. Existing copies remain unchanged
+because their ownership and possible external consumers require separate review.
+Their presence is not reporting authority, and this preservation is not a claim
+of complete native removal or historical credential rotation. No credential is
+printed by selection validation or the configured-effect preview.
+
 ## Significant changes and missing activation steps
 
 The configuration-led workflow still needs complete reviewable host effects,

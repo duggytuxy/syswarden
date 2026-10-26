@@ -191,7 +191,7 @@ func TestConfigurationEffectsDescribeSelectedAndDisabledHostEffects(t *testing.T
 	c.Integrations.AbuseIPDB.APIKey = "PRIVATE-KEY"
 	c.Integrations.SIEM.IP = "192.0.2.11"
 	text := effectText(configurationEffects(c))
-	for _, part := range []string{"restrict inbound", "nftables", "Custom feeds", "Spamhaus", "IPv4 and IPv6", "1 configured whitelist", "forwarding", "WAAP audit", "rsyslog", "receiver authentication", "independently installed Wazuh", "connectivity notification", "store reporting credentials", "transfer policy data", "independent from native HA", "CIS profile", "OS hardening selected: true"} {
+	for _, part := range []string{"restrict inbound", "nftables", "Custom feeds", "Spamhaus", "IPv4 and IPv6", "1 configured whitelist", "forwarding", "WAAP audit", "rsyslog", "receiver authentication", "independently installed Wazuh", "connectivity notification", "core reads its API key from TOML", "transfer policy data", "independent from native HA", "CIS profile", "OS hardening selected: true"} {
 		if !strings.Contains(text, part) {
 			t.Errorf("missing effect %q", part)
 		}
@@ -202,7 +202,7 @@ func TestConfigurationEffectsDescribeSelectedAndDisabledHostEffects(t *testing.T
 		}
 	}
 	c.Core.EnterpriseMode = true
-	if text := effectText(configurationEffects(c)); !strings.Contains(text, "Reporting is disabled by selection or enterprise mode") || strings.Contains(text, "store reporting credentials") {
+	if text := effectText(configurationEffects(c)); !strings.Contains(text, "Reporting is disabled by selection or enterprise mode") || strings.Contains(text, "core reads its API key from TOML") {
 		t.Fatal("enterprise reporting override omitted")
 	}
 }
