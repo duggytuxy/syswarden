@@ -151,7 +151,7 @@ func (tool *sshBusctl) execute(ctx context.Context, unit string) ([]byte, error)
 	}
 	var stdout, stderr sshSystemdOutput
 	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil || stderr.buffer.Len() != 0 {
+	if err := runSSHQueryProcess(ctx, command); err != nil || stderr.buffer.Len() != 0 {
 		return nil, fmt.Errorf("SSH startup query failed or exceeded its bounds")
 	}
 	return stdout.buffer.Bytes(), nil

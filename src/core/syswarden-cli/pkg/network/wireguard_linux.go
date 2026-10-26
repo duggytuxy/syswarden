@@ -307,6 +307,12 @@ func runBoundedWireGuardCommandContext(
 	input string,
 	limit int,
 ) ([]byte, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("missing WireGuard command context")
+	}
+	if len(input) > maximumWireGuardCommandOutput {
+		return nil, fmt.Errorf("WireGuard command input exceeds %d bytes", maximumWireGuardCommandOutput)
+	}
 	if limit < 1 || limit > maximumWireGuardCommandOutput {
 		return nil, fmt.Errorf("invalid WireGuard command output limit %d", limit)
 	}
@@ -321,48 +327,20 @@ func runBoundedWireGuardCommandContext(
 	var output boundedWireGuardCommandBuffer
 	output.limit = limit
 	command := exec.CommandContext(ctx, path, args...) // #nosec G204 -- executable is root/ancestry attested and arguments are fixed or previously validated
-	configureWireGuardCommandLifecycle(command)
 	command.Env = append([]string(nil), wireGuardFixedCommandEnvironment...)
-	if input != "" {
-		if len(input) > maximumWireGuardCommandOutput {
-			return nil, fmt.Errorf("WireGuard command input exceeds %d bytes", maximumWireGuardCommandOutput)
-		}
-		command.Stdin = strings.NewReader(input)
-	}
-	command.Stdout = &output
-	command.Stderr = &output
 	if err := wireGuardExecutablePreStartAttestor(executableIdentity); err != nil {
 		return nil, fmt.Errorf("reattest WireGuard command %s immediately before start: %w", name, err)
 	}
-	err = command.Start()
-	if err == nil {
-		err = command.Wait()
-	}
-	if errors.Is(err, exec.ErrWaitDelay) && command.Process != nil {
-		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	}
+	err = captureWireGuardProcess(ctx, command, input, &output)
 	output.mu.Lock()
 	wire := append([]byte(nil), output.buffer.Bytes()...)
 	output.mu.Unlock()
 	if err != nil {
-		return wire, fmt.Errorf("WireGuard command %s failed: %w: %s", name, err, strings.TrimSpace(string(wire)))
+		// Keep bounded private bytes available to typed status classifiers, but
+		// never copy tool output or input into an operator-facing error.
+		return wire, fmt.Errorf("WireGuard command %s failed: %w", name, err)
 	}
 	return wire, nil
-}
-
-func configureWireGuardCommandLifecycle(command *exec.Cmd) {
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.WaitDelay = wireGuardCommandWaitDelay
-	command.Cancel = func() error {
-		if command.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
 }
 
 func runBoundedWireGuardCommand(name string, args []string, input string, limit int, timeout time.Duration) ([]byte, error) {

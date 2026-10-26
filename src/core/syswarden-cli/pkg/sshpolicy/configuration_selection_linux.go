@@ -106,7 +106,7 @@ func (daemon *pinnedSSHD) runDefaultConfiguration(parent context.Context) ([]byt
 	command.WaitDelay = time.Second
 	var stdout, stderr parserOutput
 	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
+	if err := runSSHQueryProcess(ctx, command); err != nil {
 		clear(stdout.Bytes())
 		clear(stderr.Bytes())
 		return nil, nil, fmt.Errorf("installed SSH default-configuration probe failed or exceeded execution bounds")

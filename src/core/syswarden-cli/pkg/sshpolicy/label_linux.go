@@ -138,7 +138,7 @@ func (tool *sshLabelExecutable) lookup(ctx context.Context) ([]byte, error) {
 	command.WaitDelay = time.Second
 	var stdout, stderr parserOutput
 	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
+	if err := runSSHQueryProcess(ctx, command); err != nil {
 		return nil, fmt.Errorf("SELinux target-label lookup failed or exceeded execution bounds")
 	}
 	return parseSSHTargetLabel(stdout.Bytes())

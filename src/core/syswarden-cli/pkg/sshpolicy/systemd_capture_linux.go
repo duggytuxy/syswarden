@@ -178,7 +178,7 @@ func (tool *sshSystemctl) run(parent context.Context, unit string) ([]byte, erro
 	}
 	var stdout, stderr sshSystemdOutput
 	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil || stderr.buffer.Len() != 0 {
+	if err := runSSHQueryProcess(ctx, command); err != nil || stderr.buffer.Len() != 0 {
 		return nil, fmt.Errorf("SSH system-manager query failed or exceeded its bounds")
 	}
 	return stdout.buffer.Bytes(), nil
