@@ -2029,7 +2029,6 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 (
                     "postinst.sh",
                     (
-                        "ln -sf /opt/syswarden/bin/syswarden-cli",
                         "migrate_legacy_configuration\n",
                         "/opt/syswarden/bin/syswarden-cli install",
                         "syswarden_consume_deferred_purge_marker",
@@ -2521,12 +2520,16 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertLess(
             scripts["postinst"].index(invocation),
             scripts["postinst"].index(
-                "ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden"
+                "\n    /opt/syswarden/bin/syswarden-cli install\n"
             ),
         )
 
         with tempfile.TemporaryDirectory(prefix="sw-install-barrier-", dir="/tmp") as temporary:
             root = Path(temporary)
+            launcher_bin = root / "usr/local/bin"
+            launcher_bin.mkdir(parents=True, mode=0o755)
+            (launcher_bin / "syswarden").symlink_to("/opt/syswarden/bin/syswarden-cli")
+            (launcher_bin / "syswarden-tui").symlink_to("/opt/syswarden/bin/syswarden-tui")
             state_root = root / "var/lib/syswarden"
             state_root.mkdir(parents=True, mode=0o750)
             state_root.chmod(0o750)
@@ -2541,6 +2544,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
             operator.chmod(0o600)
 
             def prepare(script: str) -> str:
+                script = script.replace("syswarden_preflight_launchers / ", f'syswarden_preflight_launchers "{root}" ')
+                script = script.replace("!= 0:0", f"!= {owner}")
                 executable = script.replace(
                     "/var/lib/.syswarden-removal-finalizing-v1", str(finalizing)
                 ).replace("/var/lib/syswarden", str(state_root))
@@ -5720,8 +5725,10 @@ systemctl() {
         tail = postremove[postremove.index("syswarden_attest_state_root() {") :]
         postinstall = self.script("postinst.sh")
         consumer_start = postinstall.index("syswarden_install_path_absent() {")
-        consumer_end = postinstall.index("\nmodular_config_complete() {", consumer_start)
-        consumer = postinstall[consumer_start:consumer_end]
+        # This fixture isolates the deferred-removal state machine. Payload
+        # launcher and phase checks are exercised by the generated-hook tests.
+        consumer_end = postinstall.index("\nset -e\nexport SYSWARDEN_PKG_INSTALL=1\n", consumer_start)
+        consumer = postinstall[consumer_start:consumer_end] + "\nset -e\nsyswarden_preflight_install_barriers\n"
 
         with tempfile.TemporaryDirectory(prefix="sw-deb-deferred-", dir="/tmp") as temporary:
             root = Path(temporary)

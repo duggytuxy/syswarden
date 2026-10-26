@@ -102,6 +102,20 @@ the unsigned workflow because its fresh enablement behavior has not been
 qualified against this inactive-installation contract. This guard is not full
 migration or lifecycle acceptance.
 
+## Package command launchers
+
+Before unpacking, the candidate checks the protected directory ancestry and the
+existing `syswarden` and `syswarden-tui` launchers in `/usr/local/bin`. Missing
+launchers are permitted before unpack. Existing entries must be exact packaged
+symlinks; a custom wrapper, redirected link, shared hard link or unsafe parent
+refuses installation without replacing that entry. After unpack, both exact
+payload links must exist. Post-install hooks do not recreate links forcibly.
+
+Keep an administrator customization intact while reviewing a collision. Move
+or rename it only through an explicit administrator decision, then retry the
+package transaction. These checks do not lock out concurrent privileged changes
+or establish complete native upgrade and removal acceptance.
+
 ## Optional network allowance refresh
 
 The optional SaaS monitor allowance preserves its last published IPv4/IPv6 pair

@@ -206,6 +206,142 @@ class PackageInstallPhaseTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode == 0, accepted, result.stderr)
 
+class PackageLauncherPreflightTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="sw-launcher-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.helper = HELPER.read_text().replace("!= 0:0", f"!= {os.getuid()}:{os.getgid()}")
+        self.bin = self.root / "usr/local/bin"
+        self.bin.mkdir(parents=True, mode=0o755)
+
+    def run_gate(self, phase: str, helper: str | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["/bin/sh", "-eu", "-c", (helper or self.helper) +
+             '\nsyswarden_preflight_launchers "$1" "$2"',
+             "launcher-contract", str(self.root), phase],
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+
+    def links(self) -> None:
+        for name, target in (("syswarden", "syswarden-cli"), ("syswarden-tui", "syswarden-tui")):
+            (self.bin / name).symlink_to("/opt/syswarden/bin/" + target)
+
+    def snapshot(self) -> list[tuple]:
+        rows = []
+        for path in sorted(self.root.rglob("*")):
+            item = path.lstat()
+            content = os.readlink(path) if path.is_symlink() else path.read_bytes() if path.is_file() else None
+            rows.append((str(path.relative_to(self.root)), item.st_dev, item.st_ino, item.st_mode,
+                         item.st_uid, item.st_gid, item.st_nlink, item.st_size,
+                         item.st_mtime_ns, item.st_ctime_ns, content))
+        return rows
+
+    def test_absent_before_unpack_and_exact_payload_after_unpack(self) -> None:
+        before = self.snapshot()
+        self.assertEqual(self.run_gate("before").returncode, 0)
+        self.assertNotEqual(self.run_gate("after").returncode, 0)
+        self.assertEqual(self.snapshot(), before)
+        self.links()
+        before = self.snapshot()
+        for phase in ("before", "after"):
+            result = self.run_gate(phase)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout + result.stderr, "")
+            self.assertEqual(self.snapshot(), before)
+
+    def test_missing_parents_are_not_created(self) -> None:
+        self.bin.rmdir()
+        self.bin.parent.rmdir()
+        self.bin.parent.parent.rmdir()
+        before = self.snapshot()
+        self.assertEqual(self.run_gate("before").returncode, 0)
+        self.assertNotEqual(self.run_gate("after").returncode, 0)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_each_administrator_collision_is_preserved_without_disclosure(self) -> None:
+        for name in ("syswarden", "syswarden-tui"):
+            for kind in ("wrapper", "directory", "fifo", "redirect", "broken", "newline"):
+                with self.subTest(name=name, kind=kind):
+                    path = self.bin / name
+                    if kind == "wrapper":
+                        path.write_bytes(b"PRIVATE-OPERATOR-FIXTURE\n")
+                        path.chmod(0o755)
+                    elif kind == "directory":
+                        path.mkdir()
+                    elif kind == "fifo":
+                        os.mkfifo(path)
+                    else:
+                        target = "/opt/syswarden/bin/" + ("syswarden-cli" if name == "syswarden" else name)
+                        path.symlink_to(target + "\n" if kind == "newline" else "/PRIVATE-OPERATOR-FIXTURE/" + kind)
+                    before = self.snapshot()
+                    for phase in ("before", "after"):
+                        result = self.run_gate(phase)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertNotIn("PRIVATE-OPERATOR-FIXTURE", result.stdout + result.stderr)
+                        self.assertEqual(self.snapshot(), before)
+                    path.rmdir() if kind == "directory" else path.unlink()
+
+    def test_unsafe_parent_and_link_metadata_refuse(self) -> None:
+        self.links()
+        for parent in (self.root / "usr", self.bin.parent, self.bin):
+            previous = parent.stat().st_mode & 0o777
+            parent.chmod(0o777)
+            before = self.snapshot()
+            self.assertNotEqual(self.run_gate("before").returncode, 0)
+            self.assertEqual(self.snapshot(), before)
+            parent.chmod(previous)
+        path = self.bin / "syswarden"
+        os.link(path, self.bin / "operator-hardlink", follow_symlinks=False)
+        before = self.snapshot()
+        self.assertNotEqual(self.run_gate("before").returncode, 0)
+        self.assertEqual(self.snapshot(), before)
+        (self.bin / "operator-hardlink").unlink()
+        helper = self.helper.replace(f"!= {os.getuid()}:{os.getgid()}:1", "!= 4294967294:4294967294:1")
+        self.assertNotEqual(self.run_gate("before", helper).returncode, 0)
+
+    def test_symlink_parent_refuses_without_following_it(self) -> None:
+        self.bin.rmdir()
+        alternate = self.root / "PRIVATE-OPERATOR-FIXTURE"
+        alternate.mkdir()
+        self.bin.symlink_to(alternate, target_is_directory=True)
+        before = self.snapshot()
+        result = self.run_gate("before")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("PRIVATE-OPERATOR-FIXTURE", result.stdout + result.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_actual_generated_hooks_screen_before_payload_and_host_actions(self) -> None:
+        contracts.PackageLifecycleContractTests.setUpClass()
+        contract = contracts.PackageLifecycleContractTests()
+        for loader in (contract.local_build_script, contract.script):
+            for hook, phase in (("preinst.sh", "before"), ("postinst.sh", "after")):
+                with self.subTest(loader=loader.__name__, hook=hook):
+                    source = loader(hook)
+                    call = f"\nsyswarden_preflight_launchers / {phase}\n"
+                    self.assertEqual(source.count(call), 1)
+                    self.assertLess(source.index(call), source.index("\nsyswarden_preflight_install_barriers\n"))
+                    self.assertNotIn("ln -sf /opt/syswarden/bin/", source)
+                    prefix = source.split(call, 1)[0] + call.replace(" / ", f' "{self.root}" ')
+                    prefix = prefix.replace("!= 0:0", f"!= {os.getuid()}:{os.getgid()}")
+                    path = self.bin / "syswarden"
+                    path.write_bytes(b"PRIVATE-OPERATOR-FIXTURE\n")
+                    before = self.snapshot()
+                    result = subprocess.run(
+                        ["/bin/sh", "-eu", "-c", prefix, "hook-contract", "1"],
+                        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+                        capture_output=True, text=True, timeout=5, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("command launcher", result.stderr)
+                    self.assertEqual(self.snapshot(), before)
+                    path.unlink()
+
+    def test_unknown_phase_refuses(self) -> None:
+        for phase in ("", "upgrade", "fresh", "after\n"):
+            self.assertNotEqual(self.run_gate(phase).returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -665,6 +665,7 @@ cat << 'EOF' >> preinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
 syswarden_set_native_install_phase preinstall "$@"
+syswarden_preflight_launchers / before
 syswarden_preflight_wireguard /
 syswarden_preflight_install_barriers
 syswarden_preflight_systemd_ordering_dropin
@@ -747,6 +748,7 @@ cat << 'EOF' >> postinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
 syswarden_set_native_install_phase postinstall "$@"
+syswarden_preflight_launchers / after
 syswarden_preflight_install_barriers
 if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
     if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
@@ -768,8 +770,6 @@ if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
     exit 0
 fi
 syswarden_preflight_alpine_cronie
-ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
-ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
 
 package_service_manager() {
     if [ -f /etc/alpine-release ]; then
