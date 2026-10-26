@@ -179,12 +179,28 @@ supports the verifier output change documented in the
 [RPM 6.0 release notes](https://rpm.org/releases/6.0.0); it does not enable RPM v6
 package framing, OpenPGP v6 keys, another algorithm or production publication.
 
-The component has no publishing mode or production updater entry. Its synthetic
-bundle tests, real ephemeral GnuPG signature-association test and inert v5 RPM
-comparisons for both names are scoped evidence, not six-format native signing or
-release acceptance. The RPM observations use a disposable signing key and an
-isolated verification database; neither installs a package or uses a release key. V4 serializers
-remain unchanged, and v5 public signing and publication remain closed.
+Native verifier execution limits each output channel to 1 MiB while reading,
+with a 60-second execution deadline and closed standard input. A private process
+group is stopped before its original leader is reaped; successful output cannot
+leave ordinary inherited descendants holding the pipes. Native adapters that
+launch external container daemons still own their container cleanup. Kernel
+stalls and processes deliberately escaping the group are outside this userspace
+execution guarantee. DEB status and logger evidence retain their exact bytes,
+including line endings; diagnostics never copy rejected tool output.
+
+Six inert v5 packages have also passed the actual native signature adapters and
+the updater identity reader, using disposable keys for both package names. The
+sealed bundle repeats all six verifications, preserves DEB bytes and the APK
+unsigned suffix, and compares RPM content and uncompressed CPIO. RPM 4 and RPM 6,
+plus APK on Alpine 3.22 and 3.24, reject altered or unsigned packages; DEB signatures
+cannot be substituted between variants. These are signature interoperability
+checks on inert payloads, not full product installation or migration acceptance.
+
+The component has no publishing mode or production updater entry. Its bundle
+tests and native observations are scoped evidence. Each RPM verification uses an
+isolated trust database. No fixture installs a package or uses a release key.
+V4 serializers remain unchanged, and v5 public signing and publication remain
+closed pending coordinated full-product qualification.
 
 The retention components explicitly select one known native owner. DEB and RPM
 queries bind identity and historical requirements to that name; product records

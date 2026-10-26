@@ -10,11 +10,16 @@ import json
 import os
 import re
 import stat
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+
+
+try:
+    from scripts.ci import native_verifier_process
+except ModuleNotFoundError:
+    import native_verifier_process
 
 
 class SignatureGateError(RuntimeError):
@@ -583,19 +588,15 @@ def run(
             fail(f"required verifier environment {name} is unavailable")
         environment[name] = value
     try:
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=environment,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        result = native_verifier_process.capture(command, environment)
+    except native_verifier_process.VerifierProcessError as exc:
         fail(f"cannot execute {label}: {exc}")
     if result.returncode != 0:
         fail(f"{label} rejected the artifact")
-    return result.stdout + result.stderr
+    try:
+        return (result.stdout + result.stderr).decode("utf-8")
+    except UnicodeDecodeError:
+        fail(f"{label} emitted invalid UTF-8")
 
 
 def validate_openpgp_signing_identity(
@@ -969,25 +970,17 @@ def run_gpgv_status_capture(
 
     environment = {"PATH": os.environ.get("PATH", ""), "LC_ALL": "C"}
     try:
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=environment,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        result = native_verifier_process.capture(command, environment)
+    except native_verifier_process.VerifierProcessError as exc:
         fail(f"cannot execute isolated DEB gpgv verification: {exc}")
-    if (
-        len(result.stdout.encode("utf-8")) > MAX_VERIFIER_OUTPUT_BYTES
-        or len(result.stderr.encode("utf-8")) > MAX_VERIFIER_OUTPUT_BYTES
-    ):
-        fail("isolated DEB gpgv verification output exceeds its bound")
     if result.returncode != 0:
         fail("isolated DEB gpgv verification rejected the signature")
-    statuses = parse_gpgv_status_output(result.stdout)
-    return statuses, result.stdout.encode("utf-8"), result.stderr.encode("utf-8")
+    try:
+        status = result.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        fail("isolated DEB gpgv status emitted invalid UTF-8")
+    statuses = parse_gpgv_status_output(status)
+    return statuses, result.stdout, result.stderr
 
 
 def run_gpgv_status(command: list[str]) -> list[tuple[str, list[str]]]:
