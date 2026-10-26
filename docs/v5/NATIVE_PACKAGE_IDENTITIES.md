@@ -170,6 +170,15 @@ The comparison does not decompress or extract files. Native metadata and the
 proof's uncompressed CPIO digest remain caller-authenticated assertions; this
 framing check does not replace native signature or package-identity validation.
 
+Native RPM verification accepts the bounded RSA/SHA256 verdict forms from RPM 4
+and RPM 6. RPM 6 reports the full OpenPGP fingerprint; the verifier binds it to
+one valid signing key in the separately selected certificate. Historical short
+key IDs must still resolve uniquely. Conflicting signers, unknown or weak
+signature lines, missing signatures and failed verdicts remain refused. This
+supports the verifier output change documented in the
+[RPM 6.0 release notes](https://rpm.org/releases/6.0.0); it does not enable RPM v6
+package framing, OpenPGP v6 keys, another algorithm or production publication.
+
 The component has no publishing mode or production updater entry. Its synthetic
 bundle tests, real ephemeral GnuPG signature-association test and inert v5 RPM
 comparisons for both names are scoped evidence, not six-format native signing or

@@ -600,7 +600,7 @@ def run(
 
 def validate_openpgp_signing_identity(
     records: list[list[str]], signature_key_id: str, as_of: dt.date
-) -> None:
+) -> str:
     matches: list[tuple[list[str], str]] = []
     for index, record in enumerate(records):
         if not record or record[0] not in {"pub", "sub"}:
@@ -620,7 +620,7 @@ def validate_openpgp_signing_identity(
             matches.append((record, fingerprint))
     if len(matches) != 1:
         fail("RPM signature key ID does not identify one committed OpenPGP key")
-    record, _ = matches[0]
+    record, fingerprint = matches[0]
     if len(record) <= 11:
         fail("RPM OpenPGP signing-key record is incomplete")
     try:
@@ -645,6 +645,7 @@ def validate_openpgp_signing_identity(
         fail("RPM OpenPGP signing key is disabled, invalid, expired or revoked")
     if created > as_of or (expires is not None and expires < as_of):
         fail("RPM OpenPGP signing key is not valid on the qualification date")
+    return fingerprint
 
 
 def validate_rpm_public_key_container(path: Path, data: bytes) -> None:
@@ -675,6 +676,43 @@ def validate_rpm_public_key_container(path: Path, data: bytes) -> None:
     ):
         fail("RPM public key armor is not singular and canonical")
 
+
+
+# RPM 4 emits a key ID; RPM 6 may emit a full fingerprint. Both refer to the
+# single certificate imported into the isolated database. Unknown signature
+# lines cannot be hidden beside an accepted line, including weak algorithms.
+_RPM_SIGNATURE_VERDICT = re.compile(
+    r"(?:(?:Header|Legacy) )?(?:OpenPGP )?V4 RSA/SHA256 signature, key "
+    r"(?:ID ([0-9a-f]{8}|[0-9a-f]{16}|[0-9a-f]{40})|fingerprint: ([0-9a-f]{40}))"
+    r": OK", re.IGNORECASE,
+)
+
+
+def validate_rpm_signature_verdicts(
+    output: str, package: Path, records: list[list[str]], as_of: dt.date,
+) -> None:
+    if len(output.encode("utf-8")) > MAX_VERIFIER_OUTPUT_BYTES:
+        fail("RPM native verifier output exceeds its bound")
+    if any(marker in output.upper() for marker in ("NOT OK", "NOKEY", "UNSIGNED")):
+        fail("RPM native verifier reported an unverified artifact")
+    signers: set[str] = set()
+    verdict_count = 0
+    for raw in output.splitlines():
+        line = raw.strip()
+        if line == str(package) + ":":
+            continue
+        if re.search(r"\bsignature\b", line, re.IGNORECASE) is None:
+            continue
+        match = _RPM_SIGNATURE_VERDICT.fullmatch(line)
+        if match is None:
+            fail("RPM native verifier emitted an unsupported signature verdict")
+        identity = (match.group(1) or match.group(2)).upper()
+        signers.add(validate_openpgp_signing_identity(records, identity, as_of))
+        verdict_count += 1
+        if verdict_count > 4:
+            fail("RPM native verifier emitted too many signature verdicts")
+    if verdict_count == 0 or len(signers) != 1:
+        fail("RPM native verifier did not identify one verified RSA/SHA256 signer")
 
 def verify_rpm(policy: dict[str, Any], policy_path: Path, package: Path, key_id: str, rpmkeys: str, gpg: str, as_of: dt.date) -> None:
     key = select_key(policy, "rpm", key_id, as_of)
@@ -743,16 +781,7 @@ def verify_rpm(policy: dict[str, Any], policy_path: Path, package: Path, key_id:
         database.mkdir(mode=0o700)
         run([rpmkeys, "--dbpath", str(database), "--import", str(public_key)], "RPM key import")
         output = run([rpmkeys, "--dbpath", str(database), "--checksig", "--verbose", str(package)], "RPM native signature verification")
-    signature_key_ids = {
-        match.upper()
-        for match in re.findall(
-            r"(?im)^.*\bRSA/SHA256\s+Signature\b[^\n]*\bkey ID ([0-9a-f]{8,40})\b[^\n]*:\s*OK\s*$",
-            output,
-        )
-    }
-    if any(marker in output.upper() for marker in ("NOT OK", "NOKEY", "UNSIGNED")) or len(signature_key_ids) != 1:
-        fail("RPM native verifier did not emit an RSA/SHA256 signature verdict")
-    validate_openpgp_signing_identity(records, signature_key_ids.pop(), as_of)
+    validate_rpm_signature_verdicts(output, package, records, as_of)
     if key_path(policy_path, key) != (public_key_path, public_key_data):
         fail("RPM public key changed during native verification")
 
