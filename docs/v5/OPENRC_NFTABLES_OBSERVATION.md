@@ -47,6 +47,27 @@ The existing systemd observation and retirement digest format remain unchanged.
 Unknown or changing inputs preserve the existing firewall and prevent unsafe
 retirement. The observer never stops the shared service or flushes its rules.
 
+## Native command execution boundary
+
+The separate CLI manager preflight runner still executes trusted manager commands;
+it must not be confused with the script-free nftables observer above. In
+particular, requesting an OpenRC service's `status` executes its init script.
+A bounded process runner does not make that operation read-only or authorize
+activation before administrator review.
+
+Manager preflight captures at most 64 KiB across stdout and stderr and stops on
+output overflow, with a 15-second maximum observation deadline. Successful
+stdout stays separate from stderr warnings; rejected-command evidence retains
+both bounded streams. The child starts in a private process group. Linux
+`waitid` observes its exit without reaping it, and group cleanup occurs while
+the original leader identity is still retained. This avoids signaling a recycled
+process group after an early leader exit. Inherited pipes, closed output streams
+and a successful leader with lingering descendants are covered separately.
+
+These bounds do not control an external daemon, an intentionally escaped process
+group or a kernel execution stall. They do not establish native service health,
+configuration consumption, an activation approval or complete lifecycle recovery.
+
 Upstream references:
 
 - [Alpine nftables configuration](https://wiki.alpinelinux.org/wiki/Nftables)

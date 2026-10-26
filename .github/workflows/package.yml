@@ -121,6 +121,7 @@ jobs:
             scripts/ci/generated_package_header_gate_test.py \
             scripts/ci/go_toolchain_evaluation_test.py \
             scripts/ci/native_package_signature_gate_test.py \
+            scripts/ci/native_verifier_process_test.py \
             scripts/ci/native_package_signing_bundle_test.py \
             scripts/ci/native_package_identity_evidence_test.py \
             scripts/ci/native_rpm_preservation_test.py \
