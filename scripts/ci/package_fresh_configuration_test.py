@@ -25,7 +25,7 @@ class FreshPackageConfigurationTests(unittest.TestCase):
         contracts.PackageLifecycleContractTests.setUpClass()
         cls.contract = contracts.PackageLifecycleContractTests()
 
-    def run_hook(self, hook: str, family: str, phase: str, before: bool, *, barrier: str = "0", offline: bool = False, cli_exit: int = 0):
+    def run_hook(self, hook: str, family: str, phase: str, before: bool, *, barrier: str = "0", offline: bool = False, cli_exit: int = 0, launcher_exit: int = 0):
         # Run the complete emitted maintainer body, not only its new branch.
         # All host operations are replaced before executing that body.
         body = hook[hook.rindex("\nset -e\nexport SYSWARDEN_PKG_INSTALL=1") + 1:]
@@ -53,6 +53,7 @@ forbidden() { printf 'forbidden:%s\n' "$1" >> "$EVENTS"; return 97; }
 for operation in mkdir chmod ln mv rm find stat id sync syswarden_preflight_alpine_cronie syswarden_retire_legacy_webtui syswarden_classify_service_manager syswarden_verify_webtui_retirement syswarden_consume_deferred_purge_marker; do
     eval "$operation() { forbidden '$operation'; }"
 done
+syswarden_preflight_launchers() { printf 'launchers:%s\n' "$2" >> "$EVENTS"; return "$LAUNCHER_EXIT"; }
 syswarden_preflight_wireguard() { printf 'wireguard\n' >> "$EVENTS"; }
 syswarden_preflight_systemd_ordering_dropin() { printf 'ordering\n' >> "$EVENTS"; }
 syswarden_preflight_systemd_socket_dropin() { printf 'socket\n' >> "$EVENTS"; }
@@ -65,7 +66,7 @@ syswarden_preflight_install_barriers() {
             result = subprocess.run(
                 ["/bin/sh", "-eu", "-c", helper + definitions + body, "fresh-hook-contract", *arguments],
                 env={"PATH": os.environ["PATH"], "LC_ALL": "C", "EVENTS": str(events), "BARRIER": barrier,
-                     "CLI_EXIT": str(cli_exit), "SYSWARDEN_PKG_INSTALL": "1", "SYSWARDEN_NATIVE_INSTALL_PHASE": "fresh",
+                     "CLI_EXIT": str(cli_exit), "LAUNCHER_EXIT": str(launcher_exit), "SYSWARDEN_PKG_INSTALL": "1", "SYSWARDEN_NATIVE_INSTALL_PHASE": "fresh",
                      "SYSWARDEN_OFFLINE_QUALIFICATION": "1" if offline else ""},
                 capture_output=True, text=True, check=False, timeout=5,
             )
@@ -80,18 +81,29 @@ syswarden_preflight_install_barriers() {
                     with self.subTest(source=source, family=family, hook=name):
                         result, events = self.run_hook(hook, family, "fresh", before)
                         self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(events, ["wireguard", "barriers", "ordering", "socket"] if before else ["barriers", "cli:fresh:install"])
+                        self.assertEqual(events, ["launchers:before", "wireguard", "barriers", "ordering", "socket"] if before else ["launchers:after", "barriers", "cli:fresh:install"])
                         result, events = self.run_hook(hook, family, "fresh", before, barrier="1")
                         self.assertNotEqual(result.returncode, 0)
-                        self.assertEqual(events, ["wireguard", "barriers", "ordering", "socket"] if before else ["barriers"])
+                        self.assertEqual(events, ["launchers:before", "wireguard", "barriers", "ordering", "socket"] if before else ["launchers:after", "barriers"])
                         result, events = self.run_hook(hook, family, "fresh", before, offline=True)
                         self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(events, ["wireguard", "barriers", "ordering", "socket"] if before else ["barriers"])
+                        self.assertEqual(events, ["launchers:before", "wireguard", "barriers", "ordering", "socket"] if before else ["launchers:after", "barriers"])
                 if not before:
                     result, events = self.run_hook(hook, "apk", "fresh", False, cli_exit=23)
                     self.assertEqual(result.returncode, 23)
-                    self.assertEqual(events, ["barriers", "cli:fresh:install"])
+                    self.assertEqual(events, ["launchers:after", "barriers", "cli:fresh:install"])
                     self.assertLess(hook.index(FRESH_BRANCH), hook.index("migrate_legacy_configuration\n"))
+
+    def test_launcher_refusal_precedes_all_other_hook_work(self) -> None:
+        for loader in (self.contract.local_build_script, self.contract.script):
+            for family in ("deb", "rpm", "apk"):
+                for phase in ("fresh", "upgrade"):
+                    for before, name, upgraded in ((True, "preinst.sh", "preupgrade.sh"), (False, "postinst.sh", "postupgrade.sh")):
+                        hook = loader(upgraded if family == "apk" and phase == "upgrade" else name)
+                        with self.subTest(family=family, phase=phase, before=before):
+                            result, events = self.run_hook(hook, family, phase, before, launcher_exit=31)
+                            self.assertEqual(result.returncode, 31, result.stderr)
+                            self.assertEqual(events, ["launchers:before" if before else "launchers:after"])
 
     def test_upgrade_and_unknown_hooks_never_enter_fresh_staging(self) -> None:
         for loader in (self.contract.local_build_script, self.contract.script):
@@ -103,7 +115,7 @@ syswarden_preflight_install_barriers() {
                         hook = loader(upgraded if family == "apk" else name)
                         result, events = self.run_hook(hook, family, phase, before)
                         self.assertEqual(result.returncode, 97, result.stderr)
-                        self.assertEqual(events, (["wireguard", "barriers", "ordering", "socket"] if before else ["barriers"]) + ["forbidden:syswarden_preflight_alpine_cronie"])
+                        self.assertEqual(events, (["launchers:before", "wireguard", "barriers", "ordering", "socket"] if before else ["launchers:after", "barriers"]) + ["forbidden:syswarden_preflight_alpine_cronie"])
 
     def test_upgrade_manager_dispositions_remain_unchanged(self) -> None:
         for loader in (self.contract.local_build_script, self.contract.script):

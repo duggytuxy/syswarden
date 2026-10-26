@@ -25,6 +25,10 @@ func verifyPackageAtNativeExecution(ctx context.Context, file *os.File, path str
 }
 
 func runAuthenticatedNativeInstall(ctx context.Context, target packageTarget, path string, beforeExecute func(context.Context) error) error {
+	guard, err := prepareNativeLauncherGuard(ctx, beforeExecute, inspectInstalledNativeLaunchers)
+	if err != nil {
+		return err
+	}
 	return runAuthenticatedNativeInstallWith(ctx, target, path, false,
 		func(ctx context.Context, manager string) error {
 			return preserveNativeDependencyReasonsForName(ctx, manager, target.packageName)
@@ -32,16 +36,20 @@ func runAuthenticatedNativeInstall(ctx context.Context, target packageTarget, pa
 			return planAuthenticatedAPKInstallForName(ctx, target.packageName, name, args)
 		}, func(ctx context.Context, name string, args ...string) error {
 			return executeExternalCommand(ctx, name, productionCommandEnvironment(name), args...)
-		}, beforeExecute)
+		}, guard)
 }
 
 func runAuthenticatedQualificationInstall(ctx context.Context, target packageTarget, path string, beforeExecute func(context.Context) error) error {
+	guard, err := prepareNativeLauncherGuard(ctx, beforeExecute, inspectInstalledNativeLaunchers)
+	if err != nil {
+		return err
+	}
 	return runAuthenticatedNativeInstallWith(ctx, target, path, true,
 		func(ctx context.Context, manager string) error {
 			return preserveNativeDependencyReasonsForName(ctx, manager, target.packageName)
 		}, func(ctx context.Context, name string, args []string) ([]string, error) {
 			return planAuthenticatedAPKInstallForName(ctx, target.packageName, name, args)
-		}, executeQualificationExternalCommand, beforeExecute)
+		}, executeQualificationExternalCommand, guard)
 }
 
 func planAuthenticatedAPKInstallForName(ctx context.Context, packageName, name string, args []string) ([]string, error) {

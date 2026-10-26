@@ -126,6 +126,15 @@ These checks do not lock out concurrent privileged changes or establish
 complete native upgrade and removal acceptance. A separately qualified APK
 payload-preservation strategy remains required before migration clearance.
 
+The candidate's online and offline updaters additionally inspect both installed
+launchers before dependency preparation and again after the final authenticated
+package-byte check. Both fixed links and their protected directory ancestry must
+match. A missing/custom/shared link, unsafe parent, observed replacement or
+cancellation refuses the native handoff. This does not lock concurrent writers,
+retrofit an already-running older updater, or protect direct package-manager
+commands. It does not authorize a new package identity or restore an APK
+transaction that has already overwritten files.
+
 ## Optional network allowance refresh
 
 The optional SaaS monitor allowance preserves its last published IPv4/IPv6 pair
