@@ -71,6 +71,13 @@ check does not change rule ordering or the existing country/ASN union semantics.
 | `syswarden reload` | Reapplies policy and integrations, reconciles scheduling and normally restarts the core. It changes the host. |
 | `syswarden install` | Runs the installation/activation pipeline subject to its native service, configuration and prerequisite guards. It changes the host. |
 
+Running the CLI without a subcommand, reading `syswarden manual`, using Cobra
+help, or generating shell completion does not load or normalize host
+configuration. These static information paths do not query recovery state or
+prepare services. They remain available while configuration or removal needs
+repair. Operational inspection commands such as `audit`, `alerts` and `list`
+retain their own runtime requirements; they are not classified as static help.
+
 The global `--config` option selects the legacy flat-file fallback; it does not
 redirect the normal modular root or the protected SSH transaction inputs.
 

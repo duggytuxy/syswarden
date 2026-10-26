@@ -15,11 +15,19 @@ import (
 
 var cfgFile string
 
+// Pin the actual root after construction without a variable-initialization cycle.
+var staticInformationRoot *cobra.Command
+
 var rootCmd = &cobra.Command{
 	Use:   "syswarden",
 	Short: "SYSWARDEN Security Orchestrator",
 	Long:  "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if staticInformationCommand(cmd) {
+			// Usage, the built-in reference and shell completion need no host
+			// policy or recovery state, including during incomplete removal.
+			return nil
+		}
 		if sshAccessControllerCommand(cmd) {
 			// The independent controller has no target configuration or removal
 			// state. Its command validates only approved private exchange files.
@@ -121,6 +129,7 @@ func Execute() {
 }
 
 func init() {
+	staticInformationRoot = rootCmd
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", platformpaths.LegacyConfig, "config file")
 }
 
@@ -170,6 +179,9 @@ func commandRequiresEarlyFirewallRecovery(cmd *cobra.Command) bool {
 // normalization modify operator files before a read-only validation or dry-run
 // migration starts.
 func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
+	if staticInformationCommand(cmd) {
+		return false
+	}
 	if cmd == nil {
 		return true
 	}
@@ -186,6 +198,27 @@ func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
 		}
 	}
 	return true
+}
+
+// Only the actual static entry points bypass host preparation. This does not
+// classify operational inspection commands such as audit, alerts or list as
+// static, and cannot be extended by renaming an unrelated command's parent.
+func staticInformationCommand(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	if cmd == staticInformationRoot || cmd == manualCmd {
+		return true
+	}
+	top := topLevelCommand(cmd)
+	if top == nil || top.Parent() != staticInformationRoot {
+		return false
+	}
+	switch top.Name() {
+	case "help", "completion", "__complete", "__completeNoDesc":
+		return true
+	}
+	return false
 }
 
 var inspectRemovalTombstone = system.InspectRemovalTombstone
