@@ -280,9 +280,13 @@ func FirewallBackendForMutation() (string, error) {
 // LoadConfigDirectory validates an isolated candidate and publishes it only
 // after every file and policy value succeeds.
 func LoadConfigDirectory(configPath string) (Diagnostics, error) {
+	return loadConfigDirectory(configPath, readSecureRegularFile)
+}
+
+func loadConfigDirectory(configPath string, readFile func(*os.Root, string, string) ([]byte, error)) (Diagnostics, error) {
 	loadMu.Lock()
 	defer loadMu.Unlock()
-	candidate, diagnostics, err := loadCandidate(configPath)
+	candidate, diagnostics, err := loadCandidate(configPath, readFile)
 	if err != nil {
 		return diagnostics, err
 	}
@@ -300,7 +304,7 @@ func LoadConfigDirectory(configPath string) (Diagnostics, error) {
 	return diagnostics, nil
 }
 
-func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
+func loadCandidate(configPath string, readFile func(*os.Root, string, string) ([]byte, error)) (*viper.Viper, Diagnostics, error) {
 	diagnostics := Diagnostics{}
 	if err := rejectOperatorPolicyEnvironment(); err != nil {
 		return nil, diagnostics, err
@@ -310,6 +314,9 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 		return nil, diagnostics, fmt.Errorf("open configuration root: %w", err)
 	}
 	defer func() { _ = root.Close() }()
+	if err := verifyConfigurationReadBarrier(root, configPath); err != nil {
+		return nil, diagnostics, err
+	}
 	candidate := viper.New()
 	candidate.SetConfigType("toml")
 	configureEnvironment(candidate)
@@ -329,7 +336,7 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 		return nil
 	}
 	if _, err := root.Lstat("config.toml"); err == nil {
-		content, readErr := readSecureRegularFile(root, "config.toml", filepath.Join(configPath, "config.toml"))
+		content, readErr := readFile(root, "config.toml", filepath.Join(configPath, "config.toml"))
 		if readErr != nil {
 			return nil, diagnostics, readErr
 		}
@@ -363,7 +370,7 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 			if filepath.Ext(entry.Name()) != ".toml" {
 				continue
 			}
-			content, readErr := readSecureRegularFile(modules, entry.Name(), filepath.Join(modulesPath, entry.Name()))
+			content, readErr := readFile(modules, entry.Name(), filepath.Join(modulesPath, entry.Name()))
 			if readErr != nil {
 				return nil, diagnostics, readErr
 			}
@@ -426,6 +433,9 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 	// later environment lookup performed by Viper.
 	candidate.Set("operator_policy", typed.OperatorPolicy)
 	candidate.Set("network.whitelist_ips", typed.Network.WhitelistIPs)
+	if err := verifyConfigurationReadBarrier(root, configPath); err != nil {
+		return nil, diagnostics, err
+	}
 	return candidate, diagnostics, nil
 }
 

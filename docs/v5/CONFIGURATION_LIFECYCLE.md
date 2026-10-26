@@ -130,7 +130,15 @@ TOML values. This remains a single-file boundary, not a transaction covering the
 whole directory or a lock against arbitrary privileged writers.
 
 An unresolved intent blocks normal editing, modular loading, default filling,
-migration and affected mutating CLI preflight. Run `syswarden config recover-edit`
+migration and affected mutating CLI preflight. The core configuration loader and
+the TUI HA reader also refuse any intent object before and after reading their
+candidate. Malformed records, terminal records awaiting cleanup, symlinks and
+non-regular objects all require recovery. Refusal preserves the core's previously
+loaded configuration and returns no TUI peers or credentials from the candidate;
+it does not fall back to legacy HA credentials. These are point-in-time checks,
+not a cross-process lock or a mechanism to revoke already running components.
+
+Run `syswarden config recover-edit`
 to inspect a supported recovery, then type its full `recover <approval-id>`
 phrase only after reviewing the stated effect. Blank or wrong input cancels;
 EOF, expired approval, changed evidence, a new administrator edit or a pending
