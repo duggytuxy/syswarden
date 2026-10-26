@@ -213,21 +213,28 @@ func attestOfflineQualificationDependenciesWith(
 }
 
 func validateOfflineQualificationDependency(path string, expectedUID int) error {
+	return validateDependencyWithParentAttestation(path, expectedUID, attestCronProviderDirectoryChain)
+}
+
+// A protected executable alone is insufficient when an enclosing directory
+// permits replacement. Optional-module and offline prerequisite checks share
+// the same parent attestation used by native retention and base installation.
+// This read-only observation is not a retained execution lease.
+func validateDependencyWithParentAttestation(path string, expectedUID int, attestParents func(string) error) error {
+	if expectedUID < 0 || attestParents == nil {
+		return errors.New("dependency attestation is unavailable")
+	}
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return fmt.Errorf("dependency path is not canonical and absolute: %q", path)
 	}
-	canonical, err := filepath.EvalSymlinks(path)
+	if !nativeDependencySystemPath(path) {
+		return errors.New("dependency lookup is outside trusted system directories")
+	}
+	canonical, err := resolveDependencyExecutableAt("/", path, expectedUID)
 	if err != nil {
 		return err
 	}
-	trusted := false
-	for _, directory := range []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin"} {
-		if filepath.Dir(canonical) == directory {
-			trusted = true
-			break
-		}
-	}
-	if !trusted {
+	if !nativeDependencySystemPath(canonical) {
 		return fmt.Errorf("dependency resolves outside trusted system directories: %q", canonical)
 	}
 	info, err := os.Stat(canonical)
@@ -239,5 +246,13 @@ func validateOfflineQualificationDependency(path string, expectedUID int) error 
 		int(status.Uid) != expectedUID {
 		return errors.New("dependency is not an owner-controlled regular executable")
 	}
-	return nil
+	return attestParents(filepath.Dir(canonical))
+}
+
+func nativeDependencySystemPath(path string) bool {
+	switch filepath.Dir(path) {
+	case "/bin", "/sbin", "/usr/bin", "/usr/sbin":
+		return true
+	}
+	return false
 }

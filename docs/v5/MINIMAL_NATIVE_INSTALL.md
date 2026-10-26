@@ -135,6 +135,15 @@ retrofit an already-running older updater, or protect direct package-manager
 commands. It does not authorize a new package identity or restore an APK
 transaction that has already overwritten files.
 
+Optional-module and offline qualification prerequisite checks also attest the
+canonical executable's directory ancestry. Both the original lookup path and
+resolved target must remain within the supported system executable directories;
+an external lookup alias cannot borrow a trusted target's identity. Bounded
+resolution checks each intermediate directory and symlink, including protected
+alternatives and merged system directories. A trusted file in a replaceable
+parent cannot satisfy that prerequisite check. These checks observe the current
+path and do not provide an execution lease against concurrent privileged changes.
+
 ## Optional network allowance refresh
 
 The optional SaaS monitor allowance preserves its last published IPv4/IPv6 pair
