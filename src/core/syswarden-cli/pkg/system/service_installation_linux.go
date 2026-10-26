@@ -3,8 +3,6 @@ package system
 import (
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 )
 
 const nativeInstallPhaseEnvironment = "SYSWARDEN_NATIVE_INSTALL_PHASE"
@@ -132,16 +130,11 @@ func installationServiceInspector(executor firewallManagerExecutor, alpine bool)
 			return inspectInstallationSystemdServices(executor, manager)
 		}, nil
 	}
-	manager, err := resolveFirewallExecutable(executor, "rc-service")
-	if err != nil {
-		return nil, err
-	}
-	runlevels, err := resolveFirewallExecutable(executor, "rc-update")
-	if err != nil {
-		return nil, err
-	}
 	return func() (installationServiceSnapshot, error) {
-		return inspectInstallationOpenRCServices(executor, manager, runlevels)
+		if err := nativeOpenRCEnvironment(); err != nil {
+			return installationServiceSnapshot{}, err
+		}
+		return inspectNativeOpenRCServices(nativeOpenRCObserver{root: "/", uid: 0, gid: 0}, observeNativeOpenRCCore)
 	}, nil
 }
 
@@ -164,43 +157,6 @@ func inspectInstallationSystemdServices(executor firewallManagerExecutor, manage
 				state.enabled, err = queryFirewallProperty(executor, manager, name, "UnitFileState")
 				if err != nil {
 					return snapshot, err
-				}
-			}
-		}
-		snapshot[index] = state
-	}
-	return snapshot, nil
-}
-
-func inspectInstallationOpenRCServices(executor firewallManagerExecutor, manager, runlevels string) (installationServiceSnapshot, error) {
-	var snapshot installationServiceSnapshot
-	enabled, err := inspectOpenRCFirewallRemovalEnablement(firewallRemovalManager{executor: executor, runlevelPath: runlevels})
-	if err != nil {
-		return snapshot, err
-	}
-	for index, name := range []string{"syswarden-firewall", "syswarden-core"} {
-		state := installationServiceState{name: name, load: "not-found", active: "inactive", enabled: "disabled"}
-		levels := enabled[name]
-		sort.Strings(levels)
-		state.runlevels = strings.Join(levels, " ")
-		if len(levels) > 0 {
-			state.enabled = "enabled"
-		}
-		_, err := executor.output(manager, "--exists", name)
-		if err != nil {
-			code, exact := firewallRemovalExitCode(err)
-			if !exact || code != 1 {
-				return snapshot, fmt.Errorf("inspect OpenRC service %s: %w", name, err)
-			}
-		} else {
-			state.load = "loaded"
-			_, err = executor.output(manager, name, "status")
-			if err == nil {
-				state.active = "active"
-			} else {
-				code, exact := firewallRemovalExitCode(err)
-				if !exact || (code != 3 && code != 16) {
-					return snapshot, fmt.Errorf("inspect OpenRC service status for %s: %w", name, err)
 				}
 			}
 		}

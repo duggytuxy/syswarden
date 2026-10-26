@@ -232,31 +232,3 @@ func TestNativeInstallationSystemdObservationPreservesMaskedAndMissing(t *testin
 		}
 	}
 }
-
-func TestNativeInstallationOpenRCObservationIncludesCustomRunlevels(t *testing.T) {
-	for _, stopped := range []bool{false, true} {
-		executor := firewallManagerExecutor{output: func(name string, args ...string) ([]byte, error) {
-			if name == "/inert/rc-update" {
-				return []byte("syswarden-core | custom default\nsyswarden-firewall | custom\n"), nil
-			}
-			if args[0] == "--exists" {
-				return nil, nil
-			}
-			if stopped && args[0] == "syswarden-firewall" {
-				return nil, fakeFirewallPreflightExitError(3)
-			}
-			return nil, nil
-		}}
-		state, err := inspectInstallationOpenRCServices(executor, "/inert/rc-service", "/inert/rc-update")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if state[1].runlevels != "custom default" {
-			t.Fatalf("lost custom membership: %#v", state)
-		}
-		plan, err := prepareNativeServiceInstallation("upgrade", true, func() (installationServiceSnapshot, error) { return state, nil })
-		if err != nil || plan.Deferred() != stopped {
-			t.Fatalf("incorrect disposition: %v, %v", plan, err)
-		}
-	}
-}

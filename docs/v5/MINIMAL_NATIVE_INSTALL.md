@@ -77,6 +77,24 @@ depends on firewall, so an active core alone is insufficient authorization.
 An unavailable or malformed observation refuses the operation instead of
 assuming an inactive or fresh host.
 
+On Alpine, this pair observation reads bounded, pinned filesystem state and
+procfs without invoking `rc-service`, `rc-update`, `rc-status`, init scripts or
+dependency generators. It checks supported definition bytes, ordinary custom
+runlevel membership, stable runtime markers and a live core process bound to the
+fixed PID file, executable path and process start identity. Hidden or ignored
+runlevels, conflicting saved stop parameters, shell configuration overrides,
+plugins, missing process evidence and changing observations refuse automatic
+activation. Administrator definitions remain unchanged and defer activation.
+A missing service with retained process or runtime bookkeeping is not a fresh
+installation. A started marker alone does not establish daemon liveness.
+
+This is bounded service-state observation, not OpenRC framework authentication,
+a manager lock, proof of firewall policy consumption or complete activation
+approval. The real-procfs component tests use inert processes in disposable
+Alpine containers; they do not qualify production package migration or service
+restart/reboot behavior. Other lifecycle operations that invoke OpenRC require
+their own review and native acceptance.
+
 For an eligible upgrade, service-definition publication leaves enablement
 artifacts unchanged, including custom OpenRC runlevels. The installer rechecks
 the pair before host mutation and before its conditional core restart. The
