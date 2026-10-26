@@ -4,8 +4,9 @@
 The caller must authenticate the seal digest, release commit, policy digest and
 selected keys through its protected workflow. A digest read from the same bundle
 is not a trust anchor. The seal binds the builder's package-identity assertions
-and RPM preservation proofs; this module does not extract native metadata or
-recompute RPM payload proofs. It independently rechecks native signatures.
+and RPM preservation proofs. This module independently compares the lead, main
+header and compressed RPM payload bytes and rechecks native signatures. It does
+not extract native metadata or recompute the proof's uncompressed CPIO digest.
 
 There is intentionally no CLI, publishing mode, default verifier, or v4 writer.
 Injected verifiers are a trusted-code boundary, never a JSON-selected plugin.
@@ -25,9 +26,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 try:
+    from scripts.ci import native_rpm_preservation as rpm_preservation
     from scripts.ci import native_package_signature_gate as signatures
     from scripts.ci import native_package_signing_bundle as legacy
 except ModuleNotFoundError:
+    import native_rpm_preservation as rpm_preservation
     import native_package_signature_gate as signatures
     import native_package_signing_bundle as legacy
 
@@ -432,6 +435,25 @@ def _rpm_proof(
     _equal(after["file"], signed, "signed RPM full-file binding")
 
 
+def _rpm_transformation(
+    files: _ObservedFiles, unsigned_path: Path, signed_path: Path,
+    coordinate: Coordinate, unsigned: dict[str, Any], signed: dict[str, Any],
+) -> dict[str, Any]:
+    # Observe one bounded package at a time. The protected file observer also
+    # rechecks these bytes and path identities before returning any summary.
+    try:
+        original = rpm_preservation.inspect_content(files.read(unsigned_path, signatures.MAX_PACKAGE_BYTES))
+        candidate = rpm_preservation.inspect_content(files.read(signed_path, signatures.MAX_PACKAGE_BYTES))
+        rpm_preservation.require_preserved(original, candidate)
+    except rpm_preservation.RPMPreservationError as exc:
+        raise IdentityEvidenceError(f"RPM signature transformation refused: {exc}") from exc
+    return {
+        "coordinate": asdict(coordinate), "unsigned": unsigned, "signed": signed,
+        "preserved_content": original.document(),
+        "comparison": "observed-region-sizes-and-sha256",
+    }
+
+
 def _apk_transformation(
     files: _ObservedFiles, path: Path, coordinate: Coordinate,
     unsigned: dict[str, Any], signed: dict[str, Any],
@@ -470,9 +492,9 @@ def verify_qualification_bundle(
 ) -> dict[str, Any]:
     """Validate sealed files and reverify six signatures with explicit authority.
 
-    RPM payload equality is accepted only as an externally authenticated proof
-    bound to the exact original and signed files. This is not native metadata,
-    retention, lifecycle, RHEL, updater, or public-release qualification.
+    RPM lead, main header and compressed payload preservation is independently
+    compared in addition to externally authenticated proofs. This is not native
+    metadata, retention, lifecycle, RHEL, updater, or public-release qualification.
     """
     coordinates = identity_coordinates(release)
     if purpose != "qualification":
@@ -509,7 +531,7 @@ def verify_qualification_bundle(
         c.rpm_proof_name for c in coordinates if c.family == "rpm"
     }, set())
     signed_records, verification_records, proof_records, signature_records = [], [], [], []
-    apk_transformations = []
+    apk_transformations, rpm_transformations = [], []
     verification_results = []
     for index, coordinate in enumerate(coordinates):
         record = files.record(packages / coordinate.filename, signatures.MAX_PACKAGE_BYTES)
@@ -531,6 +553,10 @@ def verify_qualification_bundle(
             proof_path = evidence / coordinate.rpm_proof_name
             _rpm_proof(files.document(proof_path), coordinate, original, record, release, release_sha)
             proof_records.append(files.record(proof_path, signatures.MAX_JSON_BYTES))
+            rpm_transformations.append(_rpm_transformation(
+                files, unsigned_root / coordinate.filename, packages / coordinate.filename,
+                coordinate, original, record,
+            ))
         elif coordinate.family == "apk":
             apk_transformations.append(_apk_transformation(
                 files, packages / coordinate.filename, coordinate, original, record,
@@ -597,7 +623,8 @@ def verify_qualification_bundle(
         "as_of": as_of, "source_date_epoch": source_date_epoch,
         "artifacts": signed_records, "deb_signatures": signature_records,
         "apk_transformations": apk_transformations,
-        "rpm_preservation": "caller-authenticated-full-file-bound-proofs",
+        "rpm_preservation": "independently-observed-lead-header-compressed-payload",
+        "rpm_transformations": rpm_transformations,
         "native_metadata": "caller-authenticated-build-inventory",
         "publishing": False,
     }

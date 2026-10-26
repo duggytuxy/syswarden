@@ -122,6 +122,7 @@ jobs:
             scripts/ci/native_package_signature_gate_test.py \
             scripts/ci/native_package_signing_bundle_test.py \
             scripts/ci/native_package_identity_evidence_test.py \
+            scripts/ci/native_rpm_preservation_test.py \
             scripts/ci/native_package_signing_workflow_test.py \
             scripts/ci/native_capability_evidence_test.py \
             scripts/ci/native_feed_evidence_test.py \

@@ -151,12 +151,20 @@ inventories, identity-specific signature records and complete file bindings.
 It rechecks native signatures through the existing offline verification adapters
 and refuses cross-identity substitution. DEB detached signatures preserve the
 original package bytes; APK signing must add only the selected signature prefix
-to the exact unsigned bytes. RPM payload preservation and native header metadata
-remain caller-authenticated assertions, not independently recomputed facts here.
+to the exact unsigned bytes. RPM signing may change only its signature header
+and canonical zero padding. A bounded v4 framing reader independently compares
+the actual lead, entire main header and compressed payload using their sizes and
+SHA-256 digests, before any native verifier is invoked. A matching builder proof
+cannot authorize a changed content region, even if the seal is rebound to it.
+The comparison does not decompress or extract files. Native metadata and the
+proof's uncompressed CPIO digest remain caller-authenticated assertions; this
+framing check does not replace native signature or package-identity validation.
 
 The component has no publishing mode or production updater entry. Its synthetic
-bundle tests and real ephemeral GnuPG signature-association test are scoped
-evidence, not six-format native signing or release acceptance. V4 serializers
+bundle tests, real ephemeral GnuPG signature-association test and inert v5 RPM
+comparisons for both names are scoped evidence, not six-format native signing or
+release acceptance. The RPM observations use a disposable signing key and an
+isolated verification database; neither installs a package or uses a release key. V4 serializers
 remain unchanged, and v5 public signing and publication remain closed.
 
 The retention components explicitly select one known native owner. DEB and RPM

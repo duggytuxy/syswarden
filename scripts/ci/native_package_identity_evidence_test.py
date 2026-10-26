@@ -15,6 +15,7 @@ import io
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -61,6 +62,22 @@ def apk_prefix(public_key: str, epoch: int = SOURCE_DATE_EPOCH, payload: bytes =
     return gzip.compress(stream.getvalue(), compresslevel=9, mtime=0)
 
 
+def rpm_header(region: int, value: bytes) -> bytes:
+    """Small framed fixture; it is not a semantically complete RPM header."""
+    trailer = struct.pack(">IIiI", region, 7, -32, 16)
+    return (bytes.fromhex("8eade80100000000") + struct.pack(">II", 2, len(value) + 16)
+            + struct.pack(">IIII", region, 7, len(value), 16)
+            + struct.pack(">IIII", 1000, 7, 0, len(value)) + value + trailer)
+
+
+def rpm_fixture(name: str, signature: bytes = b"unsigned") -> bytes:
+    lead = bytearray(96)
+    lead[:6], lead[78:80] = bytes.fromhex("edabeedb0300"), b"\0\5"
+    header = rpm_header(62, signature)
+    header += b"\0" * (-len(header) % 8)
+    return bytes(lead) + header + rpm_header(63, name.encode("ascii")) + b"synthetic payload"
+
+
 class IdentityEvidenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -85,6 +102,9 @@ class IdentityEvidenceTests(unittest.TestCase):
         for coordinate in self.coordinates:
             original = f"synthetic unsigned {coordinate.filename}\n".encode("ascii")
             signed = original if coordinate.family == "deb" else b"synthetic signed\n" + original
+            if coordinate.family == "rpm":
+                original = rpm_fixture(coordinate.package_name)
+                signed = rpm_fixture(coordinate.package_name, b"synthetic changed signature")
             if coordinate.family == "apk":
                 original = gzip.compress(original, mtime=0)
                 signed = apk_prefix(self.keys["apk"]["public_key"]) + original
@@ -203,6 +223,8 @@ class IdentityEvidenceTests(unittest.TestCase):
         self.assertEqual(self.calls, list(self.coordinates))
         self.assertEqual(len(summary["artifacts"]), 6)
         self.assertEqual(len(summary["deb_signatures"]), 2)
+        self.assertEqual(len(summary["rpm_transformations"]), 2)
+        self.assertEqual(summary["rpm_preservation"], "independently-observed-lead-header-compressed-payload")
         self.assertIs(summary["publishing"], False)
         self.assertEqual(summary["status"], "native-signatures-reverified-not-release-qualified")
         for path, (raw, metadata) in before.items():
@@ -337,6 +359,45 @@ class IdentityEvidenceTests(unittest.TestCase):
                 proof_path.write_bytes(original_proof)
                 self.refresh_checksums()
                 self.reseal()
+
+    def test_authenticated_false_rpm_preservation_claim_refuses_before_native_tools(self) -> None:
+        # Rebind all documents, checksums and the trusted seal to the changed
+        # signed bytes. Matching builder assertions still cannot prove equality.
+        for coordinate in (c for c in self.coordinates if c.family == "rpm"):
+            path = self.packages / coordinate.filename
+            original = path.read_bytes()
+            proof_path = self.proofs / coordinate.rpm_proof_name
+            verification_path = self.proofs / coordinate.verification_name
+            proof_raw, verification_raw = proof_path.read_bytes(), verification_path.read_bytes()
+            for mutation in ("lead", "header", "payload", "append", "malformed"):
+                with self.subTest(package=coordinate.package_name, mutation=mutation):
+                    changed = bytearray(original)
+                    if mutation == "lead":
+                        changed[10] ^= 1
+                    elif mutation == "header":
+                        changed[-len(b"synthetic payload") - 17] ^= 1
+                    elif mutation == "payload":
+                        changed[-1] ^= 1
+                    elif mutation == "append":
+                        changed += b"unexpected trailer"
+                    else:
+                        changed[104:108] = b"\xff" * 4
+                    path.write_bytes(changed)
+                    proof = json.loads(proof_raw)
+                    proof["signed"]["file"] = record(path)
+                    write_json(proof_path, proof)
+                    verification = json.loads(verification_raw)
+                    verification["package"] = record(path)
+                    write_json(verification_path, verification)
+                    self.refresh_checksums()
+                    self.reseal()
+                    self.refuse_without_output()
+                    self.assertEqual(self.calls, [])
+            path.write_bytes(original)
+            proof_path.write_bytes(proof_raw)
+            verification_path.write_bytes(verification_raw)
+            self.refresh_checksums()
+            self.reseal()
 
     def test_detached_signature_swap_refuses_even_when_provenance_rebound(self) -> None:
         left, right = [c for c in self.coordinates if c.family == "deb"]
