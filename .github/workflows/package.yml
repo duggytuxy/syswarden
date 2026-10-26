@@ -118,6 +118,7 @@ jobs:
             scripts/ci/package_systemd_ordering_preflight_test.py \
             scripts/ci/package_wireguard_preflight_test.py \
             scripts/ci/package_variant_metadata_test.py \
+            scripts/ci/generated_package_header_gate_test.py \
             scripts/ci/go_toolchain_evaluation_test.py \
             scripts/ci/native_package_signature_gate_test.py \
             scripts/ci/native_package_signing_bundle_test.py \
@@ -1803,6 +1804,24 @@ jobs:
                 --contract scripts/ci/package_systemd_socket_capability_contract.json
             done
           done
+
+      - name: Verify Generated Package Identities with Updater Parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export SYSWARDEN_GENERATED_PACKAGE_DIRECTORY="${PACKAGE_ASSETS}"
+          export SYSWARDEN_GENERATED_PACKAGE_VERSION="${RELEASE_TAG}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOMAXPROCS=2 \
+            go -C "${EXACT_SOURCE_ROOT}/src/core/syswarden-cli" test \
+              -buildvcs=false -p=2 -count=1 -timeout=3m -json ./pkg/system \
+              -run '^TestGeneratedNativePackageIdentity$' \
+              > "${PACKAGE_WORKSPACE}/generated-header-tests.jsonl"
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            "${EXACT_SOURCE_ROOT}/scripts/ci/generated_package_header_gate.py" \
+            --report "${PACKAGE_WORKSPACE}/generated-header-tests.jsonl" \
+            --packages "${PACKAGE_ASSETS}" --release "${RELEASE_TAG}" \
+            --summary "${PACKAGE_WORKSPACE}/generated-header-summary.json"
 
       - name: Validate Packaged Binary Provenance
         shell: bash

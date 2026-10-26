@@ -143,6 +143,16 @@ native transaction matrix remains open.
 
 ## Selected native preparation
 
+The unsigned package build also runs the updater's native header reader against
+its actual generated standard artifacts: three compatibility packages for v4,
+or both identities in all three formats for v5. It checks exact native name,
+version/revision and AMD64 architecture, rejects the other identity or release,
+and verifies unchanged bytes, metadata and descriptor offsets. A separate report
+gate requires every expected case to run and pass without skips, then binds each
+reported digest to the actual package. Missing tests, duplicated cases and stale
+reports cannot satisfy this gate. This inspection does not install packages,
+execute maintainer scripts or establish native signature or lifecycle acceptance.
+
 The separate `native_package_identity_evidence.py` component verifies a
 qualification-only schema 2 evidence bundle for all six standard v5 coordinates.
 The caller must independently authenticate the release commit, evidence seal,
