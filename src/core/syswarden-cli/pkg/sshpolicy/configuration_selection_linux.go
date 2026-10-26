@@ -51,11 +51,22 @@ func bindSSHConfigurationSelection(ctx context.Context, startup StartupSummary, 
 			return "", err
 		}
 	}
-	identity, err := sshActivationDigest([]any{"ssh-configuration-selection-v1", parserDigest, startup, MainPath, expected})
+	identity, err := sshConfigurationSelectionDigest(startup, parserDigest, expected)
 	if err := errors.Join(err, ctx.Err(), guard(), ctx.Err()); err != nil {
 		return "", err
 	}
 	return identity, nil
+}
+
+// Keep the existing v1 identity bytes separate from the live selection probe.
+// Recovery may reconstruct this identity from the sealed published graph only
+// after independently verifying the current, journal-proven inverse phase.
+func sshConfigurationSelectionDigest(startup StartupSummary, parserDigest string, expected sshEffective) (string, error) {
+	if startup.Schema != 1 || !startup.DeclarationVerified || !lowerDigest.MatchString(startup.CommandSHA256) ||
+		!lowerDigest.MatchString(parserDigest) || len(expected) == 0 {
+		return "", ErrInventoryUnsafe
+	}
+	return sshActivationDigest([]any{"ssh-configuration-selection-v1", parserDigest, startup, MainPath, expected})
 }
 
 // OpenSSH emits this first load event before reading any configuration line.

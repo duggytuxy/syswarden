@@ -16,7 +16,11 @@ import (
 // activation CLI or installer caller. Every dispatcher must durably record
 // intent before request. A successful send never acknowledges
 // consumed policy, independent access or a completed migration.
-func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) (_ sshActivationLease, err error) {
+func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) (sshActivationLease, error) {
+	return bindSSHSystemdTarget(parent, policyGuard, nil)
+}
+
+func bindSSHSystemdTarget(parent context.Context, policyGuard func() error, recovery *sshRecoveryPolicyAnchor) (_ sshActivationLease, err error) {
 	if parent == nil || policyGuard == nil {
 		return nil, ErrInventoryUnsafe
 	}
@@ -77,6 +81,12 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 		values, resources.daemon.runDefaultConfiguration, guard)
 	if err != nil {
 		return nil, err
+	}
+	if recovery != nil {
+		configuration, err = recovery.selection(*held.summary.Startup, resources.daemon.digest, values)
+		if err := errors.Join(err, guard()); err != nil {
+			return nil, err
+		}
 	}
 	expected, err := sshExpectedEndpoints(values)
 	if err != nil {

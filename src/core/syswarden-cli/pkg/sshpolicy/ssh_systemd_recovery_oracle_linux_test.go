@@ -17,6 +17,8 @@ import (
 	"syswarden-cli/pkg/sshselection"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Each invocation owns a fresh disposable systemd container. Unlike the
@@ -31,9 +33,12 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	requireSSHIsolatedSystemdFixture(t)
 	noop := os.Getenv("SYSWARDEN_SSH_ISOLATED_RECOVERY_NOOP") == "1"
 	exchange := os.Getenv("SYSWARDEN_SSH_ISOLATED_ACCESS_EXCHANGE") == "1"
+	interruption := os.Getenv("SYSWARDEN_SSH_ISOLATED_RECOVERY_INTERRUPT")
 	restoredExchange := exchange || noop
 	profile := os.Getenv("SYSWARDEN_SSH_ISOLATED_RECOVERY_PROFILE")
-	if (profile != "forwarding" && profile != "cis" && profile != "legacy-cis") || ((noop || exchange) && profile != "forwarding") || (noop && exchange) {
+	if (profile != "forwarding" && profile != "cis" && profile != "legacy-cis") || ((noop || exchange) && profile != "forwarding") || (noop && exchange) ||
+		(interruption != "" && interruption != "main" && interruption != "drop-in") ||
+		(interruption != "" && (profile != "forwarding" || noop || exchange)) {
 		t.Fatal("explicit qualified recovery fixture profile required")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Second)
@@ -173,7 +178,7 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 			t.Fatal(err)
 		}
 		activation, activationErr := attemptSSHActivation(ctx, session.journal, plan.PlanSHA256,
-			session.parser, session.run, session.check, session.bind)
+			session.parser, session.run, session.check, bindSSHSystemdActivation)
 		closeErr := session.close()
 		if activationErr != nil || closeErr != nil || !activation.IntentDurable || !activation.RequestReturned || !activation.RecoveryRequired {
 			t.Fatal("production activation boundary failed", activation, activationErr, closeErr)
@@ -208,6 +213,67 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 		t.Fatal("inspection or rejected approval changed history")
 	}
 	probe(false)
+	if interruption != "" {
+		listenersBefore, err := ObserveSystemdListeners()
+		if err != nil {
+			t.Fatal(err)
+		}
+		session, err := openSSHRecoverySession(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ops := sshPublicationDefaults()
+		failAt, renames := 1, 0
+		if interruption == "drop-in" {
+			failAt = 2
+		}
+		ops.rename = func(a int, b string, c int, d string, flags uint) error {
+			if err := unix.Renameat2(a, b, c, d, flags); err != nil {
+				return err
+			}
+			renames++
+			if renames == failAt {
+				return unix.EIO
+			}
+			return nil
+		}
+		partial, partialErr := recoverSSHActivatedConfiguration(ctx, session.journal, plan.PlanSHA256, session.parser,
+			inspection.RecoverySHA256, session.run, session.check, session.bind, ops)
+		closeErr := session.close()
+		if !errors.Is(partialErr, unix.EIO) || closeErr != nil || renames != failAt || !partial.IntentDurable ||
+			!partial.RecoveryRequired || partial.RequestReturned || partial.ConfigurationRestored {
+			t.Fatal("inverse interruption did not stop before restoring reload", interruption, partial, partialErr, closeErr)
+		}
+		partialHistory := isolatedSSHRecoveryHistory(t, ctx)
+		if partialHistory[sshRuntimeRecoveryReloadName] != "" {
+			t.Fatal("interrupted inverse recorded a restoring reload")
+		}
+		for name, digest := range history {
+			if partialHistory[name] != digest {
+				t.Fatal("inverse interruption changed original history", name)
+			}
+		}
+		probe(false)
+		if reopened, err := InspectSystemdRecovery(ctx, plan.PlanSHA256); err != nil || reopened != inspection {
+			t.Fatal("production reopen changed the original recovery approval", interruption, reopened, err)
+		}
+		probe(false)
+		for range 2 {
+			select {
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			case <-time.After(250 * time.Millisecond):
+			}
+			listenersAfter, err := ObserveSystemdListeners()
+			if err != nil || listenersAfter.SocketsSHA256 != listenersBefore.SocketsSHA256 ||
+				listenersAfter.Process.IdentitySHA256 != listenersBefore.Process.IdentitySHA256 {
+				t.Fatal("interrupted recovery or inspection changed the daemon/listeners", err)
+			}
+		}
+		if !reflect.DeepEqual(partialHistory, isolatedSSHRecoveryHistory(t, ctx)) {
+			t.Fatal("interrupted recovery inspection changed history")
+		}
+	}
 	var restored RuntimeRecoverySummary
 	noopCalls := 0
 	if noop {
@@ -218,8 +284,8 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 			if err != nil {
 				return session, err
 			}
-			session.bind = func(ctx context.Context, guard func() error) (sshActivationLease, error) {
-				lease, err := bindSSHSystemdActivation(ctx, guard)
+			session.bind = func(ctx context.Context, guard func() error, anchor *sshRecoveryPolicyAnchor) (sshActivationLease, error) {
+				lease, err := bindSSHSystemdRecovery(ctx, guard, anchor)
 				if err == nil {
 					lease.(*sshActivationTarget).send = func() error { noopCalls++; return nil }
 				}

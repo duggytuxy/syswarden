@@ -35,7 +35,8 @@ alone cannot authorize migration completion.
 ## Integrated recovery scenarios
 
 The same runner accepts `--scenario recovery-forwarding`, `recovery-cis`,
-`recovery-legacy-cis` and `recovery-noop`. Each invocation requires a new output
+`recovery-legacy-cis`, `recovery-noop`, `recovery-interrupt-main` and
+`recovery-interrupt-drop-in`. Each invocation requires a new output
 folder and creates a new disposable container. The default `activation` scenario
 retains the independent signal/listener negative controls described above.
 
@@ -77,6 +78,18 @@ assessment and repeated restoration cannot turn that uncertainty into acceptance
 or replay the reload. Process and kernel listener identities must remain
 unchanged across assessment and rejected replay. All scenarios keep `RecoveryRequired` true; none grants
 production policy-consumption or independent access authority.
+
+### Interrupted original restoration
+
+The two interruption scenarios use the forwarding profile and inject a fixture
+I/O failure immediately after a successful inverse rename: first the main-file
+exchange, then the drop-in move. Each run closes the production recovery session
+and reopens fixed-path inspection. The original recovery digest must remain
+valid while the daemon still enforces its previous policy. Only an explicit
+resume may complete the inverse history and request the restoring reload.
+Original records, retained inode attribution and the recovery-required result
+remain subject to the ordinary recovery assertions. These scenarios are distinct
+from replay after a restoring-reload intent, which remains prohibited.
 
 ### Label preparation boundary
 

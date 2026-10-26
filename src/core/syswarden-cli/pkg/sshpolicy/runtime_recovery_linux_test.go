@@ -29,9 +29,9 @@ func runtimeRecoveryFixture(t *testing.T, evidence, uncertain bool) (*inventoryF
 	return f, plan, deps, journal
 }
 
-func runtimeRecoveryBinder(t *testing.T, journal *sshJournal, calls, closes *int) sshActivationBind {
+func runtimeRecoveryBinder(t *testing.T, journal *sshJournal, calls, closes *int) sshRecoveryBind {
 	t.Helper()
-	return func(ctx context.Context, guard func() error) (sshActivationLease, error) {
+	return func(ctx context.Context, guard func() error, _ *sshRecoveryPolicyAnchor) (sshActivationLease, error) {
 		if err := errors.Join(ctx.Err(), guard()); err != nil {
 			return nil, err
 		}
@@ -62,7 +62,7 @@ func runtimeRecoveryBinder(t *testing.T, journal *sshJournal, calls, closes *int
 	}
 }
 
-func runtimeRecoveryPlan(t *testing.T, journal *sshJournal, plan migrationPlan, deps sshTransactionDependencies, bind sshActivationBind) string {
+func runtimeRecoveryPlan(t *testing.T, journal *sshJournal, plan migrationPlan, deps sshTransactionDependencies, bind sshRecoveryBind) string {
 	t.Helper()
 	result, err := recoverSSHActivatedConfiguration(t.Context(), journal, plan.summary.PlanSHA256, deps.parserDigest, "",
 		deps.run, deps.checkParser, bind, sshPublicationDefaults())
@@ -125,7 +125,7 @@ func TestSSHRuntimeRecoveryRestoresExactInodesAndNeverClaimsAccess(t *testing.T)
 func TestSSHRuntimeRecoveryWithSerializedTarget(t *testing.T) {
 	_, plan, deps, journal := runtimeRecoveryFixture(t, false, false)
 	sends, observations, closes := 0, 0, 0
-	bind := func(ctx context.Context, guard func() error) (sshActivationLease, error) {
+	bind := func(ctx context.Context, guard func() error, _ *sshRecoveryPolicyAnchor) (sshActivationLease, error) {
 		if err := errors.Join(ctx.Err(), guard()); err != nil {
 			return nil, err
 		}
@@ -258,8 +258,8 @@ func TestSSHRuntimeRecoveryRejectsChangedApprovalInputs(t *testing.T) {
 				}
 			case "target", "closed-lease", "bind-error":
 				previous := bind
-				bind = func(ctx context.Context, guard func() error) (sshActivationLease, error) {
-					lease, err := previous(ctx, guard)
+				bind = func(ctx context.Context, guard func() error, anchor *sshRecoveryPolicyAnchor) (sshActivationLease, error) {
+					lease, err := previous(ctx, guard, anchor)
 					if err == nil {
 						switch kind {
 						case "target":
@@ -294,7 +294,9 @@ func TestSSHRuntimeRecoveryParserFailureAfterRestorationResumes(t *testing.T) {
 	approved := runtimeRecoveryPlan(t, journal, plan, deps, bind)
 	run := func(ctx context.Context, image *parserImage, mode, access string) ([]byte, error) {
 		if image == nil {
-			return nil, unix.EIO
+			if _, err := os.Lstat(f.path(DropInPath)); errors.Is(err, os.ErrNotExist) {
+				return nil, unix.EIO
+			}
 		}
 		return deps.run(ctx, image, mode, access)
 	}
@@ -323,8 +325,8 @@ func TestSSHRuntimeRecoveryRequestFailureRetainsAllEvidence(t *testing.T) {
 			approved := runtimeRecoveryPlan(t, journal, plan, deps, bind)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			wrapped := func(ctx context.Context, guard func() error) (sshActivationLease, error) {
-				lease, err := bind(ctx, guard)
+			wrapped := func(ctx context.Context, guard func() error, anchor *sshRecoveryPolicyAnchor) (sshActivationLease, error) {
+				lease, err := bind(ctx, guard, anchor)
 				if err != nil {
 					return lease, err
 				}
@@ -419,8 +421,8 @@ func TestSSHRuntimeRecoveryResumeRefusesChangedHistoryAndTarget(t *testing.T) {
 				}
 			case "target":
 				previous := bind
-				bind = func(ctx context.Context, guard func() error) (sshActivationLease, error) {
-					lease, err := previous(ctx, guard)
+				bind = func(ctx context.Context, guard func() error, anchor *sshRecoveryPolicyAnchor) (sshActivationLease, error) {
+					lease, err := previous(ctx, guard, anchor)
 					if err == nil {
 						lease.(*activationTestLease).target = strings.Repeat("c", 64)
 					}

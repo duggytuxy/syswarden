@@ -124,11 +124,25 @@ func recheckSSHRuntimeRecoveryRecords(journal *sshJournal, expected map[string]s
 // independently bound by recovery approval, never inferred from current files.
 func validateSSHRuntimeRecovery(journal *sshJournal, intent sshRuntimeRecoveryIntent, original, parser string,
 	records map[string]string) (sshPreparation, migrationPlan, error) {
+	return validateSSHRuntimeRecoveryHistory(journal, intent, original, parser, records, false)
+}
+
+// Only a freshly reconstructed, unrecorded recovery can lack its new target.
+// Recorded intents and every downstream reader keep strict target validation.
+func validateSSHRuntimeRecoveryHistory(journal *sshJournal, intent sshRuntimeRecoveryIntent, original, parser string,
+	records map[string]string, unboundFresh bool) (sshPreparation, migrationPlan, error) {
 	fail := func(err error) (sshPreparation, migrationPlan, error) {
 		return sshPreparation{}, migrationPlan{}, errors.Join(ErrInventoryChanged, err)
 	}
+	validTarget := lowerDigest.MatchString(intent.Target)
+	if unboundFresh {
+		validTarget = intent.Target == "" && records[sshRuntimeRecoveryName] == "" && records[sshRuntimeRecoveryReloadName] == ""
+		for step := 1; step <= 2; step++ {
+			validTarget = validTarget && records[sshRuntimeRecoveryPhase(step, false)] == "" && records[sshRuntimeRecoveryPhase(step, true)] == ""
+		}
+	}
 	if intent.Schema != 1 || intent.Domain != sshRuntimeRecoveryDomain || intent.Plan != original ||
-		intent.Parser != parser || !lowerDigest.MatchString(intent.Target) {
+		intent.Parser != parser || !validTarget {
 		return fail(ErrInventoryUnsafe)
 	}
 	expected := map[string]bool{sshMarkerName: true, sshPreparedRecord: true, sshActivationIntentName: true}
@@ -223,7 +237,7 @@ func validateSSHRuntimeRecovery(journal *sshJournal, intent sshRuntimeRecoveryIn
 // A partial inverse can resume only with exactly the same history and target.
 // A reload intent always prohibits replay, even if dispatch may not have run.
 func recoverSSHActivatedConfiguration(ctx context.Context, journal *sshJournal, original, parser, recoveryApproval string,
-	run sshParserRun, parserCheck func() error, bind sshActivationBind, ops sshPublicationOps) (result sshRuntimeRecoveryResult, err error) {
+	run sshParserRun, parserCheck func() error, bind sshRecoveryBind, ops sshPublicationOps) (result sshRuntimeRecoveryResult, err error) {
 	if ctx == nil || journal == nil || journal.retained != nil || run == nil || parserCheck == nil || bind == nil ||
 		ops.sync == nil || ops.rename == nil || !lowerDigest.MatchString(original) || !lowerDigest.MatchString(parser) ||
 		(recoveryApproval != "" && !lowerDigest.MatchString(recoveryApproval)) {
@@ -286,13 +300,36 @@ func recoverSSHActivatedConfiguration(ctx context.Context, journal *sshJournal, 
 	if err != nil {
 		return result, err
 	}
+	prepared, plan, err := validateSSHRuntimeRecoveryHistory(journal, intent, original, parser, records, fresh)
+	if err != nil {
+		return result, err
+	}
+	digest, err := sshActivationDigest(prepared)
+	if err != nil {
+		return result, err
+	}
+	start := sshRollbackStart{1, prepared.Transaction, digest, 3, intent.Before}
+	position, _, err := matchSSHRecordedRollback(journal, prepared, start, current, sshRuntimeRecoveryPhase)
+	if err != nil {
+		return result, err
+	}
 	// A fresh target is independently approved, not equated with the historical
 	// activation target. Before resume, its original socket generation must hold.
 	baseFence := func() error {
 		return errors.Join(ctx.Err(), parserCheck(), recheckSSHRuntimeRecoveryRecords(journal, records))
 	}
 	guard := sshRollbackInventoryGuard(ctx, journal, intent.Transaction, current, parserCheck, baseFence)
-	lease, bindErr := bind(ctx, guard)
+	// Reconstruct the approved published policy only after validating history
+	// and the exact live inverse phase. No production process is opened before
+	// all candidate graphs and this phase's parser values have been checked.
+	if err := errors.Join(verifySSHRollbackCandidates(ctx, plan, run, guard), checkSSHRollbackBudget(current, prepared), guard()); err != nil {
+		return result, err
+	}
+	anchor, err := prepareSSHRecoveryPolicyAnchor(ctx, plan, parser, position, run, guard)
+	if err != nil {
+		return result, err
+	}
+	lease, bindErr := bind(ctx, guard, anchor)
 	if lease != nil {
 		defer func() { err = errors.Join(err, lease.Close()) }()
 	}
@@ -307,17 +344,7 @@ func recoverSSHActivatedConfiguration(ctx context.Context, journal *sshJournal, 
 	} else if intent.Target != lease.identity() {
 		return result, ErrInventoryChanged
 	}
-	prepared, plan, err := validateSSHRuntimeRecovery(journal, intent, original, parser, records)
-	if err != nil {
-		return result, err
-	}
-	digest, err := sshActivationDigest(prepared)
-	if err != nil {
-		return result, err
-	}
-	start := sshRollbackStart{1, prepared.Transaction, digest, 3, intent.Before}
-	position, _, err := matchSSHRecordedRollback(journal, prepared, start, current, sshRuntimeRecoveryPhase)
-	if err != nil {
+	if _, _, err := validateSSHRuntimeRecovery(journal, intent, original, parser, records); err != nil {
 		return result, err
 	}
 	fence := func() error {
@@ -327,7 +354,7 @@ func recoverSSHActivatedConfiguration(ctx context.Context, journal *sshJournal, 
 		return errors.Join(baseFence(), lease.check())
 	}
 	guard = sshRollbackInventoryGuard(ctx, journal, intent.Transaction, current, parserCheck, fence)
-	if err := errors.Join(verifySSHRollbackCandidates(ctx, plan, run, guard), checkSSHRollbackBudget(current, prepared), guard()); err != nil {
+	if err := guard(); err != nil {
 		return result, err
 	}
 	recoveryDigest, err := sshActivationDigest(intent)

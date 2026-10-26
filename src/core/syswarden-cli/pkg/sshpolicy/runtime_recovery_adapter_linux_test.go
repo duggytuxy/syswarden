@@ -48,8 +48,8 @@ func TestSSHRecoveryAdapterOwnsResourcesAndPreservesPartialFacts(t *testing.T) {
 				case "nil-session":
 					return nil, nil
 				case "request-error":
-					s.bind = func(ctx context.Context, guard func() error) (sshActivationLease, error) {
-						l, err := bind(ctx, guard)
+					s.bind = func(ctx context.Context, guard func() error, anchor *sshRecoveryPolicyAnchor) (sshActivationLease, error) {
+						l, err := bind(ctx, guard, anchor)
 						if err == nil {
 							previous := l.(*activationTestLease).requestFn
 							l.(*activationTestLease).requestFn = func(ctx context.Context, guard func() error) error {

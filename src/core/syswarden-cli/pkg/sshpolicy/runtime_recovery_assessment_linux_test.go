@@ -338,7 +338,7 @@ func TestSSHRecoveryAssessmentSessionAndInputBoundaries(t *testing.T) {
 					t.Fatal("lost caller context")
 				}
 				s := &sshRecoverySession{journal: journal, parser: deps.parserDigest, run: ownedEndpointParser(deps.run), check: deps.checkParser,
-					bind: func(context.Context, func() error) (sshActivationLease, error) {
+					bind: func(context.Context, func() error, *sshRecoveryPolicyAnchor) (sshActivationLease, error) {
 						t.Fatal("assessment acquired mutation lease")
 						return nil, nil
 					},

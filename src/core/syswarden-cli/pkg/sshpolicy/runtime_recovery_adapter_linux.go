@@ -62,7 +62,7 @@ type sshRecoverySession struct {
 	parser  string
 	run     sshParserRun
 	check   func() error
-	bind    sshActivationBind
+	bind    sshRecoveryBind
 	close   func() error
 }
 
@@ -106,7 +106,7 @@ func openSSHRecoverySession(ctx context.Context) (_ *sshRecoverySession, err err
 	}
 	return &sshRecoverySession{journal, daemon.digest, daemon.run,
 		func() error { return errors.Join(ctx.Err(), daemon.recheck(root, 0)) },
-		bindSSHSystemdActivation, closeResources}, nil
+		bindSSHSystemdRecovery, closeResources}, nil
 }
 
 func runSSHRecoverySession(ctx context.Context, original, recovery string, apply bool,

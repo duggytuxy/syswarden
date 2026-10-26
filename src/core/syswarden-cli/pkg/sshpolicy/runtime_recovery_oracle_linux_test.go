@@ -48,7 +48,7 @@ func testOpenSSHRecoveryAssessment(t *testing.T, dispatch bool) {
 	runtime.expectAccess("via-bastion", true)
 	bastionBefore := runtime.read("bastion.conf")
 	requests := 0
-	bind := func(ctx context.Context, guard func() error) (sshActivationLease, error) {
+	bind := func(ctx context.Context, guard func() error, _ *sshRecoveryPolicyAnchor) (sshActivationLease, error) {
 		if err := errors.Join(ctx.Err(), guard()); err != nil {
 			return nil, err
 		}

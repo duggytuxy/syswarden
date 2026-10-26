@@ -49,6 +49,15 @@ record without repeating the rename. A completed transition is skipped. An
 unexpected inode, extra record, changed target or changed configuration refuses
 further mutation and retains all evidence.
 
+Resume derives the target's policy identity from the protected original
+publication, after checking the exact recorded inverse phase. It separately
+parses the current graph and verifies that it matches that phase, including the
+compiled default main-file selection when applicable. Restoring an approved
+file therefore does not change the target identity by itself. Parser, manager,
+startup, process, network namespace, endpoints and original listener generation
+remain bound. Existing v1 recovery approvals and record bytes are preserved;
+no record is rewritten or adopted from an unverified current graph.
+
 After both transitions, the installed parser must confirm the live original
 graph against its sealed baseline. A distinct restoring-reload intent is then
 made durable before the one-shot request. Any presence of this record blocks
