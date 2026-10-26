@@ -25,6 +25,17 @@ type modularConfigSource struct {
 // treated as a modular TOML root, a symbolic link is rejected explicitly, and
 // any other path is parsed as the deprecated flat syswarden-auto.conf format.
 func ParseConfig(configPath string) error {
+	return parseConfig(configPath, true)
+}
+
+// ParseConfigForInspection validates the same legacy or modular policy without
+// persisting historical compatibility normalization. It replaces only this
+// process's validated snapshot; it does not activate policy or repair files.
+func ParseConfigForInspection(configPath string) error {
+	return parseConfig(configPath, false)
+}
+
+func parseConfig(configPath string, persistCompatibility bool) error {
 	if info, err := os.Lstat(configPath); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			err := fmt.Errorf("configuration path %s is a symbolic link", configPath)
@@ -32,14 +43,14 @@ func ParseConfig(configPath string) error {
 			return err
 		}
 		if info.IsDir() {
-			if err := loadModularConfig(configPath); err != nil {
+			if err := loadModularConfigWithPersistence(configPath, persistCompatibility); err != nil {
 				return err
 			}
 			return nil
 		}
 	}
 
-	if err := loadOldConfig(configPath); err != nil {
+	if err := loadOldConfigWithPersistence(configPath, persistCompatibility); err != nil {
 		return err
 	}
 	log.Println("[WARNING] Using old flat configuration format (deprecated)")
@@ -47,7 +58,11 @@ func ParseConfig(configPath string) error {
 	return nil
 }
 
-func loadModularConfig(configDir string) (loadErr error) {
+func loadModularConfig(configDir string) error {
+	return loadModularConfigWithPersistence(configDir, true)
+}
+
+func loadModularConfigWithPersistence(configDir string, persistCompatibility bool) (loadErr error) {
 	configLoadMu.Lock()
 	defer configLoadMu.Unlock()
 	defer func() {
@@ -173,7 +188,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 	if len(retiredWhitelistEntries) != 0 {
 		v.Set("network.whitelist_ips", modConfig.Network.WhitelistIPs)
 	}
-	if err := normalizeHistoricalModularHA(&modConfig, sources); err != nil {
+	if err := normalizeHistoricalModularHA(&modConfig, sources, persistCompatibility); err != nil {
 		return err
 	}
 

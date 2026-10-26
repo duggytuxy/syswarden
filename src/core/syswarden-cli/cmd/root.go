@@ -106,7 +106,11 @@ var rootCmd = &cobra.Command{
 			}
 		}
 		if commandRequiresAutomaticConfigLoad(cmd) {
-			initConfigHook()
+			if configurationInspectionCommand(cmd) {
+				initInspectionConfigHook()
+			} else {
+				initConfigHook()
+			}
 		}
 		return enforceValidatedConfiguration(cmd)
 	},
@@ -135,6 +139,21 @@ func init() {
 
 var refusePendingModuleEditHook = func() error { return config.RefusePendingModuleEdit(configEditorRoot) }
 var initConfigHook = initConfig
+var initInspectionConfigHook = func() { initConfigUsing(config.ParseConfigForInspection) }
+
+// These operational readers still need validated policy, unlike static help.
+// Their configuration load must never persist a compatibility rewrite.
+func configurationInspectionCommand(cmd *cobra.Command) bool {
+	if cmd == nil || cmd.Parent() != staticInformationRoot {
+		return false
+	}
+	switch cmd.Name() {
+	case "audit", "alerts", "check", "list":
+		return true
+	}
+	return false
+}
+
 var recoverPendingFirewallTransactionHook = firewall.RecoverPendingAuthoritativeTransaction
 var refusePendingFirewallTransactionHook = firewall.RefusePendingAuthoritativeTransaction
 
@@ -324,7 +343,9 @@ func enforceValidatedConfiguration(cmd *cobra.Command) error {
 	)
 }
 
-func initConfig() {
+func initConfig() { initConfigUsing(config.ParseConfig) }
+
+func initConfigUsing(parse func(string) error) {
 	// Parse config if TOML directory exists, or if legacy conf file exists
 	tomlExists := false
 	if _, err := os.Stat("/etc/syswarden/config/modules"); err == nil {
@@ -332,7 +353,7 @@ func initConfig() {
 	}
 
 	if tomlExists {
-		_ = config.ParseConfig("/etc/syswarden/config")
+		_ = parse("/etc/syswarden/config")
 		return
 	}
 
@@ -340,5 +361,5 @@ func initConfig() {
 	// silent here so root, help, and repair commands retain their process
 	// contract; mutating commands surface the recorded failure through the
 	// fail-closed PersistentPreRunE guard above.
-	_ = config.ParseConfig(cfgFile)
+	_ = parse(cfgFile)
 }

@@ -13,7 +13,11 @@ import (
 
 // loadOldConfig reads syswarden-auto.conf into an isolated candidate. The
 // active configuration is replaced only after the complete file was read.
-func loadOldConfig(path string) (loadErr error) {
+func loadOldConfig(path string) error {
+	return loadOldConfigWithPersistence(path, true)
+}
+
+func loadOldConfigWithPersistence(path string, persistCompatibility bool) (loadErr error) {
 	configLoadMu.Lock()
 	defer configLoadMu.Unlock()
 	defer func() {
@@ -192,7 +196,7 @@ func loadOldConfig(path string) (loadErr error) {
 	if err := validateLegacyConfig(candidate); err != nil {
 		return err
 	}
-	if normalized {
+	if normalized && persistCompatibility {
 		rewritten, rewriteErr := persistHistoricalLegacyHA(content)
 		if rewriteErr != nil {
 			return rewriteErr

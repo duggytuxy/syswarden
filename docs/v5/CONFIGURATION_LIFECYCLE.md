@@ -77,6 +77,13 @@ configuration. These static information paths do not query recovery state or
 prepare services. They remain available while configuration or removal needs
 repair. Operational inspection commands such as `audit`, `alerts` and `list`
 retain their own runtime requirements; they are not classified as static help.
+`audit`, `alerts`, `check` and `list` load validated configuration without
+persisting historical compatibility normalization. Eligible historical defaults
+retain their safe in-memory interpretation, while original file bytes and
+metadata remain unchanged. Invalid or ambiguous policy still refuses the
+operation and preserves the last valid process snapshot. This configuration
+boundary does not make every diagnostic host probe script-free; for example,
+an OpenRC service status query can execute its administrator-controlled script.
 
 The global `--config` option selects the legacy flat-file fallback; it does not
 redirect the normal modular root or the protected SSH transaction inputs.

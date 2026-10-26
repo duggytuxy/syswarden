@@ -36,20 +36,18 @@ func TestGlobalConfigWritersRemainInSingleThreadedLifecycle_SW_CFG_001(t *testin
 			return err
 		}
 		ast.Inspect(parsed, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
 			name := ""
-			switch function := call.Fun.(type) {
+			switch expression := node.(type) {
 			case *ast.SelectorExpr:
-				name = function.Sel.Name
-			case *ast.Ident:
-				if parsed.Name.Name == "config" {
+				// Include function-value references passed into the startup
+				// loader, not only a direct config.ParseConfig(...) call.
+				name = expression.Sel.Name
+			case *ast.CallExpr:
+				if function, ok := expression.Fun.(*ast.Ident); ok && parsed.Name.Name == "config" {
 					name = function.Name
 				}
 			}
-			if name == "ParseConfig" || name == "PrepareInstallationConfiguration" {
+			if name == "ParseConfig" || name == "ParseConfigForInspection" || name == "PrepareInstallationConfiguration" {
 				relative, relErr := filepath.Rel(moduleRoot, path)
 				if relErr == nil {
 					callers[filepath.ToSlash(relative)+":"+name] = struct{}{}
@@ -70,6 +68,7 @@ func TestGlobalConfigWritersRemainInSingleThreadedLifecycle_SW_CFG_001(t *testin
 	want := []string{
 		"cmd/install.go:PrepareInstallationConfiguration",
 		"cmd/root.go:ParseConfig",
+		"cmd/root.go:ParseConfigForInspection",
 		"config/minimal_defaults.go:ParseConfig",
 	}
 	if !reflect.DeepEqual(callerFiles, want) {
