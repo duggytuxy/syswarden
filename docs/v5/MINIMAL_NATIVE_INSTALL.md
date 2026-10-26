@@ -108,13 +108,23 @@ Before unpacking, the candidate checks the protected directory ancestry and the
 existing `syswarden` and `syswarden-tui` launchers in `/usr/local/bin`. Missing
 launchers are permitted before unpack. Existing entries must be exact packaged
 symlinks; a custom wrapper, redirected link, shared hard link or unsafe parent
-refuses installation without replacing that entry. After unpack, both exact
+refuses the hook without changing that entry itself. After unpack, both exact
 payload links must exist. Post-install hooks do not recreate links forcibly.
 
+A pre-install script refusal is not a portable transaction barrier. In inert
+native transactions with both package identities, DEB and RPM stopped before
+replacing a colliding launcher. APK 2 and APK 3 continued unpacking after the
+same refusal and replaced the existing entry. A nonzero APK result therefore
+does not prove that payload or administrator files were preserved. Direct APK
+installation and upgrade remain unqualified for this collision; the hook check
+alone must not be used as a preservation guarantee.
+
 Keep an administrator customization intact while reviewing a collision. Move
-or rename it only through an explicit administrator decision, then retry the
-package transaction. These checks do not lock out concurrent privileged changes
-or establish complete native upgrade and removal acceptance.
+or rename it only through an explicit administrator decision. Do not retry a
+candidate APK transaction as a recovery mechanism for an overwritten entry.
+These checks do not lock out concurrent privileged changes or establish
+complete native upgrade and removal acceptance. A separately qualified APK
+payload-preservation strategy remains required before migration clearance.
 
 ## Optional network allowance refresh
 
