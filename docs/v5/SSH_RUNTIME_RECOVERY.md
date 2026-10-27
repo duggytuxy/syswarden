@@ -65,6 +65,29 @@ replay, including a failed directory sync, cancellation before dispatch, signal
 error or lost response. Another attempt requires a separate future recovery
 operation; deleting the marker is not a supported procedure.
 
+## Bounded durable reload observation
+
+After the production target observes replacement of every listener and retirement
+of the previous process address space, it can publish one immutable
+`runtime-recovery-observation.json` record. The record binds the exact recovery,
+reload-intent bytes and inode image, restored graph, parser, target, process
+summary and before/after listener generations. Retained kernel handles and the
+configuration/history guard remain checked through publication. A successful
+callback or authenticated connection cannot supply this observation.
+
+The production lease also retains one procfs mount-event descriptor from the
+pinned daemon before dispatch. Mount changes invalidate the lease permanently,
+even when a later unmount restores the original path metadata and namespace
+identity. The descriptor is never reopened to clear an event. This detects a
+changed mount view; it does not block mounts or establish policy consumption.
+
+The writer reports its acknowledged publication separately from
+`request_returned`. Failed or uncertain publication retains all history and the
+no-replay fence. Existing histories without the record remain unchanged; neither
+read-only inspection nor a later successful connection backfills it. Reopening
+observes the record's presence and exact identity, not the original writer's
+lost durability acknowledgement.
+
 ## Meaning of the result
 
 Configuration restoration and a returned reload request are separate facts.
@@ -122,7 +145,7 @@ authority or the native package lifecycle.
 record. Original restoration preserves it opaquely alongside any receipt, even
 when expired, malformed or associated with a revoked controller. Its image is
 bound by the independent restoration approval. The closed history can contain
-17 entries after the six inverse/reload records. Controller availability never
+18 entries after the six inverse/reload records and optional production observation. Controller availability never
 authorizes restoration and is not required to inspect or apply this recovery.
 
 ## Separately authorized restored access
@@ -130,9 +153,15 @@ authorizes restoration and is not required to inspect or apply this recovery.
 The [restoration access commands](SSH_ACCESS_COMMANDS.md#access-after-restoring-the-original-policy)
 require a separate enrollment binding the original plan and approved recovery.
 They add at most two purpose-specific records after the complete inverse
-transition. The ordinary 17-entry observer remains strict; the access path admits
+transition. The ordinary 18-entry observer remains strict; the access path admits
 only the exact approved, pinned record images, outside the original history
 digest. Original records are never rewritten.
+
+When a valid production observation is present, restored access uses purpose-v2
+request, issuance and evidence records. The signed request additionally binds
+the observation bytes, inode image and current process/listener generation.
+Legacy purpose-v1 exchanges remain valid only for their unchanged legacy
+histories; they cannot be promoted or substituted for an observed exchange.
 
 Request preparation, issuance and recording recheck file, parser, authority, time
 and endpoint state. A late change suppresses successful delivery while retaining

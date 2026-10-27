@@ -327,23 +327,26 @@ package generation retains the historical dependency set at this stage.
 
 ## Incomplete configuration recovery
 
-Installation and repair must not replace lost policy with the fresh standard
-profile. When the published `config.toml` exists but a required module is missing,
-the installer refuses before writing replacement templates, even when surviving
-files look like defaults. This also applies to a missing `99-user.toml`: its former
-operator choices cannot be inferred from the remaining files.
+Activation and repair must not replace lost policy with fresh inactive defaults.
+Activation requires the existing master file and every required module before
+retired-secret cleanup or configuration loading. An absent or empty directory,
+unpublished template fragments, and a missing module are all refused. This
+includes a missing `99-user.toml`: previous operator choices cannot be inferred
+from the remaining files. Refusal preserves the last validated policy and reports
+a degraded load instead of replacing existing protection.
 
-Without a master file, automatic completion is limited to an unfinished fresh
-initialization whose surviving modules all match the exact current templates.
-A custom user module or any additional TOML module makes an incomplete directory
-ambiguous. Unsafe links are refused before defaults are created. A complete
-administrator configuration is preserved byte for byte, including its permissions.
+Only fresh native package staging may complete an unfinished initialization whose
+surviving modules match the exact current templates. This staging authority does
+not authorize activation. A custom user module or any additional TOML module makes
+an incomplete directory ambiguous. Unsafe links are refused before defaults are
+created. A complete administrator configuration is preserved byte for byte,
+including its permissions.
 
 Restore the complete last-known configuration from the installation's retained
-backup and validate it before retrying installation or reload. Do not delete
+backup and validate it before retrying activation or reload. Do not delete
 remaining configuration to make the installation appear fresh, and do not copy
 new default files over a historical policy. For a genuinely new installation,
-let the standard profile initialize completely before editing the optional TOML
+let the inactive configuration initialize completely before making explicit TOML
 selections. These refusals do not undo already active protection or establish that
 an administrator's previous state has been recovered.
 

@@ -304,6 +304,9 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 		!restored.RecoveryRequired || restored.RuntimeActivated || restored.AccessVerified {
 		t.Fatal("production original restoration failed", restored, err)
 	}
+	if restored.ReloadObservationDurable == noop || (!noop && (!lowerDigest.MatchString(restored.ReloadObservationSHA256) || !lowerDigest.MatchString(restored.ReloadObservationImageSHA256))) {
+		t.Fatal("production restoring observation did not match dispatch outcome", restored)
+	}
 	probe(!noop && profile != "legacy-cis")
 	after := isolatedSSHMainImage(t)
 	// Rename changes ctime. The original inode, metadata, xattrs and bytes must
@@ -317,7 +320,11 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	}
 	isolatedSSHRetainedCandidates(t, ctx)
 	recoveredHistory := isolatedSSHRecoveryHistory(t, ctx)
-	if len(recoveredHistory) != len(history)+6 {
+	added := 6
+	if !noop {
+		added++
+	}
+	if len(recoveredHistory) != len(history)+added {
 		t.Fatal("incomplete inverse/reload history")
 	}
 	for name, digest := range history {
@@ -333,6 +340,9 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 	if err != nil || !assessment.ConfigurationRestored || !assessment.ParserVerified || !assessment.ReloadIntentObserved ||
 		!assessment.RecoveryRequired || assessment.RuntimeActivated || assessment.AccessVerified {
 		t.Fatal("production post-reload assessment failed", assessment, err)
+	}
+	if assessment.ReloadObservationObserved == noop || (!noop && (assessment.Schema != 2 || assessment.ReloadObservationSHA256 != restored.ReloadObservationSHA256 || assessment.ReloadObservationImageSHA256 != restored.ReloadObservationImageSHA256 || !lowerDigest.MatchString(assessment.RuntimeGenerationSHA256))) {
+		t.Fatal("read-only assessment lost the exact production observation", assessment)
 	}
 	if _, err := RestoreOriginalSystemd(ctx, plan.PlanSHA256, inspection.RecoverySHA256); err == nil {
 		t.Fatal("restoring reload replay accepted")
@@ -511,7 +521,7 @@ func isolatedSSHExportRecoveryHistory(t *testing.T) {
 	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
-	if err != nil || len(entries) > 19 {
+	if err != nil || len(entries) > 20 {
 		t.Error("cannot export bounded fixture journal", err)
 		return
 	}

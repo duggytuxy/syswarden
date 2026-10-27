@@ -25,7 +25,9 @@ func TestCurrentReleaseRequiresInstalledPackageAttestation(t *testing.T) {
 			u.currentVersion = testUpdateVersion
 			var output bytes.Buffer
 			u.stdout = &output
-			if kind != "missing-attestor" {
+			if kind == "missing-attestor" {
+				u.attestInstalled = nil
+			} else {
 				u.attestInstalled = func(ctx context.Context, target packageTarget, uid int) (installedQualificationEvidence, error) {
 					attestations++
 					if _, ok := ctx.Deadline(); !ok {
@@ -53,7 +55,11 @@ func TestCurrentReleaseRequiresInstalledPackageAttestation(t *testing.T) {
 			} else if err == nil || success {
 				t.Fatalf("unhealthy current package passed: %v %s", err, output.String())
 			}
-			if requests != 1 || mutations != 0 {
+			wantRequests := 1
+			if kind == "missing-attestor" {
+				wantRequests = 0
+			}
+			if requests != wantRequests || mutations != 0 {
 				t.Fatalf("requests=%d mutations=%d", requests, mutations)
 			}
 			if kind != "missing-attestor" && attestations != 1 {

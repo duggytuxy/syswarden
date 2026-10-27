@@ -13,17 +13,20 @@ import (
 // of loaded policy, authenticated access or a completed recovery. Private
 // configuration, history, process identifiers and endpoints are omitted.
 type RuntimeRecoverySummary struct {
-	Schema                int    `json:"schema"`
-	Operation             string `json:"operation"`
-	PlanSHA256            string `json:"plan_sha256"`
-	RecoverySHA256        string `json:"recovery_sha256"`
-	Transaction           string `json:"transaction"`
-	IntentDurable         bool   `json:"intent_durable"`
-	ConfigurationRestored bool   `json:"configuration_restored"`
-	RequestReturned       bool   `json:"request_returned"`
-	RecoveryRequired      bool   `json:"recovery_required"`
-	RuntimeActivated      bool   `json:"runtime_activated"`
-	AccessVerified        bool   `json:"access_verified"`
+	Schema                       int    `json:"schema"`
+	Operation                    string `json:"operation"`
+	PlanSHA256                   string `json:"plan_sha256"`
+	RecoverySHA256               string `json:"recovery_sha256"`
+	Transaction                  string `json:"transaction"`
+	IntentDurable                bool   `json:"intent_durable"`
+	ConfigurationRestored        bool   `json:"configuration_restored"`
+	RequestReturned              bool   `json:"request_returned"`
+	RecoveryRequired             bool   `json:"recovery_required"`
+	RuntimeActivated             bool   `json:"runtime_activated"`
+	AccessVerified               bool   `json:"access_verified"`
+	ReloadObservationDurable     bool   `json:"reload_observation_durable,omitempty"`
+	ReloadObservationSHA256      string `json:"reload_observation_sha256,omitempty"`
+	ReloadObservationImageSHA256 string `json:"reload_observation_image_sha256,omitempty"`
 }
 
 // InspectSystemdRecovery reads only fixed protected paths. It neither repairs
@@ -139,7 +142,13 @@ func runSSHRecoverySession(ctx context.Context, original, recovery string, apply
 		summary = RuntimeRecoverySummary{Schema: 1, Operation: "restore-original", PlanSHA256: original,
 			RecoverySHA256: result.RecoverySHA256, Transaction: result.Transaction,
 			IntentDurable: result.IntentDurable, ConfigurationRestored: result.ConfigurationRestored,
-			RequestReturned: result.RequestReturned, RecoveryRequired: true}
+			RequestReturned: result.RequestReturned, RecoveryRequired: true,
+			ReloadObservationDurable:     result.ReloadObservationDurable,
+			ReloadObservationSHA256:      result.ReloadObservationSHA256,
+			ReloadObservationImageSHA256: result.ReloadObservationImageSHA256}
+		if result.ReloadObservationDurable {
+			summary.Schema = 2
+		}
 	}
 	return summary, err
 }

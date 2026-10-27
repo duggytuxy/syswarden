@@ -44,7 +44,17 @@ false. The recorded target digest describes the approved historical target;
 current endpoints are a new observation and do not prove that target consumed
 the restored policy.
 
-Record presence does not prove durability or signal delivery. The command may
+If the production restoring request also recorded its bounded kernel
+observation, schema-2 output identifies that record and its exact inode image.
+Assessment requires the current process summary and listener generation to match
+the recorded post-request generation. A replaced record, changed process or new
+listener generation fails closed. The additional digests bind subsequent
+purpose-v2 restored-access exchanges; they do not set runtime activation,
+access verification or completed recovery to true. Histories without this record
+retain their original schema-1 output and uncertainty without being rewritten.
+
+Record presence alone does not prove the original writer acknowledged durability.
+A reload intent alone does not establish signal delivery. The command may
 successfully inspect a visible reload record left by a failed directory sync
 before dispatch. It preserves that uncertainty and the prohibition on replay.
 The journal is neither cleared nor reusable after inspection. Do not delete

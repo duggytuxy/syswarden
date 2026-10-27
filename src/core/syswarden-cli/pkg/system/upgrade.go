@@ -275,9 +275,11 @@ func newProductionUpdater() (*updater, error) {
 		metadataTimeout:         metadataDownloadTimeout,
 		packageTimeout:          packageDownloadTimeout,
 		installTimeout:          packageInstallationTimeout,
+		attestTimeout:           qualificationAttestTimeout,
 		attestRPM:               attestInstalledStandardRPMRelease,
 		preflightNativeIdentity: preflightStandardNativeUpdate,
 		attestInstalled:         attestInstalledQualificationVersion,
+		attestCandidateCLI:      attestQualificationPackageCLI,
 		attestPackageIdentity:   attestNativePackageHeader,
 		retireWebTUI: func() error {
 			return config.RemoveRetiredWebTUIConfiguration("/etc/syswarden/config")
@@ -417,6 +419,23 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
 		return fmt.Errorf("reverify package after native header attestation: %w", err)
 	}
+	payloadAttestationCtx, cancelPayloadAttestation := context.WithTimeout(ctx, u.attestTimeout)
+	if err := payloadAttestationCtx.Err(); err != nil {
+		cancelPayloadAttestation()
+		return fmt.Errorf("attest candidate CLI from authenticated package: %w", err)
+	}
+	expectedCandidateCLISHA256, err := u.attestCandidateCLI(payloadAttestationCtx, target, packageFile)
+	err = errors.Join(err, payloadAttestationCtx.Err())
+	cancelPayloadAttestation()
+	if err != nil {
+		return fmt.Errorf("attest candidate CLI from authenticated package: %w", err)
+	}
+	if !validSHA256(expectedCandidateCLISHA256) {
+		return errors.New("authenticated package CLI attestation lacks a valid SHA-256 digest")
+	}
+	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
+		return fmt.Errorf("reverify package after candidate CLI attestation: %w", err)
+	}
 	if err := u.attestStandardRPMChannel(ctx, target, "immediately before package installation"); err != nil {
 		return err
 	}
@@ -445,6 +464,20 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return fmt.Errorf("install %s package: %w", target.format, err)
 	}
 
+	if err := u.recheckStandardNativeIdentity(ctx, u.attestTimeout, identity); err != nil {
+		return fmt.Errorf("package transaction completed but native package identity changed: %w", err)
+	}
+	installedCandidate, err := u.attestQualificationInstallation(ctx, target, "post-install")
+	if err != nil {
+		return fmt.Errorf("package transaction completed but candidate attestation failed: %w", err)
+	}
+	if installedCandidate.version != latestVersion {
+		return fmt.Errorf("package transaction installed version %s, want exact candidate %s", installedCandidate.version, latestVersion)
+	}
+	if installedCandidate.cliSHA256 != expectedCandidateCLISHA256 {
+		return fmt.Errorf("installed candidate CLI SHA-256 %s does not match authenticated package payload %s", installedCandidate.cliSHA256, expectedCandidateCLISHA256)
+	}
+
 	if err := u.finishUpgrade(ctx, target); err != nil {
 		return fmt.Errorf("package installed but post-install finalization failed: %w", err)
 	}
@@ -452,10 +485,10 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 }
 
 func (u *updater) validateConfiguration() error {
-	if u.client == nil || u.lookPath == nil || u.installPackage == nil || u.stdout == nil || u.preflightNativeIdentity == nil || u.attestPackageIdentity == nil {
+	if u.client == nil || u.lookPath == nil || u.installPackage == nil || u.stdout == nil || u.preflightNativeIdentity == nil || u.attestPackageIdentity == nil || u.attestInstalled == nil || u.attestCandidateCLI == nil {
 		return errors.New("updater dependencies are incomplete")
 	}
-	if u.metadataTimeout <= 0 || u.packageTimeout <= 0 || u.installTimeout <= 0 {
+	if u.metadataTimeout <= 0 || u.packageTimeout <= 0 || u.installTimeout <= 0 || u.attestTimeout <= 0 {
 		return errors.New("updater timeouts must be positive")
 	}
 	for label, rawURL := range map[string]string{"release API": u.latestURL, "release download base": u.downloadBaseURL} {
@@ -543,7 +576,10 @@ func releaseAssetURL(baseURL, version, assetName string) (string, error) {
 	return parsed.String(), nil
 }
 
-func (u *updater) finishUpgrade(_ context.Context, target packageTarget) error {
+func (u *updater) finishUpgrade(ctx context.Context, target packageTarget) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if target.os != "linux" {
 		return errors.New("package target operating system is not supported")
 	}
@@ -556,6 +592,7 @@ func (u *updater) finishUpgrade(_ context.Context, target packageTarget) error {
 			errorsFound = append(errorsFound, fmt.Errorf("retire Web-TUI configuration: %w", err))
 		}
 	}
+	errorsFound = append(errorsFound, ctx.Err())
 	if err := errors.Join(errorsFound...); err != nil {
 		return err
 	}

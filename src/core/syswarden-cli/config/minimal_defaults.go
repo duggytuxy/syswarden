@@ -81,19 +81,25 @@ func preflightMissingDefaults(outputDir, master string, modules []renderedModule
 	return nil
 }
 
-// PrepareInstallationConfiguration preserves the previous valid snapshot but
-// records a degraded load on any refusal, including an incomplete-policy repair.
+// PrepareInstallationConfiguration validates existing policy for activation.
+// Fresh native staging owns initialization and exact unpublished-template retry;
+// activation must never infer fresh-install authority from missing configuration.
+// Preserve the previous valid snapshot and record a degraded load on refusal.
 func PrepareInstallationConfiguration(root string) (err error) {
 	defer func() {
 		if err != nil {
 			recordConfigLoadFailure(root, err)
 		}
 	}()
+	complete, err := ModularConfigurationComplete(root)
+	if err != nil {
+		return fmt.Errorf("inspect existing modular configuration before activation: %w", err)
+	}
+	if !complete {
+		return fmt.Errorf("activation requires complete existing modular configuration: restore the installation's retained policy or complete explicit legacy migration before retrying; fresh defaults cannot establish the previous protection")
+	}
 	if err := RemoveRetiredWebTUIConfiguration(root); err != nil {
 		return fmt.Errorf("remove retired Web-TUI configuration: %w", err)
-	}
-	if err := EnsureDefaults(root); err != nil {
-		return fmt.Errorf("complete missing modular defaults: %w", err)
 	}
 	if err := ParseConfig(root); err != nil {
 		return fmt.Errorf("validate modular configuration: %w", err)

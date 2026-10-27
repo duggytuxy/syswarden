@@ -264,11 +264,24 @@ func resolveModularSaaSAlias(v *viper.Viper, observed map[string]struct{}) {
 	_, legacyFile := observed["integrations.saas.enabled"]
 	_, officialEnv := os.LookupEnv("SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS")
 	_, legacyEnv := os.LookupEnv("SYSWARDEN_INTEGRATIONS_SAAS_ENABLED")
-	if officialFile || officialEnv {
+	resolveModularSaaSAliasPresence(v, officialFile || officialEnv, legacyFile || legacyEnv)
+}
+
+// Preview and editor validation merge TOML only. Environment presence must not
+// cause an absent official key to override an explicit deprecated TOML alias.
+// The caller supplies a Viper instance without automatic environment overlays.
+func resolveModularSaaSAliasFromTOML(v *viper.Viper, observed map[string]struct{}) {
+	_, official := observed["network.saas.allow_monitors"]
+	_, legacy := observed["integrations.saas.enabled"]
+	resolveModularSaaSAliasPresence(v, official, legacy)
+}
+
+func resolveModularSaaSAliasPresence(v *viper.Viper, official, legacy bool) {
+	if official {
 		v.Set("network.saas.allow_monitors", v.GetBool("network.saas.allow_monitors"))
 		return
 	}
-	if legacyFile || legacyEnv {
+	if legacy {
 		v.Set("network.saas.allow_monitors", v.GetBool("integrations.saas.enabled"))
 		return
 	}

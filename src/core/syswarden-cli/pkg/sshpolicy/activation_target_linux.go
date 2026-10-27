@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -28,9 +29,10 @@ func bindSSHSystemdTarget(parent context.Context, policyGuard func() error, reco
 	var resources *sshProcessResources
 	var held *sshRetainedProcess
 	var execution *sshExecReload
+	var mounts *sshMountEventFence
 	cleanup := func() error {
 		cancel()
-		return errors.Join(execution.Close(), held.Close(), resources.Close())
+		return errors.Join(mounts.Close(), execution.Close(), held.Close(), resources.Close())
 	}
 	defer func() {
 		if err != nil {
@@ -64,8 +66,14 @@ func bindSSHSystemdTarget(parent context.Context, policyGuard func() error, reco
 	if !ok || process == nil || held.summary.Startup == nil || !held.summary.Startup.DeclarationVerified {
 		return nil, ErrInventoryUnsafe
 	}
+	mounts, err = pinSSHMountEvents(process)
+	if err != nil {
+		return nil, err
+	}
 	check := func(ctx context.Context) error {
-		return held.recheck(ctx, snapshot, resources.recheck, startup)
+		return mounts.guard(func() error {
+			return held.recheck(ctx, snapshot, resources.recheck, startup)
+		})
 	}
 	// Expectations come from the protected current graph and pinned parser.
 	// They are not supplied by the caller or inferred from current listeners.
@@ -127,20 +135,48 @@ func bindSSHSystemdTarget(parent context.Context, policyGuard func() error, reco
 	// pidfd_send_signal cannot retarget a recycled numeric PID. Only SIGHUP
 	// to the retained thread-group leader is allowed, with no shell, manager
 	// mutation, child signal, numeric-PID fallback or automatic retry.
-	send := func() error { return sendSSHProcessReload(process) }
-	verify := func(ctx context.Context) error { return errors.Join(listeners.check(ctx), execution.beforeRequest()) }
-	after := func(ctx context.Context, guard func() error) error {
+	send := func() error {
+		if err := mounts.check(); err != nil {
+			return err
+		}
+		return sendSSHProcessReload(process)
+	}
+	verify := func(ctx context.Context) error {
+		return mounts.guard(func() error { return errors.Join(listeners.check(ctx), execution.beforeRequest()) })
+	}
+	preSend := func() error { return mounts.guard(execution.beforeRequest) }
+	lease := &sshActivationTarget{ctx: ctx, target: target, verify: verify, preSend: preSend, send: send, closeFn: cleanup}
+	lease.after = func(ctx context.Context, guard func() error) error {
 		if err := listeners.wait(ctx, guard, pauseSSHListenerObservation); err != nil {
 			return err
 		}
 		if err := execution.observe(ctx, func() error { return errors.Join(check(ctx), guard()) }); err != nil {
 			return err
 		}
-		return errors.Join(listeners.wait(ctx, func() error {
+		after, err := listeners.observe(ctx, func() error {
 			return errors.Join(guard(), execution.checkAfter())
-		}, pauseSSHListenerObservation), execution.checkAfter())
+		}, pauseSSHListenerObservation)
+		if err := errors.Join(err, execution.checkAfter(), guard(), ctx.Err()); err != nil {
+			return err
+		}
+		if recovery != nil {
+			processSummary, err := sshActivationDigest(held.summary)
+			if err != nil {
+				return err
+			}
+			// This capability is minted only after the retained production
+			// process has retired its old address space and replaced every
+			// listener. It is neither accepted from a caller nor serialized.
+			observed := &sshRestoringReloadObservation{target: target, processSummary: processSummary,
+				listeners: listeners, execution: execution, after: slices.Clone(after)}
+			if err := observed.recheck(ctx, guard); err != nil {
+				return err
+			}
+			lease.observation = observed
+		}
+		return nil
 	}
-	return &sshActivationTarget{ctx: ctx, target: target, verify: verify, preSend: execution.beforeRequest, send: send, after: after, closeFn: cleanup}, nil
+	return lease, nil
 }
 
 func sendSSHProcessReload(process *sshProcessBinding) error {
@@ -162,6 +198,7 @@ type sshActivationTarget struct {
 	after             func(context.Context, func() error) error
 	closeFn           func() error
 	attempted, closed bool
+	observation       *sshRestoringReloadObservation
 }
 
 func (l *sshActivationTarget) identity() string {
@@ -195,7 +232,7 @@ func (l *sshActivationTarget) checkLocked(ctx context.Context) error {
 	return errors.Join(l.verify(ctx), ctx.Err(), l.ctx.Err())
 }
 
-func (l *sshActivationTarget) request(parent context.Context, policyGuard func() error) error {
+func (l *sshActivationTarget) request(parent context.Context, policyGuard func() error) (err error) {
 	if l == nil {
 		return ErrInventoryClosed
 	}
@@ -206,7 +243,12 @@ func (l *sshActivationTarget) request(parent context.Context, policyGuard func()
 	}
 	// Even a rejected dispatch consumes this lease. The durable transaction
 	// must be recovered explicitly; no uncertain request is replayed.
-	defer func() { l.attempted = true }()
+	defer func() {
+		l.attempted = true
+		if err != nil {
+			l.observation = nil
+		}
+	}()
 	if parent == nil || policyGuard == nil || l.ctx == nil {
 		return ErrInventoryUnsafe
 	}
@@ -253,6 +295,7 @@ func (l *sshActivationTarget) Close() error {
 		return nil
 	}
 	l.closed = true
+	l.observation = nil
 	if l.closeFn == nil {
 		return ErrInventoryUnsafe
 	}

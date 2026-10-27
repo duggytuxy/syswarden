@@ -471,6 +471,9 @@ func TestNativePackageHeaderBoundaryUpdaterRefusesBeforeInstallation(t *testing.
 				}
 				if outcome == "success" {
 					wantIdentities = 2
+					if channel == "online" {
+						wantIdentities = 3
+					}
 					if err != nil || installs.Load() != 1 {
 						t.Fatalf("valid gate did not permit one installation: installs=%d error=%v", installs.Load(), err)
 					}

@@ -17,20 +17,24 @@ import (
 // Record presence is not proof of durability, signal delivery, policy consumption
 // or authenticated access. RecoveryRequired remains true even on success.
 type RecoveryAssessment struct {
-	Schema                int             `json:"schema"`
-	PlanSHA256            string          `json:"plan_sha256"`
-	RecoverySHA256        string          `json:"recovery_sha256"`
-	Transaction           string          `json:"transaction"`
-	ReloadIntentSHA256    string          `json:"reload_intent_sha256"`
-	RecordedTargetSHA256  string          `json:"recorded_target_sha256"`
-	RestoredSHA256        string          `json:"restored_sha256"`
-	ConfigurationRestored bool            `json:"configuration_restored"`
-	ParserVerified        bool            `json:"parser_verified"`
-	ReloadIntentObserved  bool            `json:"reload_intent_observed"`
-	RecoveryRequired      bool            `json:"recovery_required"`
-	RuntimeActivated      bool            `json:"runtime_activated"`
-	AccessVerified        bool            `json:"access_verified"`
-	Endpoints             EndpointSummary `json:"endpoints"`
+	Schema                       int             `json:"schema"`
+	PlanSHA256                   string          `json:"plan_sha256"`
+	RecoverySHA256               string          `json:"recovery_sha256"`
+	Transaction                  string          `json:"transaction"`
+	ReloadIntentSHA256           string          `json:"reload_intent_sha256"`
+	RecordedTargetSHA256         string          `json:"recorded_target_sha256"`
+	RestoredSHA256               string          `json:"restored_sha256"`
+	ConfigurationRestored        bool            `json:"configuration_restored"`
+	ParserVerified               bool            `json:"parser_verified"`
+	ReloadIntentObserved         bool            `json:"reload_intent_observed"`
+	RecoveryRequired             bool            `json:"recovery_required"`
+	RuntimeActivated             bool            `json:"runtime_activated"`
+	AccessVerified               bool            `json:"access_verified"`
+	Endpoints                    EndpointSummary `json:"endpoints"`
+	ReloadObservationObserved    bool            `json:"reload_observation_observed,omitempty"`
+	ReloadObservationSHA256      string          `json:"reload_observation_sha256,omitempty"`
+	ReloadObservationImageSHA256 string          `json:"reload_observation_image_sha256,omitempty"`
+	RuntimeGenerationSHA256      string          `json:"runtime_generation_sha256,omitempty"`
 }
 
 // Keep the existing writer's exact field order and encoding. The read-only
@@ -91,7 +95,11 @@ func withSSHRestoredAccessAssessment(ctx context.Context, journal *sshJournal, o
 	}
 	// No missing completion, extra phase or original record may be inferred
 	// from matching live files. Require the full recorded inverse transition.
-	if len(records) != len(intent.Records)+6 {
+	expectedRecords := len(intent.Records) + 6
+	if _, present := records[sshRuntimeRecoveryObservationName]; present {
+		expectedRecords++
+	}
+	if len(records) != expectedRecords {
 		return RecoveryAssessment{}, ErrInventoryChanged
 	}
 	current, err := stableSSHRollback(journal, prepared.Transaction)
@@ -119,6 +127,13 @@ func withSSHRestoredAccessAssessment(ctx context.Context, journal *sshJournal, o
 	want, err := json.Marshal(sshRuntimeRecoveryReload{1, recovery, restored, intent.Target})
 	if err != nil || !bytes.Equal(reloadWire, want) {
 		return RecoveryAssessment{}, errors.Join(ErrInventoryChanged, err)
+	}
+	observation, observationImage, err := readSSHRuntimeRecoveryObservation(journal, intent, recovery, restored, reloadWire)
+	if err != nil {
+		return RecoveryAssessment{}, err
+	}
+	if observationImage != nil && records[sshRuntimeRecoveryObservationName] != sshImageDigest(*observationImage) {
+		return RecoveryAssessment{}, ErrInventoryChanged
 	}
 	a := &sshRestoredAccessAssessment{journal: journal, plan: plan, records: records, issuance: issuance, evidence: evidence}
 	baseFence := func() error {
@@ -155,6 +170,21 @@ func withSSHRestoredAccessAssessment(ctx context.Context, journal *sshJournal, o
 	summary := RecoveryAssessment{Schema: 1, PlanSHA256: original, RecoverySHA256: recovery, Transaction: prepared.Transaction,
 		ReloadIntentSHA256: digestBytes(reloadWire), RecordedTargetSHA256: intent.Target, RestoredSHA256: restored,
 		ConfigurationRestored: true, ParserVerified: true, ReloadIntentObserved: true, RecoveryRequired: true, Endpoints: endpoints}
+	if observationImage != nil {
+		process, err := sshActivationDigest(endpoints.Listeners.Process)
+		if err != nil || process != observation.ProcessSummarySHA256 || endpoints.Listeners.SocketsSHA256 != observation.AfterSocketsSHA256 {
+			return RecoveryAssessment{}, errors.Join(ErrInventoryChanged, err)
+		}
+		generation, err := sshActivationDigest([]string{"ssh-restored-runtime-generation-v1", process, observation.AfterSocketsSHA256})
+		if err != nil {
+			return RecoveryAssessment{}, err
+		}
+		summary.Schema = 2
+		summary.ReloadObservationObserved = true
+		summary.ReloadObservationSHA256 = digestBytes(observationImage.data)
+		summary.ReloadObservationImageSHA256 = sshImageDigest(*observationImage)
+		summary.RuntimeGenerationSHA256 = generation
+	}
 	if action != nil {
 		// Re-observe endpoints at each publication boundary. The observer gets
 		// only the base file/parser guard, never this enclosing action guard.

@@ -126,6 +126,13 @@ and target lineage, plus the current parser and endpoint assessment. The
 recorded target identifies restoration history; it is not proof that the daemon
 consumed the restored policy. Historical activation records remain unchanged.
 
+A valid production reload observation selects purpose-v2 restored requests,
+issuance and evidence. Their request binds the exact observation and its inode
+image plus the current process/listener generation. The target rejects drift
+before issuance, recording and read-only inspection. Existing purpose-v1
+exchanges retain their original bytes and uncertainty; a v1 issuance cannot
+contain or authorize a v2 request. Both versions leave recovery required.
+
 Use a separate empty private exchange directory for restoration so that earlier
 activation files remain intact. The four commands use the same protected file
 names, output reservation, independent controller credentials and transport

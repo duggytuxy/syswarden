@@ -229,3 +229,85 @@ func TestModuleProposalEffectReviewIsBoundToCandidateAndCopied(t *testing.T) {
 		t.Fatal("preview published unapproved candidate")
 	}
 }
+
+func TestConfigurationPreviewAndEditorUseTOMLSaaSAliasPrecedence(t *testing.T) {
+	for _, scenario := range []struct {
+		name, content, environment, value string
+		want                              bool
+	}{
+		{name: "legacy-true", content: "[integrations.saas]\nenabled=true\n", want: true},
+		{name: "legacy-false", content: "[integrations.saas]\nenabled=false\n"},
+		{name: "official-false-wins", content: "[network.saas]\nallow_monitors=false\n[integrations.saas]\nenabled=true\n"},
+		{name: "official-true-wins", content: "[network.saas]\nallow_monitors=true\n[integrations.saas]\nenabled=false\n", want: true},
+		{name: "no-selection", content: "# no SaaS selection\n"},
+		{name: "official-env-does-not-hide-alias", content: "[integrations.saas]\nenabled=true\n", environment: "SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS", value: "false", want: true},
+		{name: "legacy-env-does-not-change-alias", content: "[integrations.saas]\nenabled=true\n", environment: "SYSWARDEN_INTEGRATIONS_SAAS_ENABLED", value: "false", want: true},
+		{name: "official-env-does-not-enable", content: "# no SaaS selection\n", environment: "SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS", value: "true"},
+		{name: "legacy-env-does-not-enable", content: "# no SaaS selection\n", environment: "SYSWARDEN_INTEGRATIONS_SAAS_ENABLED", value: "true"},
+		{name: "official-false-not-overlaid", content: "[network.saas]\nallow_monitors=false\n[integrations.saas]\nenabled=true\n", environment: "SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS", value: "true"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			preserveOperatorPolicyGlobals(t)
+			root, _ := initializedUserModule(t)
+			// Keep a complete historical modular tree with no official SaaS
+			// assignment, so each case explicitly supplies its own precedence.
+			for _, relative := range []string{"config.toml", "modules/00-core.toml", "modules/10-network.toml"} {
+				path := filepath.Join(root, relative)
+				raw, err := os.ReadFile(path) // #nosec G304 -- fixed fixture paths within the test-owned root
+				if err != nil {
+					t.Fatal(err)
+				}
+				lines := strings.Split(strings.ReplaceAll(string(raw), "unconfigured-v1", ""), "\n")
+				for index, line := range lines {
+					if strings.HasPrefix(strings.TrimSpace(line), "allow_monitors =") {
+						lines[index] = "# official SaaS selection omitted by this fixture"
+					}
+				}
+				if err := writeModuleFixture(path, []byte(strings.Join(lines, "\n")), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := writeModuleFixture(filepath.Join(root, "modules", userModuleName), []byte(scenario.content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if scenario.environment != "" {
+				t.Setenv(scenario.environment, scenario.value)
+			}
+			before := intentFixtureFiles(t, root)
+			global, load := GlobalConfig, CurrentLoadState()
+			preview, err := PreviewConfiguration(t.Context(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := fmt.Sprintf("SaaS allowlists selected: %t", scenario.want)
+			if !strings.Contains(strings.Join(preview.ModulePlan, "\n"), want) {
+				t.Fatalf("preview lost TOML alias precedence: %v", preview.ModulePlan)
+			}
+			edit, err := BeginUserModuleEdit(t.Context(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proposal, err := edit.Prepare(t.Context(), []byte(scenario.content+"# reviewed candidate\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(proposal.Review().ModulePlan, "\n"), want) {
+				t.Fatal("editor review lost TOML alias precedence")
+			}
+			if !reflect.DeepEqual(before, intentFixtureFiles(t, root)) || GlobalConfig != global || !reflect.DeepEqual(load, CurrentLoadState()) {
+				t.Fatal("read-only alias review changed source or globals")
+			}
+			if scenario.environment == "" {
+				if err := proposal.Publish(t.Context(), proposal.Review().ApprovalID, func() error { return nil }); err != nil {
+					t.Fatal(err)
+				}
+				if err := ParseConfigForInspection(root); err != nil {
+					t.Fatal(err)
+				}
+				if GlobalConfig.AllowSaaSMonitors != scenario.want {
+					t.Fatal("published editor proposal differs from reviewed TOML semantics")
+				}
+			}
+		})
+	}
+}

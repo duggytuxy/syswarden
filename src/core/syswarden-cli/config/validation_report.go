@@ -119,6 +119,7 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	if err := profileInventory.validate(); err != nil {
 		return report, err
 	}
+	resolveModularSaaSAliasFromTOML(v, observed)
 	if err := resolveOptionalModules(v); err != nil {
 		return report, err
 	}
@@ -194,6 +195,7 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	_ = v.BindEnv("network.whitelist_ips")
 	setDefaults(v, configDir)
+	observed := make(map[string]struct{})
 	var profileInventory unconfiguredProfileInventory
 	merge := func(relative string, content []byte) error {
 		document, err := parseTOMLDocument(content, relative)
@@ -201,6 +203,7 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 			return err
 		}
 		profileInventory.record(relative, document)
+		flattenTOMLKeys("", document, observed)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("merge %s: %w", relative, err)
 		}
@@ -256,6 +259,7 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 		return "", false, err
 	}
 	whitelistWasSet := v.IsSet("network.whitelist_ips")
+	resolveModularSaaSAlias(v, observed)
 	if err := resolveOptionalModules(v); err != nil {
 		return "", false, err
 	}

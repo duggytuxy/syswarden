@@ -68,13 +68,17 @@ Restoration must recover the original main inode, bytes, permissions, ownership,
 attributes and modification time. The expected rename-related ctime change is
 not confused with lost ownership. Candidate main and drop-in inodes remain
 attributable recovery data outside active configuration. All original journal
-records remain unchanged and exactly six inverse/reload records are added.
+records remain unchanged. Successful restoring requests add exactly six
+inverse/reload records plus one production kernel-observation record. The oracle
+requires durable publication and matching read-only assessment of that exact
+record and the current process/listener generation.
 
 `recovery-noop` changes only the test lease's signal callback to a successful
 no-op. The real listener observer must reject that request, while the original
 files have already been restored. Fresh pinned authentication still succeeds,
 but forwarding remains prohibited by the stale daemon policy. Read-only
-assessment and repeated restoration cannot turn that uncertainty into acceptance
+assessment must show no successful reload observation. Its restored-access
+exchange stays purpose-v1. Repeated restoration cannot turn that uncertainty into acceptance
 or replay the reload. Process and kernel listener identities must remain
 unchanged across assessment and rejected replay. All scenarios keep `RecoveryRequired` true; none grants
 production policy-consumption or independent access authority.
@@ -218,5 +222,7 @@ The fixture controller executes in the same disposable container and process,
 using generated test credentials. This validates target composition and actual
 transport, not independent-host controller trust, operational key provisioning
 or full migration acceptance. Its private export accepts the resulting maximum
-19-entry recovery history, including exactly the two restoration access records;
+20-entry recovery history, including the optional production observation and
+exactly two restoration access records. Successful observed exchanges use
+purpose-v2 and bind the exact recorded generation;
 no controller or SSH private key is exported.

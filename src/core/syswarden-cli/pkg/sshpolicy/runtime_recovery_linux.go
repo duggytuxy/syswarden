@@ -35,12 +35,15 @@ type sshRuntimeRecoveryIntent struct {
 // These observations never assert loaded policy, authenticated access or
 // completed recovery. Even a successful restoring request keeps the fence.
 type sshRuntimeRecoveryResult struct {
-	Transaction           string
-	RecoverySHA256        string
-	IntentDurable         bool
-	ConfigurationRestored bool
-	RequestReturned       bool
-	RecoveryRequired      bool
+	Transaction                  string
+	RecoverySHA256               string
+	IntentDurable                bool
+	ConfigurationRestored        bool
+	RequestReturned              bool
+	ReloadObservationDurable     bool
+	ReloadObservationSHA256      string
+	ReloadObservationImageSHA256 string
+	RecoveryRequired             bool
 }
 
 func sshRuntimeRecoveryPhase(step int, done bool) string {
@@ -63,7 +66,7 @@ func observeSSHRuntimeRecoveryRecordsWithAccess(journal *sshJournal, issuance, e
 	if evidence != nil && issuance == nil {
 		return nil, ErrInventoryUnsafe
 	}
-	limit := 17
+	limit := 18
 	if issuance != nil {
 		limit++
 	}
@@ -80,7 +83,7 @@ func observeSSHRuntimeRecoveryRecordsWithAccess(journal *sshJournal, issuance, e
 	records := make(map[string]string, len(names))
 	allowed := map[string]bool{sshMarkerName: true, sshPreparedRecord: true,
 		sshActivationIntentName: true, sshAccessEvidenceName: true, sshAccessIssuanceName: true,
-		sshRuntimeRecoveryName: true, sshRuntimeRecoveryReloadName: true}
+		sshRuntimeRecoveryName: true, sshRuntimeRecoveryReloadName: true, sshRuntimeRecoveryObservationName: true}
 	for step := 1; step <= 3; step++ {
 		allowed[sshPublicationName(step, false)], allowed[sshPublicationName(step, true)] = true, true
 	}
@@ -136,7 +139,7 @@ func validateSSHRuntimeRecoveryHistory(journal *sshJournal, intent sshRuntimeRec
 	}
 	validTarget := lowerDigest.MatchString(intent.Target)
 	if unboundFresh {
-		validTarget = intent.Target == "" && records[sshRuntimeRecoveryName] == "" && records[sshRuntimeRecoveryReloadName] == ""
+		validTarget = intent.Target == "" && records[sshRuntimeRecoveryName] == "" && records[sshRuntimeRecoveryReloadName] == "" && records[sshRuntimeRecoveryObservationName] == ""
 		for step := 1; step <= 2; step++ {
 			validTarget = validTarget && records[sshRuntimeRecoveryPhase(step, false)] == "" && records[sshRuntimeRecoveryPhase(step, true)] == ""
 		}
@@ -159,7 +162,7 @@ func validateSSHRuntimeRecoveryHistory(journal *sshJournal, intent sshRuntimeRec
 		return fail(ErrInventoryUnsafe)
 	}
 	for name := range records {
-		if name == sshRuntimeRecoveryName || name == sshRuntimeRecoveryReloadName ||
+		if name == sshRuntimeRecoveryName || name == sshRuntimeRecoveryReloadName || name == sshRuntimeRecoveryObservationName ||
 			name == sshRuntimeRecoveryPhase(1, false) || name == sshRuntimeRecoveryPhase(1, true) ||
 			name == sshRuntimeRecoveryPhase(2, false) || name == sshRuntimeRecoveryPhase(2, true) {
 			continue
@@ -252,7 +255,7 @@ func recoverSSHActivatedConfiguration(ctx context.Context, journal *sshJournal, 
 	if err != nil {
 		return result, err
 	}
-	if _, exists := records[sshRuntimeRecoveryReloadName]; exists {
+	if records[sshRuntimeRecoveryReloadName] != "" || records[sshRuntimeRecoveryObservationName] != "" {
 		return result, errors.New("SSH restoring reload may have been requested; retain history and obtain fresh runtime and access evidence before another operation")
 	}
 	var intent sshRuntimeRecoveryIntent
@@ -455,5 +458,22 @@ func recoverSSHActivatedConfiguration(ctx context.Context, journal *sshJournal, 
 		return result, err
 	}
 	result.RequestReturned = true
+	// Only the concrete production target can carry this private observation.
+	// A successful callback, caller boolean or authentication is insufficient.
+	if target, ok := lease.(*sshActivationTarget); ok {
+		observed, err := target.restoringReloadObservation(ctx, requestGuard)
+		if err != nil {
+			return result, err
+		}
+		if observed != nil {
+			image, err := publishSSHRuntimeRecoveryObservation(ctx, journal, intent, recoveryDigest, restored, records, observed, requestGuard)
+			if err != nil {
+				return result, err
+			}
+			result.ReloadObservationDurable = true
+			result.ReloadObservationSHA256 = digestBytes(image.data)
+			result.ReloadObservationImageSHA256 = sshImageDigest(image)
+		}
+	}
 	return result, nil
 }

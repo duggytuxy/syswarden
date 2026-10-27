@@ -823,10 +823,19 @@ func testUpdaterForPlatform(
 	keys map[string]ed25519.PublicKey,
 	runner commandRunner,
 ) *updater {
+	candidateVersion := testUpdateVersion
+	candidateDigest := strings.Repeat("a", sha256.Size*2)
 	return &updater{
-		// Transport/workspace tests inject their own package bytes. Native
-		// header parsing and the mandatory production gate have separate tests.
-		attestPackageIdentity: func(context.Context, packageTarget, string, *os.File) error { return nil },
+		// Transport/workspace tests inject opaque package bytes and attestation
+		// evidence. Native parsing and the production gates have separate tests.
+		attestPackageIdentity: func(_ context.Context, _ packageTarget, version string, _ *os.File) error {
+			candidateVersion = version
+			return nil
+		},
+		attestCandidateCLI: func(context.Context, packageTarget, *os.File) (string, error) { return candidateDigest, nil },
+		attestInstalled: func(context.Context, packageTarget, int) (installedQualificationEvidence, error) {
+			return installedQualificationEvidence{version: candidateVersion, cliSHA256: candidateDigest}, nil
+		},
 		preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {
 			return testCompatibilityUpdateIdentity("dpkg-query"), nil
 		},
@@ -853,6 +862,7 @@ func testUpdaterForPlatform(
 		metadataTimeout: time.Second,
 		packageTimeout:  time.Second,
 		installTimeout:  time.Second,
+		attestTimeout:   time.Second,
 	}
 }
 

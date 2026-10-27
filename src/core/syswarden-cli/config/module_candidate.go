@@ -153,6 +153,7 @@ func validateModuleCandidateWithIntent(configDir string, target tomlEditTarget, 
 	if err := inventory.validate(); err != nil {
 		return nil, err
 	}
+	resolveModularSaaSAliasFromTOML(v, observed)
 	if err := resolveOptionalModules(v); err != nil {
 		return nil, err
 	}

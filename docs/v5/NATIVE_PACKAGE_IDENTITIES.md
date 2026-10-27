@@ -112,6 +112,14 @@ must still match the original observation. This comparison detects observed
 identity drift; it is not a native package database lock or permission to convert
 between the two package names. Published v4 signed manifest bytes and artifact names remain unchanged.
 
+Online updates also derive the expected CLI digest from the authenticated open
+package before installation. Native-manager success is followed by a repeated
+selected-package registration check and exact installed version, ownership and
+CLI-byte attestation. A mismatch, failed observation or cancellation prevents
+post-install finalization and a success message. This does not undo a partial
+native transaction or establish runtime health; durable APK transition recovery
+and complete payload/lifecycle qualification remain separate requirements.
+
 ## Signed identity and installed ownership
 
 The v5 producer and consumer use `syswarden-update-manifest/v3`. Its exact ordered
@@ -335,6 +343,74 @@ Its fixtures have two distinct scopes:
 Success for the disjoint synthetic layout does not validate the selected full
 package variants or transfer of current production paths. The selected variants
 do not support coexistence, and the laboratory is not their acceptance matrix.
+
+## Controlled APK launcher transition candidate
+
+The current product payload and hooks do not implement this transition. Direct
+APK installation and upgrade remain unqualified for administrator launcher
+collisions, including same-identity upgrades of both package variants. An incoming
+preinstall/preupgrade refusal cannot guarantee that APK leaves the filesystem
+unchanged. Omitting a formerly owned alias from the new package alone is also
+unsafe: the old package's cleanup can delete it.
+
+The separate `scripts/ci/apk_protected_path_probe.py` characterizes a possible
+pre-transaction bridge with inert APK v2 packages on apk-tools 2.14.12 and 3.0.8.
+It uses existing cached Linux AMD64 images, no network or host mounts, verifies
+actual container isolation before execution and verifies exact container cleanup.
+Run it only with `--run-native`, an existing absolute `--nfpm` executable, an
+exact cached `--image` ID and a new absolute `--output` directory. The independent
+fixtures accept unsigned packages; the product verification contract does not.
+
+Both identities run seven scenarios with separately seeded native remove and
+purge lifecycles, for 28 observations per image. Each fixture modifies one regular
+launcher and one symlink. It compares file bytes, link target, inode, permissions,
+ownership, link count, size, sampled timestamps and output from inert consumers.
+It separately observes native ownership and removal of the vendor payload.
+These consumers do not establish real SSH, firewall or service preservation.
+
+| Preparation and payload | Upgrade observation | Later removal observation |
+| --- | --- | --- |
+| Preexisting `+usr/local/bin` directory rule, aliases still packaged | Administrator launchers remain, but APK owns their paths. | Ordinary remove preserves them; purge deletes them. |
+| Preexisting directory rule, new package omits aliases | Modified launchers remain with the same observed identity and effect; APK no longer owns them. | Separate remove and purge both preserve them. |
+| Exact-file protection rules | Replacement still occurs; omitted old aliases are deleted. | No preservation guarantee. |
+| Rule shipped by the incoming package or written by its preupgrade script | Replacement still occurs in that transaction. | No preservation guarantee. |
+
+The second row is a controlled-transition candidate, not a supported installation
+procedure. Protection must exist before a new APK process loads its database.
+The native [APK 2 database implementation](https://github.com/alpinelinux/apk-tools/blob/v2.14.12/src/database.c)
+and [APK 3 database implementation](https://github.com/alpinelinux/apk-tools/blob/v3.0.8/src/database.c)
+apply replacement and old-payload cleanup using directory protection state.
+A rule for the shared directory also affects other entries there. An exact-file
+rule or a late package hook is not an equivalent substitute.
+
+A production bridge still requires all of the following:
+
+- A separate authenticated preparation step and explicit approval before native
+  replacement, bound to the installed identity, exact old and new payloads,
+  administrator inventory and selected transition. Incoming scripts, a package
+  name, and a successful APK exit are not approval or ownership evidence.
+- Protected creation and inspection of the APK policy file and its parents,
+  preservation of existing policy and its effective precedence, and an exact
+  record of any bridge-owned addition. Do not replace administrator policy or
+  override the complete protected-path configuration. Cleanup must remove only
+  an unchanged bridge-owned addition after proving it is no longer needed.
+- Inspection of all old and new payload paths and native removal effects,
+  including parents, retired files, dependencies and recovery hooks. Unknown or
+  changing ownership must refuse before the transaction. The two launcher
+  fixtures do not prove this wider boundary or concurrent-writer safety.
+- Coordinated APK alias omission, staging and payload attestations, hook checks,
+  updater checks and removal inventories. Retained administrator aliases must
+  remain unowned and must not be adopted into a product cleanup receipt. Product
+  aliases created later need separate attributable ownership and removal rules.
+- Verification of unchanged administrator behavior through failure, retry,
+  maintenance, reload and reboot, with independent uninstall, native remove and
+  native purge qualification. Backups alone do not prove uninterrupted behavior.
+
+The compatibility identity must retain its historical dependency promises. The
+base identity must retain every mandatory Alpine prerequisite. Fresh product
+configuration must remain inactive with no selected list until explicit TOML
+configuration and approved activation. This laboratory changes none of those
+contracts, does not enable base updates and does not establish IVVQ acceptance.
 
 ## Inert native laboratory
 

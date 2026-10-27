@@ -98,7 +98,7 @@ func restoredSSHRecordName(name string) bool {
 	// Generic journal publication names do not grant file-only retirement
 	// authority for the separately approved restoration access exchange.
 	return name == sshMarkerName || (sshRecordName(name) && name != sshPreparationAbortName && name != sshActivationIntentName &&
-		name != sshRestoredAccessIssuanceName && name != sshRestoredAccessEvidenceName)
+		name != sshRestoredAccessIssuanceName && name != sshRestoredAccessEvidenceName && name != sshRuntimeRecoveryObservationName)
 }
 
 func observeSSHRestoredFiles(directory *os.File, uid int) (map[string]string, sshPreparation, error) {

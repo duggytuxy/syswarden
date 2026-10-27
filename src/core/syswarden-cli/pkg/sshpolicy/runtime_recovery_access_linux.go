@@ -78,8 +78,8 @@ func parseSSHRestoredAccessRequest(wire []byte, approved string) (sshRestoredAcc
 	if err := json.Unmarshal(wire, &request); err != nil {
 		return sshRestoredAccessRequest{}, ErrInventoryUnsafe
 	}
-	canonical, err := json.Marshal(request)
-	if err != nil || !bytes.Equal(wire, canonical) || request.Schema != 1 || request.Domain != sshRestoredAccessRequestDomain || len(request.Routes) == 0 || len(request.Routes) > MaxAccessContexts {
+	canonical, err := canonicalSSHRestoredAccessRequest(wire, request)
+	if err != nil || !bytes.Equal(wire, canonical) || len(request.Routes) == 0 || len(request.Routes) > MaxAccessContexts {
 		return sshRestoredAccessRequest{}, ErrInventoryUnsafe
 	}
 	for _, hash := range []string{request.Transaction, request.Plan, request.Recovery, request.ReloadIntent, request.Restored, request.Target, request.Assessment} {
@@ -123,7 +123,7 @@ func makeSSHRestoredAccessRequest(a *sshRestoredAccessAssessment, summary Recove
 	}
 	request := sshRestoredAccessRequest{1, sshRestoredAccessRequestDomain, summary.Transaction, summary.PlanSHA256, summary.RecoverySHA256,
 		summary.ReloadIntentSHA256, summary.RestoredSHA256, summary.RecordedTargetSHA256, assessment, routes}
-	wire, err := json.Marshal(request)
+	wire, err := marshalSSHRestoredAccessRequest(request, summary)
 	if err != nil || len(wire) > maxSSHAccessRequestBytes {
 		return nil, errors.Join(ErrInventoryBounds, err)
 	}
@@ -259,6 +259,9 @@ func issueSSHAuthorizedRestoredAccessChallenge(ctx context.Context, journal *ssh
 			}
 			record := sshRestoredAccessIssuance{1, sshRestoredAccessIssuanceDomain, summary.Transaction, plan, recovery, summary.ReloadIntentSHA256,
 				summary.RestoredSHA256, summary.RecordedTargetSHA256, parser, history, authority.digest, sshImageDigest(authority.image), request, challenge, true}
+			if summary.ReloadObservationObserved {
+				record.Schema, record.Domain = 2, sshObservedRestoredAccessIssuanceDomain
+			}
 			wire, err := json.Marshal(record)
 			if err != nil || len(wire) > maxSSHAccessIssuanceBytes {
 				return errors.Join(ErrInventoryBounds, err)
@@ -297,7 +300,7 @@ func decodeSSHRestoredAccessIssuance(wire []byte, approved string, authority *ss
 		return fail(err)
 	}
 	canonical, err := json.Marshal(record)
-	if err != nil || !bytes.Equal(wire, canonical) || record.Schema != 1 || record.Domain != sshRestoredAccessIssuanceDomain || !record.RecoveryRequired ||
+	if err != nil || !bytes.Equal(wire, canonical) || !validSSHRestoredAccessRecordVersion(record.Schema, record.Domain, false) || !record.RecoveryRequired ||
 		record.Plan != authority.plan || record.Recovery != authority.recovery || record.Enrollment != authority.digest || record.EnrollmentImage != sshImageDigest(authority.image) {
 		return fail(err)
 	}
@@ -307,7 +310,7 @@ func decodeSSHRestoredAccessIssuance(wire []byte, approved string, authority *ss
 		}
 	}
 	request, err := parseSSHRestoredAccessRequest(record.Request, digestBytes(record.Request))
-	if err != nil || request.Transaction != record.Transaction || request.Plan != record.Plan || request.Recovery != record.Recovery ||
+	if err != nil || request.Schema != record.Schema || request.Transaction != record.Transaction || request.Plan != record.Plan || request.Recovery != record.Recovery ||
 		request.ReloadIntent != record.ReloadIntent || request.Restored != record.Restored || request.Target != record.Target {
 		return fail(err)
 	}
@@ -381,6 +384,9 @@ func recordSSHAuthorizedRestoredAccessEvidence(ctx context.Context, journal *ssh
 			evidence := sshRestoredAccessEvidence{1, sshRestoredAccessEvidenceDomain, record.Transaction, record.Plan, record.Recovery, record.ReloadIntent,
 				record.Restored, record.Target, record.Parser, record.Records, record.Enrollment, record.EnrollmentImage, digestBytes(authority.controller), last.Unix(),
 				record.Request, record.Challenge, receipt, approvedImage, true}
+			if record.Schema == 2 {
+				evidence.Schema, evidence.Domain = 2, sshObservedRestoredAccessEvidenceDomain
+			}
 			wire, err := json.Marshal(evidence)
 			if err != nil || len(wire) > maxSSHAccessEvidenceBytes {
 				return errors.Join(ErrInventoryBounds, err)
@@ -453,7 +459,7 @@ func inspectSSHAuthorizedRestoredAccess(ctx context.Context, journal *sshJournal
 				return err
 			}
 			if evidenceImage != nil {
-				if evidence.Schema != 1 || evidence.Domain != sshRestoredAccessEvidenceDomain || !evidence.RecoveryRequired || evidence.Transaction != record.Transaction ||
+				if evidence.Schema != record.Schema || !validSSHRestoredAccessRecordVersion(evidence.Schema, evidence.Domain, true) || !evidence.RecoveryRequired || evidence.Transaction != record.Transaction ||
 					evidence.Plan != record.Plan || evidence.Recovery != record.Recovery || evidence.ReloadIntent != record.ReloadIntent || evidence.Restored != record.Restored ||
 					evidence.Target != record.Target || evidence.Parser != record.Parser || evidence.Records != record.Records || evidence.Enrollment != record.Enrollment ||
 					evidence.EnrollmentImage != record.EnrollmentImage || evidence.Controller != digestBytes(authority.controller) || evidence.Issuance != approvedImage ||

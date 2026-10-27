@@ -138,6 +138,7 @@ jobs:
             scripts/ci/package_install_phase_test.py \
             scripts/ci/package_fresh_configuration_test.py \
             scripts/ci/native_fresh_configuration_probe_test.py \
+            scripts/ci/apk_protected_path_probe_test.py \
             scripts/ci/package_lifecycle_lab_test.py \
             scripts/ci/package_v5_apk_removal_test.py \
             scripts/ci/package_stage_gate_test.py \

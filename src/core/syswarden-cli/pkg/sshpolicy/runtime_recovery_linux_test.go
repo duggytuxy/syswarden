@@ -91,7 +91,8 @@ func TestSSHRuntimeRecoveryRestoresExactInodesAndNeverClaimsAccess(t *testing.T)
 				result, err := recoverSSHActivatedConfiguration(t.Context(), journal, plan.summary.PlanSHA256, deps.parserDigest, approved,
 					deps.run, deps.checkParser, bind, sshPublicationDefaults())
 				if err != nil || !result.ConfigurationRestored || !result.RequestReturned || !result.IntentDurable ||
-					!result.RecoveryRequired || !journal.poisoned || calls != 1 || closes != 3 {
+					!result.RecoveryRequired || result.ReloadObservationDurable || result.ReloadObservationSHA256 != "" ||
+					result.ReloadObservationImageSHA256 != "" || !journal.poisoned || calls != 1 || closes != 3 {
 					t.Fatal("restoration or uncertainty boundary failed", result, calls, closes, err)
 				}
 				if err := journal.Close(); err != nil {
@@ -144,6 +145,7 @@ func TestSSHRuntimeRecoveryWithSerializedTarget(t *testing.T) {
 	result, err := recoverSSHActivatedConfiguration(t.Context(), journal, plan.summary.PlanSHA256, deps.parserDigest, approved,
 		deps.run, deps.checkParser, bind, sshPublicationDefaults())
 	if err != nil || !result.ConfigurationRestored || !result.RequestReturned || !result.RecoveryRequired ||
+		result.ReloadObservationDurable || result.ReloadObservationSHA256 != "" || result.ReloadObservationImageSHA256 != "" ||
 		sends != 1 || observations != 1 || closes != 2 {
 		t.Fatal("serialized recovery request failed", result, sends, observations, closes, err)
 	}

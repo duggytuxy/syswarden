@@ -135,3 +135,89 @@ func TestIncompletePolicyRepairKeepsLastValidatedSnapshot(t *testing.T) {
 		t.Error("failed repair changed the retained configuration")
 	}
 }
+
+func TestActivationNeverSeedsMissingHistoricalConfiguration(t *testing.T) {
+	for _, scenario := range []string{"absent-root", "empty-root", "empty-modules", "partial-published", "unpublished-fragments"} {
+		t.Run(scenario, func(t *testing.T) {
+			preserveOperatorPolicyGlobals(t)
+			retainedRoot := filepath.Join(t.TempDir(), "retained-config")
+			if err := EnsureDefaults(retainedRoot); err != nil {
+				t.Fatal(err)
+			}
+			if err := ParseConfig(retainedRoot); err != nil {
+				t.Fatal(err)
+			}
+			lastValidated := GlobalConfig
+			parent := t.TempDir()
+			root := filepath.Join(parent, "config")
+			switch scenario {
+			case "empty-root":
+				if err := os.Mkdir(root, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "empty-modules":
+				if err := os.MkdirAll(filepath.Join(root, "modules"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "partial-published", "unpublished-fragments":
+				if err := EnsureDefaults(root); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(filepath.Join(root, "modules/10-network.toml")); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "unpublished-fragments" {
+					if err := os.Remove(filepath.Join(root, "config.toml")); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					// Refusal must precede even otherwise permitted retired-secret cleanup.
+					if err := os.WriteFile(filepath.Join(root, "modules/99-user.toml"), []byte("[user]\nwebtui_password = 'deliberate-test-secret'\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			before := directoryDigest(t, parent)
+			inventory := make(map[string]os.FileInfo)
+			if err := filepath.Walk(parent, func(path string, info os.FileInfo, err error) error {
+				if err == nil {
+					inventory[path] = info
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				if err := PrepareInstallationConfiguration(root); err == nil || !strings.Contains(err.Error(), "activation requires complete existing modular configuration") {
+					t.Fatalf("attempt %d inferred activation authority from missing policy: %v", attempt, err)
+				}
+				if GlobalConfig != lastValidated {
+					t.Fatal("refused activation replaced the last validated snapshot")
+				}
+				if state := CurrentLoadState(); !state.Degraded || state.Source != root {
+					t.Fatalf("missing activation policy not reported as degraded: %+v", state)
+				}
+				if got := directoryDigest(t, parent); !reflect.DeepEqual(got, before) {
+					t.Fatal("refused activation changed configuration bytes or file inventory")
+				}
+				seen := 0
+				if err := filepath.Walk(parent, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+					original, exists := inventory[path]
+					if !exists || !os.SameFile(original, info) || original.Mode() != info.Mode() || original.Size() != info.Size() || !original.ModTime().Equal(info.ModTime()) {
+						t.Errorf("refused activation changed filesystem metadata at %s", path)
+					}
+					seen++
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if seen != len(inventory) {
+					t.Fatal("refused activation changed directory inventory")
+				}
+			}
+		})
+	}
+}
