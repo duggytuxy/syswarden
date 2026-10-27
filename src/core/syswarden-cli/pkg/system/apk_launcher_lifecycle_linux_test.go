@@ -216,7 +216,7 @@ func TestFreshAPKLauncherPreservesInheritedWithoutAdoptingBehavior(t *testing.T)
 }
 
 func TestFreshAPKLauncherLateDriftRetainsRecoveryDebt(t *testing.T) {
-	for _, target := range []string{"first-created-alias", "inherited-alias", "cli", "tui", "pending-reference"} {
+	for _, target := range []string{"first-created-alias", "inherited-alias", "cli", "tui", "pending-reference", "pending-reference-unlink"} {
 		t.Run(target, func(t *testing.T) {
 			root := freshAPKFixture(t, true)
 			if target == "inherited-alias" {
@@ -244,21 +244,45 @@ func TestFreshAPKLauncherLateDriftRetainsRecoveryDebt(t *testing.T) {
 					freshAPKFixtureWrite(t, root, qualificationPackageCLIPath, []byte("changed runtime\n"), 0750)
 				case "tui":
 					freshAPKFixtureWrite(t, root, "opt/syswarden/bin/syswarden-tui", []byte("changed runtime\n"), 0750)
-				case "pending-reference":
+				case "pending-reference", "pending-reference-unlink":
 					path := filepath.Join(root, strings.TrimPrefix(apkLauncherLifecycleRoot, "/"), "pending.json")
 					raw, err := os.ReadFile(path) // #nosec G304 -- fixed pending.json under t.TempDir before deliberate inode replacement
 					if err != nil {
 						return err
 					}
-					if err := os.Remove(path); err != nil {
+					before, err := os.Lstat(path)
+					if err != nil {
 						return err
 					}
-					return os.WriteFile(path, raw, 0600) // #nosec G703 -- fixed pending.json under t.TempDir; deliberate same-byte inode replacement
+					if target == "pending-reference-unlink" {
+						err = os.Remove(path)
+					} else {
+						// Retaining the original makes this replacement distinct even
+						// without the production descriptor's inode-reuse protection.
+						err = os.Rename(path, path+".held")
+					}
+					if err != nil {
+						return err
+					}
+					if err := os.WriteFile(path, raw, 0600); err != nil { // #nosec G703 -- fixed pending.json under t.TempDir; deliberate same-byte inode replacement
+						return err
+					}
+					after, err := os.Lstat(path)
+					if err != nil {
+						return err
+					}
+					if os.SameFile(before, after) {
+						t.Fatal("pending reference replacement reused the original inode")
+					}
 				}
 				return nil
 			}
-			if err := completeFreshAPKLaunchersAt(context.Background(), root, fault); err == nil {
+			err := completeFreshAPKLaunchersAt(context.Background(), root, fault)
+			if err == nil {
 				t.Fatal("late drift accepted")
+			}
+			if strings.HasPrefix(target, "pending-reference") && !strings.Contains(err.Error(), "pending reference identity changed") {
+				t.Fatalf("pending replacement did not reach the identity guard: %v", err)
 			}
 			if !changed {
 				t.Fatal("late mutation seam not reached")

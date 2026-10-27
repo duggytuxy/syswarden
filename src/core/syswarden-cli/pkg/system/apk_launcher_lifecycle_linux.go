@@ -493,16 +493,27 @@ func completeFreshAPKLaunchersAt(ctx context.Context, host string, fault func(st
 	}
 	s.fault = fault
 	defer func() { result = errors.Join(result, s.close()) }()
-	pending, err := readAPKTransitionBytes(s.directory, "pending.json", 4096)
+	// Keep the original inode alive until retirement, including when its name is
+	// unlinked, so a replacement cannot reuse the identity authorizing removal.
+	pendingFile, err := s.directory.root.OpenFile("pending.json", os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	pendingIdentity, err := s.directory.root.Lstat("pending.json")
+	defer func() { result = errors.Join(result, pendingFile.Close()) }()
+	pendingIdentity, err := pendingFile.Stat()
 	if err != nil {
 		return err
+	}
+	pending, err := readAPKTransitionBytes(s.directory, "pending.json", 4096)
+	if err != nil {
+		return err
+	}
+	pendingNamed, err := s.directory.root.Lstat("pending.json")
+	if err != nil || !sameServiceArtifactIdentity(pendingIdentity, pendingNamed) {
+		return errors.New("fresh APK launcher pending reference changed during capture")
 	}
 	var reference apkLauncherLifecycleReference
 	if decodeAPKTransitionJSON(pending, &reference) != nil || reference.Schema != apkFreshLauncherSchema || reference.Kind != "fresh-pending" || !validSHA256(reference.PlanSHA256) || reference.ReceiptSHA256 != reference.PlanSHA256 {
