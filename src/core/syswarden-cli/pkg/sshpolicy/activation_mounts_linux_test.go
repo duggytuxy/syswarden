@@ -242,17 +242,64 @@ func TestSSHMountEventsRejectUnqualifiedProcessAndFakeProcfs(t *testing.T) {
 // This optional rootless oracle changes only a new user/mount namespace. A
 // host that disables unprivileged user namespaces reports the missing coverage.
 func TestSSHMountEventsNativeMountUnmountABA(t *testing.T) {
+	probe := exec.Command("/proc/self/exe", "-test.run=^TestSSHMountEventsNativeExecProbe$", "-test.v")
+	probe.Env = []string{"SYSWARDEN_MOUNT_EVENT_TEST_EXEC_PROBE=yes", "GOMAXPROCS=2"}
+	if output, err := probe.CombinedOutput(); err != nil || !strings.Contains(string(output), "PASS: TestSSHMountEventsNativeExecProbe") {
+		t.Fatalf("same-executable probe failed before namespace creation: %v\n%s", err, output)
+	}
 	command := exec.Command("/proc/self/exe", "-test.run=^TestSSHMountEventsNativeABAChild$", "-test.v")
 	command.Env = []string{"SYSWARDEN_MOUNT_EVENT_TEST_CHILD=yes", "GOMAXPROCS=2"}
 	command.SysProcAttr = &syscall.SysProcAttr{Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNS,
 		UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}},
 		GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}}, GidMappingsEnableSetgroups: false}
 	output, err := command.CombinedOutput()
-	if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS) {
-		t.Skip("native mount ABA oracle requires unprivileged user/mount namespaces")
+	if sshMountEventNamespaceStartUnavailable(err) {
+		if os.Getenv("SYSWARDEN_MOUNT_EVENT_TEST_REQUIRED") == "yes" {
+			t.Fatalf("required native mount ABA context is unavailable: %v", err)
+		}
+		t.Skipf("isolated user/mount namespace execution unavailable after executable probe: %v", err)
 	}
 	if err != nil || !strings.Contains(string(output), "PASS: TestSSHMountEventsNativeABAChild") {
 		t.Fatalf("native mount ABA oracle failed: %v\n%s", err, output)
+	}
+}
+
+// Only failures before the isolated test process starts can describe missing
+// kernel/runner capability. A child assertion or mount failure remains fatal.
+func sshMountEventNamespaceStartUnavailable(err error) bool {
+	pathError, ok := err.(*os.PathError)
+	if !ok || pathError.Op != "fork/exec" || pathError.Path != "/proc/self/exe" {
+		return false
+	}
+	return errors.Is(pathError.Err, unix.EPERM) || errors.Is(pathError.Err, unix.EACCES) ||
+		errors.Is(pathError.Err, unix.EINVAL) || errors.Is(pathError.Err, unix.ENOSYS)
+}
+
+func TestSSHMountEventsNamespaceFailureClassification(t *testing.T) {
+	for _, errno := range []error{unix.EPERM, unix.EACCES, unix.EINVAL, unix.ENOSYS} {
+		if !sshMountEventNamespaceStartUnavailable(&os.PathError{Op: "fork/exec", Path: "/proc/self/exe", Err: errno}) {
+			t.Fatal("namespace start capability failure was not classified", errno)
+		}
+		for _, err := range []error{errno,
+			errors.Join(&os.PathError{Op: "fork/exec", Path: "/proc/self/exe", Err: errno}),
+			&os.PathError{Op: "open", Path: "/proc/self/exe", Err: errno},
+			&os.PathError{Op: "fork/exec", Path: "/different/executable", Err: errno}} {
+			if sshMountEventNamespaceStartUnavailable(err) {
+				t.Fatal("unrelated error was treated as unavailable native coverage", err)
+			}
+		}
+	}
+	for _, err := range []error{nil, errors.New("assertion failure"), &exec.ExitError{},
+		&os.PathError{Op: "fork/exec", Path: "/proc/self/exe", Err: unix.ENOENT}} {
+		if sshMountEventNamespaceStartUnavailable(err) {
+			t.Fatal("execution or child failure was treated as unavailable native coverage", err)
+		}
+	}
+}
+
+func TestSSHMountEventsNativeExecProbe(t *testing.T) {
+	if os.Getenv("SYSWARDEN_MOUNT_EVENT_TEST_EXEC_PROBE") != "yes" {
+		t.Skip("same-executable probe child only")
 	}
 }
 

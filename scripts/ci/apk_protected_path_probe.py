@@ -23,9 +23,35 @@ import native_fresh_configuration_probe as isolation
 
 PACKAGE_NAMES = ("syswarden", "syswarden-base")
 CASES = ("fresh-directory", "same-directory", "omit-directory", "same-exact",
-         "omit-exact", "incoming-rule", "preupgrade-rule")
+         "omit-exact", "incoming-rule", "preupgrade-rule",
+         "omit-metadata-link-directory", "omit-metadata-regular-directory",
+         "omit-overlay", "omit-metadata-regular-overlay", "omit-metadata-link-overlay")
 REMOVALS = ("remove", "purge")
+ALIASES = ("syswarden", "syswarden-tui")
+PARENTS = ("/usr", "/usr/local", "/usr/local/bin")
 PASS_MARKER = "APK_PROTECTED_PATH_CHARACTERIZATION_PASS"
+
+OWNERSHIP_SCRIPT = r'''
+launcher_ownership() {
+    launcher_path=$1
+    expected_package=$2
+    if apk info --who-owns "$launcher_path" > owner 2>/dev/null; then
+        case "$(cat owner)" in
+            "$launcher_path is owned by $expected_package") printf 'owned\n' ;;
+            "$launcher_path symlink target is owned by $expected_package")
+                test -L "$launcher_path" || return 83
+                test "$(readlink "$launcher_path")" = /opt/sw-apk-protection/vendor || return 83
+                printf 'target-owned\n'
+                ;;
+            *) return 83 ;;
+        esac
+    else
+        query_status=$?
+        test "$query_status" -eq 1 || return 83
+        printf 'unowned\n'
+    fi
+}
+'''
 
 SCRIPT = r'''#!/bin/sh
 set -eu
@@ -33,6 +59,7 @@ cd /tmp/sw-fresh-lab
 test "$(apk --print-arch)" = x86_64
 apk --version
 apk_cmd() { apk --no-network --repositories-file /dev/null --allow-untrusted "$@"; }
+''' + OWNERSHIP_SCRIPT + r'''
 for package in syswarden syswarden-base; do
     if apk info -e "$package" >/dev/null 2>&1; then exit 80; else test "$?" -eq 1; fi
 done
@@ -43,51 +70,101 @@ mkdir -p /usr/local/bin /opt/sw-apk-protection /etc/apk/protected_paths.d
 printf '#!/bin/sh\nprintf "admin-regular\\n"\n' > admin-regular
 printf '#!/bin/sh\nprintf "admin-link\\n"\n' > /opt/sw-apk-protection/admin-target
 chmod 755 /opt/sw-apk-protection/admin-target
+identity_snapshot() {
+    for alias in syswarden syswarden-tui; do
+        if [ -L "/usr/local/bin/$alias" ]; then readlink "/usr/local/bin/$alias"; else sha256sum "/usr/local/bin/$alias"; fi
+        stat -c '%n:%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "/usr/local/bin/$alias"
+    done
+}
 snapshot() {
-    sha256sum /usr/local/bin/syswarden
-    readlink /usr/local/bin/syswarden-tui
-    stat -c '%n:%d:%i:%f:%u:%g:%h:%s:%Y:%Z' /usr/local/bin/syswarden /usr/local/bin/syswarden-tui
-    /usr/local/bin/syswarden
-    /usr/local/bin/syswarden-tui
+    for alias in syswarden syswarden-tui; do
+        sha256sum "/usr/local/bin/$alias"
+        if [ -L "/usr/local/bin/$alias" ]; then readlink "/usr/local/bin/$alias"; fi
+        stat -c '%n:%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "/usr/local/bin/$alias"
+        "/usr/local/bin/$alias"
+    done
+}
+parent_snapshot() {
+    for parent in /usr /usr/local /usr/local/bin; do
+        stat -c '%n:%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "$parent"
+    done
+}
+record_parent_snapshot() {
+    parent_stage=$1
+    parent_snapshot > "$parent_stage-parent"
+    cut -d: -f1-6 "$parent_stage-parent" > "$parent_stage-parent-access"
+    while IFS= read -r metadata; do
+        printf 'PARENT_METADATA=%s:%s:%s:%s:%s\n' "$package" "$case_name" "$removal" "$parent_stage" "$metadata"
+    done < "$parent_stage-parent"
 }
 for package in syswarden syswarden-base; do
-    for case_name in fresh-directory same-directory omit-directory same-exact omit-exact incoming-rule preupgrade-rule; do
+    for case_name in fresh-directory same-directory omit-directory same-exact omit-exact incoming-rule preupgrade-rule omit-metadata-link-directory omit-metadata-regular-directory omit-overlay omit-metadata-regular-overlay omit-metadata-link-overlay; do
         for removal in remove purge; do
             rm -f /etc/apk/protected_paths.d/sw-lab.list
             case "$case_name" in
                 fresh-*) ;;
+                omit-metadata-regular-*) apk_cmd add "./$package-1-regular.apk" ;;
                 *) apk_cmd add "./$package-1.apk" ;;
             esac
-            rm -f /usr/local/bin/syswarden /usr/local/bin/syswarden-tui
-            cp admin-regular /usr/local/bin/syswarden
-            chmod 751 /usr/local/bin/syswarden
-            ln -s /opt/sw-apk-protection/admin-target /usr/local/bin/syswarden-tui
+            case "$case_name" in
+                omit-metadata-*)
+                    # Keep the old native bytes/link target. Only metadata differs.
+                    touch -h -t 202001020304 /usr/local/bin/syswarden /usr/local/bin/syswarden-tui
+                    case "$case_name" in omit-metadata-regular-*) chmod 751 /usr/local/bin/syswarden /usr/local/bin/syswarden-tui ;; esac
+                    ;;
+                *)
+                    rm -f /usr/local/bin/syswarden /usr/local/bin/syswarden-tui
+                    cp admin-regular /usr/local/bin/syswarden
+                    chmod 751 /usr/local/bin/syswarden
+                    ln -s /opt/sw-apk-protection/admin-target /usr/local/bin/syswarden-tui
+                    ;;
+            esac
+            identity_snapshot > before-identity
             snapshot > before
+            record_parent_snapshot before
             case "$case_name" in
                 *-directory) printf '+usr/local/bin\n' > /etc/apk/protected_paths.d/sw-lab.list ;;
                 *-exact) printf '+usr/local/bin/syswarden\n+usr/local/bin/syswarden-tui\n' > /etc/apk/protected_paths.d/sw-lab.list ;;
             esac
             version=2
             case "$case_name" in omit-*) version=3 ;; incoming-rule) version=4 ;; preupgrade-rule) version=5 ;; esac
-            apk_cmd add "./$package-$version.apk"
+            case "$case_name" in
+                *-overlay)
+                    # Exact root-relative files, before APK reads installed ownership.
+                    # The incoming package omits both aliases. No directory rule is used.
+                    printf 'usr/local/bin/syswarden\nusr/local/bin/syswarden-tui\n' | apk_cmd --overlay-from-stdin add "./$package-$version.apk"
+                    ;;
+                *) apk_cmd add "./$package-$version.apk" ;;
+            esac
             test "$(/opt/sw-apk-protection/vendor)" = "vendor-$version"
             snapshot > after 2>/dev/null || true
+            identity_snapshot > after-identity 2>/dev/null || true
+            record_parent_snapshot after
+            identity_preserved=0
+            cmp -s before-identity after-identity && identity_preserved=1
             preserved=0
             cmp -s before after && preserved=1
             owned=0
             for alias in syswarden syswarden-tui; do
-                if apk info --who-owns "/usr/local/bin/$alias" > owner 2>/dev/null; then
-                    owned=$((owned + 1))
-                    test "$(cat owner)" = "/usr/local/bin/$alias is owned by $package-$version.00.0-r0"
-                else
-                    test "$?" -eq 1
-                fi
+                ownership=$(launcher_ownership "/usr/local/bin/$alias" "$package-$version.00.0-r0")
+                printf 'OWNERSHIP_OBSERVATION=%s:%s:%s:%s:%s\n' "$package" "$case_name" "$removal" "$alias" "$ownership"
+                if [ "$ownership" = owned ]; then owned=$((owned + 1)); fi
             done
             case "$owned" in 0) ;; 2) owned=1 ;; *) exit 82 ;; esac
             if [ "$removal" = purge ]; then apk_cmd del --purge "$package"; else apk_cmd del "$package"; fi
             if apk info -e "$package" >/dev/null 2>&1; then exit 81; else test "$?" -eq 1; fi
             test ! -e /opt/sw-apk-protection/vendor
             snapshot > removed 2>/dev/null || true
+            identity_snapshot > removed-identity 2>/dev/null || true
+            record_parent_snapshot removed
+            identity_retained=0
+            cmp -s before-identity removed-identity && identity_retained=1
+            printf 'IDENTITY_OBSERVATION=%s:%s:%s:%s:%s\n' "$package" "$case_name" "$removal" "$identity_preserved" "$identity_retained"
+            parent_preserved=0
+            cmp -s before-parent-access after-parent-access && parent_preserved=1
+            parent_retained=0
+            cmp -s before-parent-access removed-parent-access && parent_retained=1
+            printf 'PARENT_OBSERVATION=%s:%s:%s:%s:%s\n' "$package" "$case_name" "$removal" "$parent_preserved" "$parent_retained"
             retained=0
             cmp -s before removed && retained=1
             printf 'OBSERVATION=%s:%s:%s:%s:%s:%s\n' "$package" "$case_name" "$removal" "$preserved" "$owned" "$retained"
@@ -104,13 +181,19 @@ printf 'APK_PROTECTED_PATH_CHARACTERIZATION_PASS\n'
 def expected_observation(package: str, case: str, removal: str) -> dict:
     if package not in PACKAGE_NAMES or case not in CASES or removal not in REMOVALS:
         raise ValueError("unknown protected-path observation coordinate")
-    preserved = case.endswith("-directory")
+    preserved = case in ("fresh-directory", "same-directory", "omit-directory",
+                         "omit-overlay", "omit-metadata-regular-overlay")
     owned = not case.startswith("omit-")
-    retained = preserved and (removal == "remove" or case == "omit-directory")
+    retained = preserved and (removal == "remove" or case.startswith("omit-"))
+    metadata_link = case.startswith("omit-metadata-link-")
     return {"package_name": package, "case": case, "removal": removal,
+            "launcher_identity_preserved": preserved or metadata_link,
+            "launcher_identity_preserved_after_removal": retained or metadata_link,
             "launcher_identity_and_effect_preserved": preserved,
             "launcher_owned_after_upgrade": owned,
-            "launcher_identity_and_effect_preserved_after_removal": retained}
+            "launcher_identity_and_effect_preserved_after_removal": retained,
+            "parent_identity_and_permissions_preserved": True,
+            "parent_identity_and_permissions_preserved_after_removal": True}
 
 
 def parse_result(output: bytes) -> list[dict]:
@@ -119,17 +202,60 @@ def parse_result(output: bytes) -> list[dict]:
     lines = output.decode("utf-8", errors="strict").splitlines()
     if not lines or lines[-1] != PASS_MARKER or lines.count(PASS_MARKER) != 1:
         raise ValueError("missing or repeated protected-path completion marker")
-    observations = [line for line in lines if line.startswith("OBSERVATION=")]
     expected = [expected_observation(name, case, removal) for name in PACKAGE_NAMES for case in CASES for removal in REMOVALS]
-    if len(observations) != len(expected):
-        raise ValueError("incomplete or duplicated protected-path observations")
-    for line, record in zip(observations, expected):
-        fields = (record["package_name"], record["case"], record["removal"],
-                  str(int(record["launcher_identity_and_effect_preserved"])),
-                  str(int(record["launcher_owned_after_upgrade"])),
-                  str(int(record["launcher_identity_and_effect_preserved_after_removal"])))
-        if line != "OBSERVATION=" + ":".join(fields):
-            raise ValueError("native protected-path state differs from its observed contract")
+    observations = {
+        "OBSERVATION": ("launcher_identity_and_effect_preserved", "launcher_owned_after_upgrade",
+                        "launcher_identity_and_effect_preserved_after_removal"),
+        "IDENTITY_OBSERVATION": ("launcher_identity_preserved", "launcher_identity_preserved_after_removal"),
+        "PARENT_OBSERVATION": ("parent_identity_and_permissions_preserved",
+                               "parent_identity_and_permissions_preserved_after_removal"),
+    }
+    for prefix, keys in observations.items():
+        observed = [line for line in lines if line.startswith(prefix + "=")]
+        if len(observed) != len(expected):
+            raise ValueError("incomplete or duplicated protected-path observations")
+        for line, record in zip(observed, expected):
+            fields = (record["package_name"], record["case"], record["removal"],
+                      *(str(int(record[key])) for key in keys))
+            if line != prefix + "=" + ":".join(fields):
+                raise ValueError("native protected-path state differs from its observed contract")
+    owners = [line.removeprefix("OWNERSHIP_OBSERVATION=").split(":") for line in lines if line.startswith("OWNERSHIP_OBSERVATION=")]
+    parents = [line.removeprefix("PARENT_METADATA=").split(":") for line in lines if line.startswith("PARENT_METADATA=")]
+    if len(owners) != len(expected) * len(ALIASES) or len(parents) != len(expected) * 3 * len(PARENTS):
+        raise ValueError("incomplete or duplicated native ownership or parent metadata")
+    for record_index, record in enumerate(expected):
+        coordinate = [record["package_name"], record["case"], record["removal"]]
+        record["native_ownership_observations"] = {}
+        for alias_index, alias in enumerate(ALIASES):
+            fields = owners[record_index * len(ALIASES) + alias_index]
+            allowed = {"owned"} if record["launcher_owned_after_upgrade"] else {"unowned"}
+            if record["case"].startswith("omit-metadata-link-"):
+                allowed.add("target-owned")
+            if len(fields) != 5 or fields[:4] != coordinate + [alias] or fields[4] not in allowed:
+                raise ValueError("native file ownership differs from target ownership or expected state")
+            record["native_ownership_observations"][alias] = fields[4]
+        record["parent_metadata"] = {}
+        for stage_index, stage in enumerate(("before", "after", "removed")):
+            metadata = {}
+            for parent_index, parent in enumerate(PARENTS):
+                fields = parents[(record_index * 3 + stage_index) * len(PARENTS) + parent_index]
+                if len(fields) != 14 or fields[:5] != coordinate + [stage, parent]:
+                    raise ValueError("native parent metadata coordinate is ambiguous")
+                for index, value in enumerate(fields[5:]):
+                    pattern = r"[0-9a-f]{1,8}" if index == 2 else r"-?[0-9]{1,20}" if index >= 7 else r"[0-9]{1,20}"
+                    if re.fullmatch(pattern, value) is None:
+                        raise ValueError("native parent metadata value is malformed")
+                values = dict(zip(("device", "inode", "mode", "uid", "gid", "links", "size", "mtime", "ctime"), fields[5:]))
+                if int(values["mode"], 16) & 0o170000 != 0o040000:
+                    raise ValueError("native parent is not a directory")
+                metadata[parent] = values
+            record["parent_metadata"][stage] = metadata
+        for stage in ("after", "removed"):
+            for parent in PARENTS:
+                before = record["parent_metadata"]["before"][parent]
+                actual = record["parent_metadata"][stage][parent]
+                if any(before[key] != actual[key] for key in ("device", "inode", "mode", "uid", "gid")):
+                    raise ValueError("native parent identity or permissions changed")
     return expected
 
 
@@ -139,11 +265,15 @@ def payload(root: Path, nfpm: Path) -> bytes:
     isolation.write_private(root / "preupgrade.sh", b'#!/bin/sh\nprintf "+usr/local/bin\\n" > /etc/apk/protected_paths.d/sw-lab.list\n', 0o700)
     packages = []
     for name in PACKAGE_NAMES:
-        for version in range(1, 6):
-            vendor = root / f"{name}-vendor-{version}"
+        for version, regular in [(version, False) for version in range(1, 6)] + [(1, True)]:
+            suffix = "-regular" if regular else ""
+            vendor = root / f"{name}-vendor-{version}{suffix}"
             isolation.write_private(vendor, f'#!/bin/sh\nprintf "vendor-{version}\\n"\n'.encode())
             contents = [{"src": str(vendor), "dst": "/opt/sw-apk-protection/vendor", "file_info": {"mode": 0o755}}]
-            if version != 3:
+            if regular:
+                contents.extend({"src": str(vendor), "dst": "/usr/local/bin/" + alias,
+                                 "file_info": {"mode": 0o755}} for alias in ("syswarden", "syswarden-tui"))
+            elif version != 3:
                 contents.extend({"src": "/opt/sw-apk-protection/vendor", "dst": "/usr/local/bin/" + alias,
                                  "type": "symlink"} for alias in ("syswarden", "syswarden-tui"))
             if version == 4:
@@ -153,11 +283,11 @@ def payload(root: Path, nfpm: Path) -> bytes:
                     "maintainer": "SysWarden synthetic laboratory", "license": "MIT", "contents": contents}
             if version == 5:
                 spec["apk"] = {"scripts": {"preupgrade": str(root / "preupgrade.sh")}}
-            config, package = root / f"{name}-{version}.json", root / f"{name}-{version}.apk"
+            config, package = root / f"{name}-{version}{suffix}.json", root / f"{name}-{version}{suffix}.apk"
             isolation.write_private(config, (json.dumps(spec, indent=2) + "\n").encode())
             built = subprocess.run([str(nfpm), "pkg", "--config", str(config), "--packager", "apk", "--target", str(package)],
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30, check=False)
-            isolation.write_private(root / f"{name}-{version}.build.log", built.stdout)
+            isolation.write_private(root / f"{name}-{version}{suffix}.build.log", built.stdout)
             if built.returncode:
                 raise ValueError("inert protected-path fixture build failed")
             packages.append(package)

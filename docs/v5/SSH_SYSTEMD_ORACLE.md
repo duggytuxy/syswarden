@@ -226,3 +226,28 @@ or full migration acceptance. Its private export accepts the resulting maximum
 exactly two restoration access records. Successful observed exchanges use
 purpose-v2 and bind the exact recorded generation;
 no controller or SSH private key is exported.
+
+## Retained mount-event fence
+
+The separate `TestSSHMountEventsNativeMountUnmountABA` oracle creates new user
+and mount namespaces, performs a bind/unmount cycle and checks that the retained
+procfs event descriptor detects the change even when the final pathname metadata
+and namespace identity match their original values. It changes no host mount.
+
+The ordinary Go suite first verifies execution of the same test binary without
+namespace flags. Only a direct unavailable-context error while starting the
+isolated child can produce a coverage skip. An executed child's assertion,
+mount error, missing success marker or skip remains a failure. Some CI runners
+refuse isolated namespace creation with `EACCES`; that is distinct from a passed
+native observation.
+
+Require actual execution when collecting native qualification evidence:
+
+```sh
+SYSWARDEN_MOUNT_EVENT_TEST_REQUIRED=yes GOMAXPROCS=2 go test \
+  -C src/core/syswarden-cli -p=2 -count=1 \
+  -run '^TestSSHMountEventsNativeMountUnmountABA$' ./pkg/sshpolicy
+```
+
+Required mode fails if the isolated context is unavailable. This one fence test
+does not establish complete SSH migration or final v5.00.0 IVVQ acceptance.

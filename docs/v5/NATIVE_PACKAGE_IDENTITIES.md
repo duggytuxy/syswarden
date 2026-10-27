@@ -361,27 +361,48 @@ Run it only with `--run-native`, an existing absolute `--nfpm` executable, an
 exact cached `--image` ID and a new absolute `--output` directory. The independent
 fixtures accept unsigned packages; the product verification contract does not.
 
-Both identities run seven scenarios with separately seeded native remove and
-purge lifecycles, for 28 observations per image. Each fixture modifies one regular
-launcher and one symlink. It compares file bytes, link target, inode, permissions,
-ownership, link count, size, sampled timestamps and output from inert consumers.
-It separately observes native ownership and removal of the vendor payload.
-These consumers do not establish real SSH, firewall or service preservation.
+Both identities run twelve scenarios with separately seeded native remove and
+purge lifecycles, for 48 observations per image. The original cases change regular
+file bytes or a symlink target relative to the old package. Additional cases keep
+those bytes or targets and change only mode or timestamps. The probe separately
+compares file/link identity, inert command output, native ownership and parent
+metadata. A retained symlink does not prove that its target's behavior survives
+replacement or removal. These consumers do not establish real SSH, firewall or
+service preservation.
 
 | Preparation and payload | Upgrade observation | Later removal observation |
 | --- | --- | --- |
-| Preexisting `+usr/local/bin` directory rule, aliases still packaged | Administrator launchers remain, but APK owns their paths. | Ordinary remove preserves them; purge deletes them. |
-| Preexisting directory rule, new package omits aliases | Modified launchers remain with the same observed identity and effect; APK no longer owns them. | Separate remove and purge both preserve them. |
+| Preexisting `+usr/local/bin` directory rule, changed bytes/targets still packaged | The changed launchers remain, but APK owns their paths. | Ordinary remove preserves them; purge deletes them. |
+| Preexisting directory rule, changed bytes/targets omitted from new package | Their observed identity and effect remain; APK no longer owns them. | Separate remove and purge preserve both. |
+| Preexisting directory rule, metadata-only regular files omitted | The old package cleanup deletes them despite the metadata change. | No preservation guarantee. |
 | Exact-file protection rules | Replacement still occurs; omitted old aliases are deleted. | No preservation guarantee. |
 | Rule shipped by the incoming package or written by its preupgrade script | Replacement still occurs in that transaction. | No preservation guarantee. |
+| Exact-file stdin overlay, changed bytes/targets or metadata-only regular files omitted | Identity and inert behavior remain; aliases become unowned. | Separate remove and purge preserve both. |
+| Metadata-only symlinks to the vendor payload, omitted with directory protection or stdin overlay | Link identity remains, but the updated target changes behavior. | The link remains unowned; its removed target no longer runs. |
 
-The second row is a controlled-transition candidate, not a supported installation
-procedure. Protection must exist before a new APK process loads its database.
-The native [APK 2 database implementation](https://github.com/alpinelinux/apk-tools/blob/v2.14.12/src/database.c)
+The scoped overlay cases pass only these exact root-relative file names to
+`apk --overlay-from-stdin` before database loading:
+
+```text
+usr/local/bin/syswarden
+usr/local/bin/syswarden-tui
+```
+
+They use no shared-directory protection rule. All recorded parent metadata for
+`/usr`, `/usr/local` and `/usr/local/bin` remains unchanged in these overlay
+fixtures. The full matrix separately requires stable parent device, inode,
+mode and ownership, while retaining size and timestamp observations. A native
+ownership query that reports a symlink's target as owned is not alias ownership;
+the parser keeps these outcomes separate.
+
+These are controlled-transition candidates, not supported installation
+procedures. The native [APK 2 database implementation](https://github.com/alpinelinux/apk-tools/blob/v2.14.12/src/database.c)
 and [APK 3 database implementation](https://github.com/alpinelinux/apk-tools/blob/v3.0.8/src/database.c)
-apply replacement and old-payload cleanup using directory protection state.
-A rule for the shared directory also affects other entries there. An exact-file
-rule or a late package hook is not an equivalent substitute.
+load overlay file entries before installed ownership. Incoming alias omission
+is necessary to avoid reassignment to the new package. Directory protection
+instead applies checksum-based old-payload cleanup and does not protect every
+metadata-only change. Incoming package scripts cannot prepare either mechanism
+before their own transaction has already loaded its state.
 
 A production bridge still requires all of the following:
 
@@ -389,11 +410,15 @@ A production bridge still requires all of the following:
   replacement, bound to the installed identity, exact old and new payloads,
   administrator inventory and selected transition. Incoming scripts, a package
   name, and a successful APK exit are not approval or ownership evidence.
-- Protected creation and inspection of the APK policy file and its parents,
-  preservation of existing policy and its effective precedence, and an exact
-  record of any bridge-owned addition. Do not replace administrator policy or
-  override the complete protected-path configuration. Cleanup must remove only
-  an unchanged bridge-owned addition after proving it is no longer needed.
+- Bounded exact overlay input and native argument handling, with no arbitrary
+  paths, directory entries or unreviewed stdin. A durable receipt must precede
+  the transaction: a failed native operation can still change registration.
+  Preserve candidate and recovery material, then inspect actual native state
+  before any retry or finalization. These failure paths are not qualified by
+  the successful overlay fixtures.
+- If a protected-directory variant is used, protected policy-file creation and
+  parent inspection, existing policy precedence and attributable cleanup remain
+  mandatory. Do not overwrite administrator policy or remove shared rules.
 - Inspection of all old and new payload paths and native removal effects,
   including parents, retired files, dependencies and recovery hooks. Unknown or
   changing ownership must refuse before the transaction. The two launcher

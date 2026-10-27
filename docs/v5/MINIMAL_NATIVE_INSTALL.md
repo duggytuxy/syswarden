@@ -31,12 +31,21 @@ including when an old recovery copy is present. Resolve ambiguous retained polic
 through explicit migration or recovery instead of deleting it to force staging.
 
 Configure the installed modules with `sudo syswarden config` or edit
-`/etc/syswarden/config/modules/99-user.toml`, then run `sudo syswarden config validate`. Validation is read-only. Once the selected policy and prerequisites
-have been reviewed, an explicit `sudo syswarden install` performs activation.
-That command can change firewall rules, services and schedules; it is not a
-validation command. SSH/CIS/OS changes continue to require their separate
-explicit configuration and migration approval boundaries. Environment variables
-cannot select a list or optional module for the unconfigured profile.
+`/etc/syswarden/config/modules/99-user.toml`, then run `sudo syswarden config
+validate`. Validation and the configuration preview are read-only. Publishing
+validated TOML does not approve host activation. The current explicit
+`sudo syswarden install` entry can change firewall rules, services and schedules;
+it is not a validation command or a qualified v5 migration path.
+
+The complete v5 application gate must bind the exact captured TOML and reviewed
+host changes before configuration normalization or runtime recovery can mutate
+the host. Its reusable approved-policy record must also govern boot reload and
+independent core startup. An active service, profile marker, package hook or
+`--no-restart` flag cannot grant that approval. This integration remains open;
+the captured-policy component alone is not activation authority. SSH/CIS/OS
+changes retain their separate configuration and migration approval boundaries.
+Environment variables cannot select a list or optional module for the
+unconfigured profile.
 
 Mandatory platform dependencies remain installed. On Alpine this includes the
 requirements for nftables, OpenRC, feed scheduling and the native package and
