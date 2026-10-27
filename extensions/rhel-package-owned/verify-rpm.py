@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -21,6 +22,14 @@ class VerificationError(RuntimeError):
 
 
 EXTENSION_ROOT = Path(__file__).resolve().parent
+DESCRIPTOR_SPEC = importlib.util.spec_from_file_location(
+    "syswarden_rhel_native_activation_descriptor",
+    EXTENSION_ROOT.parent.parent / "scripts/ci/native_activation_descriptor.py",
+)
+if DESCRIPTOR_SPEC is None or DESCRIPTOR_SPEC.loader is None:
+    raise RuntimeError("cannot load the native activation descriptor contract")
+native_activation_descriptor = importlib.util.module_from_spec(DESCRIPTOR_SPEC)
+DESCRIPTOR_SPEC.loader.exec_module(native_activation_descriptor)
 INVENTORY_PATH = EXTENSION_ROOT / "inventory.json"
 PROFILE_PATH = EXTENSION_ROOT / "profile.json"
 RPM_TOOL = Path("/usr/bin/rpm")
@@ -364,6 +373,19 @@ def validate_shared_payload(
             fail(f"RPM shared non-file payload contains an unexpected digest for {path}")
 
     expected_paths = profile_paths | set(SHARED_PAYLOAD_RECORDS)
+    # Keep the historical required inventory unchanged. Only this exact optional
+    # descriptor is permitted, bound to the package's already verified binaries.
+    descriptor_path = "/" + native_activation_descriptor.DESCRIPTOR_PATH
+    descriptor = records.get(descriptor_path)
+    if descriptor is not None:
+        cli_digest = records["/opt/syswarden/bin/syswarden-cli"][4]
+        core_digest = records["/opt/syswarden/bin/syswarden-core"][4]
+        expected_digest = hashlib.sha256(
+            native_activation_descriptor.descriptor_for_digests(cli_digest, core_digest)
+        ).hexdigest()
+        if descriptor != ("-rw-r--r--", "root", "root", "", expected_digest, "1"):
+            fail("RPM native activation descriptor metadata or digest mismatch")
+        expected_paths.add(descriptor_path)
     unexpected = sorted(set(records) - expected_paths)
     if unexpected:
         fail(f"RHEL RPM contains undeclared package-owned path {unexpected[0]}")

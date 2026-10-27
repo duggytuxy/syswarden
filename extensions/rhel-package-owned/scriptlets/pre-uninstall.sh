@@ -88,6 +88,69 @@ exact_owned_payload_file() {
     trap - 0 1 2 3 15
 }
 
+exact_optional_activation_descriptor() {
+    descriptor_path="$1"
+    [ "$descriptor_path" = /opt/syswarden/activation-contract-v1.json ] || \
+        fail 'Refusing an unexpected native activation descriptor path.'
+    exact_owned_payload_file "$descriptor_path" 644
+    descriptor_record_file="$(/usr/bin/mktemp /tmp/syswarden-rhelpo-preun-activation.XXXXXXXXXX)" || \
+        fail 'Cannot allocate the native activation descriptor attestation file.'
+    cleanup_descriptor_records() {
+        /usr/bin/rm -f -- "$descriptor_record_file"
+    }
+    trap cleanup_descriptor_records 0 1 2 3 15
+    # POSIX shells count 512-byte blocks; shells using KiB still cap this at
+    # 1 MiB. Refuse the smaller boundary below even if a writer ignores EFBIG.
+    if ! (
+        ulimit -f 1024 || exit 1
+        exec /usr/bin/timeout 15 /usr/bin/rpm --noplugins --query --file "$descriptor_path" \
+            --queryformat '%{FILEDIGESTALGO}\n[%{FILENAMES}\t%{FILEDIGESTS}\n]' \
+            >"$descriptor_record_file" 2>/dev/null
+    ); then
+        fail 'Cannot query the installed native activation descriptor bindings.'
+    fi
+    [ "$(/usr/bin/stat -Lc '%u:%g:%a:%h' -- "$descriptor_record_file")" = '0:0:600:1' ] || \
+        fail 'Native activation descriptor binding output has unsafe metadata.'
+    [ "$(/usr/bin/stat -Lc '%s' -- "$descriptor_record_file")" -lt 524288 ] || \
+        fail 'Native activation descriptor binding output exceeds its size bound.'
+    descriptor_digests="$(/usr/bin/awk -F '\t' '
+        NR == 1 { if ($0 != "8") { invalid = 1; exit }; next }
+        NF != 2 || $1 !~ /^\// { invalid = 1; exit }
+        $1 == "/opt/syswarden/bin/syswarden-cli" ||
+        $1 == "/opt/syswarden/bin/syswarden-core" ||
+        $1 == "/opt/syswarden/activation-contract-v1.json" {
+            if ($1 in seen || length($2) != 64 || $2 ~ /[^0-9a-f]/) {
+                invalid = 1; exit
+            }
+            seen[$1] = $2
+        }
+        END {
+            if (invalid || !("/opt/syswarden/bin/syswarden-cli" in seen) ||
+                !("/opt/syswarden/bin/syswarden-core" in seen) ||
+                !("/opt/syswarden/activation-contract-v1.json" in seen)) exit 1
+            print seen["/opt/syswarden/bin/syswarden-cli"],
+                  seen["/opt/syswarden/bin/syswarden-core"],
+                  seen["/opt/syswarden/activation-contract-v1.json"]
+        }
+    ' "$descriptor_record_file")" || \
+        fail 'Native activation descriptor bindings are incomplete or noncanonical.'
+    cleanup_descriptor_records
+    trap - 0 1 2 3 15
+    descriptor_cli_digest="${descriptor_digests%% *}"
+    descriptor_tail="${descriptor_digests#* }"
+    descriptor_core_digest="${descriptor_tail%% *}"
+    descriptor_record_digest="${descriptor_tail#* }"
+    # This is the exact canonical native-activation-v1 serializer. The installed
+    # package hashes, not mutable local descriptor fields, select the binaries.
+    descriptor_expected_digest="$(printf '{"schema":"syswarden-native-activation-v1","architecture":"linux-amd64","approval_schema":"syswarden-activation-approval-v1","source_contract":"syswarden-toml-source-v1","environment":"toml-only-reject-modular-environment-v1","cli_sha256":"%s","core_sha256":"%s"}\n' \
+        "$descriptor_cli_digest" "$descriptor_core_digest" | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')"
+    [ "$descriptor_record_digest" = "$descriptor_expected_digest" ] || \
+        fail 'Installed RPM native activation descriptor differs from its exact binary bindings.'
+    exact_owned_payload_file /opt/syswarden/bin/syswarden-cli 750 "$descriptor_cli_digest"
+    exact_owned_payload_file /opt/syswarden/bin/syswarden-core 750 "$descriptor_core_digest"
+    exact_owned_payload_file "$descriptor_path" 644 "$descriptor_expected_digest"
+}
+
 exact_recovery_helper() {
     path="$1"
     [ -f "$path" ] && [ ! -L "$path" ] || fail "Refusing unsafe post-uninstall recovery helper: $path"
@@ -379,6 +442,9 @@ if [ "$1" -eq 0 ]; then
             /opt/syswarden/signatures.json)
                 exact_owned_payload_file "$entry" 640
                 product_children=$((product_children + 1))
+                ;;
+            /opt/syswarden/activation-contract-v1.json)
+                exact_optional_activation_descriptor "$entry"
                 ;;
             *) fail "Refusing unexpected product entry before RPM erase: $entry" ;;
         esac

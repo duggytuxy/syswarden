@@ -115,6 +115,96 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
                             self.assertIn("separately approved coordinated native transaction", result.stderr)
         self.assertEqual(guards[0], guards[1])
 
+    def test_assembly_nonfresh_refusal_requires_exact_reason_and_unchanged_state(self) -> None:
+        source = (EXTENSION_ROOT / "tests/test-rpm-assembly.sh").read_text(encoding="utf-8")
+        helpers = source[source.index("snapshot_native_refusal_state() {"):
+                         source.index("expect_rhel_upgrade_refusal() {")]
+        refusal = ("Non-fresh RHEL package-owned installation is refused before scriptlet effects. "
+                   "A separately approved coordinated native transaction is required.")
+        stub = r'''
+set -euo pipefail
+TEST_WORKSPACE="$1"
+PACKAGE_PATH=fixture.rpm
+chroot_admin() { "$@"; }
+rpm_at_root() {
+    local root="$1"
+    shift
+    if [ "$1" = --query ]; then
+        case "$*" in
+            *--dump*) printf '%s\n' '/etc/policy fixture-owned-inventory' ;;
+            *) cat "${root}/usr/lib/sysimage/rpm/identity" ;;
+        esac
+        return
+    fi
+    case "${TEST_EFFECT}" in
+        accepted) return 0 ;;
+        wrong-error) printf '%s\n' 'unrelated RPM failure' >&2; return 1 ;;
+        bytes) printf '%s\n' changed > "${root}/etc/policy" ;;
+        mode) chmod 0660 "${root}/etc/policy" ;;
+        symlink) ln -sfn elsewhere "${root}/etc/alias" ;;
+        service) printf '%s\n' 'preset syswarden-core.service' >> "${root}/var/lib/systemctl.log" ;;
+        identity) printf '%s\n' 'syswarden-unexpected' > "${root}/usr/lib/sysimage/rpm/identity" ;;
+        new-file) printf '%s\n' unexpected > "${root}/etc/unexpected" ;;
+        removed-file) rm "${root}/etc/policy" ;;
+        directory-mode) chmod 0775 "${root}/etc" ;;
+        none) ;;
+        *) return 2 ;;
+    esac
+    printf '%s\n' "${TEST_REFUSAL}" >&2
+    return 1
+}
+'''
+        for effect in ("none", "accepted", "wrong-error", "bytes", "mode", "symlink",
+                       "service", "identity", "new-file", "removed-file", "directory-mode"):
+            with self.subTest(effect=effect), tempfile.TemporaryDirectory() as raw:
+                workspace = Path(raw)
+                root = workspace / "root"
+                for path in ("etc", "var/lib", "usr/lib/sysimage/rpm", "proc"):
+                    (root / path).mkdir(parents=True, exist_ok=True)
+                (root / "etc/policy").write_text("original\n", encoding="utf-8")
+                (root / "etc/alias").symlink_to("policy")
+                (root / "var/lib/systemctl.log").write_text("", encoding="utf-8")
+                (root / "usr/lib/sysimage/rpm/identity").write_text("syswarden-original\n", encoding="utf-8")
+                result = subprocess.run(
+                    ["bash", "-c", stub + helpers +
+                     '\nexpect_native_nonfresh_refusal "$1/root" "fixture scenario" --replacepkgs\n',
+                     "rpm-refusal-regression", raw],
+                    env={**os.environ, "TEST_EFFECT": effect, "TEST_REFUSAL": refusal},
+                    capture_output=True, text=True, check=False, timeout=10,
+                )
+                if effect == "none":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("Verified non-fresh refusal with unchanged native state", result.stdout)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    if effect not in {"accepted", "wrong-error"}:
+                        self.assertIn("changed native state", result.stderr)
+
+    def test_assembly_keeps_descriptor_for_native_removal_and_separate_legacy_fixture(self) -> None:
+        source = (EXTENSION_ROOT / "tests/test-rpm-assembly.sh").read_text(encoding="utf-8")
+        profile = source[source.index("for binary in syswarden-cli syswarden-core syswarden-tui;"):
+                         source.index('assemble_profile_rpm 4.10.4 "${PACKAGE_PATH}"')]
+        self.assertIn("scripts/ci/native_activation_descriptor.py", profile)
+        self.assertIn('--root "${PROFILE_STAGE}/payload"', profile)
+        erase = source[source.index("prepare_exact_erase_state() {"):
+                       source.index("assert_final_absence() {")]
+        self.assertIn("! -name activation-contract-v1.json", erase)
+        self.assertIn('assert_chroot_path_absent "${root}" /opt/syswarden/activation-contract-v1.json', source)
+        self.assertIn('expect_rhel_upgrade_refusal "${LEGACY_CHROOT_ROOT}"', source)
+        self.assertIn("migration/rollback/reupgrade cycle remain unqualified", source)
+        independent_fresh = source[source.index("# Exercise profile removal independently"):
+                                   source.index("# Even exact legacy priority units")]
+        self.assertLess(
+            independent_fresh.index('chroot_admin install -d -m 0755 -- "${CHROOT_ROOT}/etc/systemd/system"'),
+            independent_fresh.index('rpm_at_root "${CHROOT_ROOT}" --install'),
+        )
+        # Every direct upgrade in the assembly harness must pass through the
+        # refusal helper. Successful fresh and native erase paths stay explicit.
+        self.assertEqual(source.count('--upgrade --nodeps'), 1)
+        self.assertNotRegex(source, r'rpm_at_root[^\n]+--upgrade --(?:replacepkgs|oldpackage)')
+        self.assertIn('rpm_at_root "${CHROOT_ROOT}" --install --nodeps', source)
+        self.assertIn('rpm_at_root "${CHROOT_ROOT}" --erase syswarden', source)
+
     def test_inventory_is_exact_ordered_and_digest_bound(self) -> None:
         entries = self.inventory["entries"]
         self.assertEqual(self.inventory["schema_version"], 2)
@@ -767,6 +857,189 @@ done
              mock.patch.object(verify_contract.Path, "read_text", return_value="1000 0 1\n"):
             path_lstat.return_value = mock.Mock(st_uid=65534)
             self.assertTrue(verify_contract.unmapped_overflow_owner_is_expected())
+
+class RHELActivationDescriptorTests(unittest.TestCase):
+    """Optional capability bytes do not widen the historical payload contract."""
+
+    def test_preun_descriptor_query_has_a_kernel_output_bound_and_cleans_failure(self):
+        import shlex
+
+        source = (EXTENSION_ROOT / "scriptlets/pre-uninstall.sh").read_text(encoding="utf-8")
+        match = re.search(r"^exact_optional_activation_descriptor\(\) \{\n.*?^\}\n", source, re.M | re.S)
+        self.assertIsNotNone(match)
+        function = match.group(0)
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            writer = root / "oversized-query.py"
+            writer.write_text(
+                "import os\nos.write(1, b'x' * (2 << 20))\nos.write(1, b'\\n')\n",
+                encoding="ascii",
+            )
+            function = function.replace(
+                "/usr/bin/timeout 15 /usr/bin/rpm",
+                "/usr/bin/timeout 5 " + shlex.quote(sys.executable) + " " + shlex.quote(str(writer)),
+                1,
+            ).replace(
+                "/usr/bin/mktemp /tmp/syswarden-rhelpo-preun-activation.XXXXXXXXXX",
+                "/usr/bin/mktemp " + shlex.quote(str(root / "capture.XXXXXXXXXX")),
+                1,
+            )
+            # Only the query writer and ownership callback are fixtures. The
+            # production ulimit, subprocess status, parser and cleanup remain.
+            script = (
+                "set -eu\numask 077\n"
+                "fail() { printf '%s\\n' \"$1\" >&2; exit 1; }\n"
+                "exact_owned_payload_file() { :; }\n" + function +
+                "exact_optional_activation_descriptor /opt/syswarden/activation-contract-v1.json\n"
+            )
+            result = subprocess.run(
+                ["/bin/sh", "-s"], input=script, text=True,
+                capture_output=True, check=False, timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Cannot query the installed native activation descriptor bindings.", result.stderr)
+            self.assertEqual(list(root.glob("capture.*")), [])
+
+    def records(self):
+        entries = json.loads(INVENTORY.read_text(encoding="utf-8"))["entries"]
+        records = {}
+        for entry in entries:
+            if entry["rpm_ownership"] == "payload":
+                records["/" + entry["destination"].removeprefix("payload/")] = (
+                    verify_contract.expected_permissions(entry), "root", "root", "",
+                    entry["sha256"] or "", "1",
+                )
+        for path, (mode, target) in verify_contract.SHARED_PAYLOAD_RECORDS.items():
+            records[path] = (mode, "root", "root", target, "1" * 64 if mode[0] == "-" else "", "1")
+        records["/opt/syswarden/bin/syswarden-core"] = (
+            "-rwxr-x---", "root", "root", "", "2" * 64, "1",
+        )
+        return entries, records
+
+    def descriptor_record(self, records):
+        contract = verify_contract.native_activation_descriptor
+        digest = hashlib.sha256(contract.descriptor_for_digests(
+            records["/opt/syswarden/bin/syswarden-cli"][4],
+            records["/opt/syswarden/bin/syswarden-core"][4],
+        )).hexdigest()
+        return "/" + contract.DESCRIPTOR_PATH, ("-rw-r--r--", "root", "root", "", digest, "1")
+
+    def test_rpm_accepts_historical_absence_and_exact_optional_descriptor(self):
+        entries, records = self.records()
+        verify_contract.validate_payload(entries, records, "8")
+        path, record = self.descriptor_record(records)
+        self.assertNotIn(path, verify_contract.SHARED_PAYLOAD_RECORDS)
+        records[path] = record
+        verify_contract.validate_payload(entries, records, "8")
+        records[path + ".extra"] = record
+        with self.assertRaisesRegex(verify_contract.VerificationError, "undeclared package-owned path"):
+            verify_contract.validate_payload(entries, records, "8")
+
+    def test_rpm_rejects_descriptor_metadata_and_binary_digest_drift(self):
+        entries, original = self.records()
+        path, record = self.descriptor_record(original)
+        for field, value in (
+            (0, "-rw-------"), (0, "lrwxrwxrwx"), (0, "drw-r--r--"),
+            (1, "administrator"), (2, "administrator"), (3, "/other"),
+            (4, "3" * 64), (4, "A" * 64), (5, "2"),
+        ):
+            with self.subTest(field=field, value=value):
+                records = dict(original)
+                altered = list(record)
+                altered[field] = value
+                records[path] = tuple(altered)
+                with self.assertRaisesRegex(verify_contract.VerificationError, "descriptor metadata or digest mismatch"):
+                    verify_contract.validate_payload(entries, records, "8")
+        for binary in ("cli", "core"):
+            with self.subTest(binary=binary):
+                records = dict(original)
+                records[path] = record
+                binary_path = "/opt/syswarden/bin/syswarden-" + binary
+                prior = records[binary_path]
+                records[binary_path] = (*prior[:4], "4" * 64, prior[5])
+                with self.assertRaisesRegex(verify_contract.VerificationError, "descriptor metadata or digest mismatch"):
+                    verify_contract.validate_payload(entries, records, "8")
+
+    def test_rpm_descriptor_forbids_security_attributes(self):
+        _, original = self.records()
+        path, record = self.descriptor_record(original)
+        records = {path: record}
+        verify_contract.validate_file_security_metadata(records, f"{path}\t(none)\t(none)\t0\n")
+        for capabilities, context, flags in (
+            ("cap_net_admin=ep", "(none)", "0"),
+            ("(none)", "system_u:object_r:bin_t:s0", "0"),
+            ("(none)", "(none)", "2"),
+            ("(none)", "(none)", "64"),
+        ):
+            with self.subTest(capabilities=capabilities, context=context, flags=flags):
+                with self.assertRaisesRegex(verify_contract.VerificationError, "file security metadata mismatch"):
+                    verify_contract.validate_file_security_metadata(
+                        records, f"{path}\t{capabilities}\t{context}\t{flags}\n",
+                    )
+
+    def shared_base(self, root):
+        base = root / "base"
+        inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
+        for relative in stage_contract.SHARED_PAYLOADS:
+            entry = next(entry for entry in inventory["entries"]
+                         if entry["destination"] == "payload/" + str(relative))
+            shared = base / relative
+            shared.parent.mkdir(parents=True, exist_ok=True)
+            shared.write_bytes((REPOSITORY_ROOT / entry["source"]).read_bytes())
+            shared.chmod(0o644)
+        return base
+
+    def test_stager_accepts_absence_and_exact_descriptor_without_republishing_it(self):
+        for present in (False, True):
+            with self.subTest(present=present), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                base = self.shared_base(root)
+                if present:
+                    self.runtime_descriptor(base)
+                output = root / "profile"
+                stage_contract.stage(output, base)
+                self.assertTrue(output.is_dir())
+                self.assertFalse((output / "payload" / stage_contract.native_activation_descriptor.DESCRIPTOR_PATH).exists())
+
+    def runtime_descriptor(self, base):
+        binaries = base / "opt/syswarden/bin"
+        binaries.mkdir(parents=True)
+        for name in ("cli", "core"):
+            binary = binaries / ("syswarden-" + name)
+            binary.write_bytes(("synthetic " + name + "\n").encode("ascii"))
+            binary.chmod(0o750)
+        stage_contract.native_activation_descriptor.generate(base)
+        return base / stage_contract.native_activation_descriptor.DESCRIPTOR_PATH
+
+    def test_stager_rejects_present_invalid_descriptor_without_publishing(self):
+        for mutation in ("bytes", "mode", "symlink", "dangling", "directory", "hardlink", "cli", "core", "parent"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                base = self.shared_base(root)
+                descriptor = self.runtime_descriptor(base)
+                if mutation == "bytes":
+                    descriptor.write_bytes(descriptor.read_bytes() + b" ")
+                elif mutation == "mode":
+                    descriptor.chmod(0o600)
+                elif mutation in ("symlink", "dangling"):
+                    saved = root / "saved"
+                    descriptor.rename(saved)
+                    descriptor.symlink_to(saved if mutation == "symlink" else root / "absent")
+                elif mutation == "directory":
+                    descriptor.unlink()
+                    descriptor.mkdir()
+                elif mutation == "hardlink":
+                    os.link(descriptor, root / "extra-link")
+                elif mutation in ("cli", "core"):
+                    (base / "opt/syswarden/bin" / ("syswarden-" + mutation)).write_bytes(b"changed binary\n")
+                else:
+                    (base / "opt/syswarden").chmod(0o777)
+                output = root / "profile"
+                with self.assertRaisesRegex(stage_contract.StageError, "invalid optional native activation descriptor"):
+                    stage_contract.stage(output, base)
+                self.assertFalse(output.exists())
+                self.assertTrue(descriptor.exists() or descriptor.is_symlink())
+                self.assertEqual(list(root.glob(".syswarden-rhel-profile.*")), [])
 
 
 if __name__ == "__main__":

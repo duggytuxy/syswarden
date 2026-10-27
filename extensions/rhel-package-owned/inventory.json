@@ -231,7 +231,7 @@
       "uid": 0,
       "gid": 0,
       "link_target": null,
-      "sha256": "ce940676f9d2bbfe8b55493e974fd5130d80b0094df1bf68ee51e5d6e7104f6a",
+      "sha256": "17b6ef5c0f8901b9ecb00992eb338bd010535e6f19023a60db31be251bc8cd7a",
       "rpm_ownership": "scriptlet",
       "rpm_package": "syswarden",
       "role": "rpm-pre-uninstall"
