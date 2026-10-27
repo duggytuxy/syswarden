@@ -555,9 +555,15 @@ all optional selectors to remain disabled, and exercise read-only validation,
 value lookup and menu entry/exit. Configuration bytes and metadata and selected
 administrator sentinels must remain unchanged during those reads.
 
-The fixture contains only its synthetic package and CLI payload. It does not
-qualify the production package dependency set, signed release provenance,
-all possible host changes, activation or migration. Its command traps and
+The DEB/RPM fixture contains its synthetic package and CLI payload. The APK
+fixture additionally carries inert core/TUI companions, a descriptor bound to
+the fixture bytes, completion and license files, and the exact recovery hook.
+Real APK mode requires a CLI built with `syswarden-cli/pkg/system.Version=v5.00.0`.
+It verifies pending launcher intent before native commit and independently checks
+the committed receipt against the actual launcher identities afterward. The
+inert companions are not executed. These fixtures do not qualify the production
+package dependency set, signed release provenance, all possible host changes,
+activation or migration. Its command traps and
 observed artifact inventory supplement container isolation; they are not a
 complete syscall trace. Neither a passing stub nor a passing real-CLI fixture
 establishes full native package acceptance.

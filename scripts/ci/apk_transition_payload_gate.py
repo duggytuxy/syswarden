@@ -38,10 +38,7 @@ HOOKS = {
 }
 # The complete shared launcher subtree stays outside APK ownership. An empty
 # directory payload could still change administrator parent metadata.
-TRANSITION_ENTRIES = {
-    name: entry for name, entry in package_stage_gate.APK_LINUX_ENTRIES.items()
-    if name != "usr/local" and not name.startswith("usr/local/")
-}
+TRANSITION_ENTRIES = dict(package_stage_gate.APK_LINUX_ENTRIES)
 
 
 class BoundedReader:
@@ -166,15 +163,21 @@ def validate(archive_path: Path, stage: Path, scripts: Path) -> dict[str, str]:
                     if extended or not 0 < member.size <= 4096:
                         raise APKTransitionPayloadError("APK extended header is excessive or repeated")
                     data = read_member(bounded, member.size, capture=True)
-                    prefix, separator, record = data.partition(b" ")
-                    expected_record = re.fullmatch(rb"APK-TOOLS\.checksum\.SHA1=[0-9a-f]{40}\n", record)
-                    if not separator or prefix != str(len(data)).encode("ascii") or expected_record is None:
-                        raise APKTransitionPayloadError("APK has unsupported extended metadata")
-                    extended = record.split(b"=", 1)[1].rstrip(b"\n").decode("ascii")
+                    # The pinned abuild signer emits this exact pair only on
+                    # its signature. No path or other PAX rewriting is accepted.
+                    if data in (b"11 atime=0\n11 ctime=0\n", b"11 ctime=0\n11 atime=0\n"):
+                        extended = "signature-times"
+                    else:
+                        prefix, separator, record = data.partition(b" ")
+                        expected_record = re.fullmatch(rb"APK-TOOLS\.checksum\.SHA1=[0-9a-f]{40}\n", record)
+                        if not separator or prefix != str(len(data)).encode("ascii") or expected_record is None:
+                            raise APKTransitionPayloadError("APK has unsupported extended metadata")
+                        extended = record.split(b"=", 1)[1].rstrip(b"\n").decode("ascii")
                     continue
                 if extended and member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
                     raise APKTransitionPayloadError("APK checksum metadata does not describe a regular file")
-                checksum = extended
+                signature_times = extended == "signature-times"
+                checksum = None if signature_times else extended
                 extended = None
                 name = member_name(member)
                 if name in seen:
@@ -184,7 +187,10 @@ def validate(archive_path: Path, stage: Path, scripts: Path) -> dict[str, str]:
                     raise APKTransitionPayloadError("APK must not own the command-launcher subtree")
                 if member.uid != 0 or member.gid != 0 or member.linkname or member.issparse():
                     raise APKTransitionPayloadError("APK member has unsupported ownership or link framing")
-                signature = re.fullmatch(r"\.SIGN\.RSA\.[A-Za-z0-9_.+-]+", name) is not None
+                signature_match = re.fullmatch(r"\.SIGN\.(?:RSA|RSA256)\.([A-Za-z0-9_.+-]+)", name)
+                signature = signature_match is not None and signature_match[1] not in (".", "..")
+                if signature_times and not signature:
+                    raise APKTransitionPayloadError("APK signature timestamps describe a non-signature member")
                 if signature:
                     signatures += 1
                     if signatures != 1 or len(seen) != 1:

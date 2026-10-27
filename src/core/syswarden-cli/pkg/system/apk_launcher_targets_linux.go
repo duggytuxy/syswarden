@@ -266,6 +266,9 @@ func prepareAPKLauncherCustodyWithTargetsFaultAt(ctx context.Context, hostPath, 
 		if err != nil || apkTransitionDigest(inventoryBytes) != binding.InventorySHA256 {
 			return errors.New("APK launcher target inventory does not match execution authority")
 		}
+		if err := h.applyApprovedTransfer(plan); err != nil {
+			return err
+		}
 		if plan.LauncherTargets == nil {
 			return nil
 		}
@@ -343,7 +346,7 @@ func (h *APKLauncherCustody) validateTargetProposal(proposal apkLauncherTargetPr
 			return errors.New("APK launcher target proposal aliases differ")
 		}
 		if alias.ProductDependency {
-			if alias.Disposition != "retained-administrator" || !apkLauncherDirectTarget(i, alias.Original.LinkTarget) {
+			if (alias.Disposition != "retained-administrator" && !(alias.Disposition == "product-transferred" && h.transfer != nil && h.record.TransferSHA256 != "")) || !apkLauncherDirectTarget(i, alias.Original.LinkTarget) {
 				return errors.New("APK launcher target role is unsupported")
 			}
 			needed = true

@@ -1053,15 +1053,21 @@ func UninstallSystem() error {
 	if err := retireStandalonePayloadForRemoval(); err != nil {
 		return err
 	}
-	if err := removeExactProductSymlinkAt(
-		"/usr/local/bin/syswarden-tui", "/opt/syswarden/bin/syswarden-tui", 0, 0,
-	); err != nil {
+	apkLaunchers, err := attestAPKLauncherRetirement()
+	if err != nil {
 		return err
 	}
-	if err := removeExactProductSymlinkAt(
-		"/usr/local/bin/syswarden", "/opt/syswarden/bin/syswarden-cli", 0, 0,
-	); err != nil {
-		return err
+	if !apkLaunchers {
+		if err := removeExactProductSymlinkAt(
+			"/usr/local/bin/syswarden-tui", "/opt/syswarden/bin/syswarden-tui", 0, 0,
+		); err != nil {
+			return err
+		}
+		if err := removeExactProductSymlinkAt(
+			"/usr/local/bin/syswarden", "/opt/syswarden/bin/syswarden-cli", 0, 0,
+		); err != nil {
+			return err
+		}
 	}
 	if err := removeDedicatedRemovalTree("/opt/syswarden"); err != nil {
 		return err

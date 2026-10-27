@@ -28,6 +28,15 @@ type nativeActivationBinding struct {
 	verifyPolicy func(context.Context) error
 }
 
+// OriginalRuntime exposes only the immutable authenticated source pair.
+// It never recaptures installed bytes as replacement authority.
+func (binding *nativeActivationBinding) OriginalRuntime() nativeActivationRuntimeSnapshot {
+	if binding == nil {
+		return nativeActivationRuntimeSnapshot{}
+	}
+	return binding.plan.Installed
+}
+
 type nativeActivationBindingPlan struct {
 	Schema                string                          `json:"schema"`
 	PackageName           string                          `json:"package_name"`

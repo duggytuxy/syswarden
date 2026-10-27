@@ -7,6 +7,10 @@ Local opt-in metadata generation, unsigned v5 workflow generation and the v5
 signed identity contract are intermediate implementations.
 SysWarden supports Linux AMD64 only.
 
+PR452 acceptance covers the integrated issue #422 gates. Final v5.00.0 release
+IVVQ acceptance is tracked separately by issue #236; it does not replace the
+configuration, migration, access and removal evidence required for this change.
+
 ## Identity boundary
 
 The intended fresh package identity is `syswarden-base`. Its native requirements
@@ -161,10 +165,56 @@ with the native database. This is the [Alpine C-field identity](https://wiki.alp
 not a replacement for signed artifact authentication. The execution bridge
 requires modern APKv2 `datahash` metadata, verifies the compressed data digest
 and admits only cut signature/control tar segments. Generic historical header
-inspection does not establish this execution compatibility. Failure after start
-remains unresolved, even if APK returns zero. Completion with later closure uncertainty is not accepted, and
-any existing attempt refuses automatic replay. Production hook authority is not
-yet wired, so this component exposes no executable operator command.
+inspection does not establish this execution compatibility. Signature framing
+recognizes the native signing producer's RSA256 member and its exact zero-valued
+`atime` and `ctime` metadata, as well as the bounded legacy RSA member form.
+Recognizing archive framing never replaces native cryptographic verification or
+the authenticated release manifest. Failure after start remains unresolved, even
+if APK returns zero. Completion with engine or terminal effect-resource closure uncertainty is not
+accepted, and any existing attempt refuses automatic replay.
+
+The internal transport uses four distinct native acknowledgments: pre-commit,
+pre-upgrade, post-upgrade and post-commit. The live coordinator binds kernel
+message credentials, the original native child and exact retained helper. The
+post-upgrade phase instead requires the installed candidate inode and runtime
+pair. An existing protected commit-hook directory and a recognized hook inventory
+are required. A null transaction or zero exit without all acknowledgments cannot
+complete the protocol. Loss of the coordinator retains a refusing native gate;
+a completion JSON file alone cannot retire it. The qualified lifecycle factory,
+independent terminal recovery and full product migration remain required before
+an executable operator migration command can be exposed.
+
+Before native dispatch, custody retains the original CLI, core, TUI, signatures
+and any verified activation descriptor. The exact proposal binds original
+identities, bytes and the authenticated CLI/core pair. Revalidation checks the
+complete leaf set, pinned custody ancestry and immutable retention receipt.
+Administrator files outside that closed set remain untouched. This runtime copy
+is recovery evidence only; it is neither a complete native package-database
+rollback nor authority to execute or restore the old runtime.
+
+Terminal inspection reconstructs the approved package, native acknowledgments,
+retained original runtime and candidate observation from private evidence. It
+requires successful native exit and engine resource-closure evidence, then
+reacquires APK's existing database lock without creating or replacing it.
+Finalization records its intent before publishing launcher lineage and retiring
+the exact gates. Launcher removal also requires an exact positive proof published
+only after every terminal effect-bearing resource closes successfully. The proof
+binds the plan, handoff, launcher receipt and finalized record. Pending publication
+or unresolved failure remains refused. After an interruption immediately after
+renaming the commit gate, independent terminal reconstruction can recognize its
+exact recorded quarantine. It requires the original inode, bytes, owner, mode and
+approved parent, an absent canonical gate name, unchanged outcome evidence and
+the existing database lock. Finalization can then finish only that recorded
+retirement without replaying APK. Ordinary pretransaction capture still refuses
+the quarantine. Unknown hooks, replacement files, conflicting intent and changed
+parents remain unresolved and are preserved. This post-exit lock is not continuous
+across native startup, and a completion marker alone grants no terminal authority.
+
+The original native effect review is retained with its exact digest. Post-state
+checks compare the installed candidate and current TOML, applied approval and
+host observation with that original review. They must not recapture the changed
+host as a new baseline. These checks do not prove causal daemon consumption or a
+fresh authenticated SSH connection. Those remain independent acceptance gates.
 
 Launcher custody distinguishes inherited administrator entries from exclusively
 created product entries. A canonical name or link target never grants removal
@@ -177,6 +227,17 @@ dependencies still require separate resolution. Builder layout, hook consumption
 launcher removal and the complete native lifecycle must be qualified together before the
 production migration route can open. Component tests do not establish that
 acceptance or final v5.00.0 IVVQ.
+
+A complete fresh-install ownership receipt can be carried into the first
+coordinated same-identity upgrade. The proposal binds the original native
+registration, exact source records, current lineage, both created aliases and
+any exclusively created parents. Execution records this transferred ownership
+separately from inherited administrator entries. Complete launcher removal uses
+the original creation evidence through a source-bound retirement journal, while
+also requiring the execution's positive terminal closure proof. Mixed ownership,
+changed or missing source records and a subsequent execution-lineage upgrade
+remain refused. This bounded path does not qualify arbitrary historical
+installations or repeated production upgrades.
 
 ## Signed identity and installed ownership
 

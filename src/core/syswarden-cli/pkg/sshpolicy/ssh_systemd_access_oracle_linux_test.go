@@ -57,27 +57,36 @@ func isolatedSSHEnrollAccess(t *testing.T, plan string) *isolatedAccessEnrollmen
 	return &isolatedAccessEnrollment{digestBytes(wire), key, []sshAccessCredentials{{ContextID: "administrator", Target: identity}}}
 }
 
-func isolatedSSHExerciseAccessExchange(t *testing.T, ctx context.Context, plan string, x *isolatedAccessEnrollment) {
+func isolatedSSHExerciseForwardSession(t *testing.T, ctx context.Context, plan string, x *isolatedAccessEnrollment,
+	open func(context.Context, string, string) (*sshMigrationSession, error)) {
 	t.Helper()
-	before := isolatedSSHRecoveryHistory(t, ctx)
-	request, err := PrepareSystemdAccessRequest(ctx, plan, x.approval)
-	if err != nil || !request.RecoveryRequired || digestBytes(request.Request) != request.RequestSHA256 {
-		t.Fatal("production private request failed", err)
+	var before map[string]string
+	var issued AccessChallengePublication
+	var receipt []byte
+	exchange := sshForwardAccessExchange{
+		review: func(_ context.Context, request AccessRequestPreview) (string, error) {
+			before = isolatedSSHRecoveryHistory(t, ctx)
+			if !request.RecoveryRequired || digestBytes(request.Request) != request.RequestSHA256 {
+				return "", ErrInventoryUnsafe
+			}
+			// Explicit synthetic fixture approval, not independent-host trust.
+			return request.RequestSHA256, nil
+		},
+		probe: func(ctx context.Context, delivery AccessChallengePublication) ([]byte, error) {
+			issued = delivery
+			var err error
+			receipt, err = probeSSHAccessChallenge(ctx, delivery.Request, delivery.Challenge, digestBytes(delivery.Challenge), x.key, x.credentials, time.Now, func() error { return ctx.Err() })
+			return receipt, err
+		},
 	}
-	issued, err := IssueSystemdAccessChallenge(ctx, plan, x.approval, request.RequestSHA256, 3*time.Minute)
-	if err != nil || !issued.IssuanceDurable || !issued.RecoveryRequired || len(issued.Challenge) == 0 {
-		t.Fatal("production issuance failed", err)
+	result, err := runSSHForwardSession(ctx, plan, x.approval, open, exchange)
+	if err != nil || !result.Migration.Published || !result.Migration.IntentDurable || !result.Migration.RequestReturned ||
+		!result.Migration.RecoveryRequired || !result.RecoveryRequired || !result.IssuanceDurable || !result.RecordDurable ||
+		result.RecordSHA256 == "" || before == nil || len(receipt) == 0 {
+		t.Fatal("production forward composition did not retain exact access and recovery facts", result, err)
 	}
-	if _, err := IssueSystemdAccessChallenge(ctx, plan, x.approval, request.RequestSHA256, 3*time.Minute); err == nil {
+	if _, err := IssueSystemdAccessChallenge(ctx, plan, x.approval, result.RequestSHA256, 3*time.Minute); err == nil {
 		t.Fatal("production issuance replay")
-	}
-	receipt, err := probeSSHAccessChallenge(ctx, issued.Request, issued.Challenge, digestBytes(issued.Challenge), x.key, x.credentials, time.Now, func() error { return ctx.Err() })
-	if err != nil {
-		t.Fatal("fresh pinned controller fixture authentication failed", err)
-	}
-	recorded, err := RecordSystemdAccessReceipt(ctx, plan, x.approval, issued.IssuanceSHA256, issued.IssuanceImageSHA256, receipt)
-	if err != nil || !recorded.RecordDurable || !recorded.RecoveryRequired {
-		t.Fatal("production receipt recording failed", err)
 	}
 	if _, err := RecordSystemdAccessReceipt(ctx, plan, x.approval, issued.IssuanceSHA256, issued.IssuanceImageSHA256, receipt); err == nil {
 		t.Fatal("production receipt replay")
@@ -99,5 +108,5 @@ func isolatedSSHExerciseAccessExchange(t *testing.T, ctx context.Context, plan s
 	if _, err := PrepareSystemdAccessRequest(ctx, plan, x.approval); err == nil {
 		t.Fatal("revoked production enrollment accepted")
 	}
-	t.Log("production target enrollment, durable issuance, fresh fixture authentication, one-time receipt and revocation passed")
+	t.Log("private forward composition, durable issuance, fresh signed fixture authentication, one-time recording and revocation passed; recovery remains required")
 }

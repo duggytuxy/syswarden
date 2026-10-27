@@ -65,6 +65,7 @@ type apkLauncherReceipt struct {
 	TargetProposalSHA256    string                    `json:"target_proposal_sha256,omitempty"`
 	TargetObservationSHA256 string                    `json:"target_observation_sha256,omitempty"`
 	TargetOriginalsSHA256   string                    `json:"target_originals_sha256,omitempty"`
+	TransferSHA256          string                    `json:"transfer_sha256,omitempty"`
 	Parents                 [4]apkLauncherParent      `json:"parents"`
 	Aliases                 [2]apkLauncherEntry       `json:"aliases"`
 }
@@ -96,6 +97,8 @@ type apkLauncherPinnedParent struct {
 // concurrent custody/removal handles for the same execution transaction.
 type APKLauncherCustody struct {
 	ctx             context.Context
+	host            string
+	transfer        *apkLauncherTransferProposal
 	anchor          *os.Root
 	parents         []apkLauncherPinnedParent
 	journal         *os.Root
@@ -105,11 +108,12 @@ type APKLauncherCustody struct {
 	prepared        []byte
 	receipt         []byte
 	retirement      []byte
+	quarantines     [2][]byte
 	targetAuthority *apkLauncherTargetCapability
 	targetRecords   *apkLauncherTargetRecords
 	closed          bool
 	failed          bool
-	// Private fault seam, used only to exercise publication uncertainty.
+	// Private fault seam for publication and removal uncertainty.
 	fault func(string) error
 }
 
@@ -162,7 +166,7 @@ func openAPKLauncherHost(ctx context.Context, hostPath string) (_ *APKLauncherCu
 	if err != nil {
 		return nil, errors.New("APK launcher observation root could not be pinned")
 	}
-	h := &APKLauncherCustody{ctx: ctx, anchor: anchor}
+	h := &APKLauncherCustody{ctx: ctx, host: hostPath, anchor: anchor}
 	defer func() {
 		if result != nil {
 			result = errors.Join(result, h.Close())
@@ -518,6 +522,7 @@ func (h *APKLauncherCustody) checkRecordInventory() error {
 		"launcher-prepared.json": true, "launcher-custody.json": true, "launcher-retirement.json": true,
 		"launcher-target-observation.json": true, "launcher-target-originals.json": true, "launcher-original-cli.bin": true, "launcher-original-tui.bin": true,
 		"launcher-created-cli.json": true, "launcher-created-tui.json": true,
+		"launcher-quarantine-cli.json": true, "launcher-quarantine-tui.json": true,
 		"intent-launcher-created-cli.json": true, "intent-launcher-created-tui.json": true,
 	}
 	for _, name := range names {
@@ -556,12 +561,34 @@ func (h *APKLauncherCustody) revalidateCustody(checkTargets bool) error {
 			return errors.New("APK launcher retirement evidence changed")
 		}
 	}
+	if err := h.revalidateTransferSource(); err != nil {
+		return err
+	}
 	for i, alias := range h.record.Aliases {
 		entry, err := readAPKLauncherEntry(h.aliases, filepath.Base(alias.Path))
 		if err != nil {
 			return err
 		}
 		actual := apkLauncherEntryEvidence(entry)
+		quarantine, hasQuarantine, quarantineErr := h.readQuarantine(i)
+		if quarantineErr != nil {
+			return quarantineErr
+		}
+		if hasQuarantine {
+			if _, err := h.aliases.Lstat(quarantine.Name); err == nil {
+				if !actual.Absent {
+					return errors.New("APK launcher quarantine conflicts with a live entry")
+				}
+				if err := h.attestQuarantine(quarantine); err != nil {
+					return err
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		if actual.Absent && alias.Disposition == "product-created" && len(h.retirement) != 0 && !hasQuarantine {
+			return errors.New("APK launcher absence has no exact quarantine intent")
+		}
 		if actual != alias.Committed && !(len(h.retirement) != 0 && alias.Disposition == "product-created" && actual.Absent) {
 			return errors.New("APK launcher identity or content changed")
 		}
@@ -737,8 +764,11 @@ func inspectAPKLaunchersForRemovalAt(ctx context.Context, hostPath, planSHA256, 
 	var prepared apkLauncherReceipt
 	if err != nil || apkTransitionDigest(h.prepared) != h.record.PreparedSHA256 || decodeAPKTransitionJSON(h.prepared, &prepared) != nil ||
 		prepared.Schema != apkLauncherCustodySchema || prepared.Purpose != "prepared-launcher-custody" || prepared.Binding != h.record.Binding ||
-		prepared.PreparedSHA256 != "" || prepared.Parents != h.record.Parents || prepared.TargetProposalSHA256 != h.record.TargetProposalSHA256 || prepared.TargetObservationSHA256 != "" || prepared.TargetOriginalsSHA256 != h.record.TargetOriginalsSHA256 {
+		prepared.PreparedSHA256 != "" || prepared.TransferSHA256 != h.record.TransferSHA256 || prepared.Parents != h.record.Parents || prepared.TargetProposalSHA256 != h.record.TargetProposalSHA256 || prepared.TargetObservationSHA256 != "" || prepared.TargetOriginalsSHA256 != h.record.TargetOriginalsSHA256 {
 		return nil, errors.New("APK launcher original custody receipt is invalid")
+	}
+	if err := h.loadApprovedTransfer(); err != nil {
+		return nil, err
 	}
 	for i, path := range apkLauncherParents {
 		if h.record.Parents[i].Path != path || !apkLauncherSameParent(h.record.Parents[i].Identity, h.parents[i].identity) {
@@ -749,7 +779,7 @@ func inspectAPKLaunchersForRemovalAt(ctx context.Context, hostPath, planSHA256, 
 		alias, original := h.record.Aliases[i], prepared.Aliases[i]
 		if !validAPKLauncherEvidence(alias.Original) || !validAPKLauncherEvidence(alias.Committed) ||
 			alias.Path != path || original.Path != path || alias.Original != original.Original || original.Committed != original.Original ||
-			original.CreationSHA256 != "" || original.ProductDependency != apkLauncherProductDependency(path, original.Original.LinkTarget) {
+			original.CreationSHA256 != "" && original.Disposition != "product-transferred" || original.ProductDependency != apkLauncherProductDependency(path, original.Original.LinkTarget) {
 			return nil, errors.New("APK launcher original alias binding is invalid")
 		}
 		switch alias.Disposition {
@@ -760,6 +790,10 @@ func inspectAPKLaunchersForRemovalAt(ctx context.Context, hostPath, planSHA256, 
 		case "retained-administrator":
 			if original.Disposition != "retained-administrator" || alias.Original.Absent || alias.Committed != alias.Original || alias.CreationSHA256 != "" || alias.ProductDependency != original.ProductDependency {
 				return nil, errors.New("APK launcher retained administrator record is invalid")
+			}
+		case "product-transferred":
+			if h.transfer == nil || original.Disposition != "product-transferred" || alias.Original.Absent || alias.Committed != alias.Original || original.CreationSHA256 != alias.CreationSHA256 || !alias.ProductDependency {
+				return nil, errors.New("APK launcher source ownership transfer is invalid")
 			}
 		case "product-created":
 			if original.Disposition != "absent" || alias.Original != (apkLauncherEvidence{Absent: true}) || alias.Committed.Absent ||
@@ -811,6 +845,9 @@ func (h *APKLauncherCustody) RetireOwned() error {
 	if h == nil {
 		return errors.New("APK launcher custody is unavailable")
 	}
+	if h.transfer != nil {
+		return errors.New("APK transferred launcher removal requires the complete lifecycle source authority")
+	}
 	if len(h.receipt) == 0 {
 		return errors.New("APK launcher retirement requires committed custody")
 	}
@@ -834,39 +871,15 @@ func (h *APKLauncherCustody) RetireOwned() error {
 	} else if !bytes.Equal(raw, h.retirement) {
 		return errors.New("APK launcher removal barrier differs from the retained intent")
 	}
-	for _, alias := range h.record.Aliases {
+	for i, alias := range h.record.Aliases {
 		if alias.Disposition != "product-created" {
 			continue
 		}
 		if err := h.Revalidate(); err != nil {
 			return err
 		}
-		currentBarrier, err := h.removalBarrier()
-		if err != nil || currentBarrier != barrier {
-			return errors.New("APK launcher removal barrier changed before unlink")
-		}
-		entry, err := readAPKLauncherEntry(h.aliases, filepath.Base(alias.Path))
-		if err != nil {
+		if err := h.retireOwnedAlias(i, barrier); err != nil {
 			return err
-		}
-		if entry.Absent {
-			continue
-		}
-		if apkLauncherEntryEvidence(entry) != alias.Committed {
-			return errors.New("APK launcher changed at the owned unlink boundary")
-		}
-		if err := h.aliases.Remove(filepath.Base(alias.Path)); err != nil {
-			return errors.New("APK launcher owned unlink failed; retain removal intent")
-		}
-		parent, err := h.aliases.Open(".")
-		if err != nil {
-			return errors.New("APK launcher unlink synchronization is unavailable")
-		}
-		if err := errors.Join(parent.Sync(), parent.Close()); err != nil {
-			return errors.New("APK launcher unlink synchronization failed; retain removal intent")
-		}
-		if h.fault != nil && h.fault("after-unlink-"+filepath.Base(alias.Path)) != nil {
-			return errors.New("APK launcher unlink interrupted; retain removal intent")
 		}
 	}
 	return h.AttestTerminal()
@@ -879,14 +892,24 @@ func (h *APKLauncherCustody) AttestTerminal() error {
 	if h == nil {
 		return errors.New("APK launcher custody is unavailable")
 	}
+	if h.transfer != nil {
+		return errors.New("APK transferred launcher terminal check requires the complete lifecycle source authority")
+	}
 	if len(h.receipt) == 0 {
 		return errors.New("APK launcher terminal check requires committed custody")
 	}
 	if err := h.refuseRemovalTargetDependencies(); err != nil {
 		return err
 	}
-	for _, alias := range h.record.Aliases {
+	for i, alias := range h.record.Aliases {
 		if alias.Disposition == "product-created" {
+			record, exists, err := h.readQuarantine(i)
+			if err != nil || !exists {
+				return errors.New("APK launcher terminal removal lacks quarantine custody")
+			}
+			if _, err := h.aliases.Lstat(record.Name); !errors.Is(err, os.ErrNotExist) {
+				return errors.New("APK launcher quarantine remains unresolved")
+			}
 			entry, err := readAPKLauncherEntry(h.aliases, filepath.Base(alias.Path))
 			if err != nil || !entry.Absent || len(h.retirement) == 0 {
 				return errors.New("APK launcher owned entry is not durably retired")
@@ -922,4 +945,151 @@ func (h *APKLauncherCustody) Close() error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+type apkLauncherQuarantine struct {
+	Schema        string              `json:"schema"`
+	Purpose       string              `json:"purpose"`
+	ReceiptSHA256 string              `json:"receipt_sha256"`
+	Path          string              `json:"path"`
+	Name          string              `json:"name"`
+	Evidence      apkLauncherEvidence `json:"evidence"`
+}
+
+func apkLauncherQuarantineName(index int) string {
+	if index == 0 {
+		return "launcher-quarantine-cli.json"
+	}
+	return "launcher-quarantine-tui.json"
+}
+
+func (h *APKLauncherCustody) readQuarantine(index int) (apkLauncherQuarantine, bool, error) {
+	var record apkLauncherQuarantine
+	name := apkLauncherQuarantineName(index)
+	if _, err := h.journal.Lstat(name); errors.Is(err, os.ErrNotExist) {
+		if len(h.quarantines[index]) != 0 {
+			return record, false, errors.New("APK launcher quarantine intent disappeared")
+		}
+		return record, false, nil
+	} else if err != nil {
+		return record, false, err
+	}
+	raw, err := h.readRecord(name)
+	alias := h.record.Aliases[index]
+	if err != nil || decodeAPKTransitionJSON(raw, &record) != nil || record.Schema != apkLauncherCustodySchema || record.Purpose != "owned-launcher-quarantine" || len(h.retirement) == 0 || len(h.receipt) == 0 || record.ReceiptSHA256 != apkTransitionDigest(h.receipt) || alias.Disposition != "product-created" || record.Path != alias.Path || record.Evidence != alias.Committed || !strings.HasPrefix(record.Name, ".syswarden-apk-retire-") || len(record.Name) != len(".syswarden-apk-retire-")+32 || !safeAssetName(record.Name) {
+		return record, false, errors.New("APK launcher quarantine intent is invalid")
+	}
+	if len(h.quarantines[index]) != 0 && !bytes.Equal(h.quarantines[index], raw) {
+		return record, false, errors.New("APK launcher quarantine intent changed")
+	}
+	h.quarantines[index] = raw
+	return record, true, nil
+}
+
+func (h *APKLauncherCustody) attestQuarantine(record apkLauncherQuarantine) error {
+	entry, err := readAPKLauncherEntry(h.aliases, record.Name)
+	actual := apkLauncherEntryEvidence(entry)
+	if err != nil || entry.Absent || !sameAPKLauncherMovedIdentity(record.Evidence.Identity, actual.Identity) || actual.LinkTarget != record.Evidence.LinkTarget || actual.ContentSHA256 != record.Evidence.ContentSHA256 {
+		return errors.New("APK launcher quarantine identity changed; retain the exact quarantine and intent for recovery")
+	}
+	return h.checkParents()
+}
+
+func (h *APKLauncherCustody) retireOwnedAlias(index int, barrier apkLauncherEvidence) (result error) {
+	alias := h.record.Aliases[index]
+	record, exists, err := h.readQuarantine(index)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		entry, err := readAPKLauncherEntry(h.aliases, filepath.Base(alias.Path))
+		if err != nil || apkLauncherEntryEvidence(entry) != alias.Committed {
+			return errors.New("APK launcher changed before quarantine intent")
+		}
+		name, err := randomServiceArtifactName(".syswarden-apk-retire-")
+		if err != nil {
+			return err
+		}
+		record = apkLauncherQuarantine{apkLauncherCustodySchema, "owned-launcher-quarantine", apkTransitionDigest(h.receipt), alias.Path, name, alias.Committed}
+		raw, err := apkLauncherCanonical(record)
+		if err != nil {
+			return err
+		}
+		if err := h.publish(apkLauncherQuarantineName(index), raw); err != nil {
+			return err
+		}
+		h.quarantines[index] = raw
+	}
+	directory, err := h.aliases.Open(".")
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, directory.Close()) }()
+	info, err := directory.Stat()
+	identity, identityErr := apkLauncherIdentity(info)
+	if err != nil || identityErr != nil || !apkLauncherSameParent(h.record.Parents[3].Identity, identity) {
+		return errors.New("APK launcher quarantine parent changed")
+	}
+	descriptor := directory.Fd()
+	if descriptor > uintptr(^uint(0)>>1) {
+		return errors.New("APK launcher quarantine descriptor is invalid")
+	}
+	fd := int(descriptor)
+	name := filepath.Base(alias.Path)
+	_, quarantineErr := h.aliases.Lstat(record.Name)
+	_, namedErr := h.aliases.Lstat(name)
+	if errors.Is(quarantineErr, os.ErrNotExist) && errors.Is(namedErr, os.ErrNotExist) {
+		return h.Revalidate()
+	}
+	if quarantineErr != nil && !errors.Is(quarantineErr, os.ErrNotExist) {
+		return quarantineErr
+	}
+	if errors.Is(quarantineErr, os.ErrNotExist) {
+		if err := h.Revalidate(); err != nil {
+			return err
+		}
+		entry, err := readAPKLauncherEntry(h.aliases, name)
+		if err != nil || apkLauncherEntryEvidence(entry) != alias.Committed {
+			return errors.New("APK launcher changed before atomic quarantine")
+		}
+		if currentBarrier, err := h.removalBarrier(); err != nil || currentBarrier != barrier {
+			return errors.New("APK launcher removal barrier changed before quarantine")
+		}
+		if h.fault != nil {
+			if err := h.fault("before-quarantine-" + name); err != nil {
+				return err
+			}
+		}
+		if err := unix.Renameat2(fd, name, fd, record.Name, unix.RENAME_NOREPLACE); err != nil {
+			return err
+		}
+		if err := directory.Sync(); err != nil {
+			return err
+		}
+		if h.fault != nil {
+			if err := h.fault("after-quarantine-" + name); err != nil {
+				return err
+			}
+		}
+	} else if namedErr == nil {
+		return errors.New("APK launcher quarantine conflicts with a live replacement")
+	}
+	attestErr := h.attestQuarantine(record)
+	currentBarrier, barrierErr := h.removalBarrier()
+	_, namedErr = h.aliases.Lstat(name)
+	if attestErr != nil || barrierErr != nil || currentBarrier != barrier || !errors.Is(namedErr, os.ErrNotExist) {
+		restoreErr := unix.Renameat2(fd, record.Name, fd, name, unix.RENAME_NOREPLACE)
+		return errors.Join(errors.New("APK launcher quarantine changed; preserve its recorded location for bounded recovery"), attestErr, barrierErr, restoreErr, directory.Sync())
+	}
+	if err := unix.Unlinkat(fd, record.Name, 0); err != nil {
+		restoreErr := unix.Renameat2(fd, record.Name, fd, name, unix.RENAME_NOREPLACE)
+		return errors.Join(err, restoreErr, directory.Sync())
+	}
+	if err := directory.Sync(); err != nil {
+		return err
+	}
+	if h.fault != nil && h.fault("after-unlink-"+name) != nil {
+		return errors.New("APK launcher unlink interrupted; retain removal intent")
+	}
+	return h.Revalidate()
 }

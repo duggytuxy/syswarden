@@ -209,6 +209,22 @@ native executables for bounded read-only queries. Unknown or changed evidence
 requires a new review; these observations do not authorize modifying independent
 administrator services.
 
+A newly approved command retains its original live-host and administrator
+connection observation until the first possible host effect. It checks policy
+authority after publishing approval, during consumption, and immediately before
+firewall recovery. Recovery consumes that original observation because an
+intentional host change would make it stale. The command then rechecks policy
+authority before entering application. Failure or a repeated phase refuses
+application within that command invocation and cannot publish successful
+completion. Existing exact approval
+used for an ordinary reload does not fabricate a new live-host review.
+
+Successful-application publication revalidates the exact TOML and approval after
+writing and synchronizing the completion record. Repeated completion requests
+also revalidate the retained record. If source or approval identity changes
+within that boundary, the command refuses success and preserves the private
+record for inspection instead of silently declaring the new state approved.
+
 Approval and successful application are separate root-private records. An
 approved install permits its nested firewall reload and independent core start
 before the parent can record success; a child reload cannot record completion

@@ -140,3 +140,38 @@ syswarden_preflight_launchers() {
         fi
     done
 }
+
+# APK does not own this shared subtree. Fresh intent later captures exact
+# identities through protected descriptors; this shell check grants no ownership.
+syswarden_preflight_apk_launchers() {
+    [ "$#" -eq 1 ] || return 1
+    case "$1" in /*) ;; *) return 1 ;; esac
+    syswarden_launcher_root="${1%/}"
+    for syswarden_launcher_parent in / /usr /usr/local /usr/local/bin; do
+        syswarden_launcher_path="${syswarden_launcher_root}${syswarden_launcher_parent}"
+        if [ -L "${syswarden_launcher_path}" ] || \
+           { [ -e "${syswarden_launcher_path}" ] && [ ! -d "${syswarden_launcher_path}" ]; }; then
+            printf '%s\n' 'Refusing unsafe APK launcher ancestry; preserve administrator entries.' >&2
+            return 1
+        fi
+        if [ ! -d "${syswarden_launcher_path}" ]; then
+            case "${syswarden_launcher_parent}" in /usr/local|/usr/local/bin) continue ;; *) return 1 ;; esac
+        fi
+        [ "$(stat -c '%u:%g' "${syswarden_launcher_path}")" = 0:0 ] || return 1
+        syswarden_launcher_mode="$(stat -c '%a' "${syswarden_launcher_path}")" || return 1
+        [ "$((0${syswarden_launcher_mode} & 0022))" -eq 0 ] || return 1
+    done
+    for syswarden_launcher_name in syswarden syswarden-tui; do
+        syswarden_launcher_path="${syswarden_launcher_root}/usr/local/bin/${syswarden_launcher_name}"
+        if [ ! -e "${syswarden_launcher_path}" ] && [ ! -L "${syswarden_launcher_path}" ]; then
+            continue
+        fi
+        [ "$(stat -c '%u:%g:%h' "${syswarden_launcher_path}")" = 0:0:1 ] || return 1
+        [ "$(stat -c '%s' "${syswarden_launcher_path}")" -le 1048576 ] || return 1
+        if [ ! -L "${syswarden_launcher_path}" ]; then
+            [ -f "${syswarden_launcher_path}" ] || return 1
+            syswarden_launcher_mode="$(stat -c '%a' "${syswarden_launcher_path}")" || return 1
+            [ "$((0${syswarden_launcher_mode} & 0022))" -eq 0 ] || return 1
+        fi
+    done
+}

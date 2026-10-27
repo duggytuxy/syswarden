@@ -56,8 +56,12 @@ func readAPKTransitionInventory(ctx context.Context, file *os.File) ([]apkTransi
 			return nil, errors.New("APK transition inventory has duplicate, aliased or foreign-owned members")
 		}
 		seen[key] = true
+		// The pinned abuild RSA256 producer emits exactly this timestamp pair
+		// on its signature member. It grants no control or payload metadata scope.
+		signatureTimes := stream == "apk-signature" && len(header.PAXRecords) == 2 &&
+			header.PAXRecords["atime"] == "0" && header.PAXRecords["ctime"] == "0"
 		for key := range header.PAXRecords {
-			if key != "APK-TOOLS.checksum.SHA1" {
+			if key != "APK-TOOLS.checksum.SHA1" && !signatureTimes {
 				return nil, fmt.Errorf("APK transition inventory uses unsupported extended metadata %q", key)
 			}
 		}
@@ -74,8 +78,8 @@ func readAPKTransitionInventory(ctx context.Context, file *os.File) ([]apkTransi
 		}
 		switch stream {
 		case "apk-signature":
-			if directory || !strings.HasPrefix(name, ".SIGN.RSA.") || header.Size > maximumNativeHeaderMetadataBytes || header.Mode != 0644 {
-				return nil, errors.New("APK transition requires bounded native RSA signature framing")
+			if directory || !validAPKTransitionSignatureName(name) || header.Size > maximumNativeHeaderMetadataBytes || header.Mode != 0644 {
+				return nil, errors.New("APK transition requires bounded native RSA or RSA256 signature framing")
 			}
 			signatures++
 		case "apk-control":
@@ -133,4 +137,26 @@ func readAPKTransitionInventory(ctx context.Context, file *os.File) ([]apkTransi
 		return members[i].Stream+":"+members[i].Path < members[j].Stream+":"+members[j].Path
 	})
 	return members, identity, ctx.Err()
+}
+
+// Signature framing is independent of native cryptographic verification. Keep
+// legacy RSA compatibility and the exact RSA256 algorithm used by abuild-sign.
+func validAPKTransitionSignatureName(name string) bool {
+	key := ""
+	for _, prefix := range []string{".SIGN.RSA.", ".SIGN.RSA256."} {
+		if strings.HasPrefix(name, prefix) {
+			key = strings.TrimPrefix(name, prefix)
+			break
+		}
+	}
+	if key == "" || key == "." || key == ".." {
+		return false
+	}
+	for _, value := range key {
+		if !(value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z' ||
+			value >= '0' && value <= '9' || strings.ContainsRune("_.+-", value)) {
+			return false
+		}
+	}
+	return true
 }

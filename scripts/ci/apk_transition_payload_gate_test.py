@@ -14,6 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import apk_transition_payload_gate as gate
+import native_package_signing_bundle as signing_bundle
 
 
 class APKTransitionPayloadGateTests(unittest.TestCase):
@@ -78,6 +79,68 @@ class APKTransitionPayloadGateTests(unittest.TestCase):
         wire += gzip.compress(self.tar_bytes(self.controls, False))
         wire += gzip.compress(self.tar_bytes(self.members if members is None else members))
         self.archive.write_bytes(wire)
+
+    @staticmethod
+    def signature_prefix(name, metadata=None):
+        # Same bounded public framing as the pinned abuild producer and bundle
+        # validator. Inert signature bytes do not assert cryptographic validity.
+        member = tarfile.TarInfo(name)
+        member.mode, member.size, member.mtime = 0o644, 256, 1780000000
+        member.pax_headers = {} if metadata is None else metadata
+        wire = member.tobuf(format=tarfile.PAX_FORMAT) + b"s" * 256 + bytes(256)
+        return gzip.compress(wire, mtime=0)
+
+    def test_official_rsa256_producer_contract_and_legacy_rsa(self):
+        name = ".SIGN.RSA256.apk-public.rsa.pub"
+        prefix = self.signature_prefix(name, {"atime": "0", "ctime": "0"})
+        # Exercise the exact independent signing-bundle contract, including its
+        # selected key basename and mandatory timestamp pair.
+        observed_name, signature = signing_bundle.validate_apk_signature_archive(
+            prefix, "native-package-keys/apk-public.rsa.pub", 1780000000)
+        self.assertEqual((observed_name, signature), (name, b"s" * 256))
+        for prefix in (prefix, self.signature_prefix(".SIGN.RSA.legacy.rsa.pub")):
+            with self.subTest(prefix_hash=hashlib.sha256(prefix).hexdigest()):
+                self.write_archive()
+                self.archive.write_bytes(prefix + self.archive.read_bytes())
+                observed = gate.validate(self.archive, self.stage, self.scripts)
+                self.assertIn("opt/syswarden/bin/syswarden-cli", observed)
+
+    def test_signature_names_and_framing_are_exact(self):
+        for name in (".SIGN.RSA512.key.rsa.pub", ".SIGN.DSA.key.rsa.pub", ".SIGN.RSA256x.key",
+                     ".SIGN.RSA256.", ".SIGN.RSA.", ".SIGN.RSA256..", ".SIGN.RSA256...",
+                     ".SIGN.RSA256.key/name", ".SIGN.RSA256.key/../name", "./.SIGN.RSA256.key",
+                     ".SIGN.RSA256.key name", ".SIGN.RSA256.key\\name", ".SIGN.RSA256.keyé"):
+            with self.subTest(name=name):
+                self.write_archive()
+                self.archive.write_bytes(self.signature_prefix(name) + self.archive.read_bytes())
+                with self.assertRaises(gate.APKTransitionPayloadError):
+                    gate.validate(self.archive, self.stage, self.scripts)
+        first = self.signature_prefix(".SIGN.RSA256.apk-public.rsa.pub")
+        for other, late in ((first, False), (self.signature_prefix(".SIGN.RSA.legacy.rsa.pub"), False), (b"", True)):
+            with self.subTest(other=hashlib.sha256(other).hexdigest(), late=late):
+                self.write_archive()
+                original = self.archive.read_bytes()
+                self.archive.write_bytes(original + first if late else first + other + original)
+                with self.assertRaises(gate.APKTransitionPayloadError):
+                    gate.validate(self.archive, self.stage, self.scripts)
+
+    def test_signature_timestamps_are_exact_and_signature_only(self):
+        name = ".SIGN.RSA256.apk-public.rsa.pub"
+        for metadata in ({"atime": "0"}, {"ctime": "0"}, {"atime": "1", "ctime": "0"},
+                         {"atime": "0.0", "ctime": "0"}, {"atime": "0", "ctime": "0", "mtime": "0"},
+                         {"atime": "0", "ctime": "0", "path": name},
+                         {"atime": "0", "ctime": "0", "APK-TOOLS.checksum.SHA1": "0" * 40}):
+            with self.subTest(metadata=metadata):
+                self.write_archive()
+                self.archive.write_bytes(self.signature_prefix(name, metadata) + self.archive.read_bytes())
+                with self.assertRaises(gate.APKTransitionPayloadError):
+                    gate.validate(self.archive, self.stage, self.scripts)
+        for misplaced in (".PKGINFO", "opt/syswarden/bin/syswarden-cli"):
+            with self.subTest(misplaced=misplaced):
+                self.write_archive()
+                self.archive.write_bytes(self.signature_prefix(misplaced, {"atime": "0", "ctime": "0"}) + self.archive.read_bytes())
+                with self.assertRaises(gate.APKTransitionPayloadError):
+                    gate.validate(self.archive, self.stage, self.scripts)
 
     def test_reference_descriptor_cannot_claim_unbound_runtime_capability(self):
         self.write_archive()

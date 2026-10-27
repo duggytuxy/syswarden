@@ -821,6 +821,10 @@ APK_RECOVERY_HOOK_FIRST_VERSION = "5.00.0"
 APK_RECOVERY_HOOK_SHA256 = (
     "c38eb138669360b3d664cc97c390ef5852964be64bc55991b5f664e586084522"
 )
+APK_LAUNCHER_RECOVERY_HOOK_SHA256 = (
+    "3bbcf99328b042cdd1cdd632eeee5603245d9a067e85828b7d9022849585680d"
+)
+APK_SHARED_LAUNCHERS = frozenset({"/usr/local/bin/syswarden", "/usr/local/bin/syswarden-tui"})
 RPM_DOCUMENTATION_ROOT = "/usr/share/doc/syswarden"
 GEOIP_DATA_LICENSE_PATH = "/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
 GEOIP_DATA_LICENSE_FIRST_VERSION = "4.04.0"
@@ -2988,16 +2992,25 @@ validate_manifest_contract() {
     manifest="$1"
     artifact_role="$2"
     case "${artifact_role}" in candidate|previous) ;; *) return 1 ;; esac
+    launcher_free_apk=0
+    if [ "${PACKAGE_FAMILY}" = apk ] && \
+       required_manifest_path "${manifest}" /opt/syswarden/activation-contract-v1.json && \
+       required_manifest_path "${manifest}" /etc/apk/commit_hooks.d/syswarden-recovery && \
+       ! grep -Eq '^/usr/local(/|$)' "${manifest}"; then
+        launcher_free_apk=1
+    fi
     for required in \
         /opt/syswarden/bin/syswarden-cli \
         /opt/syswarden/bin/syswarden-core \
         /opt/syswarden/bin/syswarden-tui \
-        /opt/syswarden/signatures.json \
-        /usr/local/bin/syswarden \
-        /usr/local/bin/syswarden-tui
+        /opt/syswarden/signatures.json
     do
         required_manifest_path "${manifest}" "${required}" || return 1
     done
+    if [ "${launcher_free_apk}" -eq 0 ]; then
+        required_manifest_path "${manifest}" /usr/local/bin/syswarden || return 1
+        required_manifest_path "${manifest}" /usr/local/bin/syswarden-tui || return 1
+    fi
     legacy_completion_payload=0
     if package_uses_legacy_completion_payload "${artifact_role}"; then
         legacy_completion_payload=1
@@ -3052,7 +3065,7 @@ validate_manifest_contract() {
     fi
 
     apk_recovery_payload=0
-    if package_uses_apk_recovery_payload "${artifact_role}"; then
+    if [ "${launcher_free_apk}" -eq 1 ] || package_uses_apk_recovery_payload "${artifact_role}"; then
         apk_recovery_payload=1
         required_manifest_path "${manifest}" \
             /etc/apk/commit_hooks.d/syswarden-recovery || return 1
@@ -3089,7 +3102,10 @@ validate_manifest_contract() {
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
             ;;
         apk)
-            if [ "${apk_recovery_payload}" -eq 1 ]; then
+            if [ "${launcher_free_apk}" -eq 1 ]; then
+                allowed='^/(etc/apk/commit_hooks\.d/syswarden-recovery|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt)$'
+                expected_manifest_count=8
+            elif [ "${apk_recovery_payload}" -eq 1 ]; then
                 allowed='^/(etc/apk/commit_hooks\.d/syswarden-recovery|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt)$'
                 expected_manifest_count=10
             elif [ "${legacy_completion_payload}" -eq 1 ]; then
@@ -3180,6 +3196,11 @@ validate_inventory_contract() {
     inventory="$1"
     artifact_role="$2"
     case "${artifact_role}" in candidate|previous) ;; *) return 1 ;; esac
+    launcher_free_apk=0
+    if [ "${PACKAGE_FAMILY}" = apk ] && \
+       awk -F '\t' '$1 == "/opt/syswarden/activation-contract-v1.json" { d++ } $1 == "/etc/apk/commit_hooks.d/syswarden-recovery" { h++ } $1 ~ /^\/usr\/local(\/|$)/ { a++ } END { exit d == 1 && h == 1 && a == 0 ? 0 : 1 }' "${inventory}"; then
+        launcher_free_apk=1
+    fi
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-cli file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-cli" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-core file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-core" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-tui file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-tui" { print $6 }' "${inventory}")" || return 1
@@ -3195,8 +3216,10 @@ validate_inventory_contract() {
             "${activation_cli_hash}" "${activation_core_hash}" | sha256sum | awk '{ print $1 }')" || return 1
         inventory_has_exact_entry "${inventory}" /opt/syswarden/activation-contract-v1.json file 644 "${activation_descriptor_hash}" || return 1
     fi
-    inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden symlink 777 /opt/syswarden/bin/syswarden-cli || return 1
-    inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden-tui symlink 777 /opt/syswarden/bin/syswarden-tui || return 1
+    if [ "${launcher_free_apk}" -eq 0 ]; then
+        inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden symlink 777 /opt/syswarden/bin/syswarden-cli || return 1
+        inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden-tui symlink 777 /opt/syswarden/bin/syswarden-tui || return 1
+    fi
     legacy_completion_payload=0
     if package_uses_legacy_completion_payload "${artifact_role}"; then
         legacy_completion_payload=1
@@ -3241,7 +3264,11 @@ validate_inventory_contract() {
             '/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf' \
             "${inventory}" && return 1
     fi
-    if package_uses_apk_recovery_payload "${artifact_role}"; then
+    if [ "${launcher_free_apk}" -eq 1 ]; then
+        inventory_has_exact_entry "${inventory}" \
+            /etc/apk/commit_hooks.d/syswarden-recovery file 755 \
+            3bbcf99328b042cdd1cdd632eeee5603245d9a067e85828b7d9022849585680d || return 1
+    elif package_uses_apk_recovery_payload "${artifact_role}"; then
         inventory_has_exact_entry "${inventory}" \
             /etc/apk/commit_hooks.d/syswarden-recovery file 755 \
             c38eb138669360b3d664cc97c390ef5852964be64bc55991b5f664e586084522 || return 1
@@ -7138,7 +7165,10 @@ def _validate_manager_paths(
                 else APK_PACKAGE_PATHS
             )
         )
-        if _uses_apk_recovery_payload(family, role, version):
+        launcher_free = bool(activation_paths) and APK_RECOVERY_HOOK_PATH in observed and not (APK_SHARED_LAUNCHERS & observed)
+        if launcher_free:
+            expected = expected - APK_SHARED_LAUNCHERS
+        if launcher_free or _uses_apk_recovery_payload(family, role, version):
             expected = expected | {APK_RECOVERY_HOOK_PATH}
         expected = expected | activation_paths
         if observed != expected:
@@ -7251,13 +7281,14 @@ def validate_inventory_snapshot(
         "/opt/syswarden/signatures.json": "640",
     }
     descriptor_path = "/" + native_activation_descriptor.DESCRIPTOR_PATH
+    launcher_free_apk = family == "apk" and descriptor_path in entries and APK_RECOVERY_HOOK_PATH in entries and not (APK_SHARED_LAUNCHERS & entries.keys())
     if descriptor_path in entries:
         file_modes[descriptor_path] = "644"
     if not legacy_completion:
         file_modes[BASH_COMPLETION_PATH] = "644"
     if systemd_ordering_payload:
         file_modes[SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH] = "644"
-    if _uses_apk_recovery_payload(family, role, version):
+    if launcher_free_apk or _uses_apk_recovery_payload(family, role, version):
         file_modes[APK_RECOVERY_HOOK_PATH] = "755"
     for path, mode in file_modes.items():
         entry = entries[path]
@@ -7301,8 +7332,9 @@ def validate_inventory_snapshot(
             raise LifecycleLabError(
                 "systemd WireGuard ordering payload is not the pinned intact source"
             )
-    if _uses_apk_recovery_payload(family, role, version):
-        if entries[APK_RECOVERY_HOOK_PATH]["value"] != APK_RECOVERY_HOOK_SHA256:
+    if launcher_free_apk or _uses_apk_recovery_payload(family, role, version):
+        expected_hook = APK_LAUNCHER_RECOVERY_HOOK_SHA256 if launcher_free_apk else APK_RECOVERY_HOOK_SHA256
+        if entries[APK_RECOVERY_HOOK_PATH]["value"] != expected_hook:
             raise LifecycleLabError(
                 "APK recovery hook is not the pinned intact source"
             )
@@ -7311,6 +7343,8 @@ def validate_inventory_snapshot(
         "/usr/local/bin/syswarden-tui": "/opt/syswarden/bin/syswarden-tui",
     }
     for path, target in link_targets.items():
+        if launcher_free_apk:
+            continue
         entry = entries[path]
         if (
             entry["type"] != "symlink"

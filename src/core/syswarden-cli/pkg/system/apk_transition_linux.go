@@ -186,6 +186,8 @@ type apkTransitionPlan struct {
 }
 
 type apkTransitionActivation interface {
+	DurableEffects() ([]byte, error)
+	OriginalRuntime() nativeActivationRuntimeSnapshot
 	EffectPlanSHA256() string
 	Revalidate(context.Context) error
 	VerifyInstalledCandidate(context.Context) error
@@ -403,6 +405,13 @@ func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandida
 		return errors.New("APK candidate effect evidence is incomplete")
 	}
 	if err := activation.Revalidate(ctx); err != nil {
+		return err
+	}
+	effects, err := activation.DurableEffects()
+	if err != nil || len(effects) == 0 || len(effects) > 1<<20 || apkTransitionDigest(effects) != activation.EffectPlanSHA256() {
+		return errors.Join(errors.New("APK durable effects differ from original approval evidence"), err)
+	}
+	if err := writeAPKTransitionBytes(directory, "native-effects.json", effects); err != nil {
 		return err
 	}
 	plan := apkTransitionPlan{CandidateAPKChecksum: candidateChecksum, CandidateCapabilitySHA256: capability.SHA256(), EffectPlanSHA256: activation.EffectPlanSHA256(), Schema: apkTransitionSchema, PackageName: candidate.target.packageName, Installer: candidate.target.installer, CandidateVersion: candidate.version,
@@ -726,8 +735,15 @@ func (prepared *verifiedPreparedAPKTransition) Revalidate(ctx context.Context) e
 }
 
 func openVerifiedPreparedAPKTransition(ctx context.Context, digest string, keys map[string]ed25519.PublicKey,
-	attest installedVersionAttestor, services apkTransitionServices) (verified *verifiedPreparedAPKTransition, returnErr error) {
-	if ctx == nil || !validSHA256(digest) || services.policy == nil || services.verifyNative == nil || services.activation == nil || attest == nil {
+	attest installedVersionAttestor, services apkTransitionServices) (*verifiedPreparedAPKTransition, error) {
+	return openRetainedAPKTransition(ctx, digest, keys, attest, services, true)
+}
+
+// Poststate inspection authenticates original retained evidence without
+// recapturing the replaced host as its original before-transaction authority.
+func openRetainedAPKTransition(ctx context.Context, digest string, keys map[string]ed25519.PublicKey,
+	attest installedVersionAttestor, services apkTransitionServices, original bool) (verified *verifiedPreparedAPKTransition, returnErr error) {
+	if ctx == nil || !validSHA256(digest) || services.policy == nil || services.verifyNative == nil || original && services.activation == nil || attest == nil {
 		return nil, errors.New("APK review requires an exact stored plan digest and complete verification dependencies")
 	}
 	if err := ctx.Err(); err != nil {
@@ -823,9 +839,15 @@ func openVerifiedPreparedAPKTransition(ctx context.Context, digest string, keys 
 		return nil, errors.Join(errors.New("APK stored native registration identity differs from authenticated control bytes"), err)
 	}
 
-	installed, err := attest(ctx, target, candidate.uid)
-	if err != nil || installed.version != plan.InstalledVersion || installed.cliSHA256 != plan.InstalledCLISHA256 {
-		return nil, errors.Join(errors.New("APK original installed candidate changed since preparation"), err)
+	if original {
+		installed, err := attest(ctx, target, candidate.uid)
+		if err != nil || installed.version != plan.InstalledVersion || installed.cliSHA256 != plan.InstalledCLISHA256 {
+			return nil, errors.Join(errors.New("APK original installed candidate changed since preparation"), err)
+		}
+	}
+	effects, err := readAPKTransitionBytes(directory, "native-effects.json", 1<<20)
+	if err != nil || apkTransitionDigest(effects) != plan.EffectPlanSHA256 {
+		return nil, errors.Join(errors.New("APK retained original effects changed"), err)
 	}
 	snapshotBytes, err := readAPKTransitionBytes(directory, "host-snapshot.json", 2*maximumAPKTransitionSnapshotBytes)
 	if err != nil || apkTransitionDigest(snapshotBytes) != plan.HostSnapshotSHA256 {
@@ -835,9 +857,11 @@ func openVerifiedPreparedAPKTransition(ctx context.Context, digest string, keys 
 	if err := decodeAPKTransitionJSON(snapshotBytes, &snapshot); err != nil {
 		return nil, err
 	}
-	current, err := captureAPKTransitionHost(ctx, services.hostRoot)
-	if err != nil || !reflect.DeepEqual(snapshot, current) {
-		return nil, errors.Join(errors.New("APK current host differs from the explicitly reviewed plan"), err)
+	if original {
+		current, err := captureAPKTransitionHost(ctx, services.hostRoot)
+		if err != nil || !reflect.DeepEqual(snapshot, current) {
+			return nil, errors.Join(errors.New("APK current host differs from the explicitly reviewed plan"), err)
+		}
 	}
 	policy, err := services.policy(ctx)
 	if err != nil || policy != plan.Policy {
@@ -850,17 +874,20 @@ func openVerifiedPreparedAPKTransition(ctx context.Context, digest string, keys 
 	if err != nil || capability.SHA256() != plan.CandidateCapabilitySHA256 {
 		return nil, errors.Join(errors.New("APK stored runtime capability changed"), err)
 	}
-	activation, err := services.activation(ctx, candidate)
-	if err != nil {
-		return nil, err
+	if original {
+		activation, err := services.activation(ctx, candidate)
+		if err != nil {
+			return nil, err
+		}
+		if activation == nil || activation.EffectPlanSHA256() != plan.EffectPlanSHA256 {
+			return nil, errors.New("APK stored candidate effect evidence changed")
+		}
+		if err := activation.Revalidate(ctx); err != nil {
+			return nil, err
+		}
+		opened.activation = activation
 	}
-	if activation == nil || activation.EffectPlanSHA256() != plan.EffectPlanSHA256 {
-		return nil, errors.New("APK stored candidate effect evidence changed")
-	}
-	if err := activation.Revalidate(ctx); err != nil {
-		return nil, err
-	}
-	opened.activation, opened.capability = activation, capability
+	opened.capability = capability
 	opened.plan, opened.candidate, opened.snapshot = plan, candidate, snapshot
 	return opened, nil
 }
@@ -938,12 +965,12 @@ func inspectAPKTransitionCustodyInventory(directory *pinnedServiceDirectory, fil
 	if err != nil {
 		return err
 	}
-	names, readErr := file.Readdirnames(9)
+	names, readErr := file.Readdirnames(10)
 	closeErr := file.Close()
-	if readErr != nil && !errors.Is(readErr, io.EOF) || closeErr != nil || len(names) > 7 {
+	if readErr != nil && !errors.Is(readErr, io.EOF) || closeErr != nil || len(names) > 8 {
 		return errors.New("APK custody inventory is incomplete or excessive")
 	}
-	expected := map[string]bool{filename: true, updateManifestAssetName: true, updateManifestSignatureAssetName: true, "host-snapshot.json": true, "plan.json": true, "prepared.json": true}
+	expected := map[string]bool{filename: true, updateManifestAssetName: true, updateManifestSignatureAssetName: true, "host-snapshot.json": true, "native-effects.json": true, "plan.json": true, "prepared.json": true}
 	for _, name := range names {
 		if name == "approval.json" {
 			continue

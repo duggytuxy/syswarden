@@ -51,6 +51,8 @@ var retireGeneratedListsForRemoval = system.RetireGeneratedListsForRemoval
 var retireCreatedUISnapshotsForRemoval = system.RetireCreatedUISnapshotsForRemoval
 var removeEmptyFirewallWrapperStateForRemoval = system.RemoveEmptyFirewallWrapperStateForRemoval
 var retireActivationStateForRemoval = retireApprovedActivationStateForRemoval
+var preflightAPKLaunchersForRemoval = system.PreflightAPKLauncherRemoval
+var retireAPKLaunchersForRemoval = system.RetireAPKLaunchersForRemoval
 
 // Retire only the verified product approval inventory. This short custody is
 // acquired after the removal barrier and released before configuration or
@@ -68,6 +70,9 @@ func retireApprovedActivationStateForRemoval() (result error) {
 }
 
 func prepareVerifiedFirewallRemoval() error {
+	if err := preflightAPKLaunchersForRemoval(); err != nil {
+		return fmt.Errorf("APK launcher ownership requires recovery before removal starts; preserve aliases, their targets and native ownership evidence: %w", err)
+	}
 	if err := preflightWireGuardPolicyTransition(); err != nil {
 		return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
 	}
@@ -196,6 +201,9 @@ func prepareVerifiedFirewallRemoval() error {
 	}
 	if err := retireActivationStateForRemoval(); err != nil {
 		return fmt.Errorf("activation approval retirement remains incomplete; preserve ambiguous records, the CLI and removal barrier, then retry the original removal command after recovery: %w", err)
+	}
+	if err := retireAPKLaunchersForRemoval(); err != nil {
+		return fmt.Errorf("APK launcher retirement remains incomplete; preserve inherited aliases, payload, the CLI and removal barrier: %w", err)
 	}
 	if err := removePristineDefaultConfigurationForRemoval(); err != nil {
 		return fmt.Errorf("default configuration retirement remains incomplete; preserve the CLI and removal barrier: %w", err)

@@ -225,8 +225,24 @@ func inspectBoundPayload(directory *pinnedServiceDirectory, expected map[string]
 			return result, fmt.Errorf("standalone payload directory changed during inspection")
 		}
 	}
+	if err := attestBoundPayloadLeaves(directory.root, result); err != nil {
+		return result, err
+	}
 	result.digest = fmt.Sprintf("%x", digest.Sum(nil))
 	return result, nil
+}
+
+// Recheck the complete captured set after the final read. A directory identity
+// alone cannot witness an in-place change to an earlier file during hashing.
+func attestBoundPayloadLeaves(root *os.Root, snapshot retainedDirectorySnapshot) error {
+	for name, expected := range snapshot.files {
+		info, err := root.Lstat(name)
+		actual, identityErr := exactRemovalArtifactIdentity(info)
+		if err != nil || identityErr != nil || actual != expected {
+			return fmt.Errorf("standalone payload changed before the complete snapshot was witnessed: %s", name)
+		}
+	}
+	return nil
 }
 
 func retireStandalonePayloadForRemoval() error {

@@ -20,7 +20,8 @@ var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install SYSWARDEN and configure security modules",
 	Long:  "Installs the selected firewall services and feed scheduler. Fresh packages stage an unconfigured profile without activating lists or services. SSH, CIS and OS hardening require a separate explicit configuration operation.",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (result error) {
+		defer func() { recordConfigurationActivationFailure(cmd, result) }()
 		if err := preflightWireGuardPolicyTransition(); err != nil {
 			return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
 		}
@@ -49,6 +50,11 @@ var installCmd = &cobra.Command{
 			}
 			fmt.Println("[INFO] Candidate package staged without host activation; the qualification updater must attest it before activation.")
 			return nil
+		}
+		if configurationActivationExecution(cmd) != nil {
+			if err := beginConfigurationActivationApplication(cmd); err != nil {
+				return installStageError("activation authority changed before installation effects", err)
+			}
 		}
 		if err := preflightLegacyWireGuardForInstall(); err != nil {
 			return installStageError("historical WireGuard conflict detected before configuration or dependency changes", err)

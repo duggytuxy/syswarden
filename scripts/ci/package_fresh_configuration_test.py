@@ -28,7 +28,7 @@ class FreshPackageConfigurationTests(unittest.TestCase):
     def run_hook(self, hook: str, family: str, phase: str, before: bool, *, barrier: str = "0", offline: bool = False, cli_exit: int = 0, launcher_exit: int = 0):
         # Run the complete emitted maintainer body, not only its new branch.
         # All host operations are replaced before executing that body.
-        body = hook[hook.rindex("\nset -e\nexport SYSWARDEN_PKG_INSTALL=1") + 1:]
+        body = hook if "exec /var/backups/syswarden-apk-transitions-v1/active-hook " in hook else hook[hook.rindex("\nset -e\nexport SYSWARDEN_PKG_INSTALL=1") + 1:]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             events = root / "events"
@@ -39,7 +39,11 @@ class FreshPackageConfigurationTests(unittest.TestCase):
             stub = root / "cli"
             stub.write_text('#!/bin/sh\nprintf "cli:%s:%s\\n" "$SYSWARDEN_NATIVE_INSTALL_PHASE" "$*" >> "$EVENTS"\nexit "$CLI_EXIT"\n')
             stub.chmod(0o700)
+            dispatcher = root / "active-hook"
+            dispatcher.write_text('#!/bin/sh\nprintf "native-gate:%s\n" "$*" >> "$EVENTS"\nprintf "%s\n" "requires separately approved coordinated native transaction" >&2\nexit 1\n')
+            dispatcher.chmod(0o700)
             body = body.replace(CLI, shlex.quote(str(stub))).replace("/etc/alpine-release", str(alpine))
+            body = body.replace("/var/backups/syswarden-apk-transitions-v1/active-hook", shlex.quote(str(dispatcher)))
             arguments = {
                 ("deb", "fresh", True): ("install",), ("deb", "upgrade", True): ("upgrade", "4.10.4", "5.00.0"),
                 ("deb", "fresh", False): ("configure",), ("deb", "upgrade", False): ("configure", "4.10.4"),
@@ -54,6 +58,7 @@ for operation in mkdir chmod ln mv rm find stat id sync syswarden_preflight_alpi
     eval "$operation() { forbidden '$operation'; }"
 done
 syswarden_preflight_launchers() { printf 'launchers:%s\n' "$2" >> "$EVENTS"; return "$LAUNCHER_EXIT"; }
+syswarden_preflight_apk_launchers() { printf 'launchers:apk\n' >> "$EVENTS"; return "$LAUNCHER_EXIT"; }
 syswarden_preflight_wireguard() { printf 'wireguard\n' >> "$EVENTS"; }
 syswarden_preflight_systemd_ordering_dropin() { printf 'ordering\n' >> "$EVENTS"; }
 syswarden_preflight_systemd_socket_dropin() { printf 'socket\n' >> "$EVENTS"; }
@@ -81,17 +86,20 @@ syswarden_preflight_install_barriers() {
                     with self.subTest(source=source, family=family, hook=name):
                         result, events = self.run_hook(hook, family, "fresh", before)
                         self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(events, ["launchers:before", "wireguard", "barriers", "ordering", "socket"] if before else ["launchers:after", "barriers", "cli:fresh:install"])
+                        base = (["launchers:apk"] if family == "apk" else ["launchers:before" if before else "launchers:after"])
+                        stage = ["cli:fresh:internal-apk-launchers --stage-fresh"] if family == "apk" and not before else []
+                        prefix = base + (["wireguard", "barriers", "ordering", "socket"] if before else stage + ["barriers"])
+                        self.assertEqual(events, prefix if before else prefix + ["cli:fresh:install"])
                         result, events = self.run_hook(hook, family, "fresh", before, barrier="1")
                         self.assertNotEqual(result.returncode, 0)
-                        self.assertEqual(events, ["launchers:before", "wireguard", "barriers", "ordering", "socket"] if before else ["launchers:after", "barriers"])
+                        self.assertEqual(events, prefix)
                         result, events = self.run_hook(hook, family, "fresh", before, offline=True)
                         self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(events, ["launchers:before", "wireguard", "barriers", "ordering", "socket"] if before else ["launchers:after", "barriers"])
+                        self.assertEqual(events, prefix)
                 if not before:
                     result, events = self.run_hook(hook, "apk", "fresh", False, cli_exit=23)
                     self.assertEqual(result.returncode, 23)
-                    self.assertEqual(events, ["launchers:after", "barriers", "cli:fresh:install"])
+                    self.assertEqual(events, ["launchers:apk", "cli:fresh:internal-apk-launchers --stage-fresh"])
                     self.assertLess(hook.index(FRESH_BRANCH), hook.index("migrate_legacy_configuration\n"))
 
     def test_fresh_launcher_refusal_precedes_other_work_and_upgrade_is_refused_first(self) -> None:
@@ -103,7 +111,7 @@ syswarden_preflight_install_barriers() {
                         with self.subTest(family=family, phase=phase, before=before):
                             result, events = self.run_hook(hook, family, phase, before, launcher_exit=31)
                             self.assertEqual(result.returncode, 31 if phase == "fresh" else 1, result.stderr)
-                            self.assertEqual(events, ["launchers:before" if before else "launchers:after"] if phase == "fresh" else [])
+                            self.assertEqual(events, ["launchers:apk" if family == "apk" else "launchers:before" if before else "launchers:after"] if phase == "fresh" else ["native-gate:" + ("pre-upgrade" if before else "post-upgrade")] if family == "apk" else [])
 
     def test_upgrade_and_unknown_hooks_never_enter_fresh_staging(self) -> None:
         for loader in (self.contract.local_build_script, self.contract.script):
@@ -117,7 +125,7 @@ syswarden_preflight_install_barriers() {
                             result, events = self.run_hook(hook, family, phase, before, offline=offline)
                             self.assertEqual(result.returncode, 1, result.stderr)
                             self.assertIn("separately approved coordinated native transaction", result.stderr)
-                            self.assertEqual(events, [])
+                            self.assertEqual(events, ["native-gate:" + ("pre-upgrade" if before else "post-upgrade")] if family == "apk" else [])
 
     def test_upgrade_manager_dispositions_remain_unchanged(self) -> None:
         for loader in (self.contract.local_build_script, self.contract.script):

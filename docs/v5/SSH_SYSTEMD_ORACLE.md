@@ -32,13 +32,15 @@ removal contracts. The controlled forwarding probe is not a production authority
 for general policy-consumption acknowledgement. A successful fresh connection
 alone cannot authorize migration completion.
 
-## Integrated recovery scenarios
+## Integrated forward and recovery scenarios
 
-The same runner accepts `--scenario recovery-forwarding`, `recovery-cis`,
-`recovery-legacy-cis`, `recovery-noop`, `recovery-interrupt-main` and
-`recovery-interrupt-drop-in`. Each invocation requires a new output
-folder and creates a new disposable container. The default `activation` scenario
-retains the independent signal/listener negative controls described above.
+The runner covers seven integrated scenarios: `access-exchange`,
+`recovery-forwarding`, `recovery-cis`, `recovery-legacy-cis`, `recovery-noop`,
+`recovery-interrupt-main` and `recovery-interrupt-drop-in`. Select each with
+`--scenario`. The first exercises the internal forward composition; the other
+six cover restoration, stale policy and interrupted inverse publication. Each
+invocation requires a new output folder and disposable container. The separate
+default `activation` scenario retains the signal/listener negative controls above.
 
 The activation scenario also checks default main-file selection with the real
 pinned parser. A private copy of the fixture ELF has only its unique, same-size
@@ -200,14 +202,19 @@ part of the separate, incomplete #422 migration qualification.
 
 ## Fixed-path target access exchange
 
-The `access-exchange` scenario extends the forwarding recovery case with a
-single explicitly declared direct administrator context. It independently writes
-a synthetic private controller enrollment before publication. It exercises the
-internal coordinated first migration with the production opener and retained
-systemd lease, then calls the actual root-only request, issuance and receipt
-adapters after activation. Only label resolution uses the fixture label. Real OpenSSH
-authentication produces a signed fixture receipt. Issuance and receipt replay
-are refused. Revoking the enrollment blocks a new request, while the subsequent
+The `access-exchange` scenario exercises `runSSHForwardSession`: first
+migration, exact request approval, durable challenge issuance, fresh OpenSSH
+authentication and signed receipt recording. It uses the production migration
+opener and fixed-path target adapters. The migration lease closes before the
+access exchange; each access adapter independently rechecks the current
+assessment. Only label resolution uses the fixture label. A synthetic private
+controller enrollment declares one direct administrator context before publication.
+
+The composed result records scoped access and keeps `RecoveryRequired` true.
+It preserves partial durable facts on failure, writes no terminal acceptance and
+retires no recovery history. It has no production CLI or installer entry point
+and does not establish causal consumed-policy acceptance. Issuance and receipt
+replay are refused. Enrollment revocation blocks a new request; subsequent
 original restoration must still succeed and retain both access records.
 
 After restoration, a separate synthetic enrollment binds the approved recovery

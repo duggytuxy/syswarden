@@ -24,7 +24,7 @@ PREINSTALL_CALL = 'syswarden_set_native_install_phase preinstall "$@"'
 PREUPGRADE_CALL = 'syswarden_set_native_install_phase preupgrade "$@"'
 UPGRADE_CALL = 'syswarden_set_native_install_phase postupgrade "$@"'
 REFUSAL_CALL = 'syswarden_require_fresh_native_install || exit 1'
-WRAPPER_MARKER = "# APK upgrade has a fixed selector even when apk-tools supplies no phase environment.\n"
+WRAPPER_MARKER = "# Upgrade hooks require the separately approved live native dispatcher.\n"
 
 
 class PackageInstallPhaseTests(unittest.TestCase):
@@ -132,8 +132,7 @@ class PackageInstallPhaseTests(unittest.TestCase):
                         self.assertIn("separately approved coordinated native transaction", result.stderr)
 
     def test_both_builders_gate_every_install_hook_immediately_after_phase(self) -> None:
-        for name, phase in (("preinst.sh", PREINSTALL_CALL), ("preupgrade.sh", PREUPGRADE_CALL),
-                            ("postinst.sh", INSTALL_CALL), ("postupgrade.sh", UPGRADE_CALL)):
+        for name, phase in (("preinst.sh", PREINSTALL_CALL), ("postinst.sh", INSTALL_CALL)):
             local, public = self.contract.local_build_script(name), self.contract.script(name)
             self.assertEqual(local, public)
             body = local[local.rindex("\nset -e\nexport SYSWARDEN_PKG_INSTALL=1") + 1:]
@@ -148,40 +147,27 @@ class PackageInstallPhaseTests(unittest.TestCase):
         (directory / "postinst.sh").write_text(installed)
         (directory / "preinst.sh").write_text(preinstalled)
         return subprocess.run(
-            ["/bin/bash", "-eu", "-c", 'PACKAGE_SCRIPTS="$1"\n' + block,
-             "wrapper-contract", str(directory)],
+            ["/bin/bash", "-eu", "-c", 'PACKAGE_SCRIPTS="$1"\nSOURCE_ROOT="$2"\nEXACT_SOURCE_ROOT="$2"\n' + block,
+             "wrapper-contract", str(directory), str(ROOT)],
             cwd=directory, env={"PATH": os.environ["PATH"], "LC_ALL": "C"},
             capture_output=True, text=True, check=False, timeout=5,
         )
 
-    def test_real_local_and_public_wrapper_generation_changes_only_phase(self) -> None:
-        outputs = []
-        for source, loader in (
-            (LOCAL.read_text(), self.contract.local_build_script),
-            (WORKFLOW.read_text(), self.contract.script),
-        ):
-            installed = loader("postinst.sh")
-            preinstalled = loader("preinst.sh")
-            self.assertEqual(installed.count("\n" + INSTALL_CALL + "\n"), 1)
-            self.assertLess(installed.index("\n" + INSTALL_CALL), installed.index("\nsyswarden_preflight_alpine_cronie\n"))
-            self.assertIn(HELPER.read_text(), installed)
+    def test_real_local_and_public_upgrade_generation_uses_only_fixed_dispatcher(self) -> None:
+        for source, loader in ((LOCAL.read_text(), self.contract.local_build_script),
+                               (WORKFLOW.read_text(), self.contract.script)):
             with tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
-                result = self.generated_upgrade(source, installed, directory, preinstalled)
+                # Incoming fresh script content cannot become upgrade authority.
+                result = self.generated_upgrade(source, "untrusted postinstall\n", directory, "untrusted preinstall\n")
                 self.assertEqual(result.returncode, 0, result.stderr)
-                upgraded = (directory / "postupgrade.sh").read_text()
-                self.assertEqual(upgraded, installed.replace("\n" + INSTALL_CALL + "\n", "\n" + UPGRADE_CALL + "\n"))
-                self.assertEqual((directory / "preupgrade.sh").read_text(), preinstalled.replace("\n" + PREINSTALL_CALL + "\n", "\n" + PREUPGRADE_CALL + "\n"))
-                outputs.append(upgraded)
-            for invalid in (installed.replace(INSTALL_CALL, "true"), installed + "\n" + INSTALL_CALL + "\n"):
-                with tempfile.TemporaryDirectory() as temporary:
-                    result = self.generated_upgrade(source, invalid, Path(temporary), preinstalled)
-                    self.assertNotEqual(result.returncode, 0)
-            for invalid in (preinstalled.replace(PREINSTALL_CALL, "true"), preinstalled + "\n" + PREINSTALL_CALL + "\n"):
-                with tempfile.TemporaryDirectory() as temporary:
-                    result = self.generated_upgrade(source, installed, Path(temporary), invalid)
-                    self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(outputs[0], outputs[1])
+                for name, phase in (("preupgrade.sh", "pre-upgrade"), ("postupgrade.sh", "post-upgrade")):
+                    expected = (ROOT / "scripts/ci" / ("package_apk_" + name)).read_text()
+                    self.assertEqual((directory / name).read_text(), expected)
+                    self.assertEqual(loader(name), expected)
+                    self.assertEqual(expected, '#!/bin/sh\nset -eu\nexec /var/backups/syswarden-apk-transitions-v1/active-hook ' + phase + '\n')
+                    for forbidden in ("SYSWARDEN_NATIVE_INSTALL_PHASE", "SYSWARDEN_OFFLINE_QUALIFICATION", "syswarden-cli install", "syswarden-cli reload"):
+                        self.assertNotIn(forbidden, expected)
 
     def test_packagers_bind_permission_timestamp_and_integrity_to_upgrade_wrapper(self) -> None:
         local, workflow = LOCAL.read_text(), WORKFLOW.read_text()
@@ -213,13 +199,13 @@ class PackageInstallPhaseTests(unittest.TestCase):
                     installed = (scripts / "postinst.sh").read_bytes()
                     upgraded = scripts / "postupgrade.sh"
                     self.assertEqual(installed.count(INSTALL_CALL.encode()), 1)
-                    self.assertEqual(upgraded.read_bytes(), installed.replace(INSTALL_CALL.encode(), UPGRADE_CALL.encode()))
+                    self.assertEqual(upgraded.read_bytes(), (ROOT / "scripts/ci/package_apk_postupgrade.sh").read_bytes())
                     self.assertEqual(upgraded.stat().st_mode & 0o777, 0o755)
                     self.assertEqual(int(upgraded.stat().st_mtime), int(environment["SOURCE_DATE_EPOCH"]))
                     preinstalled = (scripts / "preinst.sh").read_bytes()
                     preupgraded = scripts / "preupgrade.sh"
                     self.assertEqual(preinstalled.count(PREINSTALL_CALL.encode()), 1)
-                    self.assertEqual(preupgraded.read_bytes(), preinstalled.replace(PREINSTALL_CALL.encode(), PREUPGRADE_CALL.encode()))
+                    self.assertEqual(preupgraded.read_bytes(), (ROOT / "scripts/ci/package_apk_preupgrade.sh").read_bytes())
                     self.assertEqual(preupgraded.stat().st_mode & 0o777, 0o755)
                     self.assertEqual(int(preupgraded.stat().st_mtime), int(environment["SOURCE_DATE_EPOCH"]))
 
@@ -364,11 +350,15 @@ class PackageLauncherPreflightTests(unittest.TestCase):
             for hook, phase in (("preinst.sh", "before"), ("postinst.sh", "after")):
                 with self.subTest(loader=loader.__name__, hook=hook):
                     source = loader(hook)
-                    call = f"\nsyswarden_preflight_launchers / {phase}\n"
+                    call = f"\n    syswarden_preflight_launchers / {phase}\n"
                     self.assertEqual(source.count(call), 1)
                     self.assertLess(source.index(call), source.index("\nsyswarden_preflight_install_barriers\n"))
                     self.assertNotIn("ln -sf /opt/syswarden/bin/", source)
-                    prefix = source.split(call, 1)[0] + call.replace(" / ", f' "{self.root}" ')
+                    branch = source.rindex('if [ -f /etc/alpine-release ]; then', 0, source.index(call))
+                    end = source.index("\nfi\n", branch) + 4
+                    prefix = source[:end].replace("syswarden_preflight_launchers / ", f'syswarden_preflight_launchers "{self.root}" ')
+                    prefix = prefix.replace("/etc/alpine-release", str(self.root / "not-alpine"))
+                    self.assertIn("syswarden_preflight_apk_launchers /", source[branch:end])
                     prefix = prefix.replace("!= 0:0", f"!= {os.getuid()}:{os.getgid()}")
                     path = self.bin / "syswarden"
                     path.write_bytes(b"PRIVATE-OPERATOR-FIXTURE\n")
@@ -382,6 +372,26 @@ class PackageLauncherPreflightTests(unittest.TestCase):
                     self.assertIn("command launcher", result.stderr)
                     self.assertEqual(self.snapshot(), before)
                     path.unlink()
+
+    def test_apk_gate_preserves_regular_wrappers_and_literal_symlinks_without_execution(self) -> None:
+        helper = self.helper.replace("= 0:0 ]", f"= {os.getuid()}:{os.getgid()} ]").replace("= 0:0:1 ]", f"= {os.getuid()}:{os.getgid()}:1 ]")
+        for kind in ("wrapper", "symlink", "writable", "fifo"):
+            with self.subTest(kind=kind):
+                path = self.bin / "syswarden"
+                if kind == "symlink":
+                    path.symlink_to("/opt/syswarden/bin/syswarden-cli")
+                elif kind == "fifo":
+                    os.mkfifo(path, 0o600)
+                else:
+                    path.write_text("#!/bin/sh\nprintf unexpected > should-not-exist\nexit 97\n")
+                    path.chmod(0o777 if kind == "writable" else 0o700)
+                before = path.lstat()
+                result = subprocess.run(["/bin/sh", "-eu", "-c", helper + '\nsyswarden_preflight_apk_launchers "$1"', "apk-launcher-contract", str(self.root)],
+                                        cwd=self.root, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, capture_output=True, text=True, timeout=5, check=False)
+                self.assertEqual(result.returncode == 0, kind in ("wrapper", "symlink"), result.stderr)
+                self.assertEqual(path.lstat(), before)
+                self.assertFalse((self.root / "should-not-exist").exists())
+                path.unlink()
 
     def test_unknown_phase_refuses(self) -> None:
         for phase in ("", "upgrade", "fresh", "after\n"):

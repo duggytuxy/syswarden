@@ -377,3 +377,177 @@ func TestActivationContractConsumersRemainIdentical(t *testing.T) {
 		t.Fatal("shared environment contract omits CLI schema namespace", sections)
 	}
 }
+
+func TestActivationApprovalHostDriftAfterPublicationRetainsPendingRecord(t *testing.T) {
+	preserveOperatorPolicyGlobals(t)
+	policy, store, request := activationApprovalFixture(t)
+	global, load := GlobalConfig, CurrentLoadState()
+	before := intentFixtureFiles(t, policy.root)
+	failure := errors.New("live host changed while approval was published")
+	approval, err := policy.approveAt(t.Context(), store, request, func() error {
+		_, err := os.Lstat(filepath.Join(store.path, activationApprovedName))
+		if err == nil {
+			return failure
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	})
+	if !errors.Is(err, failure) || approval != nil {
+		t.Fatal("publication-time host drift returned consumable authority", err)
+	}
+	state, err := readActivationState(store)
+	if err != nil || state == nil || state.record == nil || state.record.PlanSHA256 != request.PlanSHA256 {
+		t.Fatal("published pending authority was lost on drift", err)
+	}
+	if len(state.appliedRaw) != 0 {
+		t.Fatal("failed publication observation claimed successful application")
+	}
+	if GlobalConfig != global || !reflect.DeepEqual(load, CurrentLoadState()) || !reflect.DeepEqual(before, intentFixtureFiles(t, policy.root)) {
+		t.Fatal("failed approval consumed configuration or rewrote its source")
+	}
+}
+
+func TestActivationApprovalAppliedPublicationDriftRefusesSuccessAndRetainsRecord(t *testing.T) {
+	for _, previous := range []bool{false, true} {
+		for _, change := range []string{"source", "approval-identity", "cancelled"} {
+			name := map[bool]string{false: "first-application", true: "replace-older-application"}[previous] + "/" + change
+			t.Run(name, func(t *testing.T) {
+				policy, store, request := activationApprovalFixture(t)
+				approval := approveActivationFixture(t, policy, store, request)
+				if previous {
+					if err := approval.MarkApplied(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+					request.PreviousApprovalSHA256 = approval.digest
+					request.PlanSHA256 = strings.Repeat("b", 64)
+					request.ApprovedPlanSHA256 = request.PlanSHA256
+					approval = approveActivationFixture(t, policy, store, request)
+				}
+				inputs, err := os.OpenRoot(policy.root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := inputs.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				ops := defaultConfigReplacementOps()
+				syncDirectory := ops.sync
+				checks, changed := 0, false
+				ops.sync = func(root *os.Root) error {
+					if err := syncDirectory(root); err != nil {
+						return err
+					}
+					checks++
+					// A replacement also synchronizes removal of its older
+					// application record. Drift at that final durability boundary
+					// must not escape the caller's authority check.
+					if previous && checks == 1 {
+						return nil
+					}
+					changed = true
+					switch change {
+					case "source":
+						return inputs.WriteFile("modules/99-user.toml", []byte("# independent source change during application recording\n"), 0600)
+					case "approval-identity":
+						raw, err := root.ReadFile(activationApprovedName)
+						if err != nil {
+							return err
+						}
+						if err := root.WriteFile("replacement-approved.json", raw, 0600); err != nil {
+							return err
+						}
+						return root.Rename("replacement-approved.json", activationApprovedName)
+					case "cancelled":
+						cancel()
+					}
+					return nil
+				}
+				err = approval.markAppliedUsing(ctx, ops)
+				if !changed || err == nil {
+					t.Fatal("publication-time drift returned successful application", err)
+				}
+				if change == "cancelled" && !errors.Is(err, context.Canceled) {
+					t.Fatal("publication-time cancellation was lost", err)
+				}
+				state, err := readActivationState(store)
+				if err != nil || state == nil || activationDigest(state.raw) != approval.digest {
+					t.Fatal("uncertain application discarded its approval", err)
+				}
+				expected, err := activationCanonical(activationAppliedRecord{Schema: activationAppliedSchema, ApprovalSHA256: approval.digest})
+				if err != nil || !bytes.Equal(expected, state.appliedRaw) {
+					t.Fatal("uncertain publication discarded or rewrote its application record", err)
+				}
+				if err := approval.MarkApplied(ctx); err == nil {
+					t.Fatal("retained application marker bypassed changed source, approval or cancellation")
+				}
+			})
+		}
+	}
+}
+
+func TestActivationApprovalAppliedMarkerDoesNotBypassCurrentAuthority(t *testing.T) {
+	for _, change := range []string{"source", "approval-identity", "cancelled"} {
+		t.Run(change, func(t *testing.T) {
+			policy, store, request := activationApprovalFixture(t)
+			approval := approveActivationFixture(t, policy, store, request)
+			if err := approval.MarkApplied(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			inputs, err := os.OpenRoot(policy.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := inputs.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			stateRoot, err := os.OpenRoot(store.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := stateRoot.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			before, err := stateRoot.ReadFile(activationAppliedName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			switch change {
+			case "source":
+				err = inputs.WriteFile("modules/99-user.toml", []byte("# independently changed source after application\n"), 0600)
+			case "approval-identity":
+				var raw []byte
+				raw, err = stateRoot.ReadFile(activationApprovedName)
+				if err == nil {
+					err = stateRoot.WriteFile("replacement-approved.json", raw, 0600)
+				}
+				if err == nil {
+					err = stateRoot.Rename("replacement-approved.json", activationApprovedName)
+				}
+			case "cancelled":
+				cancel()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := approval.MarkApplied(ctx); err == nil {
+				t.Fatal("existing application marker bypassed current authority")
+			}
+			after, err := stateRoot.ReadFile(activationAppliedName)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("refusal changed the existing application marker", err)
+			}
+		})
+	}
+}

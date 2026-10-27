@@ -26,9 +26,15 @@ var setupAbuseForReload = integration.SetupAbuseIPDB
 var reloadCmd = &cobra.Command{
 	Use:   "reload",
 	Short: "Reapply policy and normally restart syswarden-core",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (result error) {
+		defer func() { recordConfigurationActivationFailure(cmd, result) }()
 		if err := preflightWireGuardPolicyTransition(); err != nil {
 			return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
+		}
+		if configurationActivationExecution(cmd) != nil {
+			if err := beginConfigurationActivationApplication(cmd); err != nil {
+				return fmt.Errorf("activation authority changed before reload effects: %w", err)
+			}
 		}
 		if err := preflightConfiguredCronScheduling(); err != nil {
 			return fmt.Errorf("cron scheduling preflight failed before reload mutation: %w", err)

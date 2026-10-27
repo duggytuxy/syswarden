@@ -554,7 +554,6 @@ jobs:
             local stage="$2"
             install -d -m 0755 \
               "${stage}/opt/syswarden/bin" \
-              "${stage}/usr/local/bin" \
               "${stage}/usr/share/bash-completion/completions" \
               "${stage}/usr/share/doc/syswarden"
             for component in syswarden-core syswarden-tui syswarden-cli; do
@@ -635,10 +634,6 @@ jobs:
             cp "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
               "${stage}/opt/syswarden/signatures.json"
             chmod 0640 "${stage}/opt/syswarden/signatures.json"
-            ln -s /opt/syswarden/bin/syswarden-cli \
-              "${stage}/usr/local/bin/syswarden"
-            ln -s /opt/syswarden/bin/syswarden-tui \
-              "${stage}/usr/local/bin/syswarden-tui"
             "${stage}/opt/syswarden/bin/syswarden-cli" completion bash > \
               "${stage}/usr/share/bash-completion/completions/syswarden"
             chmod 0644 \
@@ -818,7 +813,11 @@ jobs:
           export SYSWARDEN_PKG_INSTALL=1
           syswarden_set_native_install_phase preinstall "$@"
           syswarden_require_fresh_native_install || exit 1
-          syswarden_preflight_launchers / before
+          if [ -f /etc/alpine-release ]; then
+              syswarden_preflight_apk_launchers /
+          else
+              syswarden_preflight_launchers / before
+          fi
           syswarden_preflight_wireguard /
           syswarden_preflight_install_barriers
           syswarden_preflight_systemd_ordering_dropin
@@ -901,7 +900,12 @@ jobs:
           export SYSWARDEN_PKG_INSTALL=1
           syswarden_set_native_install_phase postinstall "$@"
           syswarden_require_fresh_native_install || exit 1
-          syswarden_preflight_launchers / after
+          if [ -f /etc/alpine-release ]; then
+              syswarden_preflight_apk_launchers /
+              /opt/syswarden/bin/syswarden-cli internal-apk-launchers --stage-fresh
+          else
+              syswarden_preflight_launchers / after
+          fi
           syswarden_preflight_install_barriers
           if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
               if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
@@ -1112,8 +1116,10 @@ jobs:
 
           if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
               cleanup_generated_runtime_artifacts || exit 1
-              syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
-              syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
+              if [ ! -f /etc/alpine-release ]; then
+                  syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
+                  syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
+              fi
               syswarden_remove_exact_runtime_socket /run/syswarden.sock || exit 1
               syswarden_remove_exact_runtime_socket /run/syswarden-control.sock || exit 1
               if [ "$1" = "remove" ] || [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
@@ -1163,15 +1169,9 @@ jobs:
           printf '%s\n' 'Root crontab bytes and ambiguous legacy host artifacts were preserved for manual recovery.' >&2
           EOF
 
-          # APK upgrade has a fixed selector even when apk-tools supplies no phase environment.
-          [ "$(grep -Fxc 'syswarden_set_native_install_phase preinstall "$@"' "${PACKAGE_SCRIPTS}/preinst.sh")" -eq 1 ]
-          sed 's/^syswarden_set_native_install_phase preinstall "\$@"$/syswarden_set_native_install_phase preupgrade "$@"/' \
-            "${PACKAGE_SCRIPTS}/preinst.sh" > "${PACKAGE_SCRIPTS}/preupgrade.sh"
-          [ "$(grep -Fxc 'syswarden_set_native_install_phase preupgrade "$@"' "${PACKAGE_SCRIPTS}/preupgrade.sh")" -eq 1 ]
-          [ "$(grep -Fxc 'syswarden_set_native_install_phase postinstall "$@"' "${PACKAGE_SCRIPTS}/postinst.sh")" -eq 1 ]
-          sed 's/^syswarden_set_native_install_phase postinstall "\$@"$/syswarden_set_native_install_phase postupgrade "$@"/' \
-            "${PACKAGE_SCRIPTS}/postinst.sh" > "${PACKAGE_SCRIPTS}/postupgrade.sh"
-          [ "$(grep -Fxc 'syswarden_set_native_install_phase postupgrade "$@"' "${PACKAGE_SCRIPTS}/postupgrade.sh")" -eq 1 ]
+          # Upgrade hooks require the separately approved live native dispatcher.
+          cp "${EXACT_SOURCE_ROOT}/scripts/ci/package_apk_preupgrade.sh" "${PACKAGE_SCRIPTS}/preupgrade.sh"
+          cp "${EXACT_SOURCE_ROOT}/scripts/ci/package_apk_postupgrade.sh" "${PACKAGE_SCRIPTS}/postupgrade.sh"
           chmod 0755 \
             "${PACKAGE_SCRIPTS}/preinst.sh" \
             "${PACKAGE_SCRIPTS}/preupgrade.sh" \

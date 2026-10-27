@@ -28,6 +28,16 @@ var rootCmd = &cobra.Command{
 			// policy or recovery state, including during incomplete removal.
 			return nil
 		}
+		if cmd == internalAPKTransitionHookCmd {
+			// The fixed internal handler authenticates the retained execution
+			// plan and live coordinator before any native hook effect.
+			return nil
+		}
+		if cmd == internalAPKLaunchersCmd {
+			// The fixed post-commit handler verifies its pending fresh intent
+			// and committed APK state without normal activation or recovery.
+			return nil
+		}
 		if sshAccessControllerCommand(cmd) {
 			// The independent controller has no target configuration or removal
 			// state. Its command validates only approved private exchange files.
@@ -44,6 +54,12 @@ var rootCmd = &cobra.Command{
 		}
 		if err := enforceWireGuardPolicyTransition(cmd); err != nil {
 			return err
+		}
+		topLevel := topLevelCommand(cmd)
+		if cmd == preparePackageRemovalCmd || topLevel != nil && topLevel.Name() == "uninstall" {
+			if err := preflightAPKLaunchersForRemoval(); err != nil {
+				return err
+			}
 		}
 		if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "uninstall" {
 			if err := preflightUninstall(); err != nil {
@@ -114,7 +130,7 @@ var rootCmd = &cobra.Command{
 			if err := prepareConfigurationActivationHook(cmd); err != nil {
 				return err
 			}
-			if err := recoverPendingFirewallTransactionHook(); err != nil {
+			if err := recoverConfigurationActivation(cmd, recoverPendingFirewallTransactionHook); err != nil {
 				return fmt.Errorf("approved activation recovery failed before command preparation: %w", err)
 			}
 			return enforceValidatedConfiguration(cmd)

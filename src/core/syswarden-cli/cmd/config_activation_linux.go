@@ -20,9 +20,12 @@ import (
 type activationExecutionKey struct{}
 
 type activationExecution struct {
-	policy    *config.ActivationPolicy
-	approval  *config.ActivationApproval
-	operation string
+	command         *cobra.Command
+	approval        *config.ActivationApproval
+	operation       string
+	verifyAuthority func(context.Context) error
+	reviewedHost    func(context.Context) error
+	phase           configurationActivationPhase
 }
 
 type configurationActivationPlan struct {
@@ -132,7 +135,7 @@ func prepareConfigurationActivation(cmd *cobra.Command) error {
 	}
 	if operation == "reload" && requested == "" && current != nil && activationOperationAllowed(current.Review().Operation, operation) {
 		if approval, verifyErr := policy.VerifyApproved(ctx); verifyErr == nil {
-			return consumeConfigurationActivation(cmd, policy, approval, operation)
+			return consumeConfigurationActivation(cmd, policy, approval, operation, nil)
 		}
 	}
 	if operation == "reload" {
@@ -208,26 +211,32 @@ func prepareConfigurationActivation(cmd *cobra.Command) error {
 	if requested != digest {
 		return errors.New("activation approval does not match the current exact plan; no change applied")
 	}
-	approval, err := policy.Approve(ctx, config.ActivationApprovalRequest{
-		PlanSHA256: digest, ApprovedPlanSHA256: requested, PreviousApprovalSHA256: plan.PreviousApprovalSHA256, Operation: operation,
-	}, func() error {
+	reviewedHost := func(check context.Context) error {
 		if err := readonlyConfigurationLifecyclePreflight(cmd); err != nil {
 			return err
 		}
 		if plan.SSHConnectionSHA256 != activationEnvironmentDigest("SSH_CONNECTION") || plan.SSHClientSHA256 != activationEnvironmentDigest("SSH_CLIENT") {
 			return errors.New("administrator connection context changed after activation review")
 		}
-		return host.Revalidate(ctx)
-	})
-	if err != nil {
-		return fmt.Errorf("activation approval refused before mutation: %w", err)
+		return host.Revalidate(check)
 	}
-	return consumeConfigurationActivation(cmd, policy, approval, operation)
+	approval, err := policy.Approve(ctx, config.ActivationApprovalRequest{
+		PlanSHA256: digest, ApprovedPlanSHA256: requested, PreviousApprovalSHA256: plan.PreviousApprovalSHA256, Operation: operation,
+	}, func() error { return reviewedHost(ctx) })
+	if err != nil {
+		return fmt.Errorf("activation approval did not authorize host effects: %w", err)
+	}
+	return consumeConfigurationActivation(cmd, policy, approval, operation, reviewedHost)
 }
 
-func consumeConfigurationActivation(cmd *cobra.Command, policy *config.ActivationPolicy, approval *config.ActivationApproval, operation string) error {
+func consumeConfigurationActivation(cmd *cobra.Command, policy *config.ActivationPolicy, approval *config.ActivationApproval, operation string, reviewedHost func(context.Context) error) error {
 	if !activationOperationAllowed(approval.Review().Operation, operation) {
 		return errors.New("activation approval does not permit this operation")
+	}
+	if reviewedHost != nil {
+		if err := reviewedHost(cmd.Context()); err != nil {
+			return fmt.Errorf("activation host changed before approval consumption: %w", err)
+		}
 	}
 	consumed, err := policy.UseApproved(cmd.Context())
 	if err != nil {
@@ -236,7 +245,24 @@ func consumeConfigurationActivation(cmd *cobra.Command, policy *config.Activatio
 	if consumed.Review().SHA256 != approval.Review().SHA256 {
 		return errors.New("activation approval changed before consumption")
 	}
-	cmd.SetContext(context.WithValue(cmd.Context(), activationExecutionKey{}, &activationExecution{policy: policy, approval: consumed, operation: operation}))
+	verifyAuthority := func(check context.Context) error {
+		if err := policy.Revalidate(check); err != nil {
+			return err
+		}
+		return consumed.Revalidate(check)
+	}
+	if reviewedHost != nil {
+		if err := reviewedHost(cmd.Context()); err != nil {
+			return fmt.Errorf("activation host changed during approval consumption: %w", err)
+		}
+	}
+	if err := verifyAuthority(cmd.Context()); err != nil {
+		return err
+	}
+	cmd.SetContext(context.WithValue(cmd.Context(), activationExecutionKey{}, &activationExecution{
+		command: cmd, approval: consumed, operation: operation,
+		verifyAuthority: verifyAuthority, reviewedHost: reviewedHost, phase: activationPrepared,
+	}))
 	return nil
 }
 
@@ -250,19 +276,19 @@ func configurationActivationExecution(cmd *cobra.Command) *activationExecution {
 
 func revalidateConfigurationActivation(cmd *cobra.Command) error {
 	execution := configurationActivationExecution(cmd)
-	if execution == nil {
+	if execution == nil || execution.verifyAuthority == nil {
 		return errors.New("captured activation approval is unavailable")
 	}
-	if err := execution.policy.Revalidate(cmd.Context()); err != nil {
-		return err
+	if execution.phase == activationFailed || execution.phase == activationFinished {
+		return errors.New("activation command execution cannot be reused after failure or completion")
 	}
-	return execution.approval.Revalidate(cmd.Context())
+	return execution.verifyAuthority(cmd.Context())
 }
 
 func markConfigurationActivationApplied(cmd *cobra.Command) error {
 	execution := configurationActivationExecution(cmd)
-	if execution == nil {
-		return errors.New("cannot record applied configuration without consumed approval")
+	if execution == nil || execution.approval == nil || execution.phase != activationApplying {
+		return errors.New("cannot record applied configuration before its guarded application phase")
 	}
 	if err := revalidateConfigurationActivation(cmd); err != nil {
 		return err
@@ -270,9 +296,15 @@ func markConfigurationActivationApplied(cmd *cobra.Command) error {
 	// A firewall service reload inside install cannot claim that the parent
 	// install completed. Existing applied install approval remains unchanged.
 	if execution.operation == "reload" && execution.approval.Review().Operation == "install" {
+		execution.phase = activationFinished
 		return nil
 	}
-	return execution.approval.MarkApplied(cmd.Context())
+	if err := execution.approval.MarkApplied(cmd.Context()); err != nil {
+		execution.phase = activationFailed
+		return err
+	}
+	execution.phase = activationFinished
+	return nil
 }
 
 func init() {

@@ -155,7 +155,11 @@ func TestPreviouslyApprovedActivationCanRecoverWithoutNormalization(t *testing.T
 	refusePendingModuleEditHook = func() error { return nil }
 	preflightWireGuardPolicyTransition = func() error { return nil }
 	approved := false
-	prepareConfigurationActivationHook = func(*cobra.Command) error { approved = true; return nil }
+	prepareConfigurationActivationHook = func(command *cobra.Command) error {
+		approved = true
+		fixtureActivationExecution(t, command, func(context.Context) error { return nil }, nil)
+		return nil
+	}
 	failure := errors.New("owned recovery failed")
 	recoverPendingFirewallTransactionHook = func() error {
 		if !approved {

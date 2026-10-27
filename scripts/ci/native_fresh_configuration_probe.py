@@ -26,8 +26,10 @@ import uuid
 
 try:
     from scripts.ci import native_dependency_transition_probe as native
+    from scripts.ci import native_activation_descriptor as descriptor
 except ModuleNotFoundError:
     import native_dependency_transition_probe as native
+    import native_activation_descriptor as descriptor
 
 ROOT = Path(__file__).resolve().parents[2]
 NAMES = ("syswarden", "syswarden-base")
@@ -55,6 +57,52 @@ PODMAN_EXPANDED_CAP_DROP = frozenset({
     "CAP_NET_BIND_SERVICE", "CAP_SETFCAP", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID",
 })
 SOURCE_FILES = {"local": ROOT / "build_packages.sh", "workflow": ROOT / ".github/workflows/package.yml"}
+
+APK_LAUNCHER_ROOT = "/var/backups/syswarden-apk-launchers-v1"
+APK_ALIAS_PATHS = ("usr/local/bin/syswarden", "usr/local/bin/syswarden-tui")
+APK_ALIAS_TARGETS = ("/opt/syswarden/bin/syswarden-cli", "/opt/syswarden/bin/syswarden-tui")
+APK_PAYLOAD_MODES = {
+    "opt": 0o755, "opt/syswarden": 0o755, "opt/syswarden/bin": 0o755,
+    "usr": 0o755, "usr/share": 0o755, "usr/share/bash-completion": 0o755,
+    "usr/share/bash-completion/completions": 0o755, "usr/share/doc": 0o755,
+    "usr/share/doc/syswarden": 0o755, "etc": 0o755, "etc/apk": 0o755,
+    "etc/apk/commit_hooks.d": 0o755,
+    "opt/syswarden/bin/syswarden-cli": 0o750, "opt/syswarden/bin/syswarden-core": 0o750,
+    "opt/syswarden/bin/syswarden-tui": 0o750, "opt/syswarden/signatures.json": 0o640,
+    "opt/syswarden/activation-contract-v1.json": 0o644,
+    "usr/share/bash-completion/completions/syswarden": 0o644,
+    "usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt": 0o644,
+    "usr/share/doc/syswarden/LICENSE.txt": 0o644,
+    "etc/apk/commit_hooks.d/syswarden-recovery": 0o755,
+}
+
+
+def apk_fixture_contents(root: Path, cli: bytes) -> tuple[list[dict], dict[str, str]]:
+    """Provide exact native membership, with inert companions never executed."""
+    inert = b"#!/bin/sh\nprintf 'FORBIDDEN=synthetic-runtime\n' >> /tmp/sw-fresh-lab/forbidden\nexit 97\n"
+    content = {
+        "opt/syswarden/bin/syswarden-cli": cli,
+        "opt/syswarden/bin/syswarden-core": inert,
+        "opt/syswarden/bin/syswarden-tui": inert,
+        "opt/syswarden/signatures.json": b'{"synthetic_fixture":true}\n',
+        "usr/share/bash-completion/completions/syswarden": b"# Inert fixture completion.\n",
+        "usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt": b"Synthetic fixture, no GeoIP database.\n",
+        "usr/share/doc/syswarden/LICENSE.txt": b"Synthetic fixture companion bytes.\n",
+        "etc/apk/commit_hooks.d/syswarden-recovery": (ROOT / "scripts/ci/package_apk_recovery_hook.sh").read_bytes(),
+    }
+    content[descriptor.DESCRIPTOR_PATH] = descriptor.descriptor_for_digests(
+        hashlib.sha256(cli).hexdigest(), hashlib.sha256(inert).hexdigest())
+    entries = []
+    for index, (path, mode) in enumerate(APK_PAYLOAD_MODES.items()):
+        entry = {"dst": "/" + path, "file_info": {"mode": mode, "owner": "root", "group": "root"}}
+        if path in content:
+            source = root / ("apk-payload-" + str(index))
+            write_private(source, content[path])
+            entry["src"] = str(source)
+        else:
+            entry["type"] = "dir"
+        entries.append(entry)
+    return entries, {path: hashlib.sha256(data).hexdigest() for path, data in content.items()}
 
 
 def isolation_helpers():
@@ -132,9 +180,9 @@ def validate_static_amd64_elf(data: bytes) -> None:
         raise ValueError("real CLI lacks an executable load segment")
 
 
-def validate_configuration_tar_framing(data: bytes) -> None:
+def validate_configuration_tar_framing(data: bytes, maximum_archive: int = 2 << 20, maximum_member: int = 128 << 10) -> None:
     """Reject hidden name/size overrides before tarfile interprets any header."""
-    if not data or len(data) > 2 << 20 or len(data) % 512:
+    if not data or len(data) > maximum_archive or len(data) % 512:
         raise ValueError("configuration export has invalid bounded tar framing")
     offset = 0
     while offset + 512 <= len(data):
@@ -151,7 +199,7 @@ def validate_configuration_tar_framing(data: bytes) -> None:
         if not size_field or any(character not in b"01234567" for character in size_field):
             raise ValueError("configuration export has an unsupported raw tar size")
         size = int(size_field, 8)
-        if size > 128 << 10 or header[156:157] == b"5" and size != 0:
+        if size > maximum_member or header[156:157] == b"5" and size != 0:
             raise ValueError("configuration export raw tar member exceeds its bound")
         following = offset + 512 + ((size + 511) // 512) * 512
         if following > len(data):
@@ -251,6 +299,112 @@ def parse_configuration_export(data: bytes) -> dict:
             "independent_toml_validation": True}
 
 
+def parse_launcher_export(data: bytes, package_name: str, payload_hashes: dict[str, str], identities: list[dict]) -> dict:
+    """Check native-created fixture receipts without extracting or granting authority."""
+    # Long private journal names may use USTAR prefixes or PAX path records.
+    # Never extract them: bound the whole uncompressed archive, then admit only
+    # the final closed receipt inventory and reject aliases/duplicates below.
+    if not data or len(data) > 20 << 20 or len(data) % 512:
+        raise ValueError("invalid bounded launcher export framing")
+    files, directories = {}, set()
+    base = APK_LAUNCHER_ROOT.rsplit("/", 1)[1]
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
+        for count, member in enumerate(archive):
+            if count >= 32 or member.uid != 0 or member.gid != 0 or member.sparse is not None:
+                raise ValueError("invalid bounded launcher export inventory")
+            name = member.name.rstrip("/") if member.isdir() else member.name
+            if name == base:
+                relative = ""
+            elif name.startswith(base + "/"):
+                relative = name[len(base) + 1:]
+            else:
+                raise ValueError("foreign launcher export path")
+            if any(part in ("", ".", "..") for part in relative.split("/")) and relative:
+                raise ValueError("noncanonical launcher export path")
+            if relative in files or relative in directories:
+                raise ValueError("duplicate launcher export path")
+            if member.isdir() and member.mode == 0o700:
+                directories.add(relative)
+            elif member.isfile() and member.mode == 0o600 and 0 < member.size <= 16 << 20:
+                files[relative] = archive.extractfile(member).read(member.size + 1)
+                if len(files[relative]) != member.size:
+                    raise ValueError("truncated launcher export")
+            else:
+                raise ValueError("unsafe launcher export type or permissions")
+        if len(data) - archive.offset < 1024 or any(data[archive.offset:]):
+            raise ValueError("launcher export has trailing or missing terminal blocks")
+    def record(name):
+        raw = files.get(name)
+        if raw is None or len(raw) > 512 << 10:
+            raise ValueError("missing or oversized launcher record")
+        value = json.loads(raw)
+        if (json.dumps(value, separators=(",", ":")) + "\n").encode() != raw:
+            raise ValueError("noncanonical launcher record")
+        return value
+    schema = "syswarden-apk-fresh-launchers/v1"
+    current = record("current.json")
+    if set(current) != {"schema", "kind", "plan_sha256", "receipt_sha256"} or current["schema"] != schema or current["kind"] != "fresh":
+        raise ValueError("wrong current launcher lineage")
+    if any(re.fullmatch(r"[a-f0-9]{64}", current[name]) is None for name in ("plan_sha256", "receipt_sha256")):
+        raise ValueError("invalid launcher lineage digest")
+    journal = "fresh-" + current["plan_sha256"] + "/"
+    intent, receipt = record(journal + "intent.json"), record(journal + "receipt.json")
+    if (hashlib.sha256(files[journal + "intent.json"]).hexdigest() != current["plan_sha256"]
+            or hashlib.sha256(files[journal + "receipt.json"]).hexdigest() != current["receipt_sha256"]
+            or intent.get("schema") != schema or intent.get("purpose") != "fresh-intent-no-alias-mutation"
+            or intent.get("previous_sha256") or receipt.get("schema") != schema
+            or receipt.get("purpose") != "exclusive-fresh-launcher-ownership"
+            or receipt.get("intent_sha256") != current["plan_sha256"]):
+        raise ValueError("launcher intent and receipt binding differs")
+    if hashlib.sha256(files.get(journal + "before-installed", b"")).hexdigest() != intent.get("database_sha256"):
+        raise ValueError("launcher native absence evidence differs")
+    native_record = receipt.get("native", {})
+    if native_record.get("name") != package_name or native_record.get("version") != "v" + VERSION:
+        raise ValueError("launcher receipt belongs to another native package")
+    payload = intent.get("payload", [])
+    if len(payload) != len(payload_hashes) or {item["path"]: item["sha256"] for item in payload} != payload_hashes:
+        raise ValueError("launcher intent does not bind the exact fixture payload")
+    allowed = {"current.json", journal + "intent.json", journal + "receipt.json", journal + "before-installed"}
+    originals, committed = intent.get("aliases", []), receipt.get("aliases", [])
+    if len(originals) != 2 or len(committed) != 2 or len(identities) != 2:
+        raise ValueError("launcher receipt lacks both aliases")
+    for index, (path, target) in enumerate(zip(APK_ALIAS_PATHS, APK_ALIAS_TARGETS)):
+        before, after = originals[index], committed[index]
+        if (before.get("path") != path or before.get("disposition") != "absent" or before.get("original", {}).get("absent") is not True
+                or after.get("path") != path or after.get("disposition") != "product-created" or after.get("original") != before["original"]
+                or after.get("product_dependency") is not False or after.get("committed", {}).get("absent") is not False
+                or after["committed"].get("link_target") != target):
+            raise ValueError("launcher ownership adopted an inherited alias")
+        identity = after["committed"].get("identity", {})
+        if any(identity.get(key) != value for key, value in identities[index].items()):
+            raise ValueError("launcher receipt identity differs from the installed link")
+        name = "launcher-created-" + ("cli" if index == 0 else "tui") + ".json"
+        creation, proposed = record(journal + name), record(journal + "intent-" + name)
+        if (hashlib.sha256(files[journal + name]).hexdigest() != after.get("creation_sha256")
+                or creation != {"schema": schema, "purpose": "exclusive-launcher-created", "prepared_sha256": current["plan_sha256"], "path": path, "evidence": after["committed"]}
+                or proposed != {"schema": schema, "purpose": "exclusive-launcher-create-intent", "prepared_sha256": current["plan_sha256"], "path": path, "evidence": before["original"]}):
+            raise ValueError("launcher exclusive creation evidence differs")
+        allowed.update((journal + name, journal + "intent-" + name))
+    parents = receipt.get("parents", [])
+    if [item.get("path") for item in parents] != [".", "usr", "usr/local", "usr/local/bin"] or len(intent.get("parents", [])) != 4:
+        raise ValueError("launcher parent inventory differs")
+    for index, parent in enumerate(parents):
+        if intent["parents"][index].get("absent"):
+            name = "parent-" + str(index) + ".json"
+            proposed, created = record(journal + "intent-" + name), record(journal + "created-" + name)
+            if (index < 2 or proposed != intent["parents"][index]
+                    or hashlib.sha256(files[journal + "created-" + name]).hexdigest() != parent.get("creation_sha256")
+                    or created != {key: value for key, value in parent.items() if key != "creation_sha256"}):
+                raise ValueError("launcher parent creation evidence differs")
+            allowed.update((journal + "intent-" + name, journal + "created-" + name))
+        elif parent.get("creation_sha256"):
+            raise ValueError("launcher receipt adopted an inherited parent")
+    if set(files) != allowed or directories != {"", journal.rstrip("/")}:
+        raise ValueError("launcher export has pending, unknown or missing evidence")
+    return {"fresh_apk_launcher_receipt_verified": True, "launcher_receipt_sha256": current["receipt_sha256"],
+            "launcher_export_sha256": hashlib.sha256(data).hexdigest()}
+
+
 def write_private(path: Path, data: bytes, mode: int = 0o600) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     with os.fdopen(descriptor, "wb") as output:
@@ -272,20 +426,47 @@ def render_variant(path: Path, package_name: str) -> bytes:
 def delegate(hook: str) -> bytes:
     if hook not in ("preinst.sh", "postinst.sh"):
         raise ValueError("closed native delegate required")
+    after = ""
+    if hook == "postinst.sh":
+        after = f'''if [ -f /etc/alpine-release ] && [ "$(cat {FIXTURE}/cli-mode)" = real ]; then
+    pending={APK_LAUNCHER_ROOT}/pending.json
+    test -f "$pending" && test ! -L "$pending"
+    test "$(stat -c '%u:%g:%a:%h' "$pending")" = 0:0:600:1
+    test ! -e {APK_LAUNCHER_ROOT}/current.json && test ! -L {APK_LAUNCHER_ROOT}/current.json
+    for path in /usr/local/bin/syswarden /usr/local/bin/syswarden-tui; do
+        test ! -e "$path" && test ! -L "$path"
+    done
+    printf 'APK_LAUNCHERS_PENDING_PASS\n'
+fi
+'''
     return ("#!/bin/sh\nset -eu\numask 077\n"
             f"printf 'HOOK={hook}\\nARGC=%s\\n' \"$#\" >> {FIXTURE}/events\n"
             f"for argument do printf 'ARG=%s\\n' \"$argument\" >> {FIXTURE}/events; done\n"
             f"PATH={FIXTURE}/traps:/usr/sbin:/usr/bin:/sbin:/bin\nexport PATH\n"
-            f'exec /bin/sh {FIXTURE}/{hook} "$@"\n').encode()
+            f'/bin/sh {FIXTURE}/{hook} "$@"\n' + after).encode()
 
 
 CLI = b'''#!/bin/sh
 set -eu
-test "${SYSWARDEN_PKG_INSTALL:-}" = 1
-test "${SYSWARDEN_NATIVE_INSTALL_PHASE:-}" = fresh
-test "$#" = 1 && test "$1" = install
-printf 'CLI_PHASE=fresh\nCLI_ARGC=1\nCLI_ARG=install\n' >> /tmp/sw-fresh-lab/events
+case "$*" in
+    install)
+        test "${SYSWARDEN_PKG_INSTALL:-}" = 1
+        test "${SYSWARDEN_NATIVE_INSTALL_PHASE:-}" = fresh
+        test "$#" = 1
+        printf 'CLI_PHASE=fresh\nCLI_ARGC=1\nCLI_ARG=install\n' >> /tmp/sw-fresh-lab/events
+        ;;
+    'internal-apk-launchers --stage-fresh')
+        test "$#" = 2 && test "${SYSWARDEN_NATIVE_INSTALL_PHASE:-}" = fresh
+        printf 'CLI_LAUNCHERS=stage-fresh\n' >> /tmp/sw-fresh-lab/events
+        ;;
+    'internal-apk-launchers --complete-fresh')
+        test "$#" = 2 && test -z "${SYSWARDEN_NATIVE_INSTALL_PHASE:-}"
+        printf 'CLI_LAUNCHERS=complete-fresh\n' >> /tmp/sw-fresh-lab/events
+        ;;
+    *) exit 97 ;;
+esac
 '''
+
 
 REAL_VALIDATION = r'''#!/bin/sh
 set -eu
@@ -377,7 +558,12 @@ test ! -e /etc/syswarden && test ! -L /etc/syswarden
 case "$format" in
     deb) for name in syswarden syswarden-base; do if dpkg-query -W "$name" >/dev/null 2>&1; then exit 1; fi; done ;;
     rpm) for name in syswarden syswarden-base; do if rpm -q "$name" >/dev/null 2>&1; then exit 1; fi; done ;;
-    apk) for name in syswarden syswarden-base; do if apk info --quiet -e "$name"; then exit 1; fi; done ;;
+    apk)
+        for name in syswarden syswarden-base; do if apk info --quiet -e "$name"; then exit 1; fi; done
+        for path in /usr/local/bin/syswarden /usr/local/bin/syswarden-tui /var/backups/syswarden-apk-launchers-v1; do
+            test ! -e "$path" && test ! -L "$path"
+        done
+        ;;
 esac
 # Only disposable fixture setup may create these inert administrator sentinels.
 mkdir -p /etc/ssh/sshd_config.d /etc/cron.d /etc/systemd/system /etc/init.d /etc/runlevels/default
@@ -416,6 +602,23 @@ case "$format" in
 esac
 if [ "$cli_mode" = real ]; then
     /bin/sh validate-real.sh
+    if [ "$format" = apk ]; then
+        launcher_root=/var/backups/syswarden-apk-launchers-v1
+        test ! -e "$launcher_root/pending.json" && test ! -L "$launcher_root/pending.json"
+        test -f "$launcher_root/current.json" && test ! -L "$launcher_root/current.json"
+        test "$(stat -c '%u:%g:%a:%h' "$launcher_root/current.json")" = 0:0:600:1
+        alias_index=0
+        for role in syswarden syswarden-tui; do
+            path=/usr/local/bin/$role
+            target=/opt/syswarden/bin/$role
+            if [ "$role" = syswarden ]; then target=/opt/syswarden/bin/syswarden-cli; fi
+            test -L "$path" && test "$(readlink "$path")" = "$target"
+            test "$(stat -c '%u:%g:%a:%h' "$path")" = 0:0:777:1
+            printf 'APK_LAUNCHER_ID=%s:%s\n' "$alias_index" "$(stat -c '%d:%i:%f:%u:%g:%h:%s' "$path")"
+            alias_index=$((alias_index + 1))
+        done
+        printf 'APK_LAUNCHERS_COMMITTED_PASS\n'
+    fi
 else
     test ! -e /etc/syswarden && test ! -L /etc/syswarden
 fi
@@ -467,6 +670,15 @@ def payload(root: Path, nfpm: Path, source: str, package_name: str, format_name:
             "contents": [{"src": str(root / "cli"), "dst": "/opt/syswarden/bin/syswarden-cli",
                           "file_info": {"mode": 0o755}}],
             "scripts": {"preinstall": str(root / "delegate-preinst.sh"), "postinstall": str(root / "delegate-postinst.sh")}}
+    payload_hashes = {}
+    if format_name == "apk":
+        spec["contents"], payload_hashes = apk_fixture_contents(root, cli_bytes)
+    else:
+        # DEB/RPM own these aliases in their payload. Only APK delegates their
+        # exclusive creation to its committed fresh-launcher lifecycle.
+        spec["contents"].extend({"src": target, "dst": "/" + path, "type": "symlink",
+                                 "file_info": {"mode": 0o777, "owner": "root", "group": "root"}}
+                                for path, target in zip(APK_ALIAS_PATHS, APK_ALIAS_TARGETS))
     if format_name in ("rpm", "apk"):
         spec["release"] = "0" if format_name == "apk" else "1"
     config = root / "fixture.json"
@@ -494,6 +706,7 @@ def payload(root: Path, nfpm: Path, source: str, package_name: str, format_name:
                               "cli_sha256": hashlib.sha256(cli_bytes).hexdigest(), "cli_size": len(cli_bytes),
                               "cli_binding": "caller-built-source-observation-not-release-authority" if cli_snapshot is not None else "synthetic-stub",
                               "legacy_environment_challenge": {"SYSWARDEN_LIST_CHOICE": "1", "SYSWARDEN_ENABLE_WG": "y"} if cli_snapshot is not None else {},
+                              "apk_payload_sha256": payload_hashes,
                               "emitted_hook_sha256": hashes, "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
                               "payload_sha256": hashlib.sha256(stream.getvalue()).hexdigest()}
 
@@ -588,6 +801,8 @@ def parse_result(output: bytes, source: str, package_name: str, format_name: str
         observed[hook] = [item[4:] for item in args]
         events = events[2 + count:]
     expected_events = [] if real_cli else ["CLI_PHASE=fresh", "CLI_ARGC=1", "CLI_ARG=install"]
+    if not real_cli and format_name == "apk":
+        expected_events = ["CLI_LAUNCHERS=stage-fresh", *expected_events, "CLI_LAUNCHERS=complete-fresh"]
     if events != expected_events:
         raise ValueError("fresh staging call absent, repeated or not exact")
     real_dispositions = [line for line in lines if line in (REAL_STAGING_DISPOSITION, "  * " + REAL_STAGING_DISPOSITION)]
@@ -599,7 +814,27 @@ def parse_result(output: bytes, source: str, package_name: str, format_name: str
             raise ValueError("real fresh configuration staging or validation is not exact")
     elif real_dispositions or any(line.startswith("REAL_CONFIGURATION_") for line in lines):
         raise ValueError("real configuration evidence is unexpected in stub mode")
-    return {"native_arguments": observed, "fresh_cli_staging_call": True, "administrator_sentinels_preserved": True,
+    launcher_markers = [line for line in lines if line.startswith("APK_LAUNCHERS_") or line.startswith("  * APK_LAUNCHERS_")]
+    if real_cli and format_name == "apk":
+        if launcher_markers not in (["APK_LAUNCHERS_PENDING_PASS", "APK_LAUNCHERS_COMMITTED_PASS"],
+                                    ["  * APK_LAUNCHERS_PENDING_PASS", "APK_LAUNCHERS_COMMITTED_PASS"]):
+            raise ValueError("fresh APK pending and committed launcher sequence is incomplete")
+    elif launcher_markers:
+        raise ValueError("launcher ownership evidence is unexpected in this fixture mode")
+    identities = []
+    identity_lines = [line for line in lines if line.startswith("APK_LAUNCHER_ID=")]
+    if real_cli and format_name == "apk":
+        for index, line in enumerate(identity_lines):
+            matched = re.fullmatch(r"APK_LAUNCHER_ID=([01]):([0-9]+):([1-9][0-9]*):a1ff:0:0:1:([1-9][0-9]*)", line)
+            if matched is None or int(matched[1]) != index or index > 1 or int(matched[4]) != len(APK_ALIAS_TARGETS[index]):
+                raise ValueError("installed APK launcher identity is malformed or reordered")
+            identities.append({"device": int(matched[2]), "inode": int(matched[3]), "mode": 0o120777,
+                               "uid": 0, "gid": 0, "links": 1, "size": int(matched[4])})
+        if len(identities) != 2:
+            raise ValueError("installed APK launcher identities are incomplete")
+    elif identity_lines:
+        raise ValueError("launcher identities are unexpected in this fixture mode")
+    return {"apk_launcher_identities": identities, "native_arguments": observed, "fresh_cli_staging_call": True, "administrator_sentinels_preserved": True,
             "configuration_readonly_observed": real_cli, "configured_effect_preview_observed": real_cli,
             "pending_edit_inspection_observed": real_cli}
 
@@ -640,6 +875,7 @@ def run(nfpm: Path, image: str, output: Path, source: str, package_name: str, fo
     original_cid_verified = isolation_verified = False
     failure = None
     exported_configuration = {}
+    exported_launchers = {}
     try:
         if identity.cidfile.exists() or identity.cidfile.is_symlink() or helpers.container_exists(podman, identity.name):
             raise ValueError("disposable identity collision")
@@ -676,13 +912,20 @@ def run(nfpm: Path, image: str, output: Path, source: str, package_name: str, fo
             if exported.returncode:
                 raise ValueError("real configuration export failed")
             exported_configuration = parse_configuration_export(exported.stdout)
+            if format_name == "apk":
+                launchers = helpers.execute_local(helpers.podman_command(podman, "cp", original_cid + ":" + APK_LAUNCHER_ROOT, "-"), timeout=15)
+                write_private(output / "launchers.tar", launchers.stdout)
+                if launchers.returncode:
+                    raise ValueError("real launcher receipt export failed")
+                observed = parse_result(result.stdout, source, package_name, format_name, True)
+                exported_launchers = parse_launcher_export(launchers.stdout, package_name, binding["apk_payload_sha256"], observed["apk_launcher_identities"])
             if helpers.read_container_id(identity.cidfile) != original_cid:
                 raise ValueError("original container ID changed during configuration export")
             cli_snapshot.recheck()
     except subprocess.TimeoutExpired as error:
         result = subprocess.CompletedProcess(arguments, 124, error.stdout or b"")
         failure = "native fixture operation timed out"
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, KeyError, TypeError, tarfile.TarError) as error:
         failure = str(error)
     finally:
         if attempted:
@@ -700,10 +943,12 @@ def run(nfpm: Path, image: str, output: Path, source: str, package_name: str, fo
                "nfpm_sha256": hashlib.sha256(nfpm.read_bytes()).hexdigest(),
                "nfpm_binding": "caller-trusted-tool-observation-not-execution-attestation", "passed": False}
     try:
+        summary.update(exported_launchers)
         summary.update(parse_result(result.stdout, source, package_name, format_name, cli_snapshot is not None))
         summary["passed"] = (result.returncode == 0 and cleanup["verified"] and original_cid_verified
                              and isolation_verified and failure is None
-                             and (cli_snapshot is None or bool(exported_configuration)))
+                             and (cli_snapshot is None or bool(exported_configuration))
+                             and (cli_snapshot is None or format_name != "apk" or bool(exported_launchers)))
         summary["real_toml_staging_verified"] = summary["passed"] and cli_snapshot is not None
     except (ValueError, UnicodeError) as error:
         summary["error"] = str(error)

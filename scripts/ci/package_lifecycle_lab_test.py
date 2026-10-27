@@ -6067,8 +6067,8 @@ printf() {
         root = Path(__file__).resolve().parent
         contract = json.loads((root / "package_apk_recovery_contract.json").read_text())
         source = (root / "package_apk_recovery_hook.sh").read_bytes()
-        self.assertEqual(hashlib.sha256(source).hexdigest(), lab.APK_RECOVERY_HOOK_SHA256)
-        self.assertEqual(contract, {"sha256": lab.APK_RECOVERY_HOOK_SHA256, "size": len(source)})
+        self.assertEqual(hashlib.sha256(source).hexdigest(), lab.APK_LAUNCHER_RECOVERY_HOOK_SHA256)
+        self.assertEqual(contract, {"sha256": lab.APK_LAUNCHER_RECOVERY_HOOK_SHA256, "size": len(source)})
         hook_entry = {
             "path": hook, "type": "file", "mode": "755", "uid": 0, "gid": 0,
             "value": lab.APK_RECOVERY_HOOK_SHA256,
@@ -6128,6 +6128,45 @@ printf() {
                 with self.assertRaises(lab.LifecycleLabError):
                     lab._validate_manager_paths(family, paths, role="candidate", version="5.00.0", candidate_version="5.00.0")
                 self.assertNotEqual(self.run_embedded_inventory_contract(family, paths, version="5.00.0", candidate_version="5.00.0").returncode, 0)
+
+    def test_launcher_free_apk_inventory_requires_exact_descriptor_and_hook(self) -> None:
+        lab = package_lifecycle_lab
+        paths, entries = self.exact_v404x_inventory("apk", "4.10.4", "candidate")
+        entries = [dict(entry) for entry in entries if entry["path"] not in lab.APK_SHARED_LAUNCHERS]
+        cli = next(entry["value"] for entry in entries if entry["path"] == "/opt/syswarden/bin/syswarden-cli")
+        core = next(entry["value"] for entry in entries if entry["path"] == "/opt/syswarden/bin/syswarden-core")
+        descriptor = lab.native_activation_descriptor.descriptor_for_digests(cli, core)
+        entries.extend([
+            {"path": "/" + lab.native_activation_descriptor.DESCRIPTOR_PATH, "type": "file", "mode": "644", "uid": 0, "gid": 0, "value": hashlib.sha256(descriptor).hexdigest()},
+            {"path": lab.APK_RECOVERY_HOOK_PATH, "type": "file", "mode": "755", "uid": 0, "gid": 0, "value": lab.APK_LAUNCHER_RECOVERY_HOOK_SHA256},
+        ])
+        entries.sort(key=lambda entry: entry["path"])
+
+        def check(values, valid):
+            paths = [entry["path"] for entry in values]
+            inventory = ["\t".join(str(entry[key]) for key in ("path", "type", "mode", "uid", "gid", "value")) for entry in values]
+            result = self.run_embedded_inventory_contract("apk", paths, inventory, role="candidate", version="4.10.4", candidate_version="4.10.4")
+            self.assertEqual(result.returncode == 0, valid, result.stderr)
+            if valid:
+                lab.validate_inventory_snapshot("apk", paths, values, role="candidate", version="4.10.4", candidate_version="4.10.4")
+            else:
+                with self.assertRaises(lab.LifecycleLabError):
+                    lab.validate_inventory_snapshot("apk", paths, values, role="candidate", version="4.10.4", candidate_version="4.10.4")
+
+        check(entries, True)
+        for change in ("old-hook", "no-descriptor", "bad-descriptor", "adopted-alias"):
+            with self.subTest(change=change):
+                altered = [dict(entry) for entry in entries]
+                if change == "old-hook":
+                    next(entry for entry in altered if entry["path"] == lab.APK_RECOVERY_HOOK_PATH)["value"] = lab.APK_RECOVERY_HOOK_SHA256
+                elif change == "no-descriptor":
+                    altered = [entry for entry in altered if entry["path"] != "/" + lab.native_activation_descriptor.DESCRIPTOR_PATH]
+                elif change == "bad-descriptor":
+                    next(entry for entry in altered if entry["path"] == "/" + lab.native_activation_descriptor.DESCRIPTOR_PATH)["value"] = "0" * 64
+                else:
+                    altered.append({"path": "/usr/local/bin/syswarden", "type": "symlink", "mode": "777", "uid": 0, "gid": 0, "value": "/opt/syswarden/bin/syswarden-cli"})
+                    altered.sort(key=lambda entry: entry["path"])
+                check(altered, False)
 
     def test_v4040_packages_require_exact_license_payloads(self) -> None:
         build_id_paths = {

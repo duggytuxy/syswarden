@@ -69,6 +69,15 @@ class PackageStageGateTests(unittest.TestCase):
                 apk_recovery_contract=contract,
             )
 
+    def test_apk_shared_launcher_subtree_is_not_payload(self) -> None:
+        self.create_stage(package_stage_gate.APK_LINUX_ENTRIES)
+        self.assertFalse((self.root / "usr/local").exists())
+        self.assertNotIn("usr/local", package_stage_gate.APK_LINUX_ENTRIES)
+        self.assertNotIn("usr/local/bin", package_stage_gate.APK_LINUX_ENTRIES)
+        (self.root / "usr/local").mkdir(mode=0o755)
+        with self.assertRaisesRegex(package_stage_gate.PackageStageError, "unexpected"):
+            package_stage_gate.validate(self.root, package_stage_gate.APK_LINUX_ENTRIES)
+
     def test_accepts_exact_systemd_stage_with_ordering_contract(self) -> None:
         self.create_stage(package_stage_gate.SYSTEMD_LINUX_ENTRIES)
         ordering = self.root / package_stage_gate.SYSTEMD_ORDERING_PATH

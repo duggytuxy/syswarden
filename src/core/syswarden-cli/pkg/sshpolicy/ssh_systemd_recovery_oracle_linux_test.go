@@ -163,10 +163,7 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 			}
 			return session, err
 		}
-		migration, err := runSSHMigrationSession(ctx, plan.PlanSHA256, accessFixture.approval, opener)
-		if err != nil || !migration.Published || !migration.IntentDurable || !migration.RequestReturned || !migration.RecoveryRequired {
-			t.Fatal("coordinated production publication/reload failed", migration, err)
-		}
+		isolatedSSHExerciseForwardSession(t, ctx, plan.PlanSHA256, accessFixture, opener)
 	} else {
 		published, err := isolatedSSHPublish(t, ctx, plan.PlanSHA256, label)
 		if err != nil || !published.Published || published.RecoveryRequired || published.Verification.RuntimeActivated {
@@ -194,9 +191,6 @@ func TestSSHIsolatedSystemdRecoveryOracle(t *testing.T) {
 		t.Fatal("published fixture label differs", labelErr, labelCloseErr)
 	}
 	probe(false)
-	if exchange {
-		isolatedSSHExerciseAccessExchange(t, ctx, plan.PlanSHA256, accessFixture)
-	}
 	history := isolatedSSHRecoveryHistory(t, ctx)
 	inspection, err := InspectSystemdRecovery(ctx, plan.PlanSHA256)
 	if err != nil || !lowerDigest.MatchString(inspection.RecoverySHA256) || !inspection.RecoveryRequired ||

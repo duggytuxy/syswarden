@@ -61,21 +61,29 @@ type apkExecutionLaunchers interface {
 }
 
 type apkExecutionPlan struct {
-	LauncherTargets           *apkLauncherTargetProposal `json:"launcher_targets,omitempty"`
-	LauncherTargetsSHA256     string                     `json:"launcher_targets_sha256,omitempty"`
-	Schema                    string                     `json:"schema"`
-	PreparationSHA256         string                     `json:"preparation_sha256"`
-	CandidateAPKChecksum      string                     `json:"candidate_apk_checksum"`
-	CandidateSHA256           string                     `json:"candidate_sha256"`
-	CandidateCLISHA256        string                     `json:"candidate_cli_sha256"`
-	CandidateCapabilitySHA256 string                     `json:"candidate_capability_sha256"`
-	InventorySHA256           string                     `json:"inventory_sha256"`
-	EffectPlanSHA256          string                     `json:"effect_plan_sha256"`
-	OriginalLaunchersSHA256   string                     `json:"original_launchers_sha256"`
-	OverlaySHA256             string                     `json:"overlay_sha256"`
-	Installer                 string                     `json:"installer"`
-	Arguments                 []string                   `json:"arguments"`
-	ProductAccepted           bool                       `json:"product_accepted"`
+	DatabaseLock              *apkDatabaseLockProposal     `json:"database_lock"`
+	LauncherLineage           apkLauncherLineageProposal   `json:"launcher_lineage"`
+	LauncherTransfer          *apkLauncherTransferProposal `json:"launcher_transfer,omitempty"`
+	LauncherTransferSHA256    string                       `json:"launcher_transfer_sha256,omitempty"`
+	NativeHooks               *apkNativeHookProposal       `json:"native_hooks"`
+	NativeHooksSHA256         string                       `json:"native_hooks_sha256"`
+	OriginalPayload           *apkOriginalPayloadProposal  `json:"original_payload"`
+	OriginalPayloadSHA256     string                       `json:"original_payload_sha256"`
+	LauncherTargets           *apkLauncherTargetProposal   `json:"launcher_targets,omitempty"`
+	LauncherTargetsSHA256     string                       `json:"launcher_targets_sha256,omitempty"`
+	Schema                    string                       `json:"schema"`
+	PreparationSHA256         string                       `json:"preparation_sha256"`
+	CandidateAPKChecksum      string                       `json:"candidate_apk_checksum"`
+	CandidateSHA256           string                       `json:"candidate_sha256"`
+	CandidateCLISHA256        string                       `json:"candidate_cli_sha256"`
+	CandidateCapabilitySHA256 string                       `json:"candidate_capability_sha256"`
+	InventorySHA256           string                       `json:"inventory_sha256"`
+	EffectPlanSHA256          string                       `json:"effect_plan_sha256"`
+	OriginalLaunchersSHA256   string                       `json:"original_launchers_sha256"`
+	OverlaySHA256             string                       `json:"overlay_sha256"`
+	Installer                 string                       `json:"installer"`
+	Arguments                 []string                     `json:"arguments"`
+	ProductAccepted           bool                         `json:"product_accepted"`
 }
 
 // Review identifies an immutable execution proposal. It grants no authority and
@@ -94,6 +102,7 @@ type apkExecutionApproval struct {
 }
 
 type apkExecutionEvent struct {
+	NativeHandoffSHA256   string `json:"native_handoff_sha256,omitempty"`
 	Schema                string `json:"schema"`
 	State                 string `json:"state"`
 	PlanSHA256            string `json:"plan_sha256"`
@@ -193,7 +202,56 @@ func buildAPKExecutionPlan(ctx context.Context, prepared *verifiedPreparedAPKTra
 		}
 		targetsDigest = apkTransitionDigest(targetBytes)
 	}
-	return apkExecutionPlan{CandidateAPKChecksum: prepared.plan.CandidateAPKChecksum, LauncherTargets: targets, LauncherTargetsSHA256: targetsDigest, Schema: apkExecutionSchema, PreparationSHA256: prepared.digest, CandidateSHA256: prepared.candidate.artifact.SHA256,
+	hooks, err := captureAPKNativeHooks(ctx, prepared.services.hostRoot)
+	if err != nil {
+		return empty, nil, err
+	}
+	hookBytes, err := apkExecutionJSON(hooks)
+	if err != nil {
+		return empty, nil, err
+	}
+	originalPayload, err := captureAPKOriginalPayloadProposalAt(ctx, prepared.services.hostRoot)
+	if err != nil {
+		return empty, nil, err
+	}
+	originalRuntime := prepared.activation.OriginalRuntime()
+	if originalRuntime.CLI.SHA256 != prepared.plan.InstalledCLISHA256 {
+		return empty, nil, errors.New("APK original runtime differs from prepared installed CLI")
+	}
+	if err := bindAPKOriginalRuntime(originalPayload, originalRuntime.CLI.SHA256, originalRuntime.Core.SHA256); err != nil {
+		return empty, nil, err
+	}
+	payloadBytes, err := apkExecutionJSON(originalPayload)
+	if err != nil {
+		return empty, nil, err
+	}
+	databaseLock, err := captureAPKDatabaseLock(ctx, prepared.services.hostRoot)
+	if err != nil {
+		return empty, nil, err
+	}
+	lineage, err := captureAPKLauncherLineageProposal(ctx, prepared.services.hostRoot)
+	if err != nil {
+		return empty, nil, err
+	}
+	transfer, err := captureAPKLauncherOwnershipTransfer(ctx, prepared.services.hostRoot, lineage, launchers)
+	if err != nil {
+		return empty, nil, err
+	}
+	transferDigest := ""
+	if transfer != nil {
+		if transfer.Native.Name != prepared.plan.PackageName || transfer.Native.Version != prepared.plan.InstalledVersion {
+			return empty, nil, errors.New("APK launcher ownership source differs from the prepared installed package")
+		}
+		raw, err := apkExecutionJSON(transfer)
+		if err != nil {
+			return empty, nil, err
+		}
+		transferDigest = apkTransitionDigest(raw)
+	}
+	if !lineage.Absent && !validAPKLauncherTransferProposal(transfer) {
+		return empty, nil, errors.New("APK transition requires complete prior launcher ownership transfer before replacing an existing lineage")
+	}
+	return apkExecutionPlan{DatabaseLock: databaseLock, LauncherLineage: lineage, LauncherTransfer: transfer, LauncherTransferSHA256: transferDigest, NativeHooks: hooks, NativeHooksSHA256: apkTransitionDigest(hookBytes), OriginalPayload: originalPayload, OriginalPayloadSHA256: apkTransitionDigest(payloadBytes), CandidateAPKChecksum: prepared.plan.CandidateAPKChecksum, LauncherTargets: targets, LauncherTargetsSHA256: targetsDigest, Schema: apkExecutionSchema, PreparationSHA256: prepared.digest, CandidateSHA256: prepared.candidate.artifact.SHA256,
 		CandidateCLISHA256: prepared.candidate.cliSHA256, CandidateCapabilitySHA256: capability.SHA256(), InventorySHA256: apkTransitionDigest(inventory), EffectPlanSHA256: prepared.plan.EffectPlanSHA256,
 		OriginalLaunchersSHA256: apkTransitionDigest(original), OverlaySHA256: apkTransitionDigest([]byte(apkExecutionOverlay)), Installer: prepared.candidate.target.installer, Arguments: args}, launchers, ctx.Err()
 }
@@ -244,8 +302,8 @@ func openAPKExecutionOverlay() (*os.File, error) {
 	return file, nil
 }
 
-func runAPKOverlayTransaction(ctx context.Context, prepared *verifiedPreparedAPKTransition, overlay *os.File, args []string, output io.Writer) error {
-	if prepared == nil || overlay == nil || output == nil {
+func runAPKOverlayTransaction(ctx context.Context, prepared *verifiedPreparedAPKTransition, overlay *os.File, args []string, output io.Writer, handoff *apkTransitionHandoff) error {
+	if prepared == nil || overlay == nil || output == nil || handoff == nil {
 		return errors.New("APK native dispatch lacks retained execution descriptors")
 	}
 	if err := prepared.Revalidate(ctx); err != nil {
@@ -270,7 +328,7 @@ func runAPKOverlayTransaction(ctx context.Context, prepared *verifiedPreparedAPK
 	command.Env = nativeRetentionEnvironment()
 	command.Stdin = overlay
 	command.Stdout, command.Stderr = output, output
-	return dispatchAPKExecution(ctx, command, runQualificationProcessGroup)
+	return handoff.run(ctx, command, output)
 }
 
 // The native subprocess has the same compiled maximum as ordinary updater
@@ -476,7 +534,13 @@ func planAPKTransitionExecution(ctx context.Context, digest string, keys map[str
 }
 
 func executeAPKTransition(ctx context.Context, digest, approvedExecutionDigest string, keys map[string]ed25519.PublicKey, attest installedVersionAttestor, services apkTransitionServices, boundary apkExecutionBoundary) error {
-	return executeAPKTransitionWith(ctx, digest, approvedExecutionDigest, keys, attest, services, boundary, apkExecutionServices{})
+	if err := executeAPKTransitionWith(ctx, digest, approvedExecutionDigest, keys, attest, services, boundary, apkExecutionServices{}); err != nil {
+		return err
+	}
+	if err := retainAPKExecutionClosure(ctx, services.root, approvedExecutionDigest); err != nil {
+		return &APKTransitionExecutionError{Directory: filepath.Join(services.root, "execution-"+approvedExecutionDigest), Unresolved: true, Cause: err}
+	}
+	return nil
 }
 
 func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDigest string, keys map[string]ed25519.PublicKey, attest installedVersionAttestor, services apkTransitionServices, boundary apkExecutionBoundary, execution apkExecutionServices) (returnErr error) {
@@ -487,6 +551,8 @@ func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDige
 	var directory *pinnedServiceDirectory
 	var launchers apkExecutionLaunchers
 	var overlay, helper *os.File
+	var originalPayload *apkOriginalPayloadCustody
+	var handoff *apkTransitionHandoff
 	path := ""
 	started := false
 	approvalDigest := ""
@@ -501,6 +567,12 @@ func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDige
 	// acceptance. Any future lifecycle consumer must independently inspect the
 	// bounded native state and custody; no such reader is enabled here.
 	defer func() {
+		if handoff != nil {
+			returnErr = errors.Join(returnErr, handoff.Close())
+		}
+		if originalPayload != nil {
+			returnErr = errors.Join(returnErr, originalPayload.Close())
+		}
 		if overlay != nil {
 			returnErr = errors.Join(returnErr, overlay.Close())
 		}
@@ -574,6 +646,10 @@ func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDige
 	if err := write(directory, "execution-approval.json", approval); err != nil {
 		return err
 	}
+	originalPayload, err = retainAPKOriginalPayloadAt(ctx, services.hostRoot, path, plan.OriginalPayload, plan.OriginalPayloadSHA256)
+	if err != nil {
+		return err
+	}
 	binding := apkLauncherCustodyBinding{PlanSHA256: approvedExecutionDigest, ApprovalSHA256: approvalDigest, CandidateSHA256: plan.CandidateSHA256, CandidateCLISHA256: plan.CandidateCLISHA256, CandidateCapabilitySHA256: plan.CandidateCapabilitySHA256, InventorySHA256: plan.InventorySHA256, OriginalSnapshotSHA256: plan.OriginalLaunchersSHA256}
 	launchers, err = boundary.PrepareLaunchers(ctx, path, binding, original)
 	if err != nil {
@@ -591,6 +667,12 @@ func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDige
 		return err
 	}
 	revalidate := func() error {
+		if err := originalPayload.RevalidateSource(ctx); err != nil {
+			return err
+		}
+		if err := originalPayload.RevalidateRetained(ctx); err != nil {
+			return err
+		}
 		if err := prepared.Revalidate(ctx); err != nil {
 			return err
 		}
@@ -612,8 +694,14 @@ func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDige
 		}
 		return errors.Join(ctx.Err(), attestRetainedDirectoryParent(path, directory, false))
 	}
+	if execution.run == nil {
+		handoff, err = prepareAPKTransitionHandoff(ctx, prepared, directory, plan, approvalDigest, revalidate)
+		if err != nil {
+			return err
+		}
+	}
 	event := func(state, receipt, observation string) error {
-		data, err := apkExecutionJSON(apkExecutionEvent{Schema: apkExecutionSchema, State: state, PlanSHA256: approvedExecutionDigest, ApprovalSHA256: approvalDigest, LauncherReceiptSHA256: receipt, ObservationSHA256: observation})
+		data, err := apkExecutionJSON(apkExecutionEvent{NativeHandoffSHA256: apkHandoffDigest(handoff), Schema: apkExecutionSchema, State: state, PlanSHA256: approvedExecutionDigest, ApprovalSHA256: approvalDigest, LauncherReceiptSHA256: receipt, ObservationSHA256: observation})
 		if err != nil {
 			return err
 		}
@@ -640,10 +728,15 @@ func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDige
 	output := qualificationBoundedBuffer{limit: 1 << 20}
 	run := execution.run
 	if run == nil {
-		run = runAPKOverlayTransaction
+		run = func(ctx context.Context, p *verifiedPreparedAPKTransition, f *os.File, a []string, w io.Writer) error {
+			return runAPKOverlayTransaction(ctx, p, f, a, w, handoff)
+		}
 	}
 	runErr := run(ctx, prepared, overlay, plan.Arguments, &output)
 	diagnosticErr := write(directory, "native-output.txt", output.Bytes())
+	if runErr == nil && diagnosticErr == nil && handoff != nil {
+		diagnosticErr = retainAPKNativeResult(directory, handoff, output.Bytes())
+	}
 	snapshot, snapshotErr := captureAPKTransitionHost(ctx, prepared.services.hostRoot)
 	snapshotDigest := ""
 	if snapshotErr == nil {
@@ -656,6 +749,9 @@ func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDige
 		runErr = errors.Join(runErr, errors.New("APK native diagnostics exceeded the retained bound"))
 	}
 	if err := errors.Join(runErr, diagnosticErr, observationErr, ctx.Err()); err != nil {
+		return err
+	}
+	if err := originalPayload.RevalidateRetained(ctx); err != nil {
 		return err
 	}
 	observed, err := attestAPKExecutionResult(ctx, prepared, launchers, boundary)

@@ -28,8 +28,12 @@ def successful_output(source="local", name="syswarden", format_name="deb"):
     lines = ["SysWarden fresh installation: pre-install host mutation deferred.", "HOOK_EVENTS_BEGIN"]
     for hook, args in zip(("preinst.sh", "postinst.sh"), arguments):
         lines += ["HOOK=" + hook, "ARGC=" + str(len(args)), *("ARG=" + argument for argument in args)]
-    lines += ["CLI_PHASE=fresh", "CLI_ARGC=1", "CLI_ARG=install", "HOOK_EVENTS_END",
-              f"FRESH_HOOK_DISPATCH_PASS={format_name}:{name}:{source}"]
+    if format_name == "apk":
+        lines += ["CLI_LAUNCHERS=stage-fresh"]
+    lines += ["CLI_PHASE=fresh", "CLI_ARGC=1", "CLI_ARG=install"]
+    if format_name == "apk":
+        lines += ["CLI_LAUNCHERS=complete-fresh"]
+    lines += ["HOOK_EVENTS_END", f"FRESH_HOOK_DISPATCH_PASS={format_name}:{name}:{source}"]
     return ("\n".join(lines) + "\n").encode()
 
 
@@ -85,7 +89,55 @@ def configuration_export(mutate=None):
 
 def real_output(format_name="deb"):
     output = successful_output(format_name=format_name).replace(b"CLI_PHASE=fresh\nCLI_ARGC=1\nCLI_ARG=install\n", b"")
+    output = output.replace(b"CLI_LAUNCHERS=stage-fresh\n", b"").replace(b"CLI_LAUNCHERS=complete-fresh\n", b"")
+    if format_name == "apk":
+        identity_lines = "".join(f"APK_LAUNCHER_ID={index}:1:{index + 10}:a1ff:0:0:1:{len(target)}\n" for index, target in enumerate(probe.APK_ALIAS_TARGETS)).encode()
+        output = output.replace(b"HOOK_EVENTS_BEGIN", b"APK_LAUNCHERS_PENDING_PASS\n" + identity_lines + b"APK_LAUNCHERS_COMMITTED_PASS\nHOOK_EVENTS_BEGIN")
     return output.replace(b"HOOK_EVENTS_BEGIN", probe.REAL_STAGING_DISPOSITION.encode() + b"\nREAL_CONFIGURATION_PREVIEW_PASS\nREAL_CONFIGURATION_EDIT_INSPECTION_PASS\nREAL_CONFIGURATION_PASS\nHOOK_EVENTS_BEGIN")
+
+
+def launcher_export(mutate=None):
+    canonical = lambda value: (json.dumps(value, separators=(",", ":")) + "\n").encode()
+    digest = lambda raw: hashlib.sha256(raw).hexdigest()
+    schema = "syswarden-apk-fresh-launchers/v1"
+    evidence = {"absent": True, "identity": {}}
+    parents = [{"path": path, "absent": False, "identity": {"inode": index + 1}} for index, path in enumerate((".", "usr", "usr/local", "usr/local/bin"))]
+    originals = [{"path": path, "disposition": "absent", "original": evidence, "committed": evidence, "product_dependency": False} for path in probe.APK_ALIAS_PATHS]
+    before = b"P:synthetic-unrelated\nV:1\n\n"
+    payload_hashes = {"opt/syswarden/bin/syswarden-cli": "a" * 64}
+    intent = {"schema": schema, "purpose": "fresh-intent-no-alias-mutation", "database_sha256": digest(before),
+              "payload": [{"path": path, "sha256": sha} for path, sha in payload_hashes.items()], "parents": parents, "aliases": originals}
+    intent_raw = canonical(intent)
+    plan = digest(intent_raw)
+    journal = "fresh-" + plan + "/"
+    files = {journal + "intent.json": intent_raw, journal + "before-installed": before}
+    aliases = []
+    for index, (path, target) in enumerate(zip(probe.APK_ALIAS_PATHS, probe.APK_ALIAS_TARGETS)):
+        committed = {"absent": False, "identity": {"device": 1, "inode": index + 10, "mode": 0o120777, "uid": 0, "gid": 0, "links": 1, "size": len(target)}, "link_target": target}
+        creation = {"schema": schema, "purpose": "exclusive-launcher-created", "prepared_sha256": plan, "path": path, "evidence": committed}
+        name = "launcher-created-" + ("cli" if index == 0 else "tui") + ".json"
+        files[journal + name] = canonical(creation)
+        creation["purpose"], creation["evidence"] = "exclusive-launcher-create-intent", evidence
+        files[journal + "intent-" + name] = canonical(creation)
+        aliases.append({"path": path, "disposition": "product-created", "original": evidence, "committed": committed, "creation_sha256": digest(files[journal + name]), "product_dependency": False})
+    receipt = {"schema": schema, "purpose": "exclusive-fresh-launcher-ownership", "intent_sha256": plan,
+               "native": {"name": "syswarden", "version": "v" + probe.VERSION}, "parents": parents, "aliases": aliases}
+    files[journal + "receipt.json"] = canonical(receipt)
+    files["current.json"] = canonical({"schema": schema, "kind": "fresh", "plan_sha256": plan, "receipt_sha256": digest(files[journal + "receipt.json"])})
+    if mutate:
+        mutate(files, journal)
+    output = io.BytesIO()
+    base = probe.APK_LAUNCHER_ROOT.rsplit("/", 1)[1]
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        for name in (base, base + "/" + journal.rstrip("/")):
+            entry = tarfile.TarInfo(name)
+            entry.type, entry.mode = tarfile.DIRTYPE, 0o700
+            archive.addfile(entry)
+        for name, raw in files.items():
+            entry = tarfile.TarInfo(base + "/" + name)
+            entry.mode, entry.size = 0o600, len(raw)
+            archive.addfile(entry, io.BytesIO(raw))
+    return output.getvalue(), payload_hashes
 
 
 class FreshHookDispatchTests(unittest.TestCase):
@@ -236,6 +288,49 @@ class FreshHookDispatchTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 probe.parse_result(good, "local", "syswarden", format_name)
 
+    def test_independent_apk_receipt_export_requires_complete_bound_lineage(self):
+        raw, payload = launcher_export()
+        identities = probe.parse_result(real_output("apk"), "local", "syswarden", "apk", True)["apk_launcher_identities"]
+        self.assertTrue(probe.parse_launcher_export(raw, "syswarden", payload, identities)["fresh_apk_launcher_receipt_verified"])
+        changes = (
+            lambda files, journal: files.__setitem__("pending.json", b"{}\n"),
+            lambda files, journal: files.__setitem__(journal + "unknown.json", b"{}\n"),
+            lambda files, journal: files.pop(journal + "launcher-created-tui.json"),
+            lambda files, journal: files.__setitem__(journal + "before-installed", b"changed\n"),
+            lambda files, journal: files.__setitem__(journal + "receipt.json", files[journal + "receipt.json"].replace(b'product-created', b'retained-administrator')),
+            lambda files, journal: files.__setitem__("current.json", files["current.json"].replace(b'"fresh"', b'"execution"')),
+            lambda files, journal: files.__setitem__(journal + "intent-launcher-created-cli.json", b"{}\n"),
+        )
+        for change in changes:
+            raw, payload = launcher_export(change)
+            with self.assertRaises((ValueError, KeyError)):
+                probe.parse_launcher_export(raw, "syswarden", payload, identities)
+        raw, payload = launcher_export()
+        with self.assertRaises(ValueError):
+            probe.parse_launcher_export(raw, "syswarden-base", payload, identities)
+        with self.assertRaises(ValueError):
+            probe.parse_launcher_export(raw, "syswarden", {"foreign": "a" * 64}, identities)
+        with self.assertRaises(ValueError):
+            probe.parse_launcher_export(raw + raw, "syswarden", payload, identities)
+        changed = copy.deepcopy(identities)
+        changed[0]["inode"] += 1
+        with self.assertRaises(ValueError):
+            probe.parse_launcher_export(raw, "syswarden", payload, changed)
+
+    def test_apk_requires_exact_stage_commit_sequence_and_no_false_ownership_in_stub_mode(self):
+        stub = successful_output(format_name="apk")
+        for marker in (b"CLI_LAUNCHERS=stage-fresh\n", b"CLI_LAUNCHERS=complete-fresh\n"):
+            for changed in (stub.replace(marker, b""), stub.replace(marker, marker + marker)):
+                with self.assertRaises(ValueError):
+                    probe.parse_result(changed, "local", "syswarden", "apk")
+        real = real_output("apk")
+        for marker in (b"APK_LAUNCHERS_PENDING_PASS\n", b"APK_LAUNCHERS_COMMITTED_PASS\n"):
+            for changed in (real.replace(marker, b""), real.replace(marker, marker + marker)):
+                with self.assertRaises(ValueError):
+                    probe.parse_result(changed, "local", "syswarden", "apk", True)
+        with self.assertRaises(ValueError):
+            probe.parse_result(stub.replace(b"HOOK_EVENTS_BEGIN", b"APK_LAUNCHERS_COMMITTED_PASS\nHOOK_EVENTS_BEGIN"), "local", "syswarden", "apk")
+
     def test_final_admin_and_forbidden_checks_follow_readonly_validation(self):
         validation = probe.SCRIPT.index("/bin/sh validate-real.sh")
         self.assertGreater(probe.SCRIPT.index("test ! -s forbidden"), validation)
@@ -261,7 +356,7 @@ class FreshHookDispatchTests(unittest.TestCase):
                 root = Path(temporary)
                 (root / "cli-mode").write_text(selected + "\n")
                 (root / "validate-real.sh").write_text("printf 'real-validation-called\\n'\n")
-                program = "\n".join(("set -eu", "stat() { printf '644\\n'; }", selection, selection_case,
+                program = "\n".join(("set -eu", "format=deb", "stat() { printf '644\\n'; }", selection, selection_case,
                                       permission, permission_check, *branches,
                                       "printf 'list=%s wg=%s\\n' \"${SYSWARDEN_LIST_CHOICE:-unset}\" \"${SYSWARDEN_ENABLE_WG:-unset}\""))
                 program = program.replace("/etc/syswarden", str(root / "absent"))
@@ -287,27 +382,42 @@ class FreshHookDispatchTests(unittest.TestCase):
             source.write_bytes(static_cli_bytes())
             source.chmod(0o700)
             snapshot = probe.native.snapshot_retention_binary(source)
-            work = root / "payload"
-            work.mkdir()
-            def build(arguments, **kwargs):
-                if arguments[0] != "/fixture/nfpm":
-                    self.assertEqual(arguments[0], "/bin/bash")
-                    return actual_run(arguments, **kwargs)
-                spec = json.loads((work / "fixture.json").read_text())
-                self.assertEqual(spec["license"], "GPL-3.0-or-later")
-                self.assertEqual((work / "cli").read_bytes(), snapshot.data)
-                self.assertEqual(spec["contents"][0]["dst"], "/opt/syswarden/bin/syswarden-cli")
-                Path(arguments[arguments.index("--target") + 1]).write_bytes(b"inert-package-with-real-cli")
-                return subprocess.CompletedProcess(arguments, 0, b"built\n")
-            with mock.patch.object(probe.subprocess, "run", side_effect=build):
-                data, binding = probe.payload(work, Path("/fixture/nfpm"), "local", "syswarden-base", "apk", snapshot)
-            self.assertEqual(binding["cli_mode"], "real")
-            self.assertEqual(binding["cli_sha256"], hashlib.sha256(snapshot.data).hexdigest())
-            with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-                self.assertEqual(archive.extractfile("cli-mode").read(), b"real\n")
-                self.assertEqual(archive.extractfile("validate-real.sh").read(), probe.REAL_VALIDATION.encode())
-                self.assertEqual(archive.extractfile("real-cli.sha256").read(),
-                                 (binding["cli_sha256"] + "  /opt/syswarden/bin/syswarden-cli\n").encode())
+            for format_name in probe.FORMATS:
+                with self.subTest(format=format_name):
+                    work = root / format_name
+                    work.mkdir()
+                    def build(arguments, **kwargs):
+                        if arguments[0] != "/fixture/nfpm":
+                            self.assertEqual(arguments[0], "/bin/bash")
+                            return actual_run(arguments, **kwargs)
+                        spec = json.loads((work / "fixture.json").read_text())
+                        self.assertEqual(spec["license"], "GPL-3.0-or-later")
+                        self.assertEqual((work / "cli").read_bytes(), snapshot.data)
+                        by_path = {entry["dst"][1:]: entry for entry in spec["contents"]}
+                        if format_name == "apk":
+                            self.assertEqual(set(by_path), set(probe.APK_PAYLOAD_MODES))
+                            self.assertFalse(any(path == "usr/local" or path.startswith("usr/local/") for path in by_path))
+                        else:
+                            self.assertEqual(set(by_path), {"opt/syswarden/bin/syswarden-cli",
+                                                           "usr/local/bin/syswarden", "usr/local/bin/syswarden-tui"})
+                            for name, target in (("syswarden", "syswarden-cli"), ("syswarden-tui", "syswarden-tui")):
+                                self.assertEqual(by_path["usr/local/bin/" + name], {
+                                    "src": "/opt/syswarden/bin/" + target, "dst": "/usr/local/bin/" + name, "type": "symlink",
+                                    "file_info": {"mode": 0o777, "owner": "root", "group": "root"}})
+                        actual_cli = by_path["opt/syswarden/bin/syswarden-cli"]
+                        self.assertEqual(Path(actual_cli["src"]).read_bytes(), snapshot.data)
+                        self.assertEqual(actual_cli["file_info"]["mode"], 0o750 if format_name == "apk" else 0o755)
+                        Path(arguments[arguments.index("--target") + 1]).write_bytes(b"inert-package-with-real-cli")
+                        return subprocess.CompletedProcess(arguments, 0, b"built\n")
+                    with mock.patch.object(probe.subprocess, "run", side_effect=build):
+                        data, binding = probe.payload(work, Path("/fixture/nfpm"), "local", "syswarden-base", format_name, snapshot)
+                    self.assertEqual(binding["cli_mode"], "real")
+                    self.assertEqual(binding["cli_sha256"], hashlib.sha256(snapshot.data).hexdigest())
+                    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+                        self.assertEqual(archive.extractfile("cli-mode").read(), b"real\n")
+                        self.assertEqual(archive.extractfile("validate-real.sh").read(), probe.REAL_VALIDATION.encode())
+                        self.assertEqual(archive.extractfile("real-cli.sha256").read(),
+                                         (binding["cli_sha256"] + "  /opt/syswarden/bin/syswarden-cli\n").encode())
             source.write_bytes(snapshot.data + b"drift")
             with self.assertRaises(ValueError):
                 probe.payload(root / "not-created", Path("/fixture/nfpm"), "local", "syswarden", "deb", snapshot)
@@ -441,7 +551,27 @@ class FreshHookDispatchTests(unittest.TestCase):
                             self.assertEqual(config["name"], name)
                             self.assertEqual(config["version_schema"], "none")
                             self.assertEqual(set(config["scripts"]), {"preinstall", "postinstall"})
-                            self.assertEqual([entry["dst"] for entry in config["contents"]], ["/opt/syswarden/bin/syswarden-cli"])
+                            expected_paths = set(probe.APK_PAYLOAD_MODES) if format_name == "apk" else {
+                                "opt/syswarden/bin/syswarden-cli", "usr/local/bin/syswarden", "usr/local/bin/syswarden-tui"}
+                            self.assertEqual({entry["dst"][1:] for entry in config["contents"]}, expected_paths)
+                            if format_name != "apk":
+                                aliases = [entry for entry in config["contents"] if entry.get("type") == "symlink"]
+                                self.assertEqual(aliases, [
+                                    {"src": "/opt/syswarden/bin/syswarden-cli", "dst": "/usr/local/bin/syswarden", "type": "symlink",
+                                     "file_info": {"mode": 0o777, "owner": "root", "group": "root"}},
+                                    {"src": "/opt/syswarden/bin/syswarden-tui", "dst": "/usr/local/bin/syswarden-tui", "type": "symlink",
+                                     "file_info": {"mode": 0o777, "owner": "root", "group": "root"}},
+                                ])
+                            if format_name == "apk":
+                                by_path = {entry["dst"][1:]: entry for entry in config["contents"]}
+                                for path, mode in probe.APK_PAYLOAD_MODES.items():
+                                    self.assertEqual(by_path[path]["file_info"]["mode"], mode)
+                                    self.assertFalse(path == "usr/local" or path.startswith("usr/local/"))
+                                core = Path(by_path["opt/syswarden/bin/syswarden-core"]["src"]).read_bytes()
+                                capability = Path(by_path[probe.descriptor.DESCRIPTOR_PATH]["src"]).read_bytes()
+                                self.assertEqual(capability, probe.descriptor.descriptor_for_digests(hashlib.sha256(probe.CLI).hexdigest(), hashlib.sha256(core).hexdigest()))
+                                recovery = Path(by_path["etc/apk/commit_hooks.d/syswarden-recovery"]["src"]).read_bytes()
+                                self.assertEqual(recovery, (probe.ROOT / "scripts/ci/package_apk_recovery_hook.sh").read_bytes())
                             for forbidden in ("depends", "recommends", "suggests", "provides", "replaces"):
                                 self.assertNotIn(forbidden, config)
                             for hook in ("preinst.sh", "postinst.sh"):

@@ -70,7 +70,7 @@ func newAPKLauncherTargetFixture(t *testing.T, relative bool) *apkLauncherTarget
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.plan = apkExecutionPlan{Schema: apkExecutionSchema, PreparationSHA256: strings.Repeat("8", 64), CandidateSHA256: f.binding.CandidateSHA256,
+	f.plan = apkExecutionPlan{LauncherLineage: apkLauncherLineageProposal{Absent: true}, Schema: apkExecutionSchema, PreparationSHA256: strings.Repeat("8", 64), CandidateSHA256: f.binding.CandidateSHA256,
 		CandidateCLISHA256: f.binding.CandidateCLISHA256, CandidateCapabilitySHA256: f.binding.CandidateCapabilitySHA256, InventorySHA256: f.binding.InventorySHA256,
 		EffectPlanSHA256: f.effect, OriginalLaunchersSHA256: f.binding.OriginalSnapshotSHA256, LauncherTargets: f.proposal, LauncherTargetsSHA256: apkTransitionDigest(raw)}
 	f.seal(t)

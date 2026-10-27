@@ -105,7 +105,8 @@ SYSTEMD_LINUX_ENTRIES = {
 
 APK_RECOVERY_PATH = "etc/apk/commit_hooks.d/syswarden-recovery"
 APK_LINUX_ENTRIES = {
-    **LINUX_ENTRIES,
+    **{path: entry for path, entry in LINUX_ENTRIES.items()
+       if path not in {"usr/local", "usr/local/bin", "usr/local/bin/syswarden", "usr/local/bin/syswarden-tui"}},
     "etc": DIRECTORY,
     "etc/apk": DIRECTORY,
     "etc/apk/commit_hooks.d": DIRECTORY,

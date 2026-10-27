@@ -84,7 +84,7 @@ func (l *apkExecutionTestLaunchers) Commit() (string, error) {
 }
 func (l *apkExecutionTestLaunchers) Close() error { return l.closeErr }
 func apkExecutionTestAuthority() *apkExecutionTestBoundary {
-	return &apkExecutionTestBoundary{digest: strings.Repeat("e", 64), launchers: &apkExecutionTestLaunchers{receipt: strings.Repeat("f", 64)}}
+	return &apkExecutionTestBoundary{digest: (apkTransitionTestActivation{}).EffectPlanSHA256(), launchers: &apkExecutionTestLaunchers{receipt: strings.Repeat("f", 64)}}
 }
 
 type apkExecutionTestFixture struct {
@@ -138,7 +138,7 @@ func (f *apkExecutionTestFixture) run(ctx context.Context, prepared *verifiedPre
 	}
 	f.post = true
 	world := "syswarden><" + prepared.plan.CandidateAPKChecksum + "\nwireguard-tools\nrsyslog\n"
-	database := strings.Replace(apkRetentionFixtureDatabase(), "V:4.10.4-r0", "V:5.00.0-r0", 1)
+	database := strings.Replace(apkRetentionFixtureDatabase(), "V:4.10.4-r0", "V:"+strings.TrimPrefix(prepared.plan.CandidateVersion, "v")+"-r0", 1)
 	database = strings.Replace(database, "C:"+apkRetentionFixtureChecksum, "C:"+prepared.plan.CandidateAPKChecksum, 1)
 	// These are precreated inert fixture files, never the host native database.
 	if err := os.WriteFile(filepath.Join(f.services.hostRoot, "etc/apk/world"), []byte(world), 0600); err != nil {
@@ -688,7 +688,7 @@ func TestAPKExecutionNativeDispatchUsesCompiledDeadlineAndCannotHideCancellation
 func apkExecutionOriginalTargetFixture(t *testing.T, services *apkTransitionServices) {
 	t.Helper()
 	for _, name := range []string{"opt", "opt/syswarden", "opt/syswarden/bin"} {
-		if err := os.Mkdir(filepath.Join(services.hostRoot, name), 0755); err != nil { // #nosec G301 -- Fixed opt ancestors beneath t.TempDir deliberately model native package directory modes.
+		if err := os.MkdirAll(filepath.Join(services.hostRoot, name), 0755); err != nil { // #nosec G301 -- Fixed opt ancestors beneath t.TempDir deliberately model native package directory modes.
 			t.Fatal(err)
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -39,6 +40,9 @@ func apkTransitionFixtureMembers() []apkTransitionFixtureMember {
 		"etc/apk/commit_hooks.d/syswarden-recovery": 0755,
 	} {
 		data := []byte("public inert fixture: " + name + "\n")
+		if name == "etc/apk/commit_hooks.d/syswarden-recovery" {
+			data = []byte(apkRecoveryHookSource)
+		}
 		if name == "opt/syswarden/activation-contract-v1.json" {
 			data, _ = canonicalNativeActivationDescriptor(nativeActivationDescriptorFor(
 				apkTransitionDigest([]byte("public inert fixture: opt/syswarden/bin/syswarden-cli\n")),
@@ -54,6 +58,9 @@ func apkTransitionFixtureControls() []apkTransitionFixtureMember {
 	entries := []apkTransitionFixtureMember{{header: tar.Header{Name: ".PKGINFO", Typeflag: tar.TypeReg, Mode: 0644, Size: int64(len(data))}, content: data}}
 	for _, name := range []string{".pre-install", ".post-install", ".pre-upgrade", ".post-upgrade", ".pre-deinstall", ".post-deinstall"} {
 		data := []byte("#!/bin/sh\nexit 0\n")
+		if name == ".pre-upgrade" || name == ".post-upgrade" {
+			data = []byte("#!/bin/sh\nset -eu\nexec /var/backups/syswarden-apk-transitions-v1/active-hook " + strings.TrimPrefix(name, ".") + "\n")
+		}
 		entries = append(entries, apkTransitionFixtureMember{header: tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0755, Size: int64(len(data))}, content: data})
 	}
 	return entries
@@ -149,20 +156,33 @@ func apkTransitionFixture(t *testing.T) (authenticatedAPKCandidate, apkTransitio
 		signature: testSignManifest(private, manifestBytes), cliSHA256: apkTransitionDigest([]byte("public inert fixture: opt/syswarden/bin/syswarden-cli\n")),
 		uid: os.Geteuid(), keys: map[string]ed25519.PublicKey{testReleaseKeyID: public},
 		attestInstalled: func(context.Context, packageTarget, int) (installedQualificationEvidence, error) {
-			return installedQualificationEvidence{version: "v4.10.4", cliSHA256: strings.Repeat("a", 64)}, nil
+			return installedQualificationEvidence{version: "v4.10.4", cliSHA256: apkTransitionDigest([]byte("original inert syswarden-cli bytes\n"))}, nil
 		}}
 	host := t.TempDir()
-	for _, name := range []string{"usr/local/bin", "etc/apk", "lib/apk/db", "etc/syswarden/config/modules"} {
+	for _, name := range []string{"var/backups", "usr/local/bin", "etc/apk", "lib/apk/db", "etc/syswarden/config/modules", "opt/syswarden/bin", "etc/apk/commit_hooks.d"} {
 		if err := os.MkdirAll(filepath.Join(host, name), 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for name, content := range map[string][]byte{"etc/apk/world": []byte("syswarden\n"), "lib/apk/db/installed": []byte(apkRetentionFixtureDatabase()),
+	for name, content := range map[string][]byte{"lib/apk/db/lock": {}, "etc/apk/world": []byte("syswarden\n"), "lib/apk/db/installed": []byte(apkRetentionFixtureDatabase()),
 		"etc/syswarden/config/syswarden.toml":       []byte("# Original opaque configuration evidence\n"),
 		"etc/syswarden/config/modules/99-user.toml": []byte("# Original operator bytes\n"), "usr/local/bin/syswarden": []byte("administrator bytes\n")} {
 		if err := os.WriteFile(filepath.Join(host, name), content, 0600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	for _, name := range []string{"opt", "opt/syswarden", "opt/syswarden/bin"} {
+		if err := os.Chmod(filepath.Join(host, name), 0755); err != nil { // #nosec G302 -- fixed temporary product ancestry models native0755 directories
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"syswarden-cli", "syswarden-core", "syswarden-tui"} {
+		if err := os.WriteFile(filepath.Join(host, "opt/syswarden/bin", name), []byte("original inert "+name+" bytes\n"), 0750); err != nil { // #nosec G306 -- fixed temporary inert runtime files model required executable0750 metadata
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(host, "opt/syswarden/signatures.json"), []byte("{}\n"), 0640); err != nil { // #nosec G306 -- fixed temporary signatures fixture models native0640 payload metadata
+		t.Fatal(err)
 	}
 	if err := os.Symlink("/opt/administrator-tool", filepath.Join(host, "usr/local/bin/syswarden-tui")); err != nil {
 		t.Fatal(err)
@@ -689,8 +709,169 @@ func TestAPKTransitionProductionConstructorsRequirePreparation(t *testing.T) {
 // The synthetic activation seam never inspects or mutates the running host.
 type apkTransitionTestActivation struct{}
 
-func (apkTransitionTestActivation) EffectPlanSHA256() string             { return strings.Repeat("e", 64) }
+func (apkTransitionTestActivation) DurableEffects() ([]byte, error) {
+	return []byte("{\"fixture\":\"inert-original-effects\"}\n"), nil
+}
+func (activation apkTransitionTestActivation) EffectPlanSHA256() string {
+	raw, _ := activation.DurableEffects()
+	return apkTransitionDigest(raw)
+}
 func (apkTransitionTestActivation) Revalidate(ctx context.Context) error { return ctx.Err() }
 func (apkTransitionTestActivation) VerifyInstalledCandidate(ctx context.Context) error {
 	return ctx.Err()
+}
+
+func (apkTransitionTestActivation) OriginalRuntime() nativeActivationRuntimeSnapshot {
+	return nativeActivationRuntimeSnapshot{CLI: nativeActivationRuntimeFile{SHA256: apkTransitionDigest([]byte("original inert syswarden-cli bytes\n"))}, Core: nativeActivationRuntimeFile{SHA256: apkTransitionDigest([]byte("original inert syswarden-core bytes\n"))}}
+}
+
+// Encode explicit PAX records because archive/tar.Writer can discard reserved
+// time keys from PAXRecords unless corresponding Header time fields are set.
+func apkTransitionFixturePAX(t *testing.T, records map[string]string) []byte {
+	t.Helper()
+	if len(records) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(records))
+	for key := range records {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var content []byte
+	for _, key := range keys {
+		value := key + "=" + records[key] + "\n"
+		size := len(value) + 3
+		for {
+			record := fmt.Sprintf("%d %s", size, value)
+			if len(record) == size {
+				content = append(content, record...)
+				break
+			}
+			size = len(record)
+		}
+	}
+	wire := nativeHeaderTestTar(t, true, nativeHeaderTestEntry{name: "PaxHeaders/signature", data: content})
+	wire[156] = tar.TypeXHeader
+	for index := 148; index < 156; index++ {
+		wire[index] = ' '
+	}
+	checksum := 0
+	for _, value := range wire[:512] {
+		checksum += int(value)
+	}
+	copy(wire[148:156], []byte(fmt.Sprintf("%06o\x00 ", checksum)))
+	return wire
+}
+
+func apkTransitionSignatureFixturePrefix(t *testing.T, entries ...nativeHeaderTestEntry) []byte {
+	t.Helper()
+	var wire []byte
+	for _, entry := range entries {
+		wire = append(wire, apkTransitionFixturePAX(t, entry.pax)...)
+		entry.pax = nil
+		wire = append(wire, nativeHeaderTestTar(t, true, entry)...)
+	}
+	return nativeHeaderTestGzip(t, wire)
+}
+
+func TestAPKTransitionInventorySignatureProducerCompatibility(t *testing.T) {
+	// The pinned producer invokes abuild-sign -t RSA256 and the independent
+	// signing bundle requires this public key basename plus the exact time pair.
+	// These inert bytes validate framing only; native signature checks remain mandatory.
+	for _, fixture := range []struct {
+		name string
+		pax  map[string]string
+	}{
+		{".SIGN.RSA256.apk-public.rsa.pub", map[string]string{"atime": "0", "ctime": "0"}},
+		{".SIGN.RSA.legacy.rsa.pub", nil},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			prefix := apkTransitionSignatureFixturePrefix(t, nativeHeaderTestEntry{
+				name: fixture.name, data: bytes.Repeat([]byte("s"), 256), pax: fixture.pax,
+			})
+			data := append(prefix, apkTransitionFixtureArchive(t, apkTransitionFixtureMembers(), false)...)
+			file := openQualificationPayloadFixture(t, "candidate.apk", data)
+			inventory, identity, err := readAPKTransitionInventory(t.Context(), file)
+			if err != nil || identity.name != "syswarden" {
+				t.Fatalf("producer signature framing rejected: %v, %+v", err, identity)
+			}
+			found := false
+			for _, member := range inventory {
+				if member.Stream == "apk-signature" && member.Path == fixture.name {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("signature member missing from authenticated inventory")
+			}
+			if _, err := readAuthenticatedAPKRegistrationChecksum(t.Context(), file); err != nil {
+				t.Fatalf("modern producer framing rejected by registration parser: %v", err)
+			}
+		})
+	}
+}
+
+func TestAPKTransitionInventorySignatureNamesAndMetadataAreExact(t *testing.T) {
+	cases := []struct {
+		label   string
+		entries []nativeHeaderTestEntry
+	}{}
+	for _, name := range []string{
+		".SIGN.RSA512.fixture.rsa.pub", ".SIGN.DSA.fixture.rsa.pub", ".SIGN.RSA256x.fixture", ".SIGN.RSA256.", ".SIGN.RSA.",
+		".SIGN.RSA256..", ".SIGN.RSA256...", ".SIGN.RSA256.fixture/name", ".SIGN.RSA256.fixture/../name", "./.SIGN.RSA256.fixture",
+		".SIGN.RSA256.fixture name", ".SIGN.RSA256.fixture\\name", ".SIGN.RSA256.fixtureé",
+	} {
+		cases = append(cases, struct {
+			label   string
+			entries []nativeHeaderTestEntry
+		}{name, []nativeHeaderTestEntry{{name: name, data: []byte("inert")}}})
+	}
+	for index, metadata := range []map[string]string{
+		{"atime": "0"}, {"ctime": "0"}, {"atime": "1", "ctime": "0"}, {"atime": "0.0", "ctime": "0"},
+		{"atime": "0", "ctime": "0", "mtime": "0"},
+		{"atime": "0", "ctime": "0", "path": ".SIGN.RSA256.apk-public.rsa.pub"},
+		{"atime": "0", "ctime": "0", "APK-TOOLS.checksum.SHA1": strings.Repeat("0", 40)},
+	} {
+		cases = append(cases, struct {
+			label   string
+			entries []nativeHeaderTestEntry
+		}{fmt.Sprintf("metadata-%d", index), []nativeHeaderTestEntry{{name: ".SIGN.RSA256.apk-public.rsa.pub", data: []byte("inert"), pax: metadata}}})
+	}
+	for _, name := range []string{".SIGN.RSA256.apk-public.rsa.pub", ".SIGN.RSA.legacy.rsa.pub"} {
+		cases = append(cases, struct {
+			label   string
+			entries []nativeHeaderTestEntry
+		}{"duplicate-" + name, []nativeHeaderTestEntry{
+			{name: ".SIGN.RSA256.apk-public.rsa.pub", data: []byte("inert")}, {name: name, data: []byte("inert")},
+		}})
+	}
+	for _, fixture := range cases {
+		t.Run(fixture.label, func(t *testing.T) {
+			prefix := apkTransitionSignatureFixturePrefix(t, fixture.entries...)
+			file := openQualificationPayloadFixture(t, "candidate.apk", append(prefix, apkTransitionFixtureArchive(t, apkTransitionFixtureMembers(), false)...))
+			if _, _, err := readAPKTransitionInventory(t.Context(), file); err == nil {
+				t.Fatal("unsupported signature algorithm, name or metadata accepted")
+			}
+		})
+	}
+	for _, stream := range []string{"control", "data"} {
+		t.Run("timestamp-pair-in-"+stream, func(t *testing.T) {
+			controls := apkTransitionFixtureTar(t, apkTransitionFixtureControls())
+			controls = controls[:len(controls)-1024]
+			data := apkTransitionFixtureTar(t, apkTransitionFixtureMembers())
+			metadata := apkTransitionFixturePAX(t, map[string]string{"atime": "0", "ctime": "0"})
+			if stream == "data" {
+				data = append(metadata, data...)
+			} else {
+				controls = append(metadata, controls...)
+			}
+			wire := apkTransitionSignatureFixturePrefix(t, nativeHeaderTestEntry{name: ".SIGN.RSA.legacy.rsa.pub", data: []byte("inert")})
+			wire = append(wire, nativeHeaderTestGzip(t, controls)...)
+			wire = append(wire, nativeHeaderTestGzip(t, data)...)
+			file := openQualificationPayloadFixture(t, "candidate.apk", wire)
+			if _, _, err := readAPKTransitionInventory(t.Context(), file); err == nil {
+				t.Fatal("signature metadata expanded control or data scope")
+			}
+		})
+	}
 }

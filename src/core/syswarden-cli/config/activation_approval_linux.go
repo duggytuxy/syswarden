@@ -229,6 +229,12 @@ func (policy *ActivationPolicy) approveAt(ctx context.Context, store activationA
 	if err := approval.Revalidate(ctx); err != nil {
 		return nil, err
 	}
+	// Publication itself can overlap an independent host change. Retain any
+	// published pending record on failure, but return no consumable handle and
+	// never report successful application from publication alone.
+	if err := guard(); err != nil {
+		return nil, fmt.Errorf("activation observations changed after approval publication; pending authority is retained without application: %w", err)
+	}
 	return approval, nil
 }
 
@@ -372,6 +378,10 @@ func (approval *ActivationApproval) Revalidate(ctx context.Context) error {
 // must not call this for a nested reload of an install approval; only the parent
 // installation can report that all of its stages completed.
 func (approval *ActivationApproval) MarkApplied(ctx context.Context) error {
+	return approval.markAppliedUsing(ctx, defaultConfigReplacementOps())
+}
+
+func (approval *ActivationApproval) markAppliedUsing(ctx context.Context, ops configReplacementOps) error {
 	if err := approval.Revalidate(ctx); err != nil {
 		return err
 	}
@@ -387,12 +397,15 @@ func (approval *ActivationApproval) MarkApplied(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if state == nil || state.record == nil || state.directory != approval.directory || state.identity != approval.identity || approvalStateDigest(state) != approval.digest {
+		return errors.New("activation approval changed before application recording")
+	}
 	raw, err := activationCanonical(activationAppliedRecord{Schema: activationAppliedSchema, ApprovalSHA256: approval.digest})
 	if err != nil {
 		return err
 	}
 	if bytes.Equal(raw, state.appliedRaw) {
-		return nil
+		return approval.Revalidate(ctx)
 	}
 	expected, err := activationReplacementIdentity(approval.store, activationAppliedName, state)
 	if err != nil {
@@ -412,7 +425,13 @@ func (approval *ActivationApproval) MarkApplied(ctx context.Context) error {
 		_, err = readActivationInputs(approval.record, approval.store.uid)
 		return err
 	}
-	return replaceSecureConfigFile(approval.store.path, activationAppliedName, raw, expected, guard, nil, nil)
+	if err := replaceSecureConfigFileUsing(approval.store.path, activationAppliedName, raw, expected, guard, nil, nil, ops); err != nil {
+		return err
+	}
+	// Publication and final directory synchronization can outlive the last
+	// source check. Retain the record on uncertainty, but do not report
+	// successful completion using a changed source or approval.
+	return approval.Revalidate(ctx)
 }
 
 func approvalFromState(store activationApprovalStore, state *activationStoredState) *ActivationApproval {

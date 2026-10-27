@@ -177,16 +177,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
         cls.workflow = PACKAGE_WORKFLOW.read_text(encoding="utf-8")
 
     def script(self, name: str) -> str:
-        if name == "preupgrade.sh":
-            return self.script("preinst.sh").replace(
-                'syswarden_set_native_install_phase preinstall "$@"',
-                'syswarden_set_native_install_phase preupgrade "$@"',
-            )
-        if name == "postupgrade.sh":
-            return self.script("postinst.sh").replace(
-                'syswarden_set_native_install_phase postinstall "$@"',
-                'syswarden_set_native_install_phase postupgrade "$@"',
-            )
+        if name in ("preupgrade.sh", "postupgrade.sh"):
+            return (REPOSITORY / "scripts/ci" / ("package_apk_" + name)).read_text(encoding="utf-8")
         destination = f"${{PACKAGE_SCRIPTS}}/{name}"
         opener = re.compile(
             rf"^\s*cat\s+<<\s*'(?P<delimiter>[A-Z][A-Z0-9_]*)'\s+>>?\s+"
@@ -315,16 +307,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 )
 
     def local_build_script(self, name: str) -> str:
-        if name == "preupgrade.sh":
-            return self.local_build_script("preinst.sh").replace(
-                'syswarden_set_native_install_phase preinstall "$@"',
-                'syswarden_set_native_install_phase preupgrade "$@"',
-            )
-        if name == "postupgrade.sh":
-            return self.local_build_script("postinst.sh").replace(
-                'syswarden_set_native_install_phase postinstall "$@"',
-                'syswarden_set_native_install_phase postupgrade "$@"',
-            )
+        if name in ("preupgrade.sh", "postupgrade.sh"):
+            return (REPOSITORY / "scripts/ci" / ("package_apk_" + name)).read_text(encoding="utf-8")
         source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         opener = re.compile(
             rf"^\s*cat\s+<<\s*'(?P<delimiter>[A-Z][A-Z0-9_]*)'\s+>>?\s+"
@@ -2139,11 +2123,15 @@ class PackageLifecycleContractTests(unittest.TestCase):
             ) -> subprocess.CompletedProcess[str]:
                 script = self.script(script_name)
                 invocation = "\nsyswarden_preflight_alpine_cronie\n"
-                self.assertIn(invocation, script)
+                if script_name in ("preupgrade.sh", "postupgrade.sh"):
+                    self.assertEqual(script, (REPOSITORY / "scripts/ci" / ("package_apk_" + script_name)).read_text())
+                else:
+                    self.assertIn(invocation, script)
                 # Fresh hooks now exit before this historical activation helper.
                 # Exercise its preserved behavior independently; whole-hook fresh
                 # non-activation is covered by package_fresh_configuration_test.
-                self.assertIn("set -e\nexport SYSWARDEN_PKG_INSTALL=1", script)
+                if script_name not in ("preupgrade.sh", "postupgrade.sh"):
+                    self.assertIn("set -e\nexport SYSWARDEN_PKG_INSTALL=1", script)
                 prefix = ("set -e\n" + ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8") + invocation).replace(
                     "[ -f /etc/alpine-release ] || return 0",
                     '[ "${SYSWARDEN_TEST_ALPINE:-}" = 1 ] || return 0',
@@ -6553,9 +6541,11 @@ systemctl() {
             self.assertNotIn(retired, source)
         # Inspect the actual command body so a retained helper declaration cannot
         # satisfy a missing call or change the apparent installation order.
-        opener = "RunE: func(cmd *cobra.Command, args []string) error {"
+        opener = "RunE: func(cmd *cobra.Command, args []string) (result error) {"
         self.assertEqual(source.count(opener), 1)
         pipeline = source.split(opener, 1)[1].split("\n\t},\n}", 1)[0]
+        self.assertIn("defer func() { recordConfigurationActivationFailure(cmd, result) }()", pipeline)
+        self.assertEqual(pipeline.count("beginConfigurationActivationApplication(cmd)"), 1)
         stages = (
             "installDependenciesForInstall()",
             "recoverPendingWireGuardForInstall()",
@@ -6568,6 +6558,7 @@ systemctl() {
         for stage in stages:
             self.assertIn(stage, pipeline)
         dependency_check = pipeline.rindex(stages[0])
+        self.assertLess(pipeline.index("beginConfigurationActivationApplication(cmd)"), dependency_check)
         wireguard_recovery, wireguard_preflight, module_preflight, package_guard, quarantine, feeds = (
             pipeline.index(stage) for stage in stages[1:]
         )
@@ -6595,6 +6586,8 @@ systemctl() {
         marker = "CONTRACT_REORDER_PLACEHOLDER"
         self.assertNotIn(marker, source)
         mutations = {
+            "missing-failure-boundary": source.replace("defer func() { recordConfigurationActivationFailure(cmd, result) }()", "", 1),
+            "missing-application-boundary": source.replace("beginConfigurationActivationApplication(cmd)", "removedApplicationBoundary(cmd)", 1),
             "missing-call-with-helper-retained": source.replace(recovery, "removedRecoveryCall()", 1),
             "feeds-before-recovery": source.replace(recovery, marker, 1).replace(feeds, recovery, 1).replace(marker, feeds, 1),
             "unconditional-helper": source.replace(recovery, "preparePackagedLegacyDynamicBanUpgrade()", 1),

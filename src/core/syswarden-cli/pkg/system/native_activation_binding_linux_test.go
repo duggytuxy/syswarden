@@ -19,6 +19,10 @@ import (
 func nativeBindingFixture(t *testing.T) (authenticatedAPKCandidate, nativeActivationBindingServices, *nativeActivationRuntimeSnapshot, *error) {
 	t.Helper()
 	candidate, _, _ := apkTransitionFixture(t)
+	// This binding unit fixture uses its own coherent original runtime pair.
+	candidate.attestInstalled = func(context.Context, packageTarget, int) (installedQualificationEvidence, error) {
+		return installedQualificationEvidence{version: "v4.10.4", cliSHA256: strings.Repeat("a", 64)}, nil
+	}
 	raw, err := canonicalNativeActivationDescriptor(nativeActivationDescriptorFor(candidate.cliSHA256, strings.Repeat("b", 64)))
 	if err != nil {
 		t.Fatal(err)

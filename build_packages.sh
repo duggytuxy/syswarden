@@ -452,8 +452,6 @@ install -d -m 0755 \
     staging-apk/opt/syswarden \
     staging-apk/opt/syswarden/bin \
     staging-apk/usr \
-    staging-apk/usr/local \
-    staging-apk/usr/local/bin \
     staging-apk/usr/share \
     staging-apk/usr/share/bash-completion \
     staging-apk/usr/share/bash-completion/completions \
@@ -481,8 +479,6 @@ install -m 0644 \
     staging/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf
 cp "${SOURCE_ROOT}/src/core/syswarden-core/signatures.json" staging-apk/opt/syswarden/
 cp dist/bin-apk/syswarden-cli dist/bin-apk/syswarden-core dist/bin-apk/syswarden-tui staging-apk/opt/syswarden/bin/
-ln -s /opt/syswarden/bin/syswarden-cli staging-apk/usr/local/bin/syswarden
-ln -s /opt/syswarden/bin/syswarden-tui staging-apk/usr/local/bin/syswarden-tui
 staging-apk/opt/syswarden/bin/syswarden-cli completion bash > \
     staging-apk/usr/share/bash-completion/completions/syswarden
 install -m 0644 \
@@ -670,7 +666,11 @@ set -e
 export SYSWARDEN_PKG_INSTALL=1
 syswarden_set_native_install_phase preinstall "$@"
 syswarden_require_fresh_native_install || exit 1
-syswarden_preflight_launchers / before
+if [ -f /etc/alpine-release ]; then
+    syswarden_preflight_apk_launchers /
+else
+    syswarden_preflight_launchers / before
+fi
 syswarden_preflight_wireguard /
 syswarden_preflight_install_barriers
 syswarden_preflight_systemd_ordering_dropin
@@ -754,7 +754,12 @@ set -e
 export SYSWARDEN_PKG_INSTALL=1
 syswarden_set_native_install_phase postinstall "$@"
 syswarden_require_fresh_native_install || exit 1
-syswarden_preflight_launchers / after
+if [ -f /etc/alpine-release ]; then
+    syswarden_preflight_apk_launchers /
+    /opt/syswarden/bin/syswarden-cli internal-apk-launchers --stage-fresh
+else
+    syswarden_preflight_launchers / after
+fi
 syswarden_preflight_install_barriers
 if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
     if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
@@ -965,8 +970,10 @@ syswarden_remove_dedicated_root() {
 
 if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     cleanup_generated_runtime_artifacts || exit 1
-    syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
-    syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
+    if [ ! -f /etc/alpine-release ]; then
+        syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
+        syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
+    fi
     syswarden_remove_exact_runtime_socket /run/syswarden.sock || exit 1
     syswarden_remove_exact_runtime_socket /run/syswarden-control.sock || exit 1
     if [ "$1" = "remove" ] || [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
@@ -1020,15 +1027,9 @@ for package_hook in preinst.sh postinst.sh prerm.sh postrm.sh; do
     syswarden_render_local_package_hook "${package_hook}" > "${package_hook}.variant"
     mv -- "${package_hook}.variant" "${package_hook}"
 done
-# APK upgrade has a fixed selector even when apk-tools supplies no phase environment.
-[ "$(grep -Fxc 'syswarden_set_native_install_phase preinstall "$@"' preinst.sh)" -eq 1 ]
-sed 's/^syswarden_set_native_install_phase preinstall "\$@"$/syswarden_set_native_install_phase preupgrade "$@"/' \
-    preinst.sh > preupgrade.sh
-[ "$(grep -Fxc 'syswarden_set_native_install_phase preupgrade "$@"' preupgrade.sh)" -eq 1 ]
-[ "$(grep -Fxc 'syswarden_set_native_install_phase postinstall "$@"' postinst.sh)" -eq 1 ]
-sed 's/^syswarden_set_native_install_phase postinstall "\$@"$/syswarden_set_native_install_phase postupgrade "$@"/' \
-    postinst.sh > postupgrade.sh
-[ "$(grep -Fxc 'syswarden_set_native_install_phase postupgrade "$@"' postupgrade.sh)" -eq 1 ]
+# Upgrade hooks require the separately approved live native dispatcher.
+cp "${SOURCE_ROOT}/scripts/ci/package_apk_preupgrade.sh" preupgrade.sh
+cp "${SOURCE_ROOT}/scripts/ci/package_apk_postupgrade.sh" postupgrade.sh
 chmod +x preinst.sh preupgrade.sh postinst.sh postupgrade.sh postrm.sh prerm.sh
 
 RPM_SCRIPTS="${PACKAGE_WORKSPACE}/rpm-scripts"
