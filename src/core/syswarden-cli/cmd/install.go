@@ -209,7 +209,7 @@ var installCmd = &cobra.Command{
 		if err := markConfigurationActivationApplied(cmd); err != nil {
 			return installStageError("record successful activation", err)
 		}
-		fmt.Println("[SYSWARDEN] Installation operations completed; final qualification remains separate.")
+		fmt.Println("[SYSWARDEN] v4.10.4 installation operations completed; final qualification remains separate.")
 		return nil
 	},
 }
