@@ -53,7 +53,7 @@ var installCmd = &cobra.Command{
 		if err := preflightLegacyWireGuardForInstall(); err != nil {
 			return installStageError("historical WireGuard conflict detected before configuration or dependency changes", err)
 		}
-		if system.OfflineQualificationActivation() {
+		if system.OfflineQualificationActivation() && configurationActivationExecution(cmd) == nil {
 			if err := prepareOfflineQualificationActivationConfiguration(
 				"/opt/syswarden/syswarden-auto.conf",
 				"/etc/syswarden/config",
@@ -68,6 +68,9 @@ var installCmd = &cobra.Command{
 		initialFirewallBackend := configuredFirewallBackend()
 		initialFirewallErr := hostFirewallBackendPreflight(initialFirewallBackend)
 		if initialFirewallErr != nil {
+			if configurationActivationExecution(cmd) != nil {
+				return installStageError("reviewed firewall selection requires an explicit configuration correction before a new approval", initialFirewallErr)
+			}
 			compatibilityClass, compatibilityEligible := classifyInstallFirewallCompatibilityError(initialFirewallErr)
 			if initialFirewallBackend != "nftables" || !compatibilityEligible {
 				return installStageError("firewall backend preflight failed before configuration repair", initialFirewallErr)
@@ -96,7 +99,7 @@ var installCmd = &cobra.Command{
 			fmt.Println("[INFO] Migrated the historical default firewall byte family from nftables to keep after typed host-state attestation.")
 		}
 
-		if err := installConfigPreflight("/etc/syswarden/config"); err != nil {
+		if err := prepareCapturedInstallConfiguration(cmd); err != nil {
 			return installStageError("configuration preflight failed before host mutation", err)
 		}
 		if err := preflightConfiguredCronScheduling(); err != nil {
@@ -203,7 +206,10 @@ var installCmd = &cobra.Command{
 			return installStageError("legacy shell completion reconciliation failed", err)
 		}
 
-		fmt.Println("[SYSWARDEN] v4.10.4 native installation complete.")
+		if err := markConfigurationActivationApplied(cmd); err != nil {
+			return installStageError("record successful activation", err)
+		}
+		fmt.Println("[SYSWARDEN] Installation operations completed; final qualification remains separate.")
 		return nil
 	},
 }
@@ -482,6 +488,16 @@ func revalidateInstallFirewallCompatibilityHost(wantClass installFirewallCompati
 
 func installStageError(stage string, err error) error {
 	return fmt.Errorf("[ERROR] %s: %w", stage, err)
+}
+
+// Production activation consumes the pre-approved immutable capture. The
+// compatibility helper remains available to isolated legacy migration tests;
+// it is never invoked after the command approval boundary.
+func prepareCapturedInstallConfiguration(cmd *cobra.Command) error {
+	if configurationActivationExecution(cmd) != nil {
+		return revalidateConfigurationActivation(cmd)
+	}
+	return installConfigPreflight("/etc/syswarden/config")
 }
 
 func prepareInstallConfiguration(configRoot string) error {

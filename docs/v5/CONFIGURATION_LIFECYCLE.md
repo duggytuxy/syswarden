@@ -68,8 +68,8 @@ check does not change rule ordering or the existing country/ASN union semantics.
 | `syswarden config-get KEY` | Reads one validated effective modular value. Some legacy-compatible settings can still reflect environment overrides, unlike file-only validation. |
 | `syswarden config migrate --dry-run` | Validates historical flat-file migration without source or destination writes. `--source` and `--output` select its paths. |
 | `syswarden config migrate` | Performs transactional configuration migration; normal preflight can recover pending firewall state. `syswarden migrate-config` is its compatibility alias. It does not activate the migrated choices. |
-| `syswarden reload` | Reapplies policy and integrations, reconciles scheduling and normally restarts the core. It changes the host. |
-| `syswarden install` | Runs the installation/activation pipeline subject to its native service, configuration and prerequisite guards. It changes the host. |
+| `syswarden reload` | Requires exact approved TOML or an explicit current `--approve-plan` digest before reapplying policy, integrations and scheduling and normally restarting the core. |
+| `syswarden config activate` / `syswarden install` | Reviews the complete TOML and live service, scheduling and interface observations; an exact `--approve-plan` digest is required for an explicit install. Native fresh staging remains inactive. |
 
 Running the CLI without a subcommand, reading `syswarden manual`, using Cobra
 help, or generating shell completion does not load or normalize host
@@ -192,9 +192,40 @@ to an external endpoint.
 After editing, run validation and review every reported selection and warning.
 Unknown keys are reported but do not by themselves make validation fail. A
 successful validation is neither approval to mutate the host nor proof of
-effective kernel, service or access behavior. `reload` currently has no separate
-confirmation or digest-bound preview. Its `--no-restart` flag suppresses only
-the core restart; policy, integrations and scheduling can still change.
+effective kernel, service or access behavior. `config activate` and explicit
+`install` now bind a command-specific plan to the complete captured TOML, local
+source identities, predecessor approval and live service/scheduling/interface
+observations. The first invocation prints that plan without activation. Repeat
+it with the exact displayed `--approve-plan` digest after review. Source, host
+observation, administrator connection context or predecessor drift refuses the
+approval. Unknown or deprecated TOML entries must be resolved first.
+
+Alpine activation review reads protected files and process evidence without
+executing OpenRC scripts, APK or crontab commands. It requires a coherent live
+OpenRC manager and known supported distribution service definitions. Root
+crontab and owned schedule inspection creates no temporary files and refuses a
+busy transaction lock immediately. Systemd observation uses fixed, validated
+native executables for bounded read-only queries. Unknown or changed evidence
+requires a new review; these observations do not authorize modifying independent
+administrator services.
+
+Approval and successful application are separate root-private records. An
+approved install permits its nested firewall reload and independent core start
+before the parent can record success; a child reload cannot record completion
+of the parent install. A later explicit install always needs a newly reviewed
+plan. Boot and ordinary reload may reuse only the exact approved source scope.
+`reload --no-restart` cannot create approval; it can only consume existing full
+approval and suppresses the immediate core restart. Policy, integrations and
+scheduling can still change. Ordinary scheduled and mutating CLI commands also
+require exact existing approval before automatic recovery or configuration use.
+
+The core independently checks protected authority and reads only the approved
+bounded TOML bytes before publishing its runtime settings. Neither configuration
+environment overrides, profile markers nor active services establish approval.
+These controls are intermediate evidence. The plan is not a complete live
+kernel-rule diff or an authenticated access proof. Native upgrade integration,
+recovery and separate removal qualification remain open; in particular, a package
+hook cannot mint new authority after replacing an unapproved older runtime.
 
 ## Optional external reporting
 

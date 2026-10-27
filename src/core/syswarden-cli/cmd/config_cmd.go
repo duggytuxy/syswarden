@@ -62,7 +62,7 @@ var configCmd = &cobra.Command{
 			if choice == 0 {
 				_, _ = fmt.Fprintln(output, "\n[*] Exiting Configuration Editor.")
 				_, _ = fmt.Fprintln(output, "Run 'sudo syswarden config validate' and review the selected policy before activation.")
-				_, _ = fmt.Fprintln(output, "An explicit 'sudo syswarden install' for a fresh setup, or 'sudo syswarden reload' for an existing setup, changes host policy and services.")
+				_, _ = fmt.Fprintln(output, "Run 'sudo syswarden config activate' for a fresh setup or 'sudo syswarden reload' for an existing setup to review the activation plan. Apply new policy only with its exact --approve-plan digest.")
 				return nil
 			}
 

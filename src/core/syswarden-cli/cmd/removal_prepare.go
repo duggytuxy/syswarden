@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"syswarden-cli/config"
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
 	"syswarden-cli/pkg/network"
@@ -48,6 +50,22 @@ var retireCreatedProductLogsForRemoval = system.RetireCreatedProductLogsForRemov
 var retireGeneratedListsForRemoval = system.RetireGeneratedListsForRemoval
 var retireCreatedUISnapshotsForRemoval = system.RetireCreatedUISnapshotsForRemoval
 var removeEmptyFirewallWrapperStateForRemoval = system.RemoveEmptyFirewallWrapperStateForRemoval
+var retireActivationStateForRemoval = retireApprovedActivationStateForRemoval
+
+// Retire only the verified product approval inventory. This short custody is
+// acquired after the removal barrier and released before configuration or
+// executable retirement; ambiguous state remains available for recovery.
+func retireApprovedActivationStateForRemoval() (result error) {
+	removal, err := config.InspectActivationStateForRemoval()
+	if err != nil || removal == nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, removal.Close()) }()
+	if err := removal.Revalidate(); err != nil {
+		return err
+	}
+	return removal.Retire()
+}
 
 func prepareVerifiedFirewallRemoval() error {
 	if err := preflightWireGuardPolicyTransition(); err != nil {
@@ -175,6 +193,9 @@ func prepareVerifiedFirewallRemoval() error {
 	}
 	if err := removeEmptyFirewallWrapperStateForRemoval(); err != nil {
 		return fmt.Errorf("compatibility receipt retirement remains incomplete; preserve the CLI and removal barrier: %w", err)
+	}
+	if err := retireActivationStateForRemoval(); err != nil {
+		return fmt.Errorf("activation approval retirement remains incomplete; preserve ambiguous records, the CLI and removal barrier, then retry the original removal command after recovery: %w", err)
 	}
 	if err := removePristineDefaultConfigurationForRemoval(); err != nil {
 		return fmt.Errorf("default configuration retirement remains incomplete; preserve the CLI and removal barrier: %w", err)

@@ -65,6 +65,8 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("Later filenames have higher precedence. Back up the complete directory before editing.\n")
 		fmt.Printf("schema_version = 1 is current; an absent schema_version denotes historical input.\n")
 		fmt.Printf("syswarden config validate --path /etc/syswarden/config is read-only and reports unknown and deprecated keys.\n")
+		fmt.Printf("syswarden config activate reviews the live activation plan; repeat with its exact --approve-plan digest only after review.\n")
+		fmt.Printf("New reload policy also requires --approve-plan. --no-restart only consumes existing approval and cannot create it.\n")
 		fmt.Printf("syswarden config migrate --dry-run performs zero source or destination writes.\n")
 		fmt.Printf("syswarden migrate-config is the compatibility alias with the same migration contract.\n")
 		fmt.Printf("The CLI validator and core loader share the choice/URL/hash, Wazuh, interval, SHA-256 prefix and HA-peer validation matrix.\n\n")

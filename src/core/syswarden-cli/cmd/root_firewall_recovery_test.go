@@ -7,28 +7,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestRootRunsFirewallRecoveryBeforeAutomaticConfigLoad_SW_FW_005(t *testing.T) {
+func TestRootRequiresActivationApprovalBeforeRecoveryOrNormalization_SW_FW_005(t *testing.T) {
 	previousInspect := inspectRemovalTombstone
-	inspectRemovalTombstone = func() (bool, error) { return false, nil }
-	t.Cleanup(func() { inspectRemovalTombstone = previousInspect })
 	previousRecovery := recoverPendingFirewallTransactionHook
 	previousInit := initConfigHook
+	previousApproval := prepareConfigurationActivationHook
 	t.Cleanup(func() {
+		inspectRemovalTombstone = previousInspect
 		recoverPendingFirewallTransactionHook = previousRecovery
 		initConfigHook = previousInit
+		prepareConfigurationActivationHook = previousApproval
 	})
-
-	sentinel := errors.New("synthetic early recovery failure")
-	recoverPendingFirewallTransactionHook = func() error { return sentinel }
-	initCalled := false
-	initConfigHook = func() { initCalled = true }
-
-	err := rootCmd.PersistentPreRunE(reloadCmd, nil)
-	if err == nil || !errors.Is(err, sentinel) {
-		t.Fatalf("early recovery error = %v, want sentinel", err)
-	}
-	if initCalled {
-		t.Fatal("automatic configuration load ran before early firewall recovery")
+	inspectRemovalTombstone = func() (bool, error) { return false, nil }
+	sentinel := errors.New("synthetic approval refusal")
+	prepareConfigurationActivationHook = func(*cobra.Command) error { return sentinel }
+	recoverPendingFirewallTransactionHook = func() error { t.Fatal("recovery preceded activation approval"); return nil }
+	initConfigHook = func() { t.Fatal("normalization preceded activation approval") }
+	if err := rootCmd.PersistentPreRunE(reloadCmd, nil); !errors.Is(err, sentinel) {
+		t.Fatalf("approval refusal=%v", err)
 	}
 }
 

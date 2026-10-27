@@ -84,6 +84,9 @@ func qualificationTestUpdater(
 	u := &updater{
 		// Bundle/workspace tests model attestors independently; real native
 		// header parsing and refusal before installation have separate tests.
+		// These opaque transport fixtures model an independently classified candidate.
+		// Production APK classification and durable refusal have separate tests.
+		prepareAPKTransition:  func(context.Context, authenticatedAPKCandidate) error { return nil },
 		attestPackageIdentity: func(context.Context, packageTarget, string, *os.File) error { return nil },
 		preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {
 			return testCompatibilityUpdateIdentity("dpkg-query"), nil

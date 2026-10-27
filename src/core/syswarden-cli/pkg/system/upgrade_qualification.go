@@ -145,6 +145,7 @@ func newQualificationUpdater() (*updater, error) {
 		trustedKeys:             trustedKeys,
 		lookPath:                exec.LookPath,
 		installPackage:          runAuthenticatedQualificationInstall,
+		prepareAPKTransition:    prepareProductionAPKTransition,
 		effectiveUID:            os.Geteuid(),
 		requireRoot:             true,
 		stdout:                  os.Stdout,
@@ -308,6 +309,9 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 		return fmt.Errorf("create secure update workspace: %w", err)
 	}
 	defer func() {
+		if retainAPKTransitionWorkspace(returnErr, workspace) {
+			return
+		}
 		if cleanupErr := removeSecureWorkspace(workspace); cleanupErr != nil {
 			returnErr = errors.Join(returnErr, fmt.Errorf("clean update workspace: %w", cleanupErr))
 		}
@@ -377,6 +381,10 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 		return fmt.Errorf("reverify package after qualification installation preflight: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if err := u.preflightAPKTransition(ctx, target, candidateVersion, artifact, packageFile, packagePath, manifestBytes, signatureBytes, expectedCandidateCLISHA256, true); err != nil {
 		return err
 	}
 

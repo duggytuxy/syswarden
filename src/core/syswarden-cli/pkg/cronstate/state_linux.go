@@ -423,7 +423,7 @@ func inspectFile(directory *os.Root, name string, uid, gid int, allowedModes ...
 	if int64(stat.Uid) != int64(uid) || int64(stat.Gid) != int64(gid) || stat.Nlink != 1 {
 		return fileIdentity{}, nil, false, fmt.Errorf("cron file %s has unsafe ownership or link count", name)
 	}
-	file, err := directory.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	file, err := directory.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fileIdentity{}, nil, false, fmt.Errorf("open cron file %s: %w", name, err)
 	}
@@ -2092,6 +2092,10 @@ func RemoveForUninstall(options Options) error {
 // Inspect reads and validates both scheduling stores without recovering or
 // modifying either one.
 func Inspect(options Options) (Inspection, error) {
+	return inspectScheduling(options, lockDirectory, nil)
+}
+
+func inspectScheduling(options Options, acquireLock func(*os.Root) (*os.File, error), finish func(openedDirectory, legacyState, journalIdentity) error) (Inspection, error) {
 	options = normalizeOptions(options)
 	if err := validateOptions(options); err != nil {
 		return Inspection{}, err
@@ -2111,7 +2115,7 @@ func Inspect(options Options) (Inspection, error) {
 		return Inspection{}, err
 	}
 	defer func() { _ = directory.root.Close() }()
-	lock, err := lockDirectory(directory.root)
+	lock, err := acquireLock(directory.root)
 	if err != nil {
 		return Inspection{}, err
 	}
@@ -2149,6 +2153,11 @@ func Inspect(options Options) (Inspection, error) {
 	minute := owned.feedMinute
 	if legacy.feedCount == 1 {
 		minute = legacy.feedMinute
+	}
+	if finish != nil {
+		if err := finish(directory, legacy, journalIdentityFromFile(identity, exists)); err != nil {
+			return Inspection{}, err
+		}
 	}
 	return Inspection{
 		LegacyFeedCount: legacy.feedCount,

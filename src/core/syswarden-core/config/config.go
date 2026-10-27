@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -247,7 +248,7 @@ var deprecatedKeys = map[string]string{ // #nosec G101 -- keys name retired cred
 }
 
 func LoadConfig() error {
-	diagnostics, err := LoadConfigDirectory("/etc/syswarden/config")
+	diagnostics, err := loadApprovedConfigDirectory(context.Background(), "/etc/syswarden/config", activationStateDirectory, 0)
 	if err != nil {
 		return err
 	}
@@ -277,8 +278,8 @@ func FirewallBackendForMutation() (string, error) {
 	}
 }
 
-// LoadConfigDirectory validates an isolated candidate and publishes it only
-// after every file and policy value succeeds.
+// LoadConfigDirectory is the configuration inspection/test loader. Production
+// core startup uses LoadConfig and its independently verified approval boundary.
 func LoadConfigDirectory(configPath string) (Diagnostics, error) {
 	return loadConfigDirectory(configPath, readSecureRegularFile)
 }
@@ -305,7 +306,16 @@ func loadConfigDirectory(configPath string, readFile func(*os.Root, string, stri
 }
 
 func loadCandidate(configPath string, readFile func(*os.Root, string, string) ([]byte, error)) (*viper.Viper, Diagnostics, error) {
+	return loadCandidateWithEnvironment(configPath, readFile, true)
+}
+
+func loadCandidateWithEnvironment(configPath string, readFile func(*os.Root, string, string) ([]byte, error), environment bool) (*viper.Viper, Diagnostics, error) {
 	diagnostics := Diagnostics{}
+	if !environment {
+		if err := rejectActivationContractEnvironment(); err != nil {
+			return nil, diagnostics, err
+		}
+	}
 	if err := rejectOperatorPolicyEnvironment(); err != nil {
 		return nil, diagnostics, err
 	}
@@ -319,7 +329,9 @@ func loadCandidate(configPath string, readFile func(*os.Root, string, string) ([
 	}
 	candidate := viper.New()
 	candidate.SetConfigType("toml")
-	configureEnvironment(candidate)
+	if environment {
+		configureEnvironment(candidate)
+	}
 	setDefaults(candidate, configPath)
 	observed := make(map[string]struct{})
 	var profileInventory unconfiguredProfileInventory
@@ -399,7 +411,11 @@ func loadCandidate(configPath string, readFile func(*os.Root, string, string) ([
 	if err := profileInventory.validate(); err != nil {
 		return nil, diagnostics, err
 	}
-	resolveSaaSAlias(candidate, observed)
+	if environment {
+		resolveSaaSAlias(candidate, observed)
+	} else {
+		resolveSaaSAliasFromTOML(candidate, observed)
+	}
 	if err := resolveOptionalModules(candidate); err != nil {
 		return nil, diagnostics, err
 	}
@@ -483,11 +499,21 @@ func resolveSaaSAlias(v *viper.Viper, observed map[string]struct{}) {
 	_, legacyFile := observed["integrations.saas.enabled"]
 	_, canonicalEnv := os.LookupEnv("SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS")
 	_, legacyEnv := os.LookupEnv("SYSWARDEN_INTEGRATIONS_SAAS_ENABLED")
-	if canonicalFile || canonicalEnv {
+	resolveSaaSAliasPresence(v, canonicalFile || canonicalEnv, legacyFile || legacyEnv)
+}
+
+func resolveSaaSAliasFromTOML(v *viper.Viper, observed map[string]struct{}) {
+	_, canonical := observed["network.saas.allow_monitors"]
+	_, legacy := observed["integrations.saas.enabled"]
+	resolveSaaSAliasPresence(v, canonical, legacy)
+}
+
+func resolveSaaSAliasPresence(v *viper.Viper, canonical, legacy bool) {
+	if canonical {
 		v.Set("integrations.saas.enabled", v.GetBool("network.saas.allow_monitors"))
 		return
 	}
-	if legacyFile || legacyEnv {
+	if legacy {
 		value := v.GetBool("integrations.saas.enabled")
 		v.Set("network.saas.allow_monitors", value)
 		v.Set("integrations.saas.enabled", value)

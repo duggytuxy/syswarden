@@ -37,7 +37,7 @@ var rootCmd = &cobra.Command{
 			// APK pre-commit must never load policy or recover firewall state.
 			return nil
 		}
-		if cmd == configCmd || cmd == configPreviewCmd || commandRequiresEarlyFirewallRecovery(cmd) {
+		if cmd == configCmd || cmd == configPreviewCmd || cmd == configActivateCmd || commandRequiresEarlyFirewallRecovery(cmd) {
 			if err := refusePendingModuleEditHook(); err != nil {
 				return err
 			}
@@ -69,6 +69,11 @@ var rootCmd = &cobra.Command{
 			// The removal tombstone remains a mandatory read-only safety gate.
 			return enforceRemovalState(cmd)
 		}
+		if cmd == updateCmd {
+			// Authentication, native transaction approval and runtime lineage
+			// are checked by the updater before candidate replacement.
+			return enforceRemovalState(cmd)
+		}
 		// Reject removal-blocked commands before firewall recovery or config normalization can mutate the host.
 		if err := enforceRemovalState(cmd); err != nil {
 			return err
@@ -83,6 +88,9 @@ var rootCmd = &cobra.Command{
 				// First installation stages only validated configuration. It
 				// must not observe/prepare services or recover firewall state.
 				return nil
+			}
+			if err := refuseUnapprovedActiveNativeInstall(); err != nil {
+				return err
 			}
 			plan, err := prepareNativeServicesForInstall()
 			if err != nil {
@@ -100,12 +108,29 @@ var rootCmd = &cobra.Command{
 				return installStageError("historical WireGuard conflict detected before command preparation", err)
 			}
 		}
+		if activationOperation(cmd) != "" {
+			// New or changed TOML must be approved before any automatic
+			// recovery or compatibility normalization can alter the host.
+			if err := prepareConfigurationActivationHook(cmd); err != nil {
+				return err
+			}
+			if err := recoverPendingFirewallTransactionHook(); err != nil {
+				return fmt.Errorf("approved activation recovery failed before command preparation: %w", err)
+			}
+			return enforceValidatedConfiguration(cmd)
+		}
+		approvedOperational := operationalConfigurationApprovalRequired(cmd)
+		if approvedOperational {
+			if err := consumeApprovedOperationalConfigurationHook(cmd); err != nil {
+				return err
+			}
+		}
 		if commandRequiresEarlyFirewallRecovery(cmd) {
 			if err := recoverPendingFirewallTransactionHook(); err != nil {
 				return fmt.Errorf("[ERROR] authoritative firewall recovery failed before command preparation: %w", err)
 			}
 		}
-		if commandRequiresAutomaticConfigLoad(cmd) {
+		if commandRequiresAutomaticConfigLoad(cmd) && !approvedOperational {
 			if configurationInspectionCommand(cmd) {
 				initInspectionConfigHook()
 			} else {
@@ -204,7 +229,7 @@ func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return true
 	}
-	if cmd == configCmd || cmd == configPreviewCmd || cmd == configEditRecoveryCmd || cmd == configGetCmd || cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
+	if cmd == configCmd || cmd == configPreviewCmd || cmd == configActivateCmd || cmd == configEditRecoveryCmd || cmd == configGetCmd || cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
 		return false
 	}
 	if isolatedSSHPolicyCommand(cmd) {

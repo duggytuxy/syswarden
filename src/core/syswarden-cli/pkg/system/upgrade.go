@@ -58,6 +58,7 @@ type updater struct {
 	trustedKeys             map[string]ed25519.PublicKey
 	lookPath                func(string) (string, error)
 	installPackage          nativePackageInstaller
+	prepareAPKTransition    apkTransitionPreparer
 	effectiveUID            int
 	requireRoot             bool
 	stdout                  io.Writer
@@ -269,6 +270,7 @@ func newProductionUpdater() (*updater, error) {
 		trustedKeys:             trustedKeys,
 		lookPath:                exec.LookPath,
 		installPackage:          runAuthenticatedNativeInstall,
+		prepareAPKTransition:    prepareProductionAPKTransition,
 		effectiveUID:            os.Geteuid(),
 		requireRoot:             true,
 		stdout:                  os.Stdout,
@@ -367,7 +369,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	fmt.Fprintln(u.stdout, "[+] A new Enterprise version is available!")
 	fmt.Fprintf(u.stdout, "[INFO] Selected %s package %s for %s/%s.\n", target.format, target.filename, u.goos, u.goarch)
 
-	manifest, err := u.fetchAndVerifyManifest(ctx, latestVersion)
+	manifest, manifestBytes, signatureBytes, err := u.fetchAndVerifyManifestProof(ctx, latestVersion)
 	if err != nil {
 		return err
 	}
@@ -381,6 +383,9 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return fmt.Errorf("create secure update workspace: %w", err)
 	}
 	defer func() {
+		if retainAPKTransitionWorkspace(returnErr, workspace) {
+			return
+		}
 		if cleanupErr := removeSecureWorkspace(workspace); cleanupErr != nil {
 			returnErr = errors.Join(returnErr, fmt.Errorf("clean update workspace: %w", cleanupErr))
 		}
@@ -450,6 +455,10 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return fmt.Errorf("reverify package after native installation preflight: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if err := u.preflightAPKTransition(ctx, target, latestVersion, artifact, packageFile, packagePath, manifestBytes, signatureBytes, expectedCandidateCLISHA256, false); err != nil {
 		return err
 	}
 
@@ -525,37 +534,37 @@ func (u *updater) fetchLatestVersion(ctx context.Context) (string, error) {
 	return latestVersion, nil
 }
 
-func (u *updater) fetchAndVerifyManifest(ctx context.Context, version string) (*updateManifest, error) {
+func (u *updater) fetchAndVerifyManifestProof(ctx context.Context, version string) (*updateManifest, []byte, []byte, error) {
 	if len(u.trustedKeys) == 0 {
-		return nil, errors.New("no trusted Ed25519 release keys are embedded; refusing update")
+		return nil, nil, nil, errors.New("no trusted Ed25519 release keys are embedded; refusing update")
 	}
 	manifestURL, err := releaseAssetURL(u.downloadBaseURL, version, updateManifestAssetName)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	signatureURL, err := releaseAssetURL(u.downloadBaseURL, version, updateManifestSignatureAssetName)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	metadataCtx, cancel := context.WithTimeout(ctx, u.metadataTimeout)
 	manifestBytes, err := downloadBoundedBytes(metadataCtx, u.client, manifestURL, maxManifestBytes)
 	cancel()
 	if err != nil {
-		return nil, fmt.Errorf("download update manifest: %w", err)
+		return nil, nil, nil, fmt.Errorf("download update manifest: %w", err)
 	}
 	metadataCtx, cancel = context.WithTimeout(ctx, u.metadataTimeout)
 	signatureBytes, err := downloadBoundedBytes(metadataCtx, u.client, signatureURL, maxSignatureAssetBytes)
 	cancel()
 	if err != nil {
-		return nil, fmt.Errorf("download update manifest signature: %w", err)
+		return nil, nil, nil, fmt.Errorf("download update manifest signature: %w", err)
 	}
 
 	manifest, err := verifySignedManifest(manifestBytes, signatureBytes, version, u.trustedKeys)
 	if err != nil {
-		return nil, fmt.Errorf("verify update manifest: %w", err)
+		return nil, nil, nil, fmt.Errorf("verify update manifest: %w", err)
 	}
-	return manifest, nil
+	return manifest, manifestBytes, signatureBytes, nil
 }
 
 func releaseAssetURL(baseURL, version, assetName string) (string, error) {

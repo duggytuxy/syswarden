@@ -357,6 +357,42 @@
     }
   },
   {
+    "path": "syswarden config activate",
+    "use": "activate",
+    "short": "Review and explicitly approve activation of the complete TOML configuration",
+    "long": "Inspects the live target and complete TOML without mutation. A new or changed policy requires the exact displayed --approve-plan digest before install/reload may apply it. Approval does not grant dedicated SSH hardening or prove migration, access or final qualification.",
+    "flags": [
+      {
+        "name": "approve-plan",
+        "type": "string",
+        "default": "",
+        "usage": "exact SHA256 of the reviewed current activation plan; never implied by package installation"
+      },
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for activate"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden config activate\"",
+      "2": "unknown command \"arg-1\" for \"syswarden config activate\"",
+      "3": "unknown command \"arg-1\" for \"syswarden config activate\"",
+      "4": "unknown command \"arg-1\" for \"syswarden config activate\""
+    }
+  },
+  {
     "path": "syswarden config migrate",
     "use": "migrate",
     "short": "Migrate the historical configuration to modular TOML",
@@ -889,6 +925,12 @@
     "long": "Installs the selected firewall services and feed scheduler. Fresh packages stage an unconfigured profile without activating lists or services. SSH, CIS and OS hardening require a separate explicit configuration operation.",
     "flags": [
       {
+        "name": "approve-plan",
+        "type": "string",
+        "default": "",
+        "usage": "exact SHA256 of the reviewed current activation plan; never implied by package installation"
+      },
+      {
         "name": "config",
         "type": "string",
         "default": "/opt/syswarden/syswarden-auto.conf",
@@ -1272,6 +1314,12 @@
     "use": "reload",
     "short": "Reapply policy and normally restart syswarden-core",
     "flags": [
+      {
+        "name": "approve-plan",
+        "type": "string",
+        "default": "",
+        "usage": "exact SHA256 of the reviewed current activation plan; never implied by package installation"
+      },
       {
         "name": "config",
         "type": "string",
@@ -2289,7 +2337,7 @@
     "path": "syswarden update",
     "use": "update",
     "short": "Install a release verified by a signed manifest",
-    "long": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. The v4.02.8 first upgrade must use a separately verified manual package procedure.",
+    "long": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. --review-apk-plan records only review of an existing protected APK preparation, without network discovery or package execution; it does not authorize package effects. The v4.02.8 first upgrade must use a separately verified manual package procedure.",
     "flags": [
       {
         "name": "candidate-version",
@@ -2317,6 +2365,12 @@
         "type": "string",
         "default": "",
         "usage": "absolute path to a protected local signed-candidate bundle; disables all network discovery"
+      },
+      {
+        "name": "review-apk-plan",
+        "type": "string",
+        "default": "",
+        "usage": "record review of an existing protected APK preparation by exact SHA-256; no download or package execution"
       }
     ],
     "arg_outcomes": {

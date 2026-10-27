@@ -50,19 +50,35 @@ func nativeOpenRCFixture(t *testing.T) (nativeOpenRCObserver, nativeOpenRCCoreOb
 
 func nativeOpenRCWrite(t *testing.T, host nativeOpenRCObserver, name, content string, mode os.FileMode) {
 	t.Helper()
-	target := filepath.Join(host.root, name)
-	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+	if !filepath.IsLocal(name) || filepath.Clean(name) != name {
+		t.Fatal("fixture path must be canonical and relative")
+	}
+	root, err := os.OpenRoot(host.root)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Lstat(target); err == nil {
-		if err := os.Chmod(target, 0600); err != nil {
+	defer func() {
+		if err := root.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := root.MkdirAll(filepath.Dir(name), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := root.Lstat(name); err == nil {
+		if !info.Mode().IsRegular() {
+			t.Fatal("fixture write target must be a regular file")
+		}
+		if err := root.Chmod(name, 0600); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := os.WriteFile(target, []byte(content), mode); err != nil {
+	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(target, mode); err != nil {
+	if err := root.WriteFile(name, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Chmod(name, mode); err != nil {
 		t.Fatal(err)
 	}
 }

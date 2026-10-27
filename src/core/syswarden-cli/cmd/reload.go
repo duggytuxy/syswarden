@@ -117,7 +117,7 @@ var reloadCmd = &cobra.Command{
 		if len(failures) > 0 {
 			return fmt.Errorf("reload sequence did not reach a verified state: %w", errors.Join(failures...))
 		}
-		return nil
+		return markConfigurationActivationApplied(cmd)
 	},
 }
 

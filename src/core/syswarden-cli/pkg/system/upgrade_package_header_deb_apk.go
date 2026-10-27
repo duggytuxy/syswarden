@@ -193,6 +193,12 @@ func nativeHeaderTarName(header *tar.Header) (string, error) {
 // APK signature/control archives may be cut tar streams without end blocks,
 // as emitted by nfpm; DEB control and APK data require a complete tar ending.
 func readNativeHeaderTar(reader *nativeHeaderReader, kind string) ([]byte, string, error) {
+	return readNativeHeaderTarObserved(reader, kind, nil)
+}
+
+type nativeHeaderMemberObserver func(string, string, *tar.Header) (io.Writer, error)
+
+func readNativeHeaderTarObserved(reader *nativeHeaderReader, kind string, observe nativeHeaderMemberObserver) ([]byte, string, error) {
 	archive := tar.NewReader(reader)
 	var metadata []byte
 	var padding int64
@@ -252,6 +258,16 @@ func readNativeHeaderTar(reader *nativeHeaderReader, kind string) ([]byte, strin
 				return nil, kind, errors.New("authenticated APK signature and control framing disagree")
 			}
 		}
+		var sink io.Writer = io.Discard
+		if observe != nil {
+			sink, err = observe(kind, name, header)
+			if err != nil {
+				return nil, kind, err
+			}
+			if sink == nil {
+				return nil, kind, errors.New("authenticated package observer has no bounded content sink")
+			}
+		}
 		if isMetadata {
 			if metadata != nil || header.Size <= 0 || header.Size > maximumNativeHeaderMetadataBytes {
 				return nil, kind, errors.New("authenticated package metadata is duplicated or excessive")
@@ -263,7 +279,10 @@ func readNativeHeaderTar(reader *nativeHeaderReader, kind string) ([]byte, strin
 			if int64(len(metadata)) != header.Size {
 				return nil, kind, errors.New("authenticated package metadata is truncated")
 			}
-		} else if _, err := io.CopyN(io.Discard, archive, header.Size); err != nil {
+			if _, err := sink.Write(metadata); err != nil {
+				return nil, kind, err
+			}
+		} else if _, err := io.CopyN(sink, archive, header.Size); err != nil {
 			return nil, kind, fmt.Errorf("read authenticated package archive member: %w", err)
 		}
 		padding = (512 - header.Size%512) % 512
@@ -377,6 +396,10 @@ func readAuthenticatedDEBIdentity(ctx context.Context, file *os.File) (nativePac
 }
 
 func readAuthenticatedAPKIdentity(ctx context.Context, file *os.File) (nativePackageHeaderIdentity, error) {
+	return readAuthenticatedAPKObserved(ctx, file, nil)
+}
+
+func readAuthenticatedAPKObserved(ctx context.Context, file *os.File, observe nativeHeaderMemberObserver) (nativePackageHeaderIdentity, error) {
 	if ctx == nil {
 		return nativePackageHeaderIdentity{}, errors.New("authenticated APK header context is unavailable")
 	}
@@ -415,7 +438,7 @@ func readAuthenticatedAPKIdentity(ctx context.Context, file *os.File) (nativePac
 		if kind == "apk-data" {
 			limit = maximumQualificationPackageExpandedBytes
 		}
-		found, actualKind, parseErr := readNativeHeaderTar(&nativeHeaderReader{reader: stream, ctx: ctx, limit: limit, total: &expandedTotal}, kind)
+		found, actualKind, parseErr := readNativeHeaderTarObserved(&nativeHeaderReader{reader: stream, ctx: ctx, limit: limit, total: &expandedTotal}, kind, observe)
 		closeErr := stream.Close()
 		if parseErr != nil || closeErr != nil {
 			return nativePackageHeaderIdentity{}, errors.Join(parseErr, closeErr)

@@ -828,6 +828,9 @@ func testUpdaterForPlatform(
 	return &updater{
 		// Transport/workspace tests inject opaque package bytes and attestation
 		// evidence. Native parsing and the production gates have separate tests.
+		// These opaque transport fixtures model an independently classified candidate.
+		// Production APK classification and durable refusal have separate tests.
+		prepareAPKTransition: func(context.Context, authenticatedAPKCandidate) error { return nil },
 		attestPackageIdentity: func(_ context.Context, _ packageTarget, version string, _ *os.File) error {
 			candidateVersion = version
 			return nil

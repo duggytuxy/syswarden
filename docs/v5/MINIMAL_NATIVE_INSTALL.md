@@ -33,16 +33,18 @@ through explicit migration or recovery instead of deleting it to force staging.
 Configure the installed modules with `sudo syswarden config` or edit
 `/etc/syswarden/config/modules/99-user.toml`, then run `sudo syswarden config
 validate`. Validation and the configuration preview are read-only. Publishing
-validated TOML does not approve host activation. The current explicit
-`sudo syswarden install` entry can change firewall rules, services and schedules;
-it is not a validation command or a qualified v5 migration path.
+validated TOML does not approve host activation. Use `sudo syswarden config activate` to inspect the live activation plan, then
+repeat it with its exact `--approve-plan` digest after review. An explicit
+`sudo syswarden install` uses the same approval boundary. Activation can change
+firewall rules, services and schedules; it is not a qualified v5 migration path.
 
-The complete v5 application gate must bind the exact captured TOML and reviewed
-host changes before configuration normalization or runtime recovery can mutate
-the host. Its reusable approved-policy record must also govern boot reload and
-independent core startup. An active service, profile marker, package hook or
-`--no-restart` flag cannot grant that approval. This integration remains open;
-the captured-policy component alone is not activation authority. SSH/CIS/OS
+The v5 application gate binds the exact captured TOML, operation, predecessor
+approval and live service/scheduling/interface observations before automatic
+configuration normalization or runtime recovery. Its reusable protected approval
+also governs boot reload and independent core startup. An active service, profile marker, package hook or
+`--no-restart` flag cannot grant that approval. Complete native upgrade integration and acceptance remain open. The command
+plan does not establish a complete kernel-rule diff or authenticated access;
+component approval tests alone are not migration qualification. SSH/CIS/OS
 changes retain their separate configuration and migration approval boundaries.
 Environment variables cannot select a list or optional module for the
 unconfigured profile.
@@ -684,3 +686,36 @@ journal windows must account for every journal byte. Legacy telemetry and HA
 retain their distinct contracts. The jq validator refuses sequence numbers above
 its exact integer range, `2^53 - 1`, and noncanonical integer wire spellings
 rather than rounding them into a passing observation.
+
+
+## Bound APK transition preparation
+
+The managed updater now routes every APK candidate through authenticated
+preparation before the native installer, including a candidate with a v4 version
+tag. A version number cannot prove compatibility with the new core approval
+contract. Unclassified candidates are refused before replacement. The preparation
+binds the signed artifact, native signature, complete bounded archive inventory,
+installed identity, exact configuration/launcher evidence, dependencies and an
+existing compatible runtime approval. Prepared and reviewed-preparation records
+explicitly grant no native execution or product acceptance.
+
+`syswarden update --review-apk-plan SHA256` records review of an already retained
+protected preparation selected by its exact lowercase SHA-256 digest. It never
+downloads another candidate or executes APK. It refuses to report update success
+because native execution is not yet implemented. The selector cannot be combined
+with offline bundle or candidate-version flags, including explicitly empty flags.
+This is review of preparation evidence, not approval of package activation effects.
+
+Incomplete custody copying or publication must retain the original authenticated
+stage as well as partial private recovery material. The error identifies retained
+locations and distinguishes verified candidate bytes from failed verification;
+it does not claim that a partial copy is a complete recovery source. No native
+transaction has started at this boundary.
+
+The ordinary package layout still carries its historical launchers. The closed
+launcher-free archive validator and inert overlay observations are not permission
+to change that layout alone. The actual stdin-overlay transaction, authenticated
+helper, receipt-aware hook/removal coordination and native crash/error matrix must
+be completed together. Incoming APK script refusal cannot guarantee rollback or
+preserve an older package's obsolete files. Direct and older-updater migration
+acceptance remains open.
