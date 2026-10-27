@@ -37,7 +37,10 @@ class APKTransitionPayloadGateTests(unittest.TestCase):
                 member.type = tarfile.DIRTYPE
                 data = b""
             else:
-                data = (name + "\n").encode("ascii")
+                if name == gate.package_stage_gate.native_activation_descriptor.DESCRIPTOR_PATH:
+                    data = gate.package_stage_gate.native_activation_descriptor.expected_descriptor(self.stage)
+                else:
+                    data = (name + "\n").encode("ascii")
                 path.write_bytes(data)
                 path.chmod(entry.mode)
                 member.size = len(data)
@@ -75,6 +78,13 @@ class APKTransitionPayloadGateTests(unittest.TestCase):
         wire += gzip.compress(self.tar_bytes(self.controls, False))
         wire += gzip.compress(self.tar_bytes(self.members if members is None else members))
         self.archive.write_bytes(wire)
+
+    def test_reference_descriptor_cannot_claim_unbound_runtime_capability(self):
+        self.write_archive()
+        descriptor = self.stage / gate.package_stage_gate.native_activation_descriptor.DESCRIPTOR_PATH
+        descriptor.write_bytes(descriptor.read_bytes().replace(b"approval-v1", b"approval-v9"))
+        with self.assertRaises(gate.package_stage_gate.PackageStageError):
+            gate.validate(self.archive, self.stage, self.scripts)
 
     def test_exact_unsigned_build_and_signed_framing(self):
         for signature in (False, True):

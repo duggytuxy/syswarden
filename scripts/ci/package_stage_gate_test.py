@@ -42,6 +42,8 @@ class PackageStageGateTests(unittest.TestCase):
                 path.chmod(contract.mode or 0o600)
             elif contract.kind == "symlink":
                 path.symlink_to(contract.target)
+        descriptor = self.root / package_stage_gate.native_activation_descriptor.DESCRIPTOR_PATH
+        descriptor.write_bytes(package_stage_gate.native_activation_descriptor.expected_descriptor(self.root))
 
     def test_accepts_exact_openrc_linux_stage(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)

@@ -31,8 +31,10 @@ from typing import Sequence
 
 try:
     from scripts.ci import package_qualification_matrix as qualification_matrix
+    from scripts.ci import native_activation_descriptor
 except ModuleNotFoundError:  # Direct execution from scripts/ci.
     import package_qualification_matrix as qualification_matrix
+    import native_activation_descriptor
 
 
 SCHEMA_VERSION = 5
@@ -3060,6 +3062,10 @@ validate_manifest_contract() {
         required_manifest_path "${manifest}" \
             /etc/apk/commit_hooks.d/syswarden-recovery && return 1
     fi
+    activation_descriptor_payload=0
+    if required_manifest_path "${manifest}" /opt/syswarden/activation-contract-v1.json; then
+        activation_descriptor_payload=1
+    fi
     case "${PACKAGE_FAMILY}" in
         deb)
             if [ "${legacy_completion_payload}" -eq 1 ]; then
@@ -3076,6 +3082,8 @@ validate_manifest_contract() {
                 allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=19
             fi
+            expected_manifest_count=$((expected_manifest_count + activation_descriptor_payload))
+            allowed="(${allowed})|^/opt/syswarden/activation-contract-v1\\.json$"
             [ "$(wc -l < "${manifest}" | tr -d ' ')" = \
                 "${expected_manifest_count}" ] || return 1
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
@@ -3094,6 +3102,8 @@ validate_manifest_contract() {
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden)$'
                 expected_manifest_count=7
             fi
+            expected_manifest_count=$((expected_manifest_count + activation_descriptor_payload))
+            allowed="(${allowed})|^/opt/syswarden/activation-contract-v1\\.json$"
             [ "$(wc -l < "${manifest}" | tr -d ' ')" = \
                 "${expected_manifest_count}" ] || return 1
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
@@ -3117,6 +3127,7 @@ validate_manifest_contract() {
             else
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             fi
+            allowed="(${allowed})|^/opt/syswarden/activation-contract-v1\\.json$"
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
             required_manifest_path "${manifest}" /usr/lib/.build-id || return 1
             awk '
@@ -3173,6 +3184,17 @@ validate_inventory_contract() {
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-core file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-core" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-tui file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-tui" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/signatures.json file 640 "$(awk -F '\t' '$1 == "/opt/syswarden/signatures.json" { print $6 }' "${inventory}")" || return 1
+    # Historical artifacts lack this file. A present descriptor must bind the
+    # exact recorded CLI/core bytes and current runtime contract, never a name.
+    if awk -F '\t' '$1 == "/opt/syswarden/activation-contract-v1.json" { found = 1 } END { exit found ? 0 : 1 }' "${inventory}"; then
+        activation_cli_hash="$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-cli" { print $6 }' "${inventory}")"
+        activation_core_hash="$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-core" { print $6 }' "${inventory}")"
+        printf '%s\n' "${activation_cli_hash}" "${activation_core_hash}" | \
+            LC_ALL=C grep -Ev '^[0-9a-f]{64}$' | grep -q . && return 1
+        activation_descriptor_hash="$(printf '{"schema":"syswarden-native-activation-v1","architecture":"linux-amd64","approval_schema":"syswarden-activation-approval-v1","source_contract":"syswarden-toml-source-v1","environment":"toml-only-reject-modular-environment-v1","cli_sha256":"%s","core_sha256":"%s"}\n' \
+            "${activation_cli_hash}" "${activation_core_hash}" | sha256sum | awk '{ print $1 }')" || return 1
+        inventory_has_exact_entry "${inventory}" /opt/syswarden/activation-contract-v1.json file 644 "${activation_descriptor_hash}" || return 1
+    fi
     inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden symlink 777 /opt/syswarden/bin/syswarden-cli || return 1
     inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden-tui symlink 777 /opt/syswarden/bin/syswarden-tui || return 1
     legacy_completion_payload=0
@@ -7065,6 +7087,7 @@ def _validate_manager_paths(
             "native package-manager inventory contains an unsafe path"
         )
     observed = set(paths)
+    activation_paths = observed & {"/" + native_activation_descriptor.DESCRIPTOR_PATH}
     legacy_completion = _uses_legacy_completion_payload(
         family,
         role,
@@ -7087,6 +7110,7 @@ def _validate_manager_paths(
     )
     if systemd_ordering_payload:
         expected_payload_paths.add(SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH)
+    expected_payload_paths.update(activation_paths)
     if family == "deb":
         expected = set(
             LEGACY_DEB_PACKAGE_PATHS
@@ -7100,6 +7124,7 @@ def _validate_manager_paths(
         if systemd_ordering_payload:
             expected.update(SYSTEMD_WIREGUARD_ORDERING_DEB_DIRECTORIES)
             expected.add(SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH)
+        expected.update(activation_paths)
         if observed != expected:
             raise LifecycleLabError("DEB native package inventory is not exact")
         return
@@ -7115,6 +7140,7 @@ def _validate_manager_paths(
         )
         if _uses_apk_recovery_payload(family, role, version):
             expected = expected | {APK_RECOVERY_HOOK_PATH}
+        expected = expected | activation_paths
         if observed != expected:
             raise LifecycleLabError("APK native package inventory is not exact")
         return
@@ -7224,6 +7250,9 @@ def validate_inventory_snapshot(
         "/opt/syswarden/bin/syswarden-tui": "750",
         "/opt/syswarden/signatures.json": "640",
     }
+    descriptor_path = "/" + native_activation_descriptor.DESCRIPTOR_PATH
+    if descriptor_path in entries:
+        file_modes[descriptor_path] = "644"
     if not legacy_completion:
         file_modes[BASH_COMPLETION_PATH] = "644"
     if systemd_ordering_payload:
@@ -7240,6 +7269,13 @@ def validate_inventory_snapshot(
             raise LifecycleLabError(
                 f"package file type/mode/digest contract failed at {path}"
             )
+    if descriptor_path in entries:
+        expected_descriptor = native_activation_descriptor.descriptor_for_digests(
+            str(entries["/opt/syswarden/bin/syswarden-cli"]["value"]),
+            str(entries["/opt/syswarden/bin/syswarden-core"]["value"]),
+        )
+        if entries[descriptor_path]["value"] != hashlib.sha256(expected_descriptor).hexdigest():
+            raise LifecycleLabError("native activation descriptor does not bind the recorded runtimes")
     if license_payloads:
         attribution = entries[GEOIP_DATA_LICENSE_PATH]
         if (

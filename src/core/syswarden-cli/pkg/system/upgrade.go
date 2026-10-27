@@ -59,6 +59,7 @@ type updater struct {
 	lookPath                func(string) (string, error)
 	installPackage          nativePackageInstaller
 	prepareAPKTransition    apkTransitionPreparer
+	guardNativeActivation   func(context.Context, authenticatedAPKCandidate) error
 	effectiveUID            int
 	requireRoot             bool
 	stdout                  io.Writer
@@ -271,6 +272,7 @@ func newProductionUpdater() (*updater, error) {
 		lookPath:                exec.LookPath,
 		installPackage:          runAuthenticatedNativeInstall,
 		prepareAPKTransition:    prepareProductionAPKTransition,
+		guardNativeActivation:   requireProductionNativeActivationTransaction,
 		effectiveUID:            os.Geteuid(),
 		requireRoot:             true,
 		stdout:                  os.Stdout,
@@ -458,6 +460,9 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return err
 	}
 
+	if err := u.preflightNativeActivation(ctx, target, latestVersion, artifact, packageFile, packagePath, manifestBytes, signatureBytes, expectedCandidateCLISHA256, false); err != nil {
+		return err
+	}
 	if err := u.preflightAPKTransition(ctx, target, latestVersion, artifact, packageFile, packagePath, manifestBytes, signatureBytes, expectedCandidateCLISHA256, false); err != nil {
 		return err
 	}
@@ -494,7 +499,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 }
 
 func (u *updater) validateConfiguration() error {
-	if u.client == nil || u.lookPath == nil || u.installPackage == nil || u.stdout == nil || u.preflightNativeIdentity == nil || u.attestPackageIdentity == nil || u.attestInstalled == nil || u.attestCandidateCLI == nil {
+	if u.client == nil || u.lookPath == nil || u.installPackage == nil || u.stdout == nil || u.preflightNativeIdentity == nil || u.attestPackageIdentity == nil || u.attestInstalled == nil || u.attestCandidateCLI == nil || u.guardNativeActivation == nil {
 		return errors.New("updater dependencies are incomplete")
 	}
 	if u.metadataTimeout <= 0 || u.packageTimeout <= 0 || u.installTimeout <= 0 || u.attestTimeout <= 0 {

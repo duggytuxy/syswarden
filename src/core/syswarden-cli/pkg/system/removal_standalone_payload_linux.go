@@ -114,7 +114,18 @@ func inspectBoundPayload(directory *pinnedServiceDirectory, expected map[string]
 		}
 		return nil
 	}
-	if err := checkNames(directory.root, []string{"bin", "signatures.json"}); err != nil {
+	// Older payloads have no descriptor. A present descriptor is product-owned
+	// only when its exact canonical bytes derive from already bound runtimes.
+	descriptorName := filepath.Base(nativeActivationDescriptorPath)
+	rootNames := []string{"bin", "signatures.json"}
+	descriptorPresent := false
+	if _, err := directory.root.Lstat(descriptorName); err == nil {
+		descriptorPresent = true
+		rootNames = append([]string{descriptorName}, rootNames...)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return result, err
+	}
+	if err := checkNames(directory.root, rootNames); err != nil {
 		return result, err
 	}
 	binInfo, err := directory.root.Lstat("bin")
@@ -167,7 +178,41 @@ func inspectBoundPayload(directory *pinnedServiceDirectory, expected map[string]
 		result.files[name], result.content[name] = identity, []byte(actual)
 		_, _ = digest.Write([]byte(name + "\x00" + actual + "\n"))
 	}
-	if err := checkNames(directory.root, []string{"bin", "signatures.json"}); err != nil {
+	if descriptorPresent {
+		raw, err := canonicalNativeActivationDescriptor(nativeActivationDescriptorFor(expected["bin/syswarden-cli"], expected["bin/syswarden-core"]))
+		if err != nil {
+			return result, err
+		}
+		before, err := directory.root.Lstat(descriptorName)
+		if err != nil || !before.Mode().IsRegular() || before.Size() != int64(len(raw)) {
+			return result, errors.New("native activation removal descriptor is ambiguous")
+		}
+		beforeIdentity, err := exactRemovalArtifactIdentity(before)
+		if err != nil {
+			return result, err
+		}
+		file, err := directory.root.OpenFile(descriptorName, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return result, err
+		}
+		identity, actual, readErr := hashStandalonePayload(file, 0644)
+		closeErr := file.Close()
+		want := fmt.Sprintf("%x", sha256.Sum256(raw))
+		if readErr != nil || closeErr != nil || identity != beforeIdentity || actual != want {
+			return result, errors.New("native activation removal descriptor does not match bound runtimes")
+		}
+		after, err := directory.root.Lstat(descriptorName)
+		if err != nil {
+			return result, err
+		}
+		afterIdentity, err := exactRemovalArtifactIdentity(after)
+		if err != nil || afterIdentity != identity {
+			return result, errors.New("native activation removal descriptor changed")
+		}
+		result.files[descriptorName], result.content[descriptorName] = identity, []byte(actual)
+		_, _ = digest.Write([]byte(descriptorName + "\x00" + actual + "\n"))
+	}
+	if err := checkNames(directory.root, rootNames); err != nil {
 		return result, err
 	}
 	if err := checkNames(bin, []string{"syswarden-cli", "syswarden-core", "syswarden-tui"}); err != nil {

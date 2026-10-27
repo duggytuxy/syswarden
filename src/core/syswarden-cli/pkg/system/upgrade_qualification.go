@@ -146,6 +146,7 @@ func newQualificationUpdater() (*updater, error) {
 		lookPath:                exec.LookPath,
 		installPackage:          runAuthenticatedQualificationInstall,
 		prepareAPKTransition:    prepareProductionAPKTransition,
+		guardNativeActivation:   requireProductionNativeActivationTransaction,
 		effectiveUID:            os.Geteuid(),
 		requireRoot:             true,
 		stdout:                  os.Stdout,
@@ -165,7 +166,7 @@ func newQualificationUpdater() (*updater, error) {
 
 func (u *updater) validateQualificationConfiguration() error {
 	if u.lookPath == nil || u.installPackage == nil || u.stdout == nil || u.attestInstalled == nil ||
-		u.attestDependencies == nil || u.attestCandidateCLI == nil || u.activateCandidate == nil || u.preflightNativeIdentity == nil || u.attestPackageIdentity == nil {
+		u.attestDependencies == nil || u.attestCandidateCLI == nil || u.activateCandidate == nil || u.preflightNativeIdentity == nil || u.attestPackageIdentity == nil || u.guardNativeActivation == nil {
 		return errors.New("offline qualification updater dependencies are incomplete")
 	}
 	if u.installTimeout <= 0 {
@@ -384,6 +385,9 @@ func (u *updater) runQualificationBundle(ctx context.Context, bundlePath, candid
 		return err
 	}
 
+	if err := u.preflightNativeActivation(ctx, target, candidateVersion, artifact, packageFile, packagePath, manifestBytes, signatureBytes, expectedCandidateCLISHA256, true); err != nil {
+		return err
+	}
 	if err := u.preflightAPKTransition(ctx, target, candidateVersion, artifact, packageFile, packagePath, manifestBytes, signatureBytes, expectedCandidateCLISHA256, true); err != nil {
 		return err
 	}
@@ -719,7 +723,7 @@ func openInstalledQualificationBinary(path string, expectedUID int) (*os.Root, *
 		_ = root.Close()
 		return nil, nil, qualificationFileIdentity{}, errors.New("installed SysWarden CLI is not a regular non-symlink file")
 	}
-	binary, err := root.OpenFile(name, os.O_RDONLY, 0)
+	binary, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		_ = root.Close()
 		return nil, nil, qualificationFileIdentity{}, fmt.Errorf("open installed SysWarden CLI: %w", err)

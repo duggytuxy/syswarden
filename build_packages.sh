@@ -502,6 +502,10 @@ chmod 750 staging-apk/opt/syswarden/bin/*
 chmod 640 staging-apk/opt/syswarden/signatures.json
 chmod 644 staging-apk/usr/share/bash-completion/completions/syswarden
 PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${SOURCE_ROOT}/scripts/ci/native_activation_descriptor.py" --root staging
+PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${SOURCE_ROOT}/scripts/ci/native_activation_descriptor.py" --root staging-apk
+PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging \
     --service-manager systemd \
@@ -665,6 +669,7 @@ cat << 'EOF' >> preinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
 syswarden_set_native_install_phase preinstall "$@"
+syswarden_require_fresh_native_install || exit 1
 syswarden_preflight_launchers / before
 syswarden_preflight_wireguard /
 syswarden_preflight_install_barriers
@@ -748,6 +753,7 @@ cat << 'EOF' >> postinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
 syswarden_set_native_install_phase postinstall "$@"
+syswarden_require_fresh_native_install || exit 1
 syswarden_preflight_launchers / after
 syswarden_preflight_install_barriers
 if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then

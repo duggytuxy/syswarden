@@ -34,11 +34,16 @@ func apkTransitionFixtureMembers() []apkTransitionFixtureMember {
 	}
 	for name, mode := range map[string]int64{
 		"opt/syswarden/bin/syswarden-cli": 0750, "opt/syswarden/bin/syswarden-core": 0750, "opt/syswarden/bin/syswarden-tui": 0750,
-		"opt/syswarden/signatures.json": 0640, "usr/share/bash-completion/completions/syswarden": 0644,
+		"opt/syswarden/signatures.json": 0640, "opt/syswarden/activation-contract-v1.json": 0644, "usr/share/bash-completion/completions/syswarden": 0644,
 		"usr/share/doc/syswarden/LICENSE.txt": 0644, "usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt": 0644,
 		"etc/apk/commit_hooks.d/syswarden-recovery": 0755,
 	} {
 		data := []byte("public inert fixture: " + name + "\n")
+		if name == "opt/syswarden/activation-contract-v1.json" {
+			data, _ = canonicalNativeActivationDescriptor(nativeActivationDescriptorFor(
+				apkTransitionDigest([]byte("public inert fixture: opt/syswarden/bin/syswarden-cli\n")),
+				apkTransitionDigest([]byte("public inert fixture: opt/syswarden/bin/syswarden-core\n"))))
+		}
 		entries = append(entries, apkTransitionFixtureMember{header: tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: mode, Size: int64(len(data))}, content: data})
 	}
 	return entries
@@ -83,12 +88,27 @@ func apkTransitionFixtureArchiveWithControls(t *testing.T, entries, controls []a
 	for _, change := range rewrite {
 		data = change(data)
 	}
+	// Match the modern native APKv2 layout: its metadata binds the exact
+	// compressed data stream, and signature/control tar segments are cut.
+	compressedData := nativeHeaderTestGzip(t, data)
+	controls = append([]apkTransitionFixtureMember(nil), controls...)
+	for index := range controls {
+		if controls[index].header.Name == ".PKGINFO" {
+			content := append(bytes.Clone(controls[index].content), []byte("datahash = "+apkTransitionDigest(compressedData)+"\n")...)
+			controls[index].content = content
+			controls[index].header.Size = int64(len(content))
+		}
+	}
+	control := apkTransitionFixtureTar(t, controls)
+	if len(control) < 1024 || !bytes.Equal(control[len(control)-1024:], make([]byte, 1024)) {
+		t.Fatal("synthetic control tar lacks its expected terminal zero blocks")
+	}
 	var result []byte
 	if signed {
 		result = nativeHeaderTestGzip(t, nativeHeaderTestTar(t, true, nativeHeaderTestEntry{name: ".SIGN.RSA.public-fixture.pub", data: []byte("inert native signature, verifier injected")}))
 	}
-	result = append(result, nativeHeaderTestGzip(t, apkTransitionFixtureTar(t, controls))...)
-	return append(result, nativeHeaderTestGzip(t, data)...)
+	result = append(result, nativeHeaderTestGzip(t, control[:len(control)-1024])...)
+	return append(result, compressedData...)
 }
 
 func apkTransitionFixture(t *testing.T) (authenticatedAPKCandidate, apkTransitionServices, []byte) {
@@ -147,7 +167,9 @@ func apkTransitionFixture(t *testing.T) (authenticatedAPKCandidate, apkTransitio
 	if err := os.Symlink("/opt/administrator-tool", filepath.Join(host, "usr/local/bin/syswarden-tui")); err != nil {
 		t.Fatal(err)
 	}
-	services := apkTransitionServices{root: filepath.Join(t.TempDir(), filepath.Base(apkTransitionRoot)), hostRoot: host,
+	services := apkTransitionServices{activation: func(context.Context, authenticatedAPKCandidate) (apkTransitionActivation, error) {
+		return apkTransitionTestActivation{}, nil
+	}, root: filepath.Join(t.TempDir(), filepath.Base(apkTransitionRoot)), hostRoot: host,
 		verifyNative: func(context.Context, authenticatedAPKCandidate) error { return nil },
 		policy: func(context.Context) (apkTransitionPolicyBinding, error) {
 			return apkTransitionPolicyBinding{strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)}, nil
@@ -322,13 +344,13 @@ func TestAPKTransitionApprovalCannotAdoptNewStateOrUnknownPlan(t *testing.T) {
 }
 
 func TestAPKTransitionInventoryRejectsAliasesUnknownOwnershipAndAmbiguousFrames(t *testing.T) {
-	for _, kind := range []string{"valid", "usr-local", "alias", "duplicate", "dot-alias", "symlink", "hardlink", "foreign-owner", "wrong-mode", "missing", "pax-path", "gnu-long-name", "native-checksum", "unsigned"} {
+	for _, kind := range []string{"valid", "usr-local", "alias", "duplicate", "dot-alias", "symlink", "hardlink", "foreign-owner", "wrong-mode", "missing", "missing-descriptor", "pax-path", "gnu-long-name", "native-checksum", "unsigned"} {
 		t.Run(kind, func(t *testing.T) {
 			entries := apkTransitionFixtureMembers()
 			signed := true
 			index := 0
 			for i, entry := range entries {
-				if entry.header.Name == "opt/syswarden/bin/syswarden-cli" {
+				if entry.header.Name == "opt/syswarden/bin/syswarden-cli" && kind != "missing-descriptor" || kind == "missing-descriptor" && entry.header.Name == "opt/syswarden/activation-contract-v1.json" {
 					index = i
 				}
 			}
@@ -353,7 +375,7 @@ func TestAPKTransitionInventoryRejectsAliasesUnknownOwnershipAndAmbiguousFrames(
 				entries[index].header.Uid = 123
 			case "wrong-mode":
 				entries[index].header.Mode = 0777
-			case "missing":
+			case "missing", "missing-descriptor":
 				entries = append(entries[:index], entries[index+1:]...)
 			case "pax-path", "gnu-long-name":
 				entries[index].header.Name = strings.Repeat("x", 120)
@@ -376,7 +398,7 @@ func TestAPKTransitionInventoryRejectsAliasesUnknownOwnershipAndAmbiguousFrames(
 			}
 			inventory, _, err := readAPKTransitionInventory(t.Context(), file)
 			if kind == "valid" {
-				if err != nil || len(inventory) != 28 {
+				if err != nil || len(inventory) != 29 {
 					t.Fatalf("valid inventory: %d %v", len(inventory), err)
 				}
 			} else if err == nil {
@@ -662,4 +684,13 @@ func TestAPKTransitionProductionConstructorsRequirePreparation(t *testing.T) {
 	if err := approvePreparedAPKTransition(ctx, "", nil, nil, apkTransitionServices{}); err == nil {
 		t.Fatal("approval accepted missing authority")
 	}
+}
+
+// The synthetic activation seam never inspects or mutates the running host.
+type apkTransitionTestActivation struct{}
+
+func (apkTransitionTestActivation) EffectPlanSHA256() string             { return strings.Repeat("e", 64) }
+func (apkTransitionTestActivation) Revalidate(ctx context.Context) error { return ctx.Err() }
+func (apkTransitionTestActivation) VerifyInstalledCandidate(ctx context.Context) error {
+	return ctx.Err()
 }

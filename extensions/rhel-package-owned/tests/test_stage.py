@@ -85,6 +85,36 @@ class RHELPackageOwnedStageTests(unittest.TestCase):
         stage_contract.REPOSITORY_ROOT = old_repository
         stage_contract.INVENTORY_PATH = old_inventory
 
+    def test_native_install_gate_refuses_every_nonfresh_phase_before_effects(self) -> None:
+        guards = []
+        for name in ("pre-install.sh", "post-install.sh"):
+            source = (EXTENSION_ROOT / "scriptlets" / name).read_text(encoding="utf-8")
+            # Execute the actual unconditional entry prefix. The suffix that
+            # queries native state or mutates the host is replaced by a sentinel.
+            prefix = source[:source.index('fail() {')]
+            self.assertIn('if [ "$#" -ne 1 ] || [ "${1:-}" != 1 ]; then', prefix)
+            self.assertNotIn("/usr/bin/", prefix)
+            guards.append(prefix)
+            for arguments in ((), ("",), ("0",), ("01",), ("2",), ("23",),
+                              ("recovery",), ("1", "extra"), ("1",), ("999999999999999999999999",)):
+                for inherited in ("fresh", "upgrade"):
+                    with self.subTest(script=name, arguments=arguments, inherited=inherited):
+                        result = subprocess.run(
+                            ["/bin/sh", "-c", prefix + "\nprintf 'EFFECT-SENTINEL\\n'\n", "rhel-install-gate", *arguments],
+                            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C",
+                                 "SYSWARDEN_NATIVE_INSTALL_PHASE": inherited,
+                                 "SYSWARDEN_PKG_INSTALL": "1", "SYSWARDEN_OFFLINE_QUALIFICATION": "1"},
+                            capture_output=True, text=True, check=False, timeout=5,
+                        )
+                        if arguments == ("1",):
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                            self.assertEqual(result.stdout, "EFFECT-SENTINEL\n")
+                        else:
+                            self.assertEqual(result.returncode, 1, result.stderr)
+                            self.assertEqual(result.stdout, "")
+                            self.assertIn("separately approved coordinated native transaction", result.stderr)
+        self.assertEqual(guards[0], guards[1])
+
     def test_inventory_is_exact_ordered_and_digest_bound(self) -> None:
         entries = self.inventory["entries"]
         self.assertEqual(self.inventory["schema_version"], 2)

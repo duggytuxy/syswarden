@@ -73,6 +73,18 @@ syswarden_set_native_install_phase() {
     export SYSWARDEN_NATIVE_INSTALL_PHASE
 }
 
+# The generated hook computes its phase from native arguments immediately
+# before this gate. Inherited phase, qualification or package flags cannot
+# authorize an upgrade. This refuses hook effects only; APK may have already
+# evaluated or changed dependencies before invoking its package script.
+syswarden_require_fresh_native_install() {
+    if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
+        return 0
+    fi
+    printf '%s\n' 'Non-fresh native installation is refused before SysWarden hook effects. A separately approved coordinated native transaction is required.' >&2
+    return 1
+}
+
 # Screen payload aliases before unpack and verify them after unpack. The package
 # must not replace an administrator wrapper or redirect through a shared symlink.
 # This read-only check assumes no concurrent privileged filesystem replacement.

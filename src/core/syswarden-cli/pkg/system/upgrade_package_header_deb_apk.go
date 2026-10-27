@@ -199,6 +199,10 @@ func readNativeHeaderTar(reader *nativeHeaderReader, kind string) ([]byte, strin
 type nativeHeaderMemberObserver func(string, string, *tar.Header) (io.Writer, error)
 
 func readNativeHeaderTarObserved(reader *nativeHeaderReader, kind string, observe nativeHeaderMemberObserver) ([]byte, string, error) {
+	return readNativeHeaderTarObservedFraming(reader, kind, observe, false)
+}
+
+func readNativeHeaderTarObservedFraming(reader *nativeHeaderReader, kind string, observe nativeHeaderMemberObserver, strictAPKCut bool) ([]byte, string, error) {
 	archive := tar.NewReader(reader)
 	var metadata []byte
 	var padding int64
@@ -209,7 +213,8 @@ func readNativeHeaderTarObserved(reader *nativeHeaderReader, kind string, observ
 		if errors.Is(err, io.EOF) {
 			ending := reader.count - before - padding
 			if entries == 0 || (ending != 0 && ending != 1024) ||
-				((kind == "deb-control" || kind == "apk-data") && ending != 1024) {
+				((kind == "deb-control" || kind == "apk-data") && ending != 1024) ||
+				(strictAPKCut && (kind == "apk-signature" || kind == "apk-control") && ending != 0) {
 				return nil, kind, errors.New("authenticated package header tar ending is invalid")
 			}
 			break
@@ -400,6 +405,10 @@ func readAuthenticatedAPKIdentity(ctx context.Context, file *os.File) (nativePac
 }
 
 func readAuthenticatedAPKObserved(ctx context.Context, file *os.File, observe nativeHeaderMemberObserver) (nativePackageHeaderIdentity, error) {
+	return readAuthenticatedAPKObservedRegistration(ctx, file, observe, nil)
+}
+
+func readAuthenticatedAPKObservedRegistration(ctx context.Context, file *os.File, observe nativeHeaderMemberObserver, registration *apkRegistrationCapture) (nativePackageHeaderIdentity, error) {
 	if ctx == nil {
 		return nativePackageHeaderIdentity{}, errors.New("authenticated APK header context is unavailable")
 	}
@@ -429,7 +438,13 @@ func readAuthenticatedAPKObserved(ctx context.Context, file *os.File, observe na
 		if kind == "complete" || members >= 3 {
 			return nativePackageHeaderIdentity{}, errors.New("authenticated APK contains extra gzip streams")
 		}
-		stream, err := gzip.NewReader(compressed)
+		var compressedStream io.Reader = compressed
+		var capturedStream *apkRegistrationStreamReader
+		if registration != nil {
+			capturedStream = newAPKRegistrationStreamReader(compressed, kind == "apk-data")
+			compressedStream = capturedStream
+		}
+		stream, err := gzip.NewReader(compressedStream)
 		if err != nil {
 			return nativePackageHeaderIdentity{}, fmt.Errorf("open authenticated APK gzip stream: %w", err)
 		}
@@ -438,10 +453,13 @@ func readAuthenticatedAPKObserved(ctx context.Context, file *os.File, observe na
 		if kind == "apk-data" {
 			limit = maximumQualificationPackageExpandedBytes
 		}
-		found, actualKind, parseErr := readNativeHeaderTarObserved(&nativeHeaderReader{reader: stream, ctx: ctx, limit: limit, total: &expandedTotal}, kind, observe)
+		found, actualKind, parseErr := readNativeHeaderTarObservedFraming(&nativeHeaderReader{reader: stream, ctx: ctx, limit: limit, total: &expandedTotal}, kind, observe, registration != nil)
 		closeErr := stream.Close()
 		if parseErr != nil || closeErr != nil {
 			return nativePackageHeaderIdentity{}, errors.Join(parseErr, closeErr)
+		}
+		if registration != nil {
+			registration.observe(actualKind, found, capturedStream)
 		}
 		switch actualKind {
 		case "apk-signature":

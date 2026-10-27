@@ -86,6 +86,8 @@ func qualificationTestUpdater(
 		// header parsing and refusal before installation have separate tests.
 		// These opaque transport fixtures model an independently classified candidate.
 		// Production APK classification and durable refusal have separate tests.
+		// Transport fixtures inject separately approved native authority; production has no bypass.
+		guardNativeActivation: func(context.Context, authenticatedAPKCandidate) error { return nil },
 		prepareAPKTransition:  func(context.Context, authenticatedAPKCandidate) error { return nil },
 		attestPackageIdentity: func(context.Context, packageTarget, string, *os.File) error { return nil },
 		preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {

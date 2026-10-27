@@ -120,6 +120,64 @@ post-install finalization and a success message. This does not undo a partial
 native transaction or establish runtime health; durable APK transition recovery
 and complete payload/lifecycle qualification remain separate requirements.
 
+## Candidate runtime and activation approval
+
+Runtime TOML approval does not authorize replacement executables. The current
+candidate builder adds `/opt/syswarden/activation-contract-v1.json`, derived
+from the final CLI and core bytes. The signed native artifact covers this exact
+file without changing historical manifest encodings or signatures. Its closed
+schema identifies Linux AMD64, the approval and TOML source contracts, the
+environment policy and both executable hashes. A missing, malformed, modified
+or unsupported descriptor cannot establish candidate activation capability.
+This descriptor does not independently qualify maintainer-script effects.
+
+The native preflight binds the authenticated package and manifest, both original
+installed executables, selected package registration, the applied runtime
+approval, complete captured policy and live host observation. It repeats those
+observations before allowing the next phase. Retained file descriptors detect
+changes across the executable pair; they do not grant a package database lock or
+exclude arbitrary privileged writers. Candidate verification also checks both
+installed executable hashes and the protected descriptor after replacement.
+
+DEB and RPM production update ingress currently refuses replacement before
+native dependency preparation because a separately approved transaction and
+candidate-specific hook authority are still required. Generated direct native
+pre/post hooks, including the separate RHEL profile, also refuse non-fresh phases
+before their own configuration, file or service effects. This does not roll back
+native-manager effects or protect against APK dependency-solver actions that
+happen before a package script. APK preparation retains the same runtime binding. Existing preparation records without the additional
+bindings remain preserved and refused; they are not silently upgraded. Historical
+installations without an applied runtime approval and inactive base updates
+still need their own qualified transition path.
+
+The internal APK execution coordinator requires a separate exact execution-plan
+approval and a qualified lifecycle boundary. Its fixed offline invocation uses
+a sealed two-file overlay, retained candidate/helper custody and bounded private
+diagnostics. It records native start before dispatch and independently checks
+registration, runtime payload, configuration, dependency reasons and unrelated
+package records afterward. The expected APKv2 registration checksum is derived
+from the authenticated package's exact compressed control stream and compared
+with the native database. This is the [Alpine C-field identity](https://wiki.alpinelinux.org/wiki/Apk_spec#Package_Checksum_Field),
+not a replacement for signed artifact authentication. The execution bridge
+requires modern APKv2 `datahash` metadata, verifies the compressed data digest
+and admits only cut signature/control tar segments. Generic historical header
+inspection does not establish this execution compatibility. Failure after start
+remains unresolved, even if APK returns zero. Completion with later closure uncertainty is not accepted, and
+any existing attempt refuses automatic replay. Production hook authority is not
+yet wired, so this component exposes no executable operator command.
+
+Launcher custody distinguishes inherited administrator entries from exclusively
+created product entries. A canonical name or link target never grants removal
+ownership. Direct role-correct CLI/TUI links can enter an exact upgrade target
+proposal before execution approval. The coordinator retains original target
+bytes privately, verifies the approved installed targets and preserves the alias
+identities. Opaque wrapper behavior and indirect link chains are not inferred.
+This upgrade authority cannot authorize target deletion during removal; inherited
+dependencies still require separate resolution. Builder layout, hook consumption,
+launcher removal and the complete native lifecycle must be qualified together before the
+production migration route can open. Component tests do not establish that
+acceptance or final v5.00.0 IVVQ.
+
 ## Signed identity and installed ownership
 
 The v5 producer and consumer use `syswarden-update-manifest/v3`. Its exact ordered

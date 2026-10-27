@@ -460,6 +460,8 @@ jobs:
             "${STAGING_AMD64}/opt/syswarden/bin/syswarden-core" \
             "${STAGING_AMD64}/opt/syswarden/bin/syswarden-tui"
           chmod 0640 "${STAGING_AMD64}/opt/syswarden/signatures.json"
+          python3 -B "${EXACT_SOURCE_ROOT}/scripts/ci/native_activation_descriptor.py" \
+            --root "${STAGING_AMD64}"
 
           # Create a symlink for global execution from the terminal (Routing to Go CLI)
           ln -s /opt/syswarden/bin/syswarden-cli \
@@ -707,6 +709,8 @@ jobs:
           }
 
           build_apk_stage amd64 "${STAGING_APK_AMD64}"
+          python3 -B "${EXACT_SOURCE_ROOT}/scripts/ci/native_activation_descriptor.py" \
+            --root "${STAGING_APK_AMD64}"
           for artifact in "${STAGING_APK_AMD64}"/opt/syswarden/bin/*; do
             validate_static_apk_binary "${artifact}" 'Advanced Micro Devices X86-64'
           done
@@ -813,6 +817,7 @@ jobs:
           set -e
           export SYSWARDEN_PKG_INSTALL=1
           syswarden_set_native_install_phase preinstall "$@"
+          syswarden_require_fresh_native_install || exit 1
           syswarden_preflight_launchers / before
           syswarden_preflight_wireguard /
           syswarden_preflight_install_barriers
@@ -895,6 +900,7 @@ jobs:
           set -e
           export SYSWARDEN_PKG_INSTALL=1
           syswarden_set_native_install_phase postinstall "$@"
+          syswarden_require_fresh_native_install || exit 1
           syswarden_preflight_launchers / after
           syswarden_preflight_install_barriers
           if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then

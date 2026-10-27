@@ -2011,7 +2011,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn('/opt/syswarden/bin/syswarden-cli install', postinstall)
         self.assertIn('[ -f /etc/alpine-release ]', postinstall)
 
-    def test_offline_qualification_hooks_preflight_then_exit_before_mutation(self) -> None:
+    def test_offline_qualification_flag_cannot_bypass_nonfresh_hook_refusal(self) -> None:
         guard = 'if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then'
         for source_name, loader in (
             ("workflow", self.script),
@@ -2040,6 +2040,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     body = script[script.rindex("set -e\nexport SYSWARDEN_PKG_INSTALL=1\n") :]
                     self.assertEqual(body.count(guard), 1)
                     guard_index = body.index(guard)
+                    self.assertLess(body.index("syswarden_require_fresh_native_install || exit 1"), guard_index)
                     if script_name == "preinst.sh":
                         self.assertLess(body.index("syswarden_preflight_alpine_cronie\n"), guard_index)
                     else:
@@ -2544,6 +2545,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             operator.chmod(0o600)
 
             def prepare(script: str) -> str:
+                script = script.replace("/etc/alpine-release", str(root / "alpine-release"))
                 script = script.replace("syswarden_preflight_launchers / ", f'syswarden_preflight_launchers "{root}" ')
                 script = script.replace("!= 0:0", f"!= {owner}")
                 executable = script.replace(
@@ -2584,8 +2586,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 return tuple(observed)
 
             def run(name: str) -> subprocess.CompletedProcess[str]:
+                # Exercise the barrier with actual fresh dpkg arguments. Empty
+                # arguments are an unknown phase and must be refused earlier.
+                arguments = ("install",) if name == "preinst" else ("configure",)
                 return subprocess.run(
-                    ("/bin/sh", "-c", executables[name], f"{name}-barrier"),
+                    ("/bin/sh", "-c", executables[name], f"{name}-barrier", *arguments),
                     check=False,
                     capture_output=True,
                     text=True,

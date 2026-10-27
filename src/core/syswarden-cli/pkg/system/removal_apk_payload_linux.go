@@ -140,6 +140,12 @@ func preserveAPKPayload(sourcePath, backupParentPath string, expected map[string
 			return "", err
 		}
 	}
+	descriptorName := filepath.Base(nativeActivationDescriptorPath)
+	if digest, present := before.content[descriptorName]; present {
+		if err := copyAPKRecoveryFile(source.root, staging.root, descriptorName, 0644, string(digest)); err != nil {
+			return "", err
+		}
+	}
 	bin, err := openExistingPinnedServiceDirectory(filepath.Join(temporary, "bin"))
 	if err != nil {
 		return "", err

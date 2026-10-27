@@ -36,7 +36,7 @@ func readAPKTransitionInventory(ctx context.Context, file *os.File) ([]apkTransi
 	}
 	files := map[string]int64{
 		"opt/syswarden/bin/syswarden-cli": 0750, "opt/syswarden/bin/syswarden-core": 0750,
-		"opt/syswarden/bin/syswarden-tui": 0750, "opt/syswarden/signatures.json": 0640,
+		"opt/syswarden/bin/syswarden-tui": 0750, "opt/syswarden/signatures.json": 0640, "opt/syswarden/activation-contract-v1.json": 0644,
 		"usr/share/bash-completion/completions/syswarden": 0644,
 		"usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt":  0644,
 		"usr/share/doc/syswarden/LICENSE.txt":             0644,

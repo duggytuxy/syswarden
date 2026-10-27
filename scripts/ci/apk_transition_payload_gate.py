@@ -115,6 +115,8 @@ def read_member(source: BoundedReader, size: int, capture: bool = False):
 
 
 def validate(archive_path: Path, stage: Path, scripts: Path) -> dict[str, str]:
+    # This also verifies the required canonical activation descriptor against
+    # both staged runtime binaries before trusting any reference-file hashes.
     package_stage_gate.validate(stage, TRANSITION_ENTRIES)
     contracts = {
         name: file_contract(stage / name, entry.mode)

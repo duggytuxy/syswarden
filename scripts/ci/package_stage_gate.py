@@ -13,6 +13,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from scripts.ci import native_activation_descriptor
+except ModuleNotFoundError:  # Direct execution from scripts/ci.
+    import native_activation_descriptor
+
 
 class PackageStageError(ValueError):
     """Raised when a package-staging tree violates its contract."""
@@ -50,6 +55,9 @@ LINUX_ENTRIES = {
     ),
     "opt/syswarden/signatures.json": ExpectedEntry(
         "file", mode=0o640, nonempty=True
+    ),
+    native_activation_descriptor.DESCRIPTOR_PATH: ExpectedEntry(
+        "file", mode=0o644, nonempty=True
     ),
     "usr": DIRECTORY,
     "usr/local": DIRECTORY,
@@ -295,6 +303,10 @@ def validate(
                     )
     if violations:
         raise PackageStageError("staging contract violation: " + "; ".join(violations))
+    try:
+        native_activation_descriptor.validate(root)
+    except (OSError, ValueError) as exc:
+        raise PackageStageError(f"native activation descriptor: {exc}") from exc
     if completion_contract is not None:
         validate_exact_content(
             root / "usr/share/bash-completion/completions/syswarden",

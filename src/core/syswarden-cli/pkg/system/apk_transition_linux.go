@@ -168,6 +168,9 @@ type apkTransitionPlan struct {
 	Installer                 string                     `json:"installer"`
 	CandidateVersion          string                     `json:"candidate_version"`
 	Artifact                  updateArtifact             `json:"artifact"`
+	CandidateAPKChecksum      string                     `json:"candidate_apk_checksum"`
+	CandidateCapabilitySHA256 string                     `json:"candidate_capability_sha256"`
+	EffectPlanSHA256          string                     `json:"effect_plan_sha256"`
 	CandidateCLISHA256        string                     `json:"candidate_cli_sha256"`
 	ManifestSHA256            string                     `json:"manifest_sha256"`
 	SignatureSHA256           string                     `json:"signature_sha256"`
@@ -182,7 +185,14 @@ type apkTransitionPlan struct {
 	ProductAccepted           bool                       `json:"product_accepted"`
 }
 
+type apkTransitionActivation interface {
+	EffectPlanSHA256() string
+	Revalidate(context.Context) error
+	VerifyInstalledCandidate(context.Context) error
+}
+
 type apkTransitionServices struct {
+	activation    func(context.Context, authenticatedAPKCandidate) (apkTransitionActivation, error)
 	root          string
 	hostRoot      string
 	verifyNative  func(context.Context, authenticatedAPKCandidate) error
@@ -193,7 +203,10 @@ type apkTransitionServices struct {
 
 func productionAPKTransitionServices() apkTransitionServices {
 	return apkTransitionServices{root: apkTransitionRoot, hostRoot: "/", verifyNative: verifyAPKTransitionNativeSignature,
-		policy: captureAPKTransitionPolicy}
+		policy: captureAPKTransitionPolicy,
+		activation: func(ctx context.Context, candidate authenticatedAPKCandidate) (apkTransitionActivation, error) {
+			return captureNativeActivationBinding(ctx, candidate)
+		}}
 }
 
 func captureAPKTransitionPolicy(ctx context.Context) (apkTransitionPolicyBinding, error) {
@@ -249,7 +262,7 @@ func prepareProductionAPKTransition(ctx context.Context, candidate authenticated
 }
 
 func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandidate, services apkTransitionServices) (returnErr error) {
-	if ctx == nil || services.verifyNative == nil || services.policy == nil || candidate.attestInstalled == nil {
+	if ctx == nil || services.verifyNative == nil || services.policy == nil || services.activation == nil || candidate.attestInstalled == nil {
 		return errors.New("APK transition preparation dependencies are unavailable")
 	}
 	if err := ctx.Err(); err != nil {
@@ -326,6 +339,10 @@ func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandida
 		func(context.Context, *os.File) (nativePackageHeaderIdentity, error) { return header, nil }); err != nil {
 		return err
 	}
+	candidateChecksum, err := readAuthenticatedAPKRegistrationChecksum(ctx, candidate.file)
+	if err != nil {
+		return err
+	}
 	cliDigest := ""
 	for _, member := range inventory {
 		if member.Path == "opt/syswarden/bin/syswarden-cli" {
@@ -374,7 +391,21 @@ func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandida
 	if !validSHA256(policy.ApprovalSHA256) || !validSHA256(policy.PolicySHA256) || !validSHA256(policy.HostSHA256) {
 		return errors.New("APK runtime approval binding is incomplete")
 	}
-	plan := apkTransitionPlan{Schema: apkTransitionSchema, PackageName: candidate.target.packageName, Installer: candidate.target.installer, CandidateVersion: candidate.version,
+	capability, err := attestNativeActivationCandidate(ctx, candidate.target, candidate.file)
+	if err != nil {
+		return err
+	}
+	activation, err := services.activation(ctx, candidate)
+	if err != nil {
+		return err
+	}
+	if activation == nil || !validSHA256(activation.EffectPlanSHA256()) {
+		return errors.New("APK candidate effect evidence is incomplete")
+	}
+	if err := activation.Revalidate(ctx); err != nil {
+		return err
+	}
+	plan := apkTransitionPlan{CandidateAPKChecksum: candidateChecksum, CandidateCapabilitySHA256: capability.SHA256(), EffectPlanSHA256: activation.EffectPlanSHA256(), Schema: apkTransitionSchema, PackageName: candidate.target.packageName, Installer: candidate.target.installer, CandidateVersion: candidate.version,
 		Artifact: artifact, CandidateCLISHA256: cliDigest, ManifestSHA256: apkTransitionDigest(candidate.manifest), SignatureSHA256: apkTransitionDigest(candidate.signature),
 		InstalledVersion: installed.version, InstalledCLISHA256: installed.cliSHA256, Inventory: inventory, HostSnapshotSHA256: apkTransitionDigest(hostBytes), Policy: policy,
 		RetainedDependencyNames: dependencies, Offline: candidate.offline}
@@ -633,117 +664,215 @@ func UpgradeSystemWithAPKTransitionApproval(planSHA256 string) error {
 	return approvePreparedAPKTransition(ctx, planSHA256, keys, attestInstalledQualificationVersion, productionAPKTransitionServices())
 }
 
-func approvePreparedAPKTransition(ctx context.Context, digest string, keys map[string]ed25519.PublicKey,
-	attest installedVersionAttestor, services apkTransitionServices) error {
-	if ctx == nil || !validSHA256(digest) || services.policy == nil || services.verifyNative == nil || attest == nil {
-		return errors.New("APK review requires an exact stored plan digest and complete verification dependencies")
+// A verified preparation retains the exact candidate and both custody directory
+// descriptors under the preparation lock. That lock is not an APK database lease.
+type verifiedPreparedAPKTransition struct {
+	digest, path      string
+	services          apkTransitionServices
+	parent, directory *pinnedServiceDirectory
+	plan              apkTransitionPlan
+	candidate         authenticatedAPKCandidate
+	snapshot          []apkTransitionHostEntry
+	activation        apkTransitionActivation
+	capability        NativeActivationCandidate
+	locked, closed    bool
+}
+
+func (prepared *verifiedPreparedAPKTransition) Close() error {
+	if prepared == nil || prepared.closed {
+		return nil
+	}
+	prepared.closed = true
+	var err error
+	if prepared.candidate.file != nil {
+		err = errors.Join(err, prepared.candidate.file.Close())
+	}
+	if prepared.directory != nil {
+		err = errors.Join(err, prepared.directory.file.Close(), prepared.directory.root.Close())
+	}
+	if prepared.parent != nil {
+		if prepared.locked {
+			err = errors.Join(err, syscall.Flock(prepared.parent.fd, syscall.LOCK_UN))
+		}
+		err = errors.Join(err, prepared.parent.file.Close(), prepared.parent.root.Close())
+	}
+	return err
+}
+
+func (prepared *verifiedPreparedAPKTransition) Revalidate(ctx context.Context) error {
+	if prepared == nil || prepared.closed || prepared.activation == nil || ctx == nil {
+		return errors.New("verified APK preparation is unavailable")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	candidate := prepared.candidate
+	if err := verifySecurePackageForInstallation(candidate.file, candidate.path, candidate.artifact, candidate.uid); err != nil {
+		return err
+	}
+	installed, err := candidate.attestInstalled(ctx, candidate.target, candidate.uid)
+	if err != nil || installed.version != prepared.plan.InstalledVersion || installed.cliSHA256 != prepared.plan.InstalledCLISHA256 {
+		return errors.Join(errors.New("APK original native identity changed before execution"), err)
+	}
+	current, err := captureAPKTransitionHost(ctx, prepared.services.hostRoot)
+	if err != nil || !reflect.DeepEqual(current, prepared.snapshot) {
+		return errors.Join(errors.New("APK original host evidence changed before execution"), err)
+	}
+	policy, err := prepared.services.policy(ctx)
+	if err != nil || policy != prepared.plan.Policy {
+		return errors.Join(errors.New("APK original runtime approval changed before execution"), err)
+	}
+	return errors.Join(ctx.Err(), prepared.activation.Revalidate(ctx), attestRetainedDirectoryParent(prepared.services.root, prepared.parent, false), attestRetainedDirectoryParent(prepared.path, prepared.directory, false))
+}
+
+func openVerifiedPreparedAPKTransition(ctx context.Context, digest string, keys map[string]ed25519.PublicKey,
+	attest installedVersionAttestor, services apkTransitionServices) (verified *verifiedPreparedAPKTransition, returnErr error) {
+	if ctx == nil || !validSHA256(digest) || services.policy == nil || services.verifyNative == nil || services.activation == nil || attest == nil {
+		return nil, errors.New("APK review requires an exact stored plan digest and complete verification dependencies")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	parent, err := openAPKTransitionRoot(services.root, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer parent.close()
+	opened := &verifiedPreparedAPKTransition{digest: digest, services: services, parent: parent}
+	defer func() {
+		if verified == nil {
+			returnErr = errors.Join(returnErr, opened.Close())
+		}
+	}()
 	if err := syscall.Flock(parent.fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { _ = syscall.Flock(parent.fd, syscall.LOCK_UN) }()
+	opened.locked = true
 	path := filepath.Join(services.root, digest)
 	directory, err := openExistingPinnedServiceDirectory(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer directory.close()
+	opened.directory, opened.path = directory, path
 	info, err := directory.file.Stat()
 	if err != nil || info.Mode() != os.ModeDir|0700 {
-		return errors.New("APK stored plan directory is not private")
+		return nil, errors.New("APK stored plan directory is not private")
 	}
 	planBytes, err := readAPKTransitionBytes(directory, "plan.json", 1<<20)
 	if err != nil || apkTransitionDigest(planBytes) != digest {
-		return errors.New("APK approval does not match immutable stored plan bytes")
+		return nil, errors.New("APK approval does not match immutable stored plan bytes")
 	}
 	var plan apkTransitionPlan
 	if err := decodeAPKTransitionJSON(planBytes, &plan); err != nil {
-		return err
+		return nil, err
 	}
-	if plan.Schema != apkTransitionSchema || plan.PackageName != compatibilityNativePackageName || plan.NativeExecutionAuthorized || plan.ProductAccepted {
-		return errors.New("APK stored plan claims unsupported identity, execution or acceptance")
+	if plan.Schema != apkTransitionSchema || plan.PackageName != compatibilityNativePackageName || plan.NativeExecutionAuthorized || plan.ProductAccepted || !validAPKRetentionChecksum(plan.CandidateAPKChecksum) || !validSHA256(plan.CandidateCapabilitySHA256) || !validSHA256(plan.EffectPlanSHA256) {
+		return nil, errors.New("APK stored plan claims unsupported identity, execution or acceptance")
 	}
 	prepared, err := readAPKTransitionBytes(directory, "prepared.json", 1024)
 	wantPrepared := "{\"schema\":\"" + apkTransitionSchema + "\",\"state\":\"prepared-only\",\"plan_sha256\":\"" + digest + "\"}\n"
 	if err != nil || string(prepared) != wantPrepared {
-		return errors.New("APK plan preparation is incomplete")
+		return nil, errors.New("APK plan preparation is incomplete")
 	}
 	if err := inspectAPKTransitionCustodyInventory(directory, plan.Artifact.Filename); err != nil {
-		return err
+		return nil, err
 	}
 	manifestBytes, err := readAPKTransitionBytes(directory, updateManifestAssetName, maxManifestBytes)
 	if err != nil || apkTransitionDigest(manifestBytes) != plan.ManifestSHA256 {
-		return errors.New("APK stored manifest changed")
+		return nil, errors.New("APK stored manifest changed")
 	}
 	signatureBytes, err := readAPKTransitionBytes(directory, updateManifestSignatureAssetName, maxSignatureAssetBytes)
 	if err != nil || apkTransitionDigest(signatureBytes) != plan.SignatureSHA256 {
-		return errors.New("APK stored manifest signature changed")
+		return nil, errors.New("APK stored manifest signature changed")
 	}
 	manifest, err := verifySignedManifest(manifestBytes, signatureBytes, plan.CandidateVersion, keys)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if plan.Installer != "/sbin/apk" && plan.Installer != "/usr/sbin/apk" {
-		return errors.New("APK stored native manager is unsupported")
+		return nil, errors.New("APK stored native manager is unsupported")
 	}
 	target := packageTarget{packageName: plan.PackageName, os: "linux", architecture: "amd64", format: packageFormatAPK, filename: plan.Artifact.Filename, installer: plan.Installer}
 	artifact, err := manifest.artifactFor(target)
 	if err != nil || artifact != plan.Artifact {
-		return errors.New("APK stored candidate selection changed")
+		return nil, errors.New("APK stored candidate selection changed")
 	}
 	packagePath := filepath.Join(path, artifact.Filename)
 	file, err := directory.root.OpenFile(artifact.Filename, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { _ = file.Close() }()
+	opened.candidate.file = file
 	candidate := authenticatedAPKCandidate{target: target, version: plan.CandidateVersion, artifact: artifact, file: file, path: packagePath,
 		manifest: manifestBytes, signature: signatureBytes, cliSHA256: plan.CandidateCLISHA256, uid: os.Geteuid(), keys: keys, attestInstalled: attest, offline: plan.Offline}
 	if err := verifySecurePackageForInstallation(file, packagePath, artifact, candidate.uid); err != nil {
-		return err
+		return nil, err
 	}
 	if err := services.verifyNative(ctx, candidate); err != nil {
-		return err
+		return nil, err
 	}
 	inventory, header, err := readAPKTransitionInventory(ctx, file)
 	if err != nil || !reflect.DeepEqual(inventory, plan.Inventory) {
-		return errors.Join(errors.New("APK stored candidate full inventory changed"), err)
+		return nil, errors.Join(errors.New("APK stored candidate full inventory changed"), err)
 	}
 	if err := attestNativePackageHeaderWith(ctx, target, plan.CandidateVersion, file,
 		func(context.Context, *os.File) (nativePackageHeaderIdentity, error) { return header, nil }); err != nil {
-		return err
+		return nil, err
 	}
+	candidateChecksum, err := readAuthenticatedAPKRegistrationChecksum(ctx, file)
+	if err != nil || candidateChecksum != plan.CandidateAPKChecksum {
+		return nil, errors.Join(errors.New("APK stored native registration identity differs from authenticated control bytes"), err)
+	}
+
 	installed, err := attest(ctx, target, candidate.uid)
 	if err != nil || installed.version != plan.InstalledVersion || installed.cliSHA256 != plan.InstalledCLISHA256 {
-		return errors.Join(errors.New("APK original installed candidate changed since preparation"), err)
+		return nil, errors.Join(errors.New("APK original installed candidate changed since preparation"), err)
 	}
 	snapshotBytes, err := readAPKTransitionBytes(directory, "host-snapshot.json", 2*maximumAPKTransitionSnapshotBytes)
 	if err != nil || apkTransitionDigest(snapshotBytes) != plan.HostSnapshotSHA256 {
-		return errors.New("APK original host evidence changed")
+		return nil, errors.New("APK original host evidence changed")
 	}
 	var snapshot []apkTransitionHostEntry
 	if err := decodeAPKTransitionJSON(snapshotBytes, &snapshot); err != nil {
-		return err
+		return nil, err
 	}
 	current, err := captureAPKTransitionHost(ctx, services.hostRoot)
 	if err != nil || !reflect.DeepEqual(snapshot, current) {
-		return errors.Join(errors.New("APK current host differs from the explicitly reviewed plan"), err)
+		return nil, errors.Join(errors.New("APK current host differs from the explicitly reviewed plan"), err)
 	}
 	policy, err := services.policy(ctx)
 	if err != nil || policy != plan.Policy {
-		return errors.Join(errors.New("APK current runtime approval differs from the stored plan"), err)
+		return nil, errors.Join(errors.New("APK current runtime approval differs from the stored plan"), err)
 	}
 	if err := errors.Join(ctx.Err(), attestRetainedDirectoryParent(services.root, parent, false), attestRetainedDirectoryParent(path, directory, false)); err != nil {
+		return nil, err
+	}
+	capability, err := attestNativeActivationCandidate(ctx, candidate.target, candidate.file)
+	if err != nil || capability.SHA256() != plan.CandidateCapabilitySHA256 {
+		return nil, errors.Join(errors.New("APK stored runtime capability changed"), err)
+	}
+	activation, err := services.activation(ctx, candidate)
+	if err != nil {
+		return nil, err
+	}
+	if activation == nil || activation.EffectPlanSHA256() != plan.EffectPlanSHA256 {
+		return nil, errors.New("APK stored candidate effect evidence changed")
+	}
+	if err := activation.Revalidate(ctx); err != nil {
+		return nil, err
+	}
+	opened.activation, opened.capability = activation, capability
+	opened.plan, opened.candidate, opened.snapshot = plan, candidate, snapshot
+	return opened, nil
+}
+
+func approvePreparedAPKTransition(ctx context.Context, digest string, keys map[string]ed25519.PublicKey,
+	attest installedVersionAttestor, services apkTransitionServices) (returnErr error) {
+	prepared, err := openVerifiedPreparedAPKTransition(ctx, digest, keys, attest, services)
+	if err != nil {
 		return err
 	}
+	defer func() { returnErr = errors.Join(returnErr, prepared.Close()) }()
+	directory := prepared.directory
 	approval := []byte("{\"schema\":\"" + apkTransitionSchema + "\",\"state\":\"reviewed-preparation-only\",\"plan_sha256\":\"" + digest + "\",\"native_execution_authorized\":false}\n")
 	if err := writeAPKTransitionBytes(directory, "approval.json", approval); err != nil {
 		if !errors.Is(err, os.ErrExist) {

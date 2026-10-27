@@ -94,7 +94,7 @@ syswarden_preflight_install_barriers() {
                     self.assertEqual(events, ["launchers:after", "barriers", "cli:fresh:install"])
                     self.assertLess(hook.index(FRESH_BRANCH), hook.index("migrate_legacy_configuration\n"))
 
-    def test_launcher_refusal_precedes_all_other_hook_work(self) -> None:
+    def test_fresh_launcher_refusal_precedes_other_work_and_upgrade_is_refused_first(self) -> None:
         for loader in (self.contract.local_build_script, self.contract.script):
             for family in ("deb", "rpm", "apk"):
                 for phase in ("fresh", "upgrade"):
@@ -102,8 +102,8 @@ syswarden_preflight_install_barriers() {
                         hook = loader(upgraded if family == "apk" and phase == "upgrade" else name)
                         with self.subTest(family=family, phase=phase, before=before):
                             result, events = self.run_hook(hook, family, phase, before, launcher_exit=31)
-                            self.assertEqual(result.returncode, 31, result.stderr)
-                            self.assertEqual(events, ["launchers:before" if before else "launchers:after"])
+                            self.assertEqual(result.returncode, 31 if phase == "fresh" else 1, result.stderr)
+                            self.assertEqual(events, ["launchers:before" if before else "launchers:after"] if phase == "fresh" else [])
 
     def test_upgrade_and_unknown_hooks_never_enter_fresh_staging(self) -> None:
         for loader in (self.contract.local_build_script, self.contract.script):
@@ -113,9 +113,11 @@ syswarden_preflight_install_barriers() {
                         if family == "apk" and phase == "unknown":
                             continue  # APK operation is fixed by its exact generated script.
                         hook = loader(upgraded if family == "apk" else name)
-                        result, events = self.run_hook(hook, family, phase, before)
-                        self.assertEqual(result.returncode, 97, result.stderr)
-                        self.assertEqual(events, (["launchers:before", "wireguard", "barriers", "ordering", "socket"] if before else ["launchers:after", "barriers"]) + ["forbidden:syswarden_preflight_alpine_cronie"])
+                        for offline in (False, True):
+                            result, events = self.run_hook(hook, family, phase, before, offline=offline)
+                            self.assertEqual(result.returncode, 1, result.stderr)
+                            self.assertIn("separately approved coordinated native transaction", result.stderr)
+                            self.assertEqual(events, [])
 
     def test_upgrade_manager_dispositions_remain_unchanged(self) -> None:
         for loader in (self.contract.local_build_script, self.contract.script):

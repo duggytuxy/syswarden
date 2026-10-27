@@ -23,6 +23,7 @@ INSTALL_CALL = 'syswarden_set_native_install_phase postinstall "$@"'
 PREINSTALL_CALL = 'syswarden_set_native_install_phase preinstall "$@"'
 PREUPGRADE_CALL = 'syswarden_set_native_install_phase preupgrade "$@"'
 UPGRADE_CALL = 'syswarden_set_native_install_phase postupgrade "$@"'
+REFUSAL_CALL = 'syswarden_require_fresh_native_install || exit 1'
 WRAPPER_MARKER = "# APK upgrade has a fixed selector even when apk-tools supplies no phase environment.\n"
 
 
@@ -96,6 +97,50 @@ class PackageInstallPhaseTests(unittest.TestCase):
             for arguments, expected in cases:
                 with self.subTest(inherited=inherited, arguments=arguments):
                     self.assertEqual(self.run_phase(False, PREINSTALL_CALL, arguments, inherited), expected)
+
+    def test_nonfresh_gate_ignores_inherited_phase_and_qualification_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "alpine-release"
+            for alpine, call, arguments in (
+                (False, PREINSTALL_CALL, ("upgrade", "4.10.4")),
+                (False, INSTALL_CALL, ("configure", "4.10.4")),
+                (False, PREINSTALL_CALL, ("2",)),
+                (False, INSTALL_CALL, ("2",)),
+                (False, PREINSTALL_CALL, ("ambiguous",)),
+                (False, INSTALL_CALL, ()),
+                (True, PREUPGRADE_CALL, ("5.00.0-r0", "4.10.4")),
+                (True, UPGRADE_CALL, ("5.00.0-r0", "4.10.4")),
+            ):
+                if alpine:
+                    marker.write_text("3.24.0\n")
+                elif marker.exists():
+                    marker.unlink()
+                helper = HELPER.read_text().replace("/etc/alpine-release", str(marker))
+                for inherited in ("fresh", "upgrade", "unknown"):
+                    with self.subTest(alpine=alpine, call=call, arguments=arguments, inherited=inherited):
+                        script = helper + "\n" + call + "\n" + REFUSAL_CALL + "\nprintf 'EFFECT-SENTINEL\\n'\n"
+                        result = subprocess.run(
+                            ["/bin/sh", "-eu", "-c", script, "phase-refusal", *arguments],
+                            env={"PATH": os.environ["PATH"], "LC_ALL": "C",
+                                 "SYSWARDEN_NATIVE_INSTALL_PHASE": inherited,
+                                 "SYSWARDEN_PKG_INSTALL": "1", "SYSWARDEN_OFFLINE_QUALIFICATION": "1",
+                                 "APK_SCRIPT": "post-install", "APK_PACKAGE": "syswarden-base"},
+                            capture_output=True, text=True, check=False, timeout=5,
+                        )
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        self.assertNotIn("EFFECT-SENTINEL", result.stdout)
+                        self.assertIn("separately approved coordinated native transaction", result.stderr)
+
+    def test_both_builders_gate_every_install_hook_immediately_after_phase(self) -> None:
+        for name, phase in (("preinst.sh", PREINSTALL_CALL), ("preupgrade.sh", PREUPGRADE_CALL),
+                            ("postinst.sh", INSTALL_CALL), ("postupgrade.sh", UPGRADE_CALL)):
+            local, public = self.contract.local_build_script(name), self.contract.script(name)
+            self.assertEqual(local, public)
+            body = local[local.rindex("\nset -e\nexport SYSWARDEN_PKG_INSTALL=1") + 1:]
+            self.assertEqual(body.splitlines()[2:4], [phase, REFUSAL_CALL])
+            for sentinel in ("secure_private_directory", "migrate_legacy_configuration", "syswarden_retire_legacy_webtui /", "/opt/syswarden/bin/syswarden-cli install"):
+                if sentinel in body:
+                    self.assertLess(body.index(REFUSAL_CALL), body.index(sentinel))
 
     def generated_upgrade(self, source: str, installed: str, directory: Path, preinstalled: str) -> subprocess.CompletedProcess[str]:
         block = source.split(WRAPPER_MARKER, 1)[1].split("chmod ", 1)[0]
