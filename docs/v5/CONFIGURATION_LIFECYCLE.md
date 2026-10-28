@@ -241,6 +241,15 @@ alone proves neither runtime inactivity nor permission to replace a package.
 The complete inactive-update coordinator and signed native acceptance remain
 required before that path can be exposed.
 
+New native artifacts declare `syswarden-native-activation-v2` with the exact
+`config-directory-flock-and-native-debt-v1` publication protocol. The historical
+`activation-contract-v1.json` path is retained to preserve package layout.
+Legacy v1 descriptors remain readable under their original contract and never
+implicitly acquire the new capability. An internal read-only observer binds the
+installed descriptor to the actual CLI/core bytes and detects later replacement.
+Both source and candidate must support the protocol before an inactive update
+can rely on it; declaring it alone proves neither inactivity nor update consent.
+
 Approval and successful application are separate root-private records. An
 approved install permits its nested firewall reload and independent core start
 before the parent can record success; a child reload cannot record completion

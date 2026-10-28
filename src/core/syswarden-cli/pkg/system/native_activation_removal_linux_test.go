@@ -10,7 +10,7 @@ import (
 )
 
 func TestNativeActivationDescriptorRemovalRequiresExactDerivedBytes(t *testing.T) {
-	for _, outcome := range []string{"historical-absent", "exact", "changed-contract", "changed-core-hash", "writable", "symlink"} {
+	for _, outcome := range []string{"historical-absent", "legacy-v1", "exact", "changed-contract", "changed-core-hash", "writable", "symlink"} {
 		t.Run(outcome, func(t *testing.T) {
 			base, root, expected := standalonePayloadFixture(t)
 			name := "syswarden/" + filepath.Base(nativeActivationDescriptorPath)
@@ -19,6 +19,11 @@ func TestNativeActivationDescriptorRemovalRequiresExactDerivedBytes(t *testing.T
 				t.Fatal(err)
 			}
 			switch outcome {
+			case "legacy-v1":
+				raw, err = canonicalNativeActivationDescriptor(nativeActivationLegacyDescriptorFor(expected["bin/syswarden-cli"], expected["bin/syswarden-core"]))
+				if err != nil {
+					t.Fatal(err)
+				}
 			case "changed-contract":
 				raw = bytes.ReplaceAll(raw, []byte("approval-v1"), []byte("approval-v9"))
 			case "changed-core-hash":
@@ -48,7 +53,7 @@ func TestNativeActivationDescriptorRemovalRequiresExactDerivedBytes(t *testing.T
 			}
 			defer directory.close()
 			snapshot, err := inspectStandalonePayload(directory, expected)
-			wantValid := outcome == "historical-absent" || outcome == "exact"
+			wantValid := outcome == "historical-absent" || outcome == "legacy-v1" || outcome == "exact"
 			if (err == nil) != wantValid {
 				t.Fatalf("ownership outcome %s: %v", outcome, err)
 			}

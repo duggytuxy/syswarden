@@ -118,11 +118,11 @@ def expected_descriptor(root: Path) -> bytes:
         return Capture(root, stack).expected()
 
 
-def descriptor_for_digests(cli: str, core: str) -> bytes:
+def descriptor_for_digests(cli: str, core: str, *, legacy: bool = False) -> bytes:
     if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in (cli, core)):
         raise ValueError("runtime capability requires exact lowercase SHA-256 digests")
     value = {
-        "schema": "syswarden-native-activation-v1",
+        "schema": "syswarden-native-activation-v1" if legacy else "syswarden-native-activation-v2",
         "architecture": "linux-amd64",
         "approval_schema": "syswarden-activation-approval-v1",
         "source_contract": "syswarden-toml-source-v1",
@@ -130,6 +130,8 @@ def descriptor_for_digests(cli: str, core: str) -> bytes:
         "cli_sha256": cli,
         "core_sha256": core,
     }
+    if not legacy:
+        value["publication_exclusion"] = "config-directory-flock-and-native-debt-v1"
     return (json.dumps(value, separators=(",", ":")) + "\n").encode("ascii")
 
 

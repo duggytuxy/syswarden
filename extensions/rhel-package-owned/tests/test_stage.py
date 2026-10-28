@@ -916,6 +916,27 @@ class RHELActivationDescriptorTests(unittest.TestCase):
         )
         return entries, records
 
+    def test_preun_exact_serializers_preserve_legacy_without_granting_new_capability(self):
+        source = (EXTENSION_ROOT / "scriptlets/pre-uninstall.sh").read_text()
+        start = source.index('    descriptor_expected_digest="$(printf')
+        end = source.index('    exact_owned_payload_file /opt/syswarden/bin/syswarden-cli', start)
+        body = source[start:end]
+        contract = verify_contract.native_activation_descriptor
+        for legacy in (True, False):
+            raw = contract.descriptor_for_digests("a" * 64, "b" * 64, legacy=legacy)
+            exact = hashlib.sha256(raw).hexdigest()
+            for actual in (exact, "0" * 64):
+                script = ("fail() { exit 17; }\n" +
+                          "descriptor_cli_digest=" + "a" * 64 + "\n" +
+                          "descriptor_core_digest=" + "b" * 64 + "\n" +
+                          "descriptor_record_digest=" + actual + "\n" + body +
+                          'printf "%s\\n" "$descriptor_expected_digest"\n')
+                result = subprocess.run(["/bin/sh", "-eu", "-c", script],
+                                        capture_output=True, text=True, check=False, timeout=5)
+                self.assertEqual(result.returncode == 0, actual == exact, result.stderr)
+                if actual == exact:
+                    self.assertEqual(result.stdout.strip(), exact)
+
     def descriptor_record(self, records):
         contract = verify_contract.native_activation_descriptor
         digest = hashlib.sha256(contract.descriptor_for_digests(

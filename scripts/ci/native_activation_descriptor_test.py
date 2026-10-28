@@ -29,7 +29,8 @@ class NativeActivationDescriptorTests(unittest.TestCase):
         descriptor.validate(self.root)
         raw = (self.root / descriptor.DESCRIPTOR_PATH).read_bytes()
         record = json.loads(raw)
-        self.assertEqual(record["schema"], "syswarden-native-activation-v1")
+        self.assertEqual(record["schema"], "syswarden-native-activation-v2")
+        self.assertEqual(record["publication_exclusion"], "config-directory-flock-and-native-debt-v1")
         for component in ("cli", "core"):
             self.assertEqual(record[component + "_sha256"], hashlib.sha256(
                 (self.binary / ("syswarden-" + component)).read_bytes()).hexdigest())
@@ -49,6 +50,20 @@ class NativeActivationDescriptorTests(unittest.TestCase):
         (self.binary / "syswarden-core").write_bytes(b"changed core")
         with self.assertRaises(ValueError):
             descriptor.validate(self.root)
+
+    def test_legacy_bytes_remain_explicit_and_cannot_validate_a_new_stage(self):
+        cli = hashlib.sha256((self.binary / "syswarden-cli").read_bytes()).hexdigest()
+        core = hashlib.sha256((self.binary / "syswarden-core").read_bytes()).hexdigest()
+        legacy = descriptor.descriptor_for_digests(cli, core, legacy=True)
+        document = json.loads(legacy)
+        self.assertEqual(document["schema"], "syswarden-native-activation-v1")
+        self.assertNotIn("publication_exclusion", document)
+        descriptor.generate(self.root)
+        output = self.root / descriptor.DESCRIPTOR_PATH
+        output.write_bytes(legacy)
+        with self.assertRaises(ValueError):
+            descriptor.validate(self.root)
+        self.assertEqual(output.read_bytes(), legacy)
 
     def test_refuses_symlink_fifo_hardlink_and_writable_payload(self):
         core = self.binary / "syswarden-core"

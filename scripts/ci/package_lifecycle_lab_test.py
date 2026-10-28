@@ -6475,6 +6475,21 @@ printf() {
                     wire = ["\t".join(str(entry[field]) for field in ("path", "type", "mode", "uid", "gid", "value")) for entry in filesystem]
                     result = self.run_embedded_inventory_contract(family, paths, wire, version="4.04.0", candidate_version="4.04.0")
                     self.assertEqual(result.returncode == 0, mutation is None, result.stderr)
+                legacy = package_lifecycle_lab.native_activation_descriptor.descriptor_for_digests(
+                    by_path["/opt/syswarden/bin/syswarden-cli"]["value"],
+                    by_path["/opt/syswarden/bin/syswarden-core"]["value"], legacy=True)
+                descriptor_entry.update(value=hashlib.sha256(legacy).hexdigest(), mode="644", uid=0)
+                wire = ["\t".join(str(entry[field]) for field in ("path", "type", "mode", "uid", "gid", "value")) for entry in filesystem]
+                for role in ("previous", "candidate"):
+                    validate = lambda: package_lifecycle_lab.validate_inventory_snapshot(
+                        family, paths, filesystem, role=role, version="4.04.0", candidate_version="4.04.0")
+                    if role == "previous":
+                        validate()
+                    else:
+                        with self.assertRaises(package_lifecycle_lab.LifecycleLabError):
+                            validate()
+                    result = self.run_embedded_inventory_contract(family, paths, wire, role=role, version="4.04.0", candidate_version="4.04.0")
+                    self.assertEqual(result.returncode == 0, role == "previous", result.stderr)
 
     def test_embedded_inventory_contract_rejects_type_mode_owner_and_link_drift(
         self,

@@ -3214,7 +3214,12 @@ validate_inventory_contract() {
             LC_ALL=C grep -Ev '^[0-9a-f]{64}$' | grep -q . && return 1
         activation_descriptor_hash="$(printf '{"schema":"syswarden-native-activation-v1","architecture":"linux-amd64","approval_schema":"syswarden-activation-approval-v1","source_contract":"syswarden-toml-source-v1","environment":"toml-only-reject-modular-environment-v1","cli_sha256":"%s","core_sha256":"%s"}\n' \
             "${activation_cli_hash}" "${activation_core_hash}" | sha256sum | awk '{ print $1 }')" || return 1
-        inventory_has_exact_entry "${inventory}" /opt/syswarden/activation-contract-v1.json file 644 "${activation_descriptor_hash}" || return 1
+        activation_current_hash="$(printf '{"schema":"syswarden-native-activation-v2","architecture":"linux-amd64","approval_schema":"syswarden-activation-approval-v1","source_contract":"syswarden-toml-source-v1","environment":"toml-only-reject-modular-environment-v1","cli_sha256":"%s","core_sha256":"%s","publication_exclusion":"config-directory-flock-and-native-debt-v1"}\n' \
+            "${activation_cli_hash}" "${activation_core_hash}" | sha256sum | awk '{ print $1 }')" || return 1
+        if ! inventory_has_exact_entry "${inventory}" /opt/syswarden/activation-contract-v1.json file 644 "${activation_current_hash}"; then
+            [ "${artifact_role}" = previous ] || return 1
+            inventory_has_exact_entry "${inventory}" /opt/syswarden/activation-contract-v1.json file 644 "${activation_descriptor_hash}" || return 1
+        fi
     fi
     if [ "${launcher_free_apk}" -eq 0 ]; then
         inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden symlink 777 /opt/syswarden/bin/syswarden-cli || return 1
@@ -7305,7 +7310,13 @@ def validate_inventory_snapshot(
             str(entries["/opt/syswarden/bin/syswarden-cli"]["value"]),
             str(entries["/opt/syswarden/bin/syswarden-core"]["value"]),
         )
-        if entries[descriptor_path]["value"] != hashlib.sha256(expected_descriptor).hexdigest():
+        expected_descriptor_hashes = {hashlib.sha256(expected_descriptor).hexdigest()}
+        if role == "previous":
+            legacy = native_activation_descriptor.descriptor_for_digests(
+                str(entries["/opt/syswarden/bin/syswarden-cli"]["value"]),
+                str(entries["/opt/syswarden/bin/syswarden-core"]["value"]), legacy=True)
+            expected_descriptor_hashes.add(hashlib.sha256(legacy).hexdigest())
+        if entries[descriptor_path]["value"] not in expected_descriptor_hashes:
             raise LifecycleLabError("native activation descriptor does not bind the recorded runtimes")
     if license_payloads:
         attribution = entries[GEOIP_DATA_LICENSE_PATH]

@@ -140,10 +140,15 @@ exact_optional_activation_descriptor() {
     descriptor_tail="${descriptor_digests#* }"
     descriptor_core_digest="${descriptor_tail%% *}"
     descriptor_record_digest="${descriptor_tail#* }"
-    # This is the exact canonical native-activation-v1 serializer. The installed
+    # These are the exact canonical native activation v1/v2 serializers. The installed
     # package hashes, not mutable local descriptor fields, select the binaries.
     descriptor_expected_digest="$(printf '{"schema":"syswarden-native-activation-v1","architecture":"linux-amd64","approval_schema":"syswarden-activation-approval-v1","source_contract":"syswarden-toml-source-v1","environment":"toml-only-reject-modular-environment-v1","cli_sha256":"%s","core_sha256":"%s"}\n' \
         "$descriptor_cli_digest" "$descriptor_core_digest" | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')"
+    descriptor_current_digest="$(printf '{"schema":"syswarden-native-activation-v2","architecture":"linux-amd64","approval_schema":"syswarden-activation-approval-v1","source_contract":"syswarden-toml-source-v1","environment":"toml-only-reject-modular-environment-v1","cli_sha256":"%s","core_sha256":"%s","publication_exclusion":"config-directory-flock-and-native-debt-v1"}\n' \
+        "$descriptor_cli_digest" "$descriptor_core_digest" | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')"
+    if [ "$descriptor_record_digest" = "$descriptor_current_digest" ]; then
+        descriptor_expected_digest="$descriptor_current_digest"
+    fi
     [ "$descriptor_record_digest" = "$descriptor_expected_digest" ] || \
         fail 'Installed RPM native activation descriptor differs from its exact binary bindings.'
     exact_owned_payload_file /opt/syswarden/bin/syswarden-cli 750 "$descriptor_cli_digest"

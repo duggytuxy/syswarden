@@ -179,12 +179,19 @@ func inspectBoundPayload(directory *pinnedServiceDirectory, expected map[string]
 		_, _ = digest.Write([]byte(name + "\x00" + actual + "\n"))
 	}
 	if descriptorPresent {
-		raw, err := canonicalNativeActivationDescriptor(nativeActivationDescriptorFor(expected["bin/syswarden-cli"], expected["bin/syswarden-core"]))
-		if err != nil {
-			return result, err
+		expectedDescriptors := make(map[string]int64)
+		for _, descriptor := range []nativeActivationDescriptor{
+			nativeActivationLegacyDescriptorFor(expected["bin/syswarden-cli"], expected["bin/syswarden-core"]),
+			nativeActivationDescriptorFor(expected["bin/syswarden-cli"], expected["bin/syswarden-core"]),
+		} {
+			raw, err := canonicalNativeActivationDescriptor(descriptor)
+			if err != nil {
+				return result, err
+			}
+			expectedDescriptors[fmt.Sprintf("%x", sha256.Sum256(raw))] = int64(len(raw))
 		}
 		before, err := directory.root.Lstat(descriptorName)
-		if err != nil || !before.Mode().IsRegular() || before.Size() != int64(len(raw)) {
+		if err != nil || !before.Mode().IsRegular() || before.Size() > maximumNativeActivationDescriptorBytes {
 			return result, errors.New("native activation removal descriptor is ambiguous")
 		}
 		beforeIdentity, err := exactRemovalArtifactIdentity(before)
@@ -197,8 +204,8 @@ func inspectBoundPayload(directory *pinnedServiceDirectory, expected map[string]
 		}
 		identity, actual, readErr := hashStandalonePayload(file, 0644)
 		closeErr := file.Close()
-		want := fmt.Sprintf("%x", sha256.Sum256(raw))
-		if readErr != nil || closeErr != nil || identity != beforeIdentity || actual != want {
+		size, known := expectedDescriptors[actual]
+		if readErr != nil || closeErr != nil || identity != beforeIdentity || !known || before.Size() != size {
 			return result, errors.New("native activation removal descriptor does not match bound runtimes")
 		}
 		after, err := directory.root.Lstat(descriptorName)

@@ -21,20 +21,23 @@ import (
 	"syscall"
 )
 
+// The historical path remains stable; the strict schema inside distinguishes capabilities.
 const nativeActivationDescriptorPath = "opt/syswarden/activation-contract-v1.json"
 const nativeActivationCorePath = "opt/syswarden/bin/syswarden-core"
 const maximumNativeActivationDescriptorBytes = 4096
+const nativePublicationExclusion = "config-directory-flock-and-native-debt-v1"
 
 // This descriptor classifies authenticated runtime bytes. It never grants
 // administrator approval, package replacement, service changes or activation.
 type nativeActivationDescriptor struct {
-	Schema         string `json:"schema"`
-	Architecture   string `json:"architecture"`
-	ApprovalSchema string `json:"approval_schema"`
-	SourceContract string `json:"source_contract"`
-	Environment    string `json:"environment"`
-	CLISHA256      string `json:"cli_sha256"`
-	CoreSHA256     string `json:"core_sha256"`
+	Schema               string `json:"schema"`
+	Architecture         string `json:"architecture"`
+	ApprovalSchema       string `json:"approval_schema"`
+	SourceContract       string `json:"source_contract"`
+	Environment          string `json:"environment"`
+	CLISHA256            string `json:"cli_sha256"`
+	CoreSHA256           string `json:"core_sha256"`
+	PublicationExclusion string `json:"publication_exclusion,omitempty"`
 }
 
 // NativeActivationCandidate contains only a private immutable value captured
@@ -45,35 +48,58 @@ type NativeActivationCandidate struct {
 }
 
 type NativeActivationCandidateReview struct {
-	Schema           string `json:"schema"`
-	Architecture     string `json:"architecture"`
-	ApprovalSchema   string `json:"approval_schema"`
-	SourceContract   string `json:"source_contract"`
-	Environment      string `json:"environment"`
-	CLISHA256        string `json:"cli_sha256"`
-	CoreSHA256       string `json:"core_sha256"`
-	DescriptorSHA256 string `json:"descriptor_sha256"`
+	Schema               string `json:"schema"`
+	Architecture         string `json:"architecture"`
+	ApprovalSchema       string `json:"approval_schema"`
+	SourceContract       string `json:"source_contract"`
+	Environment          string `json:"environment"`
+	CLISHA256            string `json:"cli_sha256"`
+	CoreSHA256           string `json:"core_sha256"`
+	DescriptorSHA256     string `json:"descriptor_sha256"`
+	PublicationExclusion string `json:"publication_exclusion,omitempty"`
 }
 
 func (candidate NativeActivationCandidate) Review() NativeActivationCandidateReview {
 	d := candidate.descriptor
-	return NativeActivationCandidateReview{d.Schema, d.Architecture, d.ApprovalSchema, d.SourceContract, d.Environment, d.CLISHA256, d.CoreSHA256, candidate.digest}
+	return NativeActivationCandidateReview{d.Schema, d.Architecture, d.ApprovalSchema, d.SourceContract, d.Environment, d.CLISHA256, d.CoreSHA256, candidate.digest, d.PublicationExclusion}
 }
 
 // SHA256 binds the exact descriptor, not an approval or the complete package.
 // The consuming transaction must separately bind its authenticated artifact.
 func (candidate NativeActivationCandidate) SHA256() string { return candidate.digest }
 
+func nativeActivationLegacyDescriptorFor(cli, core string) nativeActivationDescriptor {
+	return nativeActivationDescriptor{Schema: "syswarden-native-activation-v1", Architecture: "linux-amd64",
+		ApprovalSchema: "syswarden-activation-approval-v1", SourceContract: "syswarden-toml-source-v1",
+		Environment: "toml-only-reject-modular-environment-v1", CLISHA256: cli, CoreSHA256: core}
+}
+
 func nativeActivationDescriptorFor(cli, core string) nativeActivationDescriptor {
-	return nativeActivationDescriptor{"syswarden-native-activation-v1", "linux-amd64", "syswarden-activation-approval-v1", "syswarden-toml-source-v1", "toml-only-reject-modular-environment-v1", cli, core}
+	descriptor := nativeActivationLegacyDescriptorFor(cli, core)
+	descriptor.Schema = "syswarden-native-activation-v2"
+	descriptor.PublicationExclusion = nativePublicationExclusion
+	return descriptor
 }
 
 func canonicalNativeActivationDescriptor(descriptor nativeActivationDescriptor) ([]byte, error) {
-	if !validSHA256(descriptor.CLISHA256) || !validSHA256(descriptor.CoreSHA256) || descriptor != nativeActivationDescriptorFor(descriptor.CLISHA256, descriptor.CoreSHA256) {
+	if !validSHA256(descriptor.CLISHA256) || !validSHA256(descriptor.CoreSHA256) ||
+		(descriptor != nativeActivationDescriptorFor(descriptor.CLISHA256, descriptor.CoreSHA256) &&
+			descriptor != nativeActivationLegacyDescriptorFor(descriptor.CLISHA256, descriptor.CoreSHA256)) {
 		return nil, errors.New("native activation descriptor has an unsupported runtime contract")
 	}
 	raw, err := json.Marshal(descriptor)
 	return append(raw, '\n'), err
+}
+
+// publicationExclusion proves only the declared cooperative protocol of exact
+// authenticated runtime bytes. It is neither inactive-host proof nor consent.
+// Legacy v1 remains readable without acquiring this new capability implicitly.
+func (candidate NativeActivationCandidate) publicationExclusion() bool {
+	if candidate.descriptor != nativeActivationDescriptorFor(candidate.descriptor.CLISHA256, candidate.descriptor.CoreSHA256) {
+		return false
+	}
+	raw, err := canonicalNativeActivationDescriptor(candidate.descriptor)
+	return err == nil && apkTransitionDigest(raw) == candidate.digest
 }
 
 func parseNativeActivationDescriptor(raw []byte) (NativeActivationCandidate, error) {
