@@ -134,12 +134,19 @@ func (policy *ActivationPolicy) Approve(ctx context.Context, request ActivationA
 	return policy.approveAt(ctx, store, request, revalidateHost)
 }
 
-func (policy *ActivationPolicy) approveAt(ctx context.Context, store activationApprovalStore, request ActivationApprovalRequest, revalidateHost func() error) (*ActivationApproval, error) {
+func (policy *ActivationPolicy) approveAt(ctx context.Context, store activationApprovalStore, request ActivationApprovalRequest, revalidateHost func() error) (_ *ActivationApproval, result error) {
 	if !activationHex(request.PlanSHA256) || request.ApprovedPlanSHA256 != request.PlanSHA256 ||
 		(request.PreviousApprovalSHA256 != "" && !activationHex(request.PreviousApprovalSHA256)) ||
 		(request.Operation != "install" && request.Operation != "reload") || revalidateHost == nil {
 		return nil, errors.New("activation requires exact reviewed plan approval and live host revalidation")
 	}
+	// Inactive package preservation holds exclusive custody of this existing
+	// directory. Publication takes shared custody before creating any state.
+	lease, err := policy.lockActivationPolicy(ctx, store.uid, unix.LOCK_SH)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { result = errors.Join(result, lease.Close()) }()
 	guard := func() error {
 		if err := policy.Revalidate(ctx); err != nil {
 			return err

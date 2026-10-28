@@ -61,6 +61,15 @@ Upgrades preserve administrator configuration, selected protection and existing
 dependencies. A missing new TOML switch in a historical configuration is not
 permission to disable its former behavior or remove a package.
 
+An inactive installation must not be activated merely to make an update pass.
+The coordinated inactive-update path remains unavailable until its distinct
+preservation plan, native execution and independent terminal verification are
+qualified. Existing applied-install approval is not manufactured or treated as
+optional. Internal APK before/after attestation now selects the exact package
+name, validates the original healthy registration, rejects a second product
+identity and compares unrelated native records and dependency reasons without
+changing them. These checks do not open generic `syswarden-base` updates.
+
 ## Native service activation choices
 
 The standard native hooks distinguish fresh installation from upgrade using

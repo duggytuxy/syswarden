@@ -446,11 +446,11 @@ func TestAPKExecutionPreDispatchCustodyFailureNeverInvokesAPK(t *testing.T) {
 func TestAPKExecutionNativeDatabaseChecksAliasItselfAndPreservesTargetOwnership(t *testing.T) {
 	safe := strings.Replace(apkRetentionFixtureDatabase(), "V:4.10.4-r0", "V:5.00.0-r0", 1)
 	safe = strings.Replace(safe, "F:opt/syswarden\nR:fixture", "F:opt/syswarden/bin\nR:syswarden-cli", 1)
-	if _, _, err := apkExecutionDatabase([]byte(safe)); err != nil {
+	if _, _, err := apkExecutionDatabase([]byte(safe), compatibilityNativePackageName, true); err != nil {
 		t.Fatal("target ownership was mistaken for alias ownership", err)
 	}
 	for _, record := range []string{"F:usr/local/bin\nR:syswarden", "F:usr/local/bin\nR:syswarden-tui", "F:usr/local/../local/bin\nR:syswarden", "F:usr/local/bin\nR:../syswarden", "P:syswarden\nP:syswarden\nV:5.00.0-r0"} {
-		if _, _, err := apkExecutionDatabase([]byte(safe + "\nP:extra\nV:1.0-r0\n" + record + "\n\n")); err == nil {
+		if _, _, err := apkExecutionDatabase([]byte(safe+"\nP:extra\nV:1.0-r0\n"+record+"\n\n"), compatibilityNativePackageName, true); err == nil {
 			t.Fatal("ambiguous or alias-owning native record accepted", record)
 		}
 	}

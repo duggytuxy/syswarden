@@ -51,6 +51,7 @@ var configActivateCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return installCmd.RunE(cmd, args) },
 }
 
+var preflightAPKActivation = system.PreflightAPKConfigurationActivation
 var captureActivationPolicy = config.CaptureActivationPolicy
 var captureActivationHost = system.CaptureActivationHost
 var prepareConfigurationActivationHook = prepareConfigurationActivation
@@ -106,6 +107,9 @@ func prepareConfigurationActivation(cmd *cobra.Command) error {
 		ctx = context.Background()
 	}
 	cmd.SetContext(ctx)
+	if err := preflightAPKActivation(ctx); err != nil {
+		return err
+	}
 	if err := preflightWireGuardPolicyTransition(); err != nil {
 		return err
 	}
@@ -212,6 +216,9 @@ func prepareConfigurationActivation(cmd *cobra.Command) error {
 		return errors.New("activation approval does not match the current exact plan; no change applied")
 	}
 	reviewedHost := func(check context.Context) error {
+		if err := preflightAPKActivation(check); err != nil {
+			return err
+		}
 		if err := readonlyConfigurationLifecyclePreflight(cmd); err != nil {
 			return err
 		}
@@ -246,6 +253,9 @@ func consumeConfigurationActivation(cmd *cobra.Command, policy *config.Activatio
 		return errors.New("activation approval changed before consumption")
 	}
 	verifyAuthority := func(check context.Context) error {
+		if err := preflightAPKActivation(check); err != nil {
+			return err
+		}
 		if err := policy.Revalidate(check); err != nil {
 			return err
 		}
@@ -320,6 +330,9 @@ func consumeApprovedOperationalConfiguration(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := preflightAPKActivation(ctx); err != nil {
+		return err
 	}
 	policy, err := captureActivationPolicy(ctx, configEditorRoot)
 	if err != nil {

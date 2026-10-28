@@ -876,7 +876,10 @@ func attestAPKExecutionHost(original, current []apkTransitionHostEntry, plan apk
 
 // Direct F/R records establish alias registration. `apk info --who-owns` can
 // report a symlink target's owner, which is not ownership of the alias itself.
-func apkExecutionDatabase(data []byte) (map[string]string, map[string]string, error) {
+func apkExecutionDatabase(data []byte, selected string, refuseAliases bool) (map[string]string, map[string]string, error) {
+	if !validNativeProductPackageName(selected) {
+		return nil, nil, errors.New("APK observed database requires the exact selected product identity")
+	}
 	if len(data) == 0 || len(data) > maximumAPKInstalledDatabaseSize || bytes.ContainsAny(data, "\x00\r") {
 		return nil, nil, errors.New("APK observed native database is malformed")
 	}
@@ -913,7 +916,7 @@ func apkExecutionDatabase(data []byte) (map[string]string, map[string]string, er
 					return nil, nil, errors.New("APK observed database has a noncanonical file")
 				}
 				path := directory + "/" + value
-				if path == "usr/local/bin/syswarden" || path == "usr/local/bin/syswarden-tui" {
+				if refuseAliases && (path == "usr/local/bin/syswarden" || path == "usr/local/bin/syswarden-tui") {
 					return nil, nil, errors.New("APK retained administrator alias is still directly package-owned")
 				}
 			}
@@ -922,7 +925,7 @@ func apkExecutionDatabase(data []byte) (map[string]string, map[string]string, er
 			return nil, nil, errors.New("APK observed database identity is missing or duplicated")
 		}
 		records[name] = block
-		if name == compatibilityNativePackageName {
+		if name == selected {
 			fields = values
 		}
 	}
@@ -932,28 +935,26 @@ func apkExecutionDatabase(data []byte) (map[string]string, map[string]string, er
 func attestAPKExecutionNativeState(oldWorld, oldDatabase, newWorld, newDatabase []byte, plan apkTransitionPlan) error {
 	// Original aliases may be registered before overlay. Only the new database
 	// is subjected to the direct alias-ownership check.
-	oldRecords := map[string]string{}
-	for _, block := range strings.Split(strings.TrimRight(string(oldDatabase), "\n"), "\n\n") {
-		for _, line := range strings.Split(block, "\n") {
-			if strings.HasPrefix(line, "P:") {
-				name := line[2:]
-				if name == "" || oldRecords[name] != "" {
-					return errors.New("APK original native identity is ambiguous")
-				}
-				oldRecords[name] = block
-			}
-		}
+	oldRecords, original, err := apkExecutionDatabase(oldDatabase, plan.PackageName, false)
+	if err != nil {
+		return fmt.Errorf("APK original database is invalid: %w", err)
 	}
-	current, fields, err := apkExecutionDatabase(newDatabase)
+	originalVersion, err := canonicalInstalledAPKVersionForName(original["V"], plan.PackageName)
+	if err != nil || originalVersion != plan.InstalledVersion || original["A"] != "x86_64" || !validAPKRetentionChecksum(original["C"]) || strings.Trim(original["f"], "S") != "" {
+		return errors.New("APK original product registration is not the healthy selected source")
+	}
+	current, fields, err := apkExecutionDatabase(newDatabase, plan.PackageName, true)
 	if err != nil {
 		return err
+	}
+	for _, other := range []string{compatibilityNativePackageName, baseNativePackageName} {
+		if other != plan.PackageName && (oldRecords[other] != "" || current[other] != "") {
+			return errors.New("APK execution requires one unchanged selected product identity")
+		}
 	}
 	version, err := canonicalInstalledAPKVersionForName(fields["V"], plan.PackageName)
 	if err != nil || version != plan.CandidateVersion || fields["A"] != "x86_64" || !validAPKRetentionChecksum(fields["C"]) || fields["C"] != plan.CandidateAPKChecksum || strings.Trim(fields["f"], "S") != "" {
 		return errors.New("APK observed product registration is not the healthy selected candidate")
-	}
-	if _, exists := current[baseNativePackageName]; exists {
-		return errors.New("APK execution introduced a second product identity")
 	}
 	for name, record := range oldRecords {
 		if name != plan.PackageName && current[name] != record {

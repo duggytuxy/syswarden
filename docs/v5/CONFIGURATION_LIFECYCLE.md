@@ -225,6 +225,22 @@ also revalidate the retained record. If source or approval identity changes
 within that boundary, the command refuses success and preserves the private
 record for inspection instead of silently declaring the new state approved.
 
+Configuration activation and ordinary operational approval consumers refuse
+retained Alpine transition hooks, gate-retirement quarantine and unresolved
+launcher lineage. Removing a temporary hook is not a completion procedure. The
+lineage reader requires the independent positive closure record after all
+transaction resources have closed. Preserve incomplete records for bounded
+native recovery; do not delete them to make activation proceed.
+
+Approval publication also participates in an exclusion lock on the captured
+configuration directory. The internal inactive-preservation observer can retain
+exclusive custody while confirming absent approval state and unchanged TOML.
+It creates no approval or application record. Existing state, even an empty
+activation directory, is unresolved history for this observer. This observation
+alone proves neither runtime inactivity nor permission to replace a package.
+The complete inactive-update coordinator and signed native acceptance remain
+required before that path can be exposed.
+
 Approval and successful application are separate root-private records. An
 approved install permits its nested firewall reload and independent core start
 before the parent can record success; a child reload cannot record completion
