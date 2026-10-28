@@ -45,6 +45,33 @@ func apkTerminalCompleteFixtureWithSetup(t *testing.T, setup func(*authenticated
 
 func apkTerminalCompleteFixtureWithCustody(t *testing.T, setup func(*authenticatedAPKCandidate, *apkTransitionServices), custody func(context.Context, *verifiedPreparedAPKTransition, string, *apkExecutionTestBoundary) (apkExecutionBoundary, error)) (*apkExecutionTestFixture, func(context.Context, *verifiedPreparedAPKTransition) (apkTerminalBoundary, error)) {
 	t.Helper()
+	f, boundary, runner, bindNative := apkTerminalReadyFixture(t, setup)
+	var err error
+	if custody == nil {
+		err = f.execute(t.Context(), boundary, apkExecutionServices{run: runner})
+	} else {
+		factory := func(ctx context.Context, prepared *verifiedPreparedAPKTransition) (apkExecutionBoundary, error) {
+			return custody(ctx, prepared, f.review.PlanSHA256, boundary)
+		}
+		err = executeAPKTransitionWith(t.Context(), f.preparation.PlanSHA256, f.review.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, factory, apkExecutionServices{run: runner})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindNative()
+	if err := retainAPKExecutionClosure(t.Context(), f.services.root, f.review.PlanSHA256); err != nil {
+		t.Fatal(err)
+	}
+	factory := func(ctx context.Context, prepared *verifiedPreparedAPKTransition) (apkTerminalBoundary, error) {
+		return &apkExecutionTestBoundary{digest: prepared.plan.EffectPlanSHA256}, ctx.Err()
+	}
+	return f, factory
+}
+
+// The ready fixture retains authenticated inert inputs but has not dispatched
+// its synthetic native runner. This permits testing the complete coordinator.
+func apkTerminalReadyFixture(t *testing.T, setup func(*authenticatedAPKCandidate, *apkTransitionServices)) (*apkExecutionTestFixture, *apkExecutionTestBoundary, func(context.Context, *verifiedPreparedAPKTransition, *os.File, []string, io.Writer) error, func()) {
+	t.Helper()
 	candidate, services, _ := apkTransitionFixture(t)
 	services.root = filepath.Join(services.hostRoot, strings.TrimPrefix(apkTransitionRoot, "/"))
 	if setup != nil {
@@ -207,45 +234,30 @@ func apkTerminalCompleteFixtureWithCustody(t *testing.T, setup func(*authenticat
 		}
 		return retainAPKNativeResult(directory, &apkTransitionHandoff{record: record, digest: handoffSHA, phases: 4}, []byte("inert native transaction fixture\n"))
 	}
-	if custody == nil {
-		err = f.execute(t.Context(), boundary, apkExecutionServices{run: runner})
-	} else {
-		factory := func(ctx context.Context, prepared *verifiedPreparedAPKTransition) (apkExecutionBoundary, error) {
-			return custody(ctx, prepared, f.review.PlanSHA256, boundary)
-		}
-		err = executeAPKTransitionWith(t.Context(), f.preparation.PlanSHA256, f.review.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, factory, apkExecutionServices{run: runner})
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Bind the synthetic adapter observations explicitly. Production receives this
-	// digest only from prepareAPKTransitionHandoff and the actual native adapter.
-	for _, state := range []string{"armed", "native-started", "observed", "completed"} {
-		path := filepath.Join(f.review.Directory, state+".json")
-		raw, err := os.ReadFile(path) // #nosec G304 -- closed state-name table selects only records in this test private execution directory
-		if err != nil {
-			t.Fatal(err)
-		}
-		var event apkExecutionEvent
-		if err := decodeAPKTransitionJSON(raw, &event); err != nil {
-			t.Fatal(err)
-		}
-		event.NativeHandoffSHA256 = handoffSHA
-		raw, err = apkExecutionJSON(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, raw, 0600); err != nil {
-			t.Fatal(err)
+	bindNative := func() {
+		// Bind the synthetic adapter observations explicitly. Production receives this
+		// digest only from prepareAPKTransitionHandoff and the actual native adapter.
+		for _, state := range []string{"armed", "native-started", "observed", "completed"} {
+			path := filepath.Join(f.review.Directory, state+".json")
+			raw, err := os.ReadFile(path) // #nosec G304 -- closed state-name table selects only records in this test private execution directory
+			if err != nil {
+				t.Fatal(err)
+			}
+			var event apkExecutionEvent
+			if err := decodeAPKTransitionJSON(raw, &event); err != nil {
+				t.Fatal(err)
+			}
+			event.NativeHandoffSHA256 = handoffSHA
+			raw, err = apkExecutionJSON(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	if err := retainAPKExecutionClosure(t.Context(), f.services.root, f.review.PlanSHA256); err != nil {
-		t.Fatal(err)
-	}
-	factory := func(ctx context.Context, prepared *verifiedPreparedAPKTransition) (apkTerminalBoundary, error) {
-		return &apkExecutionTestBoundary{digest: prepared.plan.EffectPlanSHA256}, ctx.Err()
-	}
-	return f, factory
+	return f, boundary, runner, bindNative
 }
 
 func inspectAPKTerminalFixture(ctx context.Context, f *apkExecutionTestFixture, factory func(context.Context, *verifiedPreparedAPKTransition) (apkTerminalBoundary, error)) (*apkTerminalAuthority, error) {

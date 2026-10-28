@@ -272,9 +272,9 @@ func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandida
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if candidate.target.packageName != compatibilityNativePackageName || candidate.target.format != packageFormatAPK ||
+	if !validNativeProductPackageName(candidate.target.packageName) || candidate.target.format != packageFormatAPK ||
 		candidate.target.os != "linux" || candidate.target.architecture != "amd64" || candidate.uid != os.Geteuid() {
-		return errors.New("APK transition requires the existing Linux AMD64 compatibility identity")
+		return errors.New("APK transition requires an exact installed Linux AMD64 product identity")
 	}
 	manifest, err := verifySignedManifest(candidate.manifest, candidate.signature, candidate.version, candidate.keys)
 	if err != nil {
@@ -677,8 +677,8 @@ func UpgradeSystemWithAPKTransitionApproval(planSHA256 string) error {
 	if err != nil {
 		return err
 	}
-	if identity.manager != "apk" || identity.name != compatibilityNativePackageName {
-		return errors.New("APK review requires the installed compatibility identity")
+	if identity.manager != "apk" || !validNativeProductPackageName(identity.name) {
+		return errors.New("APK review requires an exact installed product identity")
 	}
 	return approvePreparedAPKTransition(ctx, planSHA256, keys, attestInstalledQualificationVersion, productionAPKTransitionServices())
 }
@@ -791,7 +791,7 @@ func openRetainedAPKTransition(ctx context.Context, digest string, keys map[stri
 	if err := decodeAPKTransitionJSON(planBytes, &plan); err != nil {
 		return nil, err
 	}
-	if !plan.Policy.valid() || plan.Schema != plan.Policy.preparationSchema() || plan.PackageName != compatibilityNativePackageName || plan.NativeExecutionAuthorized || plan.ProductAccepted || !validAPKRetentionChecksum(plan.CandidateAPKChecksum) || !validSHA256(plan.CandidateCapabilitySHA256) || !validSHA256(plan.EffectPlanSHA256) {
+	if !plan.Policy.valid() || plan.Schema != plan.Policy.preparationSchema() || !validNativeProductPackageName(plan.PackageName) || plan.NativeExecutionAuthorized || plan.ProductAccepted || !validAPKRetentionChecksum(plan.CandidateAPKChecksum) || !validSHA256(plan.CandidateCapabilitySHA256) || !validSHA256(plan.EffectPlanSHA256) {
 		return nil, errors.New("APK stored plan claims unsupported identity, execution or acceptance")
 	}
 	prepared, err := readAPKTransitionBytes(directory, "prepared.json", 1024)

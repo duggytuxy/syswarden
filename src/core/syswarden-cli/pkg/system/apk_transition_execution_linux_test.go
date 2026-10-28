@@ -143,8 +143,9 @@ func (f *apkExecutionTestFixture) run(ctx context.Context, prepared *verifiedPre
 		return err
 	}
 	f.post = true
-	world := "syswarden><" + prepared.plan.CandidateAPKChecksum + "\nwireguard-tools\nrsyslog\n"
+	world := prepared.plan.PackageName + "><" + prepared.plan.CandidateAPKChecksum + "\nwireguard-tools\nrsyslog\n"
 	database := strings.Replace(apkRetentionFixtureDatabase(), "V:4.10.4-r0", "V:"+strings.TrimPrefix(prepared.plan.CandidateVersion, "v")+"-r0", 1)
+	database = strings.Replace(database, "P:syswarden\n", "P:"+prepared.plan.PackageName+"\n", 1)
 	database = strings.Replace(database, "C:"+apkRetentionFixtureChecksum, "C:"+prepared.plan.CandidateAPKChecksum, 1)
 	// These are precreated inert fixture files, never the host native database.
 	if err := os.WriteFile(filepath.Join(f.services.hostRoot, "etc/apk/world"), []byte(world), 0600); err != nil {

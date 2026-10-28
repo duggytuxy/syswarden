@@ -303,8 +303,21 @@ closes only after these observations and before positive terminal closure is
 published. A failed close prevents that proof; retained native debt continues
 to deny activation during the final metadata publication gap.
 
-These internal custody and real isolated Alpine/OpenRC process observations are
-intermediate evidence. They do not qualify signed package transactions, direct
+The private inactive coordinator now composes preparation review, execution,
+positive execution-resource closure and independent terminal verification with
+one retained publication owner. Planning borrows original custody without an
+execution digest, so it cannot mutate launchers or finalize a transaction. Only
+an exact separate execution review can authorize the launcher owner and native
+engine. A failed native step stops the coordinator without replay or terminal
+success. Preparation and retained-plan verification select the exact installed
+`syswarden` or `syswarden-base` identity, with manifest, header and native
+registration checks; neither conversion nor coexistence is supported.
+
+Component scenarios exercise both package identities through this coordinator,
+including real launcher custody, native-state checks, terminal records and
+activation refusal on failure. Their native runner and acknowledgments remain
+controlled fixtures. These internal custody and real isolated Alpine/OpenRC
+process observations are intermediate evidence. They do not qualify signed package transactions, direct
 package-manager entry points, repeated ownership transfers, reboot or removal.
 The public update ingress and ordinary terminal entry remain closed to inactive
 migration until complete native coordination and original ownership are

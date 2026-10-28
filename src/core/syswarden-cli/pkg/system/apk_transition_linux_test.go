@@ -120,19 +120,38 @@ func apkTransitionFixtureArchiveWithControls(t *testing.T, entries, controls []a
 
 func apkTransitionFixture(t *testing.T) (authenticatedAPKCandidate, apkTransitionServices, []byte) {
 	t.Helper()
+	return apkTransitionFixtureForName(t, compatibilityNativePackageName)
+}
+
+func apkTransitionFixtureForName(t *testing.T, selected string) (authenticatedAPKCandidate, apkTransitionServices, []byte) {
+	t.Helper()
+	if !validNativeProductPackageName(selected) {
+		t.Fatal("unsupported inert package identity")
+	}
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := apkTransitionFixtureArchive(t, apkTransitionFixtureMembers(), true)
-	version := "v5.00.0"
+	version, originalVersion := "v5.00.0", "v4.10.4"
+	if selected == baseNativePackageName {
+		version, originalVersion = "v5.00.1", "v5.00.0"
+	}
+	controls := apkTransitionFixtureControls()
+	for i := range controls {
+		if controls[i].header.Name == ".PKGINFO" {
+			controls[i].content = bytes.ReplaceAll(controls[i].content, []byte("pkgname = syswarden\n"), []byte("pkgname = "+selected+"\n"))
+			controls[i].content = bytes.ReplaceAll(controls[i].content, []byte("pkgver = 5.00.0-r0\n"), []byte("pkgver = "+strings.TrimPrefix(version, "v")+"-r0\n"))
+			controls[i].header.Size = int64(len(controls[i].content))
+		}
+	}
+	data := apkTransitionFixtureArchiveWithControls(t, apkTransitionFixtureMembers(), controls, true)
 	manifest := testUpdateManifest(t, version, data)
 	manifestBytes := testMarshalManifest(t, manifest)
-	filename, err := packageFilename(version, packageFormatAPK, "amd64")
+	filename, err := packageFilenameForName(version, packageFormatAPK, "amd64", selected)
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := packageTarget{packageName: "syswarden", os: "linux", architecture: "amd64", format: packageFormatAPK, filename: filename, installer: "/sbin/apk"}
+	target := packageTarget{packageName: selected, os: "linux", architecture: "amd64", format: packageFormatAPK, filename: filename, installer: "/sbin/apk"}
 	artifact, err := manifest.artifactFor(target)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +175,7 @@ func apkTransitionFixture(t *testing.T) (authenticatedAPKCandidate, apkTransitio
 		signature: testSignManifest(private, manifestBytes), cliSHA256: apkTransitionDigest([]byte("public inert fixture: opt/syswarden/bin/syswarden-cli\n")),
 		uid: os.Geteuid(), keys: map[string]ed25519.PublicKey{testReleaseKeyID: public},
 		attestInstalled: func(context.Context, packageTarget, int) (installedQualificationEvidence, error) {
-			return installedQualificationEvidence{version: "v4.10.4", cliSHA256: apkTransitionDigest([]byte("original inert syswarden-cli bytes\n"))}, nil
+			return installedQualificationEvidence{version: originalVersion, cliSHA256: apkTransitionDigest([]byte("original inert syswarden-cli bytes\n"))}, nil
 		}}
 	host := t.TempDir()
 	for _, name := range []string{"var/backups", "usr/local/bin", "etc/apk", "lib/apk/db", "etc/syswarden/config/modules", "opt/syswarden/bin", "etc/apk/commit_hooks.d"} {
@@ -164,7 +183,7 @@ func apkTransitionFixture(t *testing.T) (authenticatedAPKCandidate, apkTransitio
 			t.Fatal(err)
 		}
 	}
-	for name, content := range map[string][]byte{"lib/apk/db/lock": {}, "etc/apk/world": []byte("syswarden\n"), "lib/apk/db/installed": []byte(apkRetentionFixtureDatabase()),
+	for name, content := range map[string][]byte{"lib/apk/db/lock": {}, "etc/apk/world": []byte(selected + "\n"), "lib/apk/db/installed": []byte(strings.Replace(strings.Replace(apkRetentionFixtureDatabase(), "P:syswarden\n", "P:"+selected+"\n", 1), "V:4.10.4-r0", "V:"+strings.TrimPrefix(originalVersion, "v")+"-r0", 1)),
 		"etc/syswarden/config/syswarden.toml":       []byte("# Original opaque configuration evidence\n"),
 		"etc/syswarden/config/modules/99-user.toml": []byte("# Original operator bytes\n"), "usr/local/bin/syswarden": []byte("administrator bytes\n")} {
 		if err := os.WriteFile(filepath.Join(host, name), content, 0600); err != nil {

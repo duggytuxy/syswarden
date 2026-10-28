@@ -115,8 +115,20 @@ func attestAPKInactiveCoordinator(ctx context.Context, original nativeActivation
 	return verify, verify(ctx, false)
 }
 
-func openAPKInactiveCustody(ctx context.Context, prepared *verifiedPreparedAPKTransition, executionSHA256 string, services apkInactiveCustodyServices) (_ *apkInactiveCustody, result error) {
-	if ctx == nil || !validSHA256(executionSHA256) || prepared == nil || prepared.closed || !prepared.locked || !prepared.plan.Policy.inactive() || services.hold == nil || services.observe == nil || services.source == nil || services.installed == nil {
+func openAPKInactiveCustody(ctx context.Context, prepared *verifiedPreparedAPKTransition, executionSHA256 string, services apkInactiveCustodyServices) (*apkInactiveCustody, error) {
+	if !validSHA256(executionSHA256) {
+		return nil, errors.New("APK inactive custody requires exact execution approval")
+	}
+	owner, err := openAPKInactivePreparationCustody(ctx, prepared, services)
+	if err != nil {
+		return nil, err
+	}
+	owner.executionSHA256 = executionSHA256
+	return owner, nil
+}
+
+func openAPKInactivePreparationCustody(ctx context.Context, prepared *verifiedPreparedAPKTransition, services apkInactiveCustodyServices) (_ *apkInactiveCustody, result error) {
+	if ctx == nil || prepared == nil || prepared.closed || !prepared.locked || !prepared.plan.Policy.inactive() || services.hold == nil || services.observe == nil || services.source == nil || services.installed == nil {
 		return nil, errors.New("APK inactive custody requires verified preparation and complete independent observers")
 	}
 	if err := prepared.Revalidate(ctx); err != nil {
@@ -134,7 +146,7 @@ func openAPKInactiveCustody(ctx context.Context, prepared *verifiedPreparedAPKTr
 	if err != nil || source == nil {
 		return nil, errors.Join(errors.New("APK inactive source coordinator authority is unavailable"), err)
 	}
-	owner := &apkInactiveCustody{preparationSHA256: prepared.digest, executionSHA256: executionSHA256, effectSHA256: prepared.plan.EffectPlanSHA256, original: original, candidate: prepared.capability, observe: services.observe, source: source, installed: services.installed}
+	owner := &apkInactiveCustody{preparationSHA256: prepared.digest, effectSHA256: prepared.plan.EffectPlanSHA256, original: original, candidate: prepared.capability, observe: services.observe, source: source, installed: services.installed}
 	defer func() {
 		if result != nil {
 			result = errors.Join(result, owner.Close())
@@ -204,7 +216,7 @@ func finalizeAPKInactiveTransition(ctx context.Context, digest string, keys map[
 		return errors.New("APK inactive finalization requires retained publication custody")
 	}
 	defer func() { result = errors.Join(result, owner.Close()) }()
-	if digest != owner.executionSHA256 {
+	if !validSHA256(owner.executionSHA256) || digest != owner.executionSHA256 {
 		return errors.New("APK inactive terminal differs from the original execution approval")
 	}
 	if err := owner.Revalidate(ctx, true); err != nil {

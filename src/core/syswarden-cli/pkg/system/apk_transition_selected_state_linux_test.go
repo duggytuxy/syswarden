@@ -3,6 +3,9 @@
 package system
 
 import (
+	"errors"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -88,5 +91,60 @@ func TestAPKExecutionSelectedNativeStatePreservesBothIdentities(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestAPKPreparationSelectedIdentityRefusesConversionAndCoexistence(t *testing.T) {
+	for _, selected := range nativeProductPackageNames {
+		for _, kind := range []string{"other-installed", "coexisting", "other-world", "unsupported-selection"} {
+			t.Run(selected+"/"+kind, func(t *testing.T) {
+				candidate, services, _ := apkTransitionFixtureForName(t, selected)
+				other := compatibilityNativePackageName
+				if other == selected {
+					other = baseNativePackageName
+				}
+				root, err := os.OpenRoot(services.hostRoot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := root.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				database, err := root.ReadFile("lib/apk/db/installed")
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch kind {
+				case "other-installed":
+					database = []byte(strings.Replace(string(database), "P:"+selected+"\n", "P:"+other+"\n", 1))
+				case "coexisting":
+					database = append(database, []byte("P:"+other+"\nV:5.00.0-r0\n\n")...)
+				case "other-world":
+					if err := root.WriteFile("etc/apk/world", []byte(other+"\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				case "unsupported-selection":
+					candidate.target.packageName = "unrelated"
+				}
+				if err := root.WriteFile("lib/apk/db/installed", database, 0600); err != nil {
+					t.Fatal(err)
+				}
+				before, err := captureAPKTransitionHost(t.Context(), services.hostRoot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = prepareAPKTransition(t.Context(), candidate, services)
+				var review *APKTransitionApprovalRequiredError
+				if err == nil || errors.As(err, &review) {
+					t.Fatal("invalid original identity produced preparation review", err)
+				}
+				after, err := captureAPKTransitionHost(t.Context(), services.hostRoot)
+				if err != nil || !reflect.DeepEqual(before, after) {
+					t.Fatal("identity refusal changed host or dependency reasons", err)
+				}
+			})
+		}
 	}
 }
