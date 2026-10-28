@@ -241,9 +241,19 @@ any exclusively created parents. Execution records this transferred ownership
 separately from inherited administrator entries. Complete launcher removal uses
 the original creation evidence through a source-bound retirement journal, while
 also requiring the execution's positive terminal closure proof. Mixed ownership,
-changed or missing source records and a subsequent execution-lineage upgrade
-remain refused. This bounded path does not qualify arbitrary historical
-installations or repeated production upgrades.
+changed or missing source records remain refused. A later same-identity upgrade
+can retain the original fresh owner while separately binding the immediately
+preceding native registration, execution and publication. The v2 transfer records
+exact identities and hashes for the predecessor's approval, target custody,
+native acknowledgments, installed snapshot and positive terminal/resource closure.
+Every predecessor must preserve the same original owner. Unknown publication
+entries, retirement debt, changed records, cycles and ancestry beyond 32 transfers
+are refused; existing record-size bounds also apply. Historical closure can
+coexist only with the exact approved successor's compiled dispatcher, never its
+own retired gate or an unresolved quarantine. The default removal guard still
+requires gate absence. These internal checks do not qualify arbitrary historical
+installations or open the public inactive migration route. Repeated native
+transactions, interruption/recovery and complete removal require separate evidence.
 
 ## Signed identity and installed ownership
 

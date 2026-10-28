@@ -889,7 +889,16 @@ type apkLauncherFinalizationRecord struct {
 
 // A published launcher reference precedes gate retirement. Removal requires
 // independent terminal finalization and absence of every recorded gate object.
-func (h *apkLauncherLifecycleRemoval) attestExecutionFinalization() (result error) {
+func (h *apkLauncherLifecycleRemoval) attestExecutionFinalization() error {
+	return h.attestExecutionFinalizationForSuccessor("")
+}
+
+// Historical evidence may coexist only with the exact separately approved
+// successor dispatcher. Its own quarantine and unresolved debt must be absent.
+func (h *apkLauncherLifecycleRemoval) attestExecutionFinalizationForSuccessor(successor string) (result error) {
+	if successor != "" && !validSHA256(successor) {
+		return errors.New("APK finalization successor binding is invalid")
+	}
 	if h == nil || h.store == nil {
 		return errors.New("APK execution finalization custody is unavailable")
 	}
@@ -1028,9 +1037,15 @@ func (h *apkLauncherLifecycleRemoval) attestExecutionFinalization() (result erro
 			return errors.Join(errors.New("APK execution terminal gate ancestry changed"), parent.Close())
 		}
 		_, namedErr := parent.Lstat(item.name)
+		namedSafe := errors.Is(namedErr, os.ErrNotExist)
+		if namedErr == nil && successor != "" && successor != reference.PlanSHA256 {
+			entry, readErr := readAPKNativeHookMode(parent, item.name, os.FileMode(item.mode&0777))
+			body, bodyErr := apkTransitionGateBytes(successor)
+			namedSafe = readErr == nil && bodyErr == nil && !entry.Absent && entry.LinkTarget == "" && bytes.Equal(entry.Content, body)
+		}
 		_, quarantineErr := parent.Lstat(record.Quarantine)
 		closeErr := parent.Close()
-		if !errors.Is(namedErr, os.ErrNotExist) || !errors.Is(quarantineErr, os.ErrNotExist) || closeErr != nil {
+		if !namedSafe || !errors.Is(quarantineErr, os.ErrNotExist) || closeErr != nil {
 			return errors.Join(errors.New("APK execution launcher removal refuses retained gate or quarantine debt"), closeErr)
 		}
 	}

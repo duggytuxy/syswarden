@@ -33,6 +33,7 @@ type apkLauncherTransferProposal struct {
 	Aliases   [2]apkLauncherEntry           `json:"aliases"`
 	Native    apkLauncherNativeRecord       `json:"native"`
 	Records   []apkLauncherTransferRecord   `json:"records"`
+	Previous  *apkLauncherPreviousExecution `json:"previous_execution,omitempty"`
 }
 
 func captureAPKLauncherOwnershipTransfer(ctx context.Context, host string, lineage apkLauncherLineageProposal, original []apkTransitionHostEntry) (_ *apkLauncherTransferProposal, result error) {
@@ -47,15 +48,22 @@ func captureAPKLauncherOwnershipTransfer(ctx context.Context, host string, linea
 		return nil, err
 	}
 	defer func() { result = errors.Join(result, h.close()) }()
-	if h.reference.Kind != "fresh" || h.currentReference != h.reference || h.execution != nil || len(h.retirement) != 0 || len(h.terminal) != 0 || h.currentIdentity != lineage.Identity {
-		return nil, errors.New("APK launcher transfer requires complete active fresh ownership")
+	if h.reference.Kind != "fresh" || h.execution != nil || len(h.retirement) != 0 || len(h.terminal) != 0 || h.currentIdentity != lineage.Identity {
+		return nil, errors.New("APK launcher transfer requires complete active original ownership")
 	}
-	raw, err := apkLauncherCanonical(h.reference)
+	origin := h
+	if h.currentReference != h.reference {
+		if h.currentReference.Kind != "execution" || h.ownership == nil || h.transferExecution == nil {
+			return nil, errors.New("APK launcher transfer lacks its closed predecessor")
+		}
+		origin = h.ownership
+	}
+	raw, err := apkLauncherCanonical(h.currentReference)
 	if err != nil || apkTransitionDigest(raw) != lineage.ReferenceSHA256 || len(original) != 6 {
 		return nil, errors.New("APK launcher transfer source differs from the approved snapshot")
 	}
 	files, err := captureAPKLauncherPayload(ctx, h.store.anchor)
-	if err != nil || !reflect.DeepEqual(files, h.intent.Payload) {
+	if err != nil || origin == h && !reflect.DeepEqual(files, h.intent.Payload) {
 		return nil, errors.New("APK launcher transfer source payload differs from its fresh native receipt")
 	}
 	_, database, err := apkLauncherReadFile(ctx, h.store.anchor, "lib/apk/db/installed", maximumAPKInstalledDatabaseSize, 0, true)
@@ -67,7 +75,7 @@ func captureAPKLauncherOwnershipTransfer(ctx context.Context, host string, linea
 		return nil, err
 	}
 	native, err := attestAPKLauncherCommittedRegistration(records, files)
-	if err != nil || native != h.receipt.Native {
+	if err != nil || origin == h && native != h.receipt.Native {
 		return nil, errors.New("APK launcher transfer source native registration changed or disappeared")
 	}
 	for _, registration := range records {
@@ -84,7 +92,14 @@ func captureAPKLauncherOwnershipTransfer(ctx context.Context, host string, linea
 			}
 		}
 	}
-	proposal := &apkLauncherTransferProposal{apkLauncherTransferSchema, "same-identity-fresh-ownership-transfer", lineage, h.reference, h.receipt.Parents, h.receipt.Aliases, h.receipt.Native, nil}
+	proposal := &apkLauncherTransferProposal{Schema: apkLauncherTransferSchema, Purpose: "same-identity-fresh-ownership-transfer", Lineage: lineage, Reference: h.reference, Parents: h.receipt.Parents, Aliases: h.receipt.Aliases, Native: native}
+	if origin != h {
+		proposal.Previous, err = captureAPKLauncherPreviousExecution(h, native)
+		if err != nil {
+			return nil, err
+		}
+		proposal.Schema, proposal.Purpose = apkLauncherRepeatedTransferSchema, "same-identity-execution-ownership-transfer"
+	}
 	for i, parent := range proposal.Parents {
 		if original[i].Path != parent.Path || original[i].Absent || !apkLauncherSameParent(original[i].Identity, parent.Identity) {
 			return nil, errors.New("APK launcher transfer parent differs from the original snapshot")
@@ -95,18 +110,18 @@ func captureAPKLauncherOwnershipTransfer(ctx context.Context, host string, linea
 			return nil, errors.New("APK launcher transfer refuses inherited, changed, or partial alias ownership")
 		}
 	}
-	names := make([]string, 0, len(h.observed))
-	for name := range h.observed {
+	names := make([]string, 0, len(origin.observed))
+	for name := range origin.observed {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		info, err := h.journal.root.Lstat(name)
+		info, err := origin.journal.root.Lstat(name)
 		identity, identityErr := apkLauncherIdentity(info)
 		if err != nil || identityErr != nil || info.Mode() != 0600 || !info.Mode().IsRegular() || !serviceFileOwnedByCurrentUser(info) || identity.Links != 1 {
 			return nil, errors.New("APK launcher transfer source evidence is unsafe")
 		}
-		proposal.Records = append(proposal.Records, apkLauncherTransferRecord{name, identity, apkTransitionDigest(h.observed[name])})
+		proposal.Records = append(proposal.Records, apkLauncherTransferRecord{name, identity, apkTransitionDigest(origin.observed[name])})
 	}
 	if err := h.revalidate(); err != nil {
 		return nil, err
@@ -115,11 +130,11 @@ func captureAPKLauncherOwnershipTransfer(ctx context.Context, host string, linea
 }
 
 func validAPKLauncherTransferProposal(proposal *apkLauncherTransferProposal) bool {
-	if proposal == nil || proposal.Schema != apkLauncherTransferSchema || proposal.Purpose != "same-identity-fresh-ownership-transfer" || proposal.Lineage.Absent || !validAPKLauncherLineageProposal(proposal.Lineage) || proposal.Reference.Schema != apkFreshLauncherSchema || proposal.Reference.Kind != "fresh" || !validSHA256(proposal.Reference.PlanSHA256) || !validSHA256(proposal.Reference.ReceiptSHA256) || len(proposal.Records) < 5 || len(proposal.Records) > 64 {
+	if proposal == nil || !validAPKLauncherTransferKind(proposal) || proposal.Lineage.Absent || !validAPKLauncherLineageProposal(proposal.Lineage) || proposal.Reference.Schema != apkFreshLauncherSchema || proposal.Reference.Kind != "fresh" || !validSHA256(proposal.Reference.PlanSHA256) || !validSHA256(proposal.Reference.ReceiptSHA256) || len(proposal.Records) < 5 || len(proposal.Records) > 64 {
 		return false
 	}
 	reference, err := apkLauncherCanonical(proposal.Reference)
-	if err != nil || apkTransitionDigest(reference) != proposal.Lineage.ReferenceSHA256 {
+	if err != nil || proposal.Previous == nil && apkTransitionDigest(reference) != proposal.Lineage.ReferenceSHA256 {
 		return false
 	}
 	if !validNativeProductPackageName(proposal.Native.Name) || !validSHA256(proposal.Native.RecordSHA256) || !validAPKRetentionChecksum(proposal.Native.Checksum) {
@@ -165,7 +180,7 @@ func openAPKLauncherTransferSource(ctx context.Context, host string, proposal *a
 	if err != nil {
 		return nil, err
 	}
-	if len(h.retirement) != 0 || len(h.terminal) != 0 || h.receipt.Parents != proposal.Parents || h.receipt.Aliases != proposal.Aliases || len(h.observed) != len(proposal.Records) || h.receipt.Native != proposal.Native {
+	if len(h.retirement) != 0 || len(h.terminal) != 0 || h.receipt.Parents != proposal.Parents || h.receipt.Aliases != proposal.Aliases || len(h.observed) != len(proposal.Records) || h.receipt.Native != apkLauncherTransferOriginalNative(proposal) {
 		return nil, errors.New("APK fresh ownership source is changed, partial, or retired")
 	}
 	current, err := s.captureLineageProposal()
@@ -198,6 +213,9 @@ func openAPKLauncherTransferSource(ctx context.Context, host string, proposal *a
 		if !exists || err != nil || identityErr != nil || identity != record.Identity || apkTransitionDigest(raw) != record.SHA256 {
 			return nil, errors.New("APK launcher source ownership evidence changed")
 		}
+	}
+	if err := verifyAPKLauncherPreviousExecution(s, proposal, executionPlan, map[string]bool{}); err != nil {
+		return nil, errors.Join(err, h.closeAuxiliary())
 	}
 	return h, h.revalidateEvidence()
 }

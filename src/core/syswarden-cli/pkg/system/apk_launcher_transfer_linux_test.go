@@ -183,7 +183,7 @@ func TestAPKLauncherTransferFreshUpgradeCompleteLauncherRemoval(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := captureAPKLauncherOwnershipTransfer(t.Context(), fixture.services.hostRoot, lineage, original); err == nil {
-				t.Fatal("execution lineage was accepted as a new fresh ownership source")
+				t.Fatal("partial synthetic native payload was accepted as a repeated ownership source")
 			}
 			if err := preflightAPKLauncherRemovalAt(t.Context(), fixture.services.hostRoot); err != nil {
 				t.Fatal(err)
