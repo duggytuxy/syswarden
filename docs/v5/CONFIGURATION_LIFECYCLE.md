@@ -292,12 +292,24 @@ This orders resource custody but does not supply production lifecycle authority.
 The boundary closes before independent terminal verification, so the inactive
 coordinator must retain publication exclusion separately across that verification.
 
-Real isolated Alpine/OpenRC observation is intermediate evidence. It does not
-qualify a signed package transaction, direct package-manager entry points,
-repeated ownership transfers, reboot or removal. The coordinator still needs
-proven original ownership, retained publication exclusion throughout replacement,
-and independent terminal closure against the original observation. Production
-terminal verification refuses the inactive path until these are integrated.
+An internal inactive-custody owner now retains publication exclusion separately
+from execution resources. It binds the exact preparation and execution review,
+original TOML and absence witness, source publication capability, and original
+coordinator PID, start identity, root credentials and executable. Replacement
+may unlink that same running executable; another inode or process cannot become
+the original source. Independent terminal observations must still match the
+original policy and host and the authenticated installed candidate. The owner
+closes only after these observations and before positive terminal closure is
+published. A failed close prevents that proof; retained native debt continues
+to deny activation during the final metadata publication gap.
+
+These internal custody and real isolated Alpine/OpenRC process observations are
+intermediate evidence. They do not qualify signed package transactions, direct
+package-manager entry points, repeated ownership transfers, reboot or removal.
+The public update ingress and ordinary terminal entry remain closed to inactive
+migration until complete native coordination and original ownership are
+qualified. The internal terminal path requires the already retained owner and
+never obtains a replacement lease or manufactures activation approval.
 No installer or update command silently switches from missing activation approval
 to inactive migration, and no activation is performed to satisfy an update gate.
 

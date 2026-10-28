@@ -40,6 +40,11 @@ func apkTerminalCompleteFixture(t *testing.T) (*apkExecutionTestFixture, func(co
 
 func apkTerminalCompleteFixtureWithSetup(t *testing.T, setup func(*authenticatedAPKCandidate, *apkTransitionServices)) (*apkExecutionTestFixture, func(context.Context, *verifiedPreparedAPKTransition) (apkTerminalBoundary, error)) {
 	t.Helper()
+	return apkTerminalCompleteFixtureWithCustody(t, setup, nil)
+}
+
+func apkTerminalCompleteFixtureWithCustody(t *testing.T, setup func(*authenticatedAPKCandidate, *apkTransitionServices), custody func(context.Context, *verifiedPreparedAPKTransition, string, *apkExecutionTestBoundary) (apkExecutionBoundary, error)) (*apkExecutionTestFixture, func(context.Context, *verifiedPreparedAPKTransition) (apkTerminalBoundary, error)) {
+	t.Helper()
 	candidate, services, _ := apkTransitionFixture(t)
 	services.root = filepath.Join(services.hostRoot, strings.TrimPrefix(apkTransitionRoot, "/"))
 	if setup != nil {
@@ -202,7 +207,15 @@ func apkTerminalCompleteFixtureWithSetup(t *testing.T, setup func(*authenticated
 		}
 		return retainAPKNativeResult(directory, &apkTransitionHandoff{record: record, digest: handoffSHA, phases: 4}, []byte("inert native transaction fixture\n"))
 	}
-	if err := f.execute(t.Context(), boundary, apkExecutionServices{run: runner}); err != nil {
+	if custody == nil {
+		err = f.execute(t.Context(), boundary, apkExecutionServices{run: runner})
+	} else {
+		factory := func(ctx context.Context, prepared *verifiedPreparedAPKTransition) (apkExecutionBoundary, error) {
+			return custody(ctx, prepared, f.review.PlanSHA256, boundary)
+		}
+		err = executeAPKTransitionWith(t.Context(), f.preparation.PlanSHA256, f.review.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, factory, apkExecutionServices{run: runner})
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	// Bind the synthetic adapter observations explicitly. Production receives this
