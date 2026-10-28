@@ -270,11 +270,26 @@ these bindings without recapturing replacement bytes as source authority.
 
 Component tests exercise this mode through retained preparation, execution
 records and terminal cleanup using inert payloads and synthetic native hook
-acknowledgments. They do not establish actual host inactivity or signed native
-migration. Production admission still requires the complete independent service,
-scheduling, process and firewall observations, the retained publication lease,
-proven source ownership and the native recovery boundary. Production terminal
-verification refuses the inactive path until those observations are integrated.
+acknowledgments. They do not establish signed native migration.
+
+The read-only Alpine admission observer separately binds stable OpenRC service
+and runlevel inventories, complete supported cron inventories, product state
+absence, exact installed product process checks, the boot and network namespace,
+and the full nftables ruleset. It does not run init scripts, activate scheduling
+providers, load kernel modules or change rules. A stopped product service, retained
+history, unsupported legacy firewall state or possible product schedule/rule is
+preserved and refused. Names are refusal signals, never ownership evidence.
+Unrelated administrator schedules and rules remain intact. Ordinary nftables
+packet/byte counters are normalized; other rule or dynamic-set changes require
+another review. Alpine's exact packaged crontab alias is bound without following
+arbitrary links, and its target inventory is checked independently.
+
+Real isolated Alpine/OpenRC observation is intermediate evidence. It does not
+qualify a signed package transaction, direct package-manager entry points,
+repeated ownership transfers, reboot or removal. The coordinator still needs
+proven original ownership, retained publication exclusion throughout replacement,
+and independent terminal closure against the original observation. Production
+terminal verification refuses the inactive path until these are integrated.
 No installer or update command silently switches from missing activation approval
 to inactive migration, and no activation is performed to satisfy an update gate.
 

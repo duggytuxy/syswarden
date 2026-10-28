@@ -456,12 +456,12 @@ func TestNativeOpenRCObserverRealProcfs(t *testing.T) {
 }
 
 func TestNativeOpenRCConfigAndReadBounds(t *testing.T) {
-	for _, valid := range []string{"# inert\n", "rc_logger=\"yes\"\n", "rc_tty_number=12\n", "rc_env_allow=\"\"\n"} {
+	for _, valid := range []string{"# inert\n", "rc_logger=\"yes\"\n", "rc_tty_number=12\n", "rc_env_allow=\"\"\n", "respawn_delay=2\nrespawn_max=5\nrespawn_period=1800\n"} {
 		if err := nativeOpenRCConfigLiteral([]byte(valid)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, invalid := range []string{"command=/bin/sh\n", "rc_logger=yes\nrc_logger=no\n", "rc_logger=yes;id\n", "source /other\n", "rc_env_allow=PATH\n", "rc_logger=\"$(id)\"\n", "rc_logger=YES\r\n"} {
+	for _, invalid := range []string{"respawn_max=-1\n", "respawn_delay=2;id\n", "respawn_period=4294967296\n", "respawn_max=01\n", "respawn_period=$(id)\n", "command=/bin/sh\n", "rc_logger=yes\nrc_logger=no\n", "rc_logger=yes;id\n", "source /other\n", "rc_env_allow=PATH\n", "rc_logger=\"$(id)\"\n", "rc_logger=YES\r\n"} {
 		if err := nativeOpenRCConfigLiteral([]byte(invalid)); err == nil {
 			t.Fatalf("accepted %q", invalid)
 		}

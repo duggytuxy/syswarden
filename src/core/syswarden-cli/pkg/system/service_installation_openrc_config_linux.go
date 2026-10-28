@@ -40,7 +40,7 @@ func nativeOpenRCConfigLiteral(content []byte) error {
 			valid = value == "legacy" || value == "hybrid" || value == "unified"
 		case "rc_parallel", "rc_interactive", "rc_logger", "rc_verbose", "rc_nocolor":
 			valid = value == "yes" || value == "no" || value == "YES" || value == "NO"
-		case "rc_tty_number":
+		case "rc_tty_number", "respawn_delay", "respawn_max", "respawn_period":
 			n, err := strconv.ParseUint(value, 10, 32)
 			valid = err == nil && strconv.FormatUint(n, 10) == value
 		}
