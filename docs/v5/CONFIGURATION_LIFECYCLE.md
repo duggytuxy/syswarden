@@ -250,6 +250,14 @@ installed descriptor to the actual CLI/core bytes and detects later replacement.
 Both source and candidate must support the protocol before an inactive update
 can rely on it; declaring it alone proves neither inactivity nor update consent.
 
+An independent terminal reader can reconstruct the original absence witness
+while the coordinator retains its exclusive publication lease. Reading or
+closing that observation neither takes nor releases the lease. The reader must
+compare its digest with the original approved transaction record; newly observed
+absence cannot replace that record. Appearance of activation state, changed TOML
+or changed protected ancestry invalidates the observation. This read-only check
+does not by itself authorize package execution or establish host inactivity.
+
 Approval and successful application are separate root-private records. An
 approved install permits its nested firewall reload and independent core start
 before the parent can record success; a child reload cannot record completion

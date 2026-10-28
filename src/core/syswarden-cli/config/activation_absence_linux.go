@@ -18,9 +18,18 @@ import (
 // custody through its outcome checks and preserve its own crash recovery gate.
 // This single-owner handle must not be used concurrently with Close.
 type ActivationAbsence struct {
+	observation *ActivationAbsenceObservation
+	lease       *activationPolicyLease
+}
+
+// ActivationAbsenceObservation independently reads the exact absent state. It
+// does not acquire publication exclusion or establish a native transaction's
+// authority. Its caller must compare its digest with the original approved
+// observation and separately retain the publication lease and recovery gate.
+// This single-owner handle must not be used concurrently with Close.
+type ActivationAbsenceObservation struct {
 	policy  *ActivationPolicy
 	store   activationApprovalStore
-	lease   *activationPolicyLease
 	anchor  *os.Root
 	witness activationAbsenceWitness
 	digest  string
@@ -57,12 +66,38 @@ func (policy *ActivationPolicy) HoldActivationAbsent(ctx context.Context) (*Acti
 	return policy.holdActivationAbsentAt(ctx, store)
 }
 
-func (policy *ActivationPolicy) holdActivationAbsentAt(ctx context.Context, store activationApprovalStore) (_ *ActivationAbsence, result error) {
+// ObserveActivationAbsent permits an independent terminal verifier to read the
+// same witness while the original coordinator holds publication exclusion. It
+// never tries to acquire a second exclusive lease, writes state or substitutes
+// a current observation for the transaction's original approved digest.
+func (policy *ActivationPolicy) ObserveActivationAbsent(ctx context.Context) (*ActivationAbsenceObservation, error) {
+	store, err := productionActivationStore()
+	if err != nil {
+		return nil, err
+	}
+	if policy == nil || policy.root != "/etc/syswarden/config" {
+		return nil, errors.New("production activation absence requires the fixed configuration root")
+	}
+	return policy.observeActivationAbsentAt(ctx, store)
+}
+
+func (policy *ActivationPolicy) holdActivationAbsentAt(ctx context.Context, store activationApprovalStore) (*ActivationAbsence, error) {
 	lease, err := policy.lockActivationPolicy(ctx, store.uid, unix.LOCK_EX)
 	if err != nil {
 		return nil, err
 	}
-	absence := &ActivationAbsence{policy: policy, store: store, lease: lease}
+	observation, err := policy.observeActivationAbsentAt(ctx, store)
+	if err != nil {
+		return nil, errors.Join(err, lease.Close())
+	}
+	return &ActivationAbsence{observation: observation, lease: lease}, nil
+}
+
+func (policy *ActivationPolicy) observeActivationAbsentAt(ctx context.Context, store activationApprovalStore) (_ *ActivationAbsenceObservation, result error) {
+	if err := policy.Revalidate(ctx); err != nil {
+		return nil, err
+	}
+	absence := &ActivationAbsenceObservation{policy: policy, store: store}
 	defer func() {
 		if result != nil {
 			result = errors.Join(result, absence.Close())
@@ -92,17 +127,41 @@ func (policy *ActivationPolicy) holdActivationAbsentAt(ctx context.Context, stor
 	return absence, nil
 }
 
+func (absence *ActivationAbsence) SHA256() string {
+	if absence == nil || absence.lease == nil {
+		return ""
+	}
+	return absence.observation.SHA256()
+}
+
+func (absence *ActivationAbsence) Revalidate(ctx context.Context) error {
+	if absence == nil || absence.lease == nil || absence.lease.file == nil || absence.lease.root == nil {
+		return errors.New("activation absence custody is unavailable")
+	}
+	return absence.observation.Revalidate(ctx)
+}
+
+// Close releases only this handle's observation and exclusive publication lease.
+func (absence *ActivationAbsence) Close() error {
+	if absence == nil {
+		return nil
+	}
+	err := errors.Join(absence.observation.Close(), absence.lease.Close())
+	absence.lease = nil
+	return err
+}
+
 // SHA256 binds exact TOML, its source scope, the absent state path and the
 // nearest protected existing ancestor. It is an observation, never consent.
-func (absence *ActivationAbsence) SHA256() string {
+func (absence *ActivationAbsenceObservation) SHA256() string {
 	if absence == nil || absence.closed {
 		return ""
 	}
 	return absence.digest
 }
 
-func (absence *ActivationAbsence) Revalidate(ctx context.Context) error {
-	if absence == nil || absence.closed || absence.lease == nil || absence.anchor == nil || absence.digest == "" {
+func (absence *ActivationAbsenceObservation) Revalidate(ctx context.Context) error {
+	if absence == nil || absence.closed || absence.anchor == nil || absence.digest == "" {
 		return errors.New("activation absence custody is unavailable")
 	}
 	if err := absence.policy.Revalidate(ctx); err != nil {
@@ -123,7 +182,7 @@ func (absence *ActivationAbsence) Revalidate(ctx context.Context) error {
 
 // Close releases descriptors only. It never removes files or claims native
 // completion. The original anchor stays open until then to prevent inode reuse.
-func (absence *ActivationAbsence) Close() error {
+func (absence *ActivationAbsenceObservation) Close() error {
 	if absence == nil || absence.closed {
 		return nil
 	}
@@ -132,7 +191,7 @@ func (absence *ActivationAbsence) Close() error {
 	if absence.anchor != nil {
 		err = absence.anchor.Close()
 	}
-	return errors.Join(err, absence.lease.Close())
+	return err
 }
 
 func observeAbsentActivationStore(store activationApprovalStore) (*os.Root, string, activationDirectoryIdentity, error) {

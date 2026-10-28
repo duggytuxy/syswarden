@@ -110,6 +110,10 @@ func TestActivationAbsenceRefusesUnresolvedStoreHistory(t *testing.T) {
 					}
 				}
 			}
+			if observation, err := policy.observeActivationAbsentAt(ctx, store); err == nil {
+				_ = observation.Close()
+				t.Fatal("independent reader accepted unresolved source history")
+			}
 			if _, err := policy.holdActivationAbsentAt(ctx, store); err == nil {
 				t.Fatal("unresolved source history accepted")
 			}
@@ -137,6 +141,11 @@ func TestActivationAbsenceRefusesCapturedSourceAndAncestorDrift(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = absence.Close() })
+			observation, err := policy.observeActivationAbsentAt(t.Context(), store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = observation.Close() })
 			ctx := t.Context()
 			switch kind {
 			case "state-appeared":
@@ -171,6 +180,9 @@ func TestActivationAbsenceRefusesCapturedSourceAndAncestorDrift(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatal(err)
+			}
+			if err := observation.Revalidate(ctx); err == nil {
+				t.Fatal("independent reader accepted source drift")
 			}
 			if err := absence.Revalidate(ctx); err == nil {
 				t.Fatal("captured source drift accepted")
