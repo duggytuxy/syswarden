@@ -375,23 +375,39 @@ class PackageLauncherPreflightTests(unittest.TestCase):
 
     def test_apk_gate_preserves_regular_wrappers_and_literal_symlinks_without_execution(self) -> None:
         helper = self.helper.replace("= 0:0 ]", f"= {os.getuid()}:{os.getgid()} ]").replace("= 0:0:1 ]", f"= {os.getuid()}:{os.getgid()}:1 ]")
+        identity_fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+                           "st_size", "st_mtime_ns", "st_ctime_ns")
         for kind in ("wrapper", "symlink", "writable", "fifo"):
             with self.subTest(kind=kind):
                 path = self.bin / "syswarden"
-                if kind == "symlink":
-                    path.symlink_to("/opt/syswarden/bin/syswarden-cli")
-                elif kind == "fifo":
-                    os.mkfifo(path, 0o600)
-                else:
-                    path.write_text("#!/bin/sh\nprintf unexpected > should-not-exist\nexit 97\n")
-                    path.chmod(0o777 if kind == "writable" else 0o700)
-                before = path.lstat()
-                result = subprocess.run(["/bin/sh", "-eu", "-c", helper + '\nsyswarden_preflight_apk_launchers "$1"', "apk-launcher-contract", str(self.root)],
-                                        cwd=self.root, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, capture_output=True, text=True, timeout=5, check=False)
-                self.assertEqual(result.returncode == 0, kind in ("wrapper", "symlink"), result.stderr)
-                self.assertEqual(path.lstat(), before)
-                self.assertFalse((self.root / "should-not-exist").exists())
-                path.unlink()
+                try:
+                    if kind == "symlink":
+                        expected_content = "/opt/syswarden/bin/syswarden-cli"
+                        path.symlink_to(expected_content)
+                        # A readlink may refresh atime under relatime. Make that
+                        # condition deterministic without weakening identity checks.
+                        os.utime(path, ns=(1_000_000_000, path.lstat().st_mtime_ns), follow_symlinks=False)
+                    elif kind == "fifo":
+                        expected_content = None
+                        os.mkfifo(path, 0o600)
+                    else:
+                        expected_content = b"#!/bin/sh\nprintf unexpected > should-not-exist\nexit 97\n"
+                        path.write_bytes(expected_content)
+                        path.chmod(0o777 if kind == "writable" else 0o700)
+                    before = path.lstat()
+                    result = subprocess.run(["/bin/sh", "-eu", "-c", helper + '\nsyswarden_preflight_apk_launchers "$1"', "apk-launcher-contract", str(self.root)],
+                                            cwd=self.root, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, capture_output=True, text=True, timeout=5, check=False)
+                    self.assertEqual(result.returncode == 0, kind in ("wrapper", "symlink"), result.stderr)
+                    after = path.lstat()
+                    self.assertEqual(tuple(getattr(after, field) for field in identity_fields),
+                                     tuple(getattr(before, field) for field in identity_fields))
+                    if kind == "symlink":
+                        self.assertEqual(os.readlink(path), expected_content)
+                    elif kind != "fifo":
+                        self.assertEqual(path.read_bytes(), expected_content)
+                    self.assertFalse((self.root / "should-not-exist").exists())
+                finally:
+                    path.unlink(missing_ok=True)
 
     def test_unknown_phase_refuses(self) -> None:
         for phase in ("", "upgrade", "fresh", "after\n"):
