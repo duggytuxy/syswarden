@@ -91,7 +91,7 @@ func apkTerminalCompleteFixtureWithSetup(t *testing.T, setup func(*authenticated
 	if !errors.As(err, &f.preparation) {
 		t.Fatal(err)
 	}
-	f.review, err = planAPKTransitionExecution(t.Context(), f.preparation.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, boundary)
+	f.review, err = planAPKTransitionExecution(t.Context(), f.preparation.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, apkExecutionTestFactory(boundary))
 	if err != nil {
 		t.Fatal(err)
 	}

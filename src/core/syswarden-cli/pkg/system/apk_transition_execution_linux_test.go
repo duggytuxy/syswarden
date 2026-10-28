@@ -87,6 +87,12 @@ func apkExecutionTestAuthority() *apkExecutionTestBoundary {
 	return &apkExecutionTestBoundary{digest: (apkTransitionTestActivation{}).EffectPlanSHA256(), launchers: &apkExecutionTestLaunchers{receipt: strings.Repeat("f", 64)}}
 }
 
+func apkExecutionTestFactory(boundary apkExecutionBoundary) apkExecutionBoundaryFactory {
+	return func(context.Context, *verifiedPreparedAPKTransition) (apkExecutionBoundary, error) {
+		return boundary, nil
+	}
+}
+
 type apkExecutionTestFixture struct {
 	candidate   authenticatedAPKCandidate
 	services    apkTransitionServices
@@ -116,7 +122,7 @@ func newAPKExecutionTestFixture(t *testing.T, setup ...func(*testing.T, *apkTran
 	if !errors.As(err, &f.preparation) {
 		t.Fatal("prepare", err)
 	}
-	f.review, err = planAPKTransitionExecution(t.Context(), f.preparation.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, apkExecutionTestAuthority())
+	f.review, err = planAPKTransitionExecution(t.Context(), f.preparation.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, apkExecutionTestFactory(apkExecutionTestAuthority()))
 	if err != nil {
 		t.Fatal("execution proposal", err)
 	}
@@ -153,7 +159,7 @@ func (f *apkExecutionTestFixture) execute(ctx context.Context, boundary *apkExec
 	if services.run == nil {
 		services.run = f.run
 	}
-	return executeAPKTransitionWith(ctx, f.preparation.PlanSHA256, f.review.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, boundary, services)
+	return executeAPKTransitionWith(ctx, f.preparation.PlanSHA256, f.review.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, apkExecutionTestFactory(boundary), services)
 }
 func assertAPKExecutionState(t *testing.T, f *apkExecutionTestFixture, name string, want bool) {
 	t.Helper()
@@ -229,7 +235,7 @@ func TestAPKExecutionRequiresSeparateExactApprovalAndQualifiedBoundary(t *testin
 					t.Fatal(err)
 				}
 			}
-			err := executeAPKTransitionWith(t.Context(), f.preparation.PlanSHA256, digest, f.candidate.keys, f.candidate.attestInstalled, f.services, boundary, apkExecutionServices{run: f.run})
+			err := executeAPKTransitionWith(t.Context(), f.preparation.PlanSHA256, digest, f.candidate.keys, f.candidate.attestInstalled, f.services, apkExecutionTestFactory(boundary), apkExecutionServices{run: f.run})
 			if err == nil || f.calls != 0 {
 				t.Fatal("unapproved native dispatch", err, f.calls)
 			}
@@ -617,10 +623,10 @@ func TestAPKExecutionIndependentAttestationFollowsLifecycleObservation(t *testin
 func TestAPKExecutionNilContextCannotDispatchOrInvokeAuthority(t *testing.T) {
 	f := newAPKExecutionTestFixture(t)
 	boundary := apkExecutionTestAuthority()
-	if _, err := planAPKTransitionExecution(nil, f.preparation.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, boundary); err == nil { //nolint:staticcheck // SA1012: Deliberate invalid input verifies rejection before authority or native dispatch.
+	if _, err := planAPKTransitionExecution(nil, f.preparation.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, apkExecutionTestFactory(boundary)); err == nil { //nolint:staticcheck // SA1012: Deliberate invalid input verifies rejection before authority or native dispatch.
 		t.Fatal("nil planning context accepted")
 	}
-	if err := executeAPKTransitionWith(nil, f.preparation.PlanSHA256, f.review.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, boundary, apkExecutionServices{run: f.run}); err == nil { //nolint:staticcheck // SA1012: Deliberate invalid input verifies rejection before authority or native dispatch.
+	if err := executeAPKTransitionWith(nil, f.preparation.PlanSHA256, f.review.PlanSHA256, f.candidate.keys, f.candidate.attestInstalled, f.services, apkExecutionTestFactory(boundary), apkExecutionServices{run: f.run}); err == nil { //nolint:staticcheck // SA1012: Deliberate invalid input verifies rejection before authority or native dispatch.
 		t.Fatal("nil execution context accepted")
 	}
 	if f.calls != 0 || len(boundary.calls) != 0 {

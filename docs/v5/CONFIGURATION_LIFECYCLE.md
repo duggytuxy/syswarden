@@ -284,6 +284,14 @@ packet/byte counters are normalized; other rule or dynamic-set changes require
 another review. Alpine's exact packaged crontab alias is bound without following
 arbitrary links, and its target inventory is checked independently.
 
+The internal execution coordinator constructs its lifecycle boundary only after
+reopening and verifying the original preparation under its exclusive lock.
+Construction failure, cancellation or a missing boundary prevents native dispatch;
+partially constructed resources close before the preparation lock is released.
+This orders resource custody but does not supply production lifecycle authority.
+The boundary closes before independent terminal verification, so the inactive
+coordinator must retain publication exclusion separately across that verification.
+
 Real isolated Alpine/OpenRC observation is intermediate evidence. It does not
 qualify a signed package transaction, direct package-manager entry points,
 repeated ownership transfers, reboot or removal. The coordinator still needs

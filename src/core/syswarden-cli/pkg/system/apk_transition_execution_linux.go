@@ -38,6 +38,13 @@ type apkExecutionBoundary interface {
 	Close() error
 }
 
+// The factory runs only after original preparation verification and its exclusive
+// lock. Returned resources, including partial construction on error, belong to
+// the caller and close before that preparation. This boundary's lifetime ends
+// before independent terminal verification; an inactive coordinator must retain
+// its publication lease separately through that verification.
+type apkExecutionBoundaryFactory func(context.Context, *verifiedPreparedAPKTransition) (apkExecutionBoundary, error)
+
 // This check rejects typed nil capabilities; it grants no execution authority.
 func apkExecutionValuePresent(value any) bool {
 	if value == nil {
@@ -511,16 +518,28 @@ func closeAPKExecutionDirectory(directory *pinnedServiceDirectory) error {
 	return errors.Join(directory.file.Close(), directory.root.Close())
 }
 
-func planAPKTransitionExecution(ctx context.Context, digest string, keys map[string]ed25519.PublicKey, attest installedVersionAttestor, services apkTransitionServices, boundary apkExecutionBoundary) (review *APKTransitionExecutionReview, returnErr error) {
-	if ctx == nil || !apkExecutionValuePresent(boundary) {
+func planAPKTransitionExecution(ctx context.Context, digest string, keys map[string]ed25519.PublicKey, attest installedVersionAttestor, services apkTransitionServices, factory apkExecutionBoundaryFactory) (review *APKTransitionExecutionReview, returnErr error) {
+	if ctx == nil || factory == nil {
 		return nil, errors.New("APK native execution requires a context and qualified hooks and lifecycle authority")
 	}
-	defer func() { returnErr = errors.Join(returnErr, boundary.Close()) }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	prepared, err := openVerifiedPreparedAPKTransition(ctx, digest, keys, attest, services)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, prepared.Close()) }()
+	boundary, err := factory(ctx, prepared)
+	if apkExecutionValuePresent(boundary) {
+		defer func() { returnErr = errors.Join(returnErr, boundary.Close()) }()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !apkExecutionValuePresent(boundary) {
+		return nil, errors.New("APK execution boundary construction returned no authority")
+	}
 	plan, _, err := buildAPKExecutionPlan(ctx, prepared, boundary)
 	if err != nil {
 		return nil, err
@@ -533,8 +552,8 @@ func planAPKTransitionExecution(ctx context.Context, digest string, keys map[str
 	return review, ctx.Err()
 }
 
-func executeAPKTransition(ctx context.Context, digest, approvedExecutionDigest string, keys map[string]ed25519.PublicKey, attest installedVersionAttestor, services apkTransitionServices, boundary apkExecutionBoundary) error {
-	if err := executeAPKTransitionWith(ctx, digest, approvedExecutionDigest, keys, attest, services, boundary, apkExecutionServices{}); err != nil {
+func executeAPKTransition(ctx context.Context, digest, approvedExecutionDigest string, keys map[string]ed25519.PublicKey, attest installedVersionAttestor, services apkTransitionServices, factory apkExecutionBoundaryFactory) error {
+	if err := executeAPKTransitionWith(ctx, digest, approvedExecutionDigest, keys, attest, services, factory, apkExecutionServices{}); err != nil {
 		return err
 	}
 	if err := retainAPKExecutionClosure(ctx, services.root, approvedExecutionDigest); err != nil {
@@ -543,11 +562,15 @@ func executeAPKTransition(ctx context.Context, digest, approvedExecutionDigest s
 	return nil
 }
 
-func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDigest string, keys map[string]ed25519.PublicKey, attest installedVersionAttestor, services apkTransitionServices, boundary apkExecutionBoundary, execution apkExecutionServices) (returnErr error) {
-	if ctx == nil || !apkExecutionValuePresent(boundary) || !validSHA256(approvedExecutionDigest) {
+func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDigest string, keys map[string]ed25519.PublicKey, attest installedVersionAttestor, services apkTransitionServices, factory apkExecutionBoundaryFactory, execution apkExecutionServices) (returnErr error) {
+	if ctx == nil || factory == nil || !validSHA256(approvedExecutionDigest) {
 		return errors.New("APK execution requires separate exact execution approval and qualified lifecycle authority")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var prepared *verifiedPreparedAPKTransition
+	var boundary apkExecutionBoundary
 	var directory *pinnedServiceDirectory
 	var launchers apkExecutionLaunchers
 	var overlay, helper *os.File
@@ -582,7 +605,7 @@ func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDige
 		if apkExecutionValuePresent(launchers) {
 			returnErr = errors.Join(returnErr, launchers.Close())
 		}
-		if !boundaryClosed {
+		if !boundaryClosed && apkExecutionValuePresent(boundary) {
 			returnErr = errors.Join(returnErr, boundary.Close())
 		}
 		if prepared != nil {
@@ -617,6 +640,13 @@ func executeAPKTransitionWith(ctx context.Context, digest, approvedExecutionDige
 	prepared, err = openVerifiedPreparedAPKTransition(ctx, digest, keys, attest, services)
 	if err != nil {
 		return err
+	}
+	boundary, err = factory(ctx, prepared)
+	if err != nil {
+		return err
+	}
+	if !apkExecutionValuePresent(boundary) {
+		return errors.New("APK execution boundary construction returned no authority")
 	}
 	plan, original, err := buildAPKExecutionPlan(ctx, prepared, boundary)
 	if err != nil {
