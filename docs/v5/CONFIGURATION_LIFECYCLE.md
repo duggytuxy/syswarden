@@ -316,9 +316,27 @@ registration checks; neither conversion nor coexistence is supported.
 Component scenarios exercise both package identities through this coordinator,
 including real launcher custody, native-state checks, terminal records and
 activation refusal on failure. Their native runner and acknowledgments remain
-controlled fixtures. These internal custody and real isolated Alpine/OpenRC
-process observations are intermediate evidence. They do not qualify signed package transactions, direct
-package-manager entry points, repeated ownership transfers, reboot or removal.
+controlled fixtures.
+
+Separate isolated OpenRC runs now complete a first inactive same-name replacement
+with actual signed APK packages for both identities under APK2 and APK3. They use
+the complete generated payload, production hooks, actual native signature checks,
+the default execution engine, all four native acknowledgments and independent
+terminal closure. The administrator nftables policy and cron entry remain intact.
+Two additional compatibility-package runs verify previously implicit rsyslog
+module requirements under both APK generations, including APK3's versioned
+virtual provider. The native transaction retains those requirements explicitly.
+The matching build-artifact gate also validates the complete staged payload and
+hook bytes for both original and candidate packages.
+
+These runs use an instrumented original CLI to invoke the internal coordinator
+and supply exact test approvals, locally trusted laboratory signing keys, and
+explicitly bound candidate CLI versions. Core and TUI binaries come from the
+successful CI artifact rather than a qualified final release build. The candidate
+CLI contains no laboratory entry point. This establishes the observed first
+replacement composition, not a public operator workflow or final release
+qualification. Repeated ownership transfers, interrupted recovery, direct native
+and older-updater paths, reboot and separate removal paths remain open.
 The public update ingress and ordinary terminal entry remain closed to inactive
 migration until complete native coordination and original ownership are
 qualified. The internal terminal path requires the already retained owner and

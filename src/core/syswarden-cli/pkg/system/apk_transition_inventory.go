@@ -15,6 +15,11 @@ import (
 	"strings"
 )
 
+// Generated lifecycle scripts embed bounded preservation checks and exceed the
+// metadata-only limit. This per-script bound remains below the aggregate control
+// archive limit; .PKGINFO and signatures keep their smaller metadata bound.
+const maximumAPKLifecycleScriptBytes = 256 << 10
+
 type apkTransitionMember struct {
 	Stream    string `json:"stream"`
 	Path      string `json:"path"`
@@ -84,7 +89,15 @@ func readAPKTransitionInventory(ctx context.Context, file *os.File) ([]apkTransi
 			signatures++
 		case "apk-control":
 			mode, known := controls[name]
-			if directory || !known || header.Mode != mode || header.Size > maximumNativeHeaderMetadataBytes {
+			limit := int64(maximumAPKLifecycleScriptBytes)
+			modeMatches := header.Mode == mode
+			if name == ".PKGINFO" {
+				// Pinned nfpm emits private 0600 metadata. Legacy 0644 is also
+				// readable; executable or group/world-writable metadata is refused.
+				modeMatches = header.Mode == 0600 || header.Mode == 0644
+				limit = maximumNativeHeaderMetadataBytes
+			}
+			if directory || !known || !modeMatches || header.Size > limit {
 				return nil, fmt.Errorf("APK transition has an unsupported control member, mode or size %q", name)
 			}
 		case "apk-data":

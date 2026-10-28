@@ -521,7 +521,7 @@ func TestAPKTransitionInventoryRequiresEveryLifecycleControlAndExactModes(t *tes
 				if mutation == "missing" {
 					controls = append(controls[:index], controls[index+1:]...)
 				} else {
-					controls[index].header.Mode = 0600
+					controls[index].header.Mode = 0660
 				}
 				file := openQualificationPayloadFixture(t, "candidate.apk", apkTransitionFixtureArchiveWithControls(t, apkTransitionFixtureMembers(), controls, true))
 				if _, _, err := readAPKTransitionInventory(t.Context(), file); err == nil {
@@ -890,6 +890,62 @@ func TestAPKTransitionInventorySignatureNamesAndMetadataAreExact(t *testing.T) {
 			file := openQualificationPayloadFixture(t, "candidate.apk", wire)
 			if _, _, err := readAPKTransitionInventory(t.Context(), file); err == nil {
 				t.Fatal("signature metadata expanded control or data scope")
+			}
+		})
+	}
+}
+
+// The pinned package builder emits private .PKGINFO and lifecycle scripts larger
+// than 64 KiB. Keep their admission distinct from metadata and payload bounds.
+func TestAPKTransitionInventoryGeneratedControlBounds(t *testing.T) {
+	for _, mode := range []int64{0600, 0644, 0400, 0620, 0666, 0755} {
+		for _, size := range []int{maximumNativeHeaderMetadataBytes + 1, maximumAPKLifecycleScriptBytes, maximumAPKLifecycleScriptBytes + 1} {
+			t.Run(fmt.Sprintf("mode-%o-script-%d", mode, size), func(t *testing.T) {
+				controls := apkTransitionFixtureControls()
+				for i := range controls {
+					if controls[i].header.Name == ".PKGINFO" {
+						controls[i].header.Mode = mode
+					}
+					if controls[i].header.Name == ".pre-install" {
+						controls[i].content = append([]byte("#!/bin/sh\n#"), bytes.Repeat([]byte("x"), size-11)...)
+						controls[i].header.Size = int64(len(controls[i].content))
+					}
+				}
+				wire := apkTransitionFixtureArchiveWithControls(t, apkTransitionFixtureMembers(), controls, true)
+				file := openQualificationPayloadFixture(t, "candidate.apk", wire)
+				inventory, _, err := readAPKTransitionInventory(t.Context(), file)
+				accepted := (mode == 0600 || mode == 0644) && size <= maximumAPKLifecycleScriptBytes
+				if (err == nil) != accepted {
+					t.Fatalf("control admission: accepted=%t: %v", accepted, err)
+				}
+				if accepted {
+					found := false
+					for _, member := range inventory {
+						if member.Stream == "apk-control" && member.Path == ".pre-install" {
+							found = member.Size == int64(size) && validSHA256(member.SHA256)
+						}
+					}
+					if !found {
+						t.Fatal("complete script missing from authenticated inventory")
+					}
+				}
+			})
+		}
+	}
+	for _, size := range []int{maximumNativeHeaderMetadataBytes, maximumNativeHeaderMetadataBytes + 1} {
+		t.Run(fmt.Sprintf("metadata-%d", size), func(t *testing.T) {
+			controls := apkTransitionFixtureControls()
+			for i := range controls {
+				if controls[i].header.Name == ".PKGINFO" {
+					padding := size - len(controls[i].content) - len("#\n") - len("datahash = ") - 64 - 1
+					controls[i].content = append(controls[i].content, []byte("#"+strings.Repeat("x", padding)+"\n")...)
+					controls[i].header.Size = int64(len(controls[i].content))
+				}
+			}
+			file := openQualificationPayloadFixture(t, "candidate.apk", apkTransitionFixtureArchiveWithControls(t, apkTransitionFixtureMembers(), controls, true))
+			_, _, err := readAPKTransitionInventory(t.Context(), file)
+			if (err == nil) != (size == maximumNativeHeaderMetadataBytes) {
+				t.Fatalf("metadata bound changed: %v", err)
 			}
 		})
 	}

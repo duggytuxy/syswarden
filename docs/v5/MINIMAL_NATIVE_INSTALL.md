@@ -533,6 +533,14 @@ relevant package records require repair. Unrelated installed packages are not
 promoted into explicit requirements. A modern minimal package with no historical
 optional dependencies produces no extra requirement.
 
+Alpine can provide `rsyslog-uxsock` from the installed `rsyslog` package instead
+of a separate module package. Retention accepts only this exact provider with
+one versioned claim matching the provider's installed version, a canonical native
+checksum, `x86_64` architecture and healthy package flags. Missing, duplicate,
+conflicting or unrelated providers are refused. The original virtual dependency
+name and any administrator world constraint remain unchanged; this recognition
+does not authorize removing the module requirement or replacing its provider.
+
 Already explicit administrator requirements, including version constraints and
 repository tags, are left unchanged. Eligible installed dependencies that lack
 an explicit requirement are passed as fixed bare names in the same native add

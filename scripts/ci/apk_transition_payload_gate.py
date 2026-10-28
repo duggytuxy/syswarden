@@ -27,7 +27,8 @@ class APKTransitionPayloadError(ValueError):
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
 MAX_MEMBERS = 128
-MAX_CONTROL_BYTES = 1024 * 1024
+MAX_METADATA_BYTES = 64 * 1024
+MAX_LIFECYCLE_SCRIPT_BYTES = 256 * 1024
 HOOKS = {
     ".pre-install": "preinst.sh",
     ".pre-upgrade": "preupgrade.sh",
@@ -203,9 +204,11 @@ def validate(archive_path: Path, stage: Path, scripts: Path) -> dict[str, str]:
                         raise APKTransitionPayloadError("APK directory metadata differs from staging")
                     continue
                 mode = 0o755 if name in HOOKS else entry.mode if entry is not None else 0o644
-                if member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE) or member.mode != mode or member.size == 0:
+                mode_matches = member.mode in (0o600, 0o644) if name == ".PKGINFO" else member.mode == mode
+                if member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE) or not mode_matches or member.size == 0:
                     raise APKTransitionPayloadError("APK file type, mode or size is invalid")
-                if name.startswith(".") and member.size > MAX_CONTROL_BYTES:
+                control_limit = MAX_LIFECYCLE_SCRIPT_BYTES if name in HOOKS else MAX_METADATA_BYTES
+                if name.startswith(".") and member.size > control_limit:
                     raise APKTransitionPayloadError("APK control member is excessive")
                 digest, actual_checksum = read_member(bounded, member.size)
                 if checksum is not None and actual_checksum != checksum:

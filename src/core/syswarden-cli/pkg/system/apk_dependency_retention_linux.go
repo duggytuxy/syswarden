@@ -19,8 +19,8 @@ var apkOptionalDependencyNames = [...]string{
 }
 
 type apkRetentionRecord struct {
-	name, version, architecture, checksum, dependencies, flags string
-	seen                                                       map[byte]bool
+	name, version, architecture, checksum, dependencies, flags, provides string
+	seen                                                                 map[byte]bool
 }
 
 // Q1 is the installed identity encoding observed for APK v2 packages with both
@@ -71,6 +71,7 @@ func apkDependencyRetentionNamesForName(packageName string, world, installed []b
 		return nil, errors.New("APK retention inventory is empty, oversized or malformed")
 	}
 	records := make(map[string]apkRetentionRecord)
+	providers := make(map[string][]apkRetentionProvider)
 	for _, block := range strings.Split(strings.TrimRight(string(installed), "\n"), "\n\n") {
 		if block == "" {
 			continue
@@ -81,7 +82,7 @@ func apkDependencyRetentionNamesForName(packageName string, world, installed []b
 				return nil, errors.New("APK installed record is malformed")
 			}
 			key, value := line[0], line[2:]
-			if !strings.ContainsRune("PVCADf", rune(key)) {
+			if !strings.ContainsRune("PVCADfp", rune(key)) {
 				continue
 			}
 			if record.seen[key] {
@@ -101,10 +102,18 @@ func apkDependencyRetentionNamesForName(packageName string, world, installed []b
 				record.dependencies = value
 			case 'f':
 				record.flags = value
+			case 'p':
+				record.provides = value
 			}
 		}
 		if record.name == "" || record.version == "" {
 			return nil, errors.New("APK installed record lacks package identity")
+		}
+		for _, token := range strings.Fields(record.provides) {
+			name := apkRetentionName(token)
+			if apkRetentionRelevant(name) && !validNativeProductPackageName(name) {
+				providers[name] = append(providers[name], apkRetentionProvider{record.name, token})
+			}
 		}
 		if !apkRetentionRelevant(record.name) {
 			continue
@@ -148,9 +157,9 @@ func apkDependencyRetentionNamesForName(packageName string, world, installed []b
 			return nil, errors.New("APK historical dependency is constrained or duplicated")
 		}
 		declared[name] = true
-		record, installed := records[name]
-		if !installed {
-			return nil, errors.New("APK historical dependency is missing; native repair is required")
+		record, err := apkRetentionDependencyRecord(name, records, providers)
+		if err != nil {
+			return nil, err
 		}
 		if strings.Trim(record.flags, "S") != "" {
 			return nil, errors.New("APK historical dependency requires native repair")
@@ -195,6 +204,26 @@ func apkDependencyRetentionNamesForName(packageName string, world, installed []b
 		}
 	}
 	return names, nil
+}
+
+type apkRetentionProvider struct{ name, token string }
+
+// Alpine can fold the uxsock module into rsyslog while retaining its versioned
+// virtual dependency. Recognize only that exact installed provider, without
+// translating or dropping the administrator's original world requirement.
+func apkRetentionDependencyRecord(name string, records map[string]apkRetentionRecord, providers map[string][]apkRetentionProvider) (apkRetentionRecord, error) {
+	record, installed := records[name]
+	claims := providers[name]
+	if installed && len(claims) == 0 {
+		return record, nil
+	}
+	if !installed && name == "rsyslog-uxsock" && len(claims) == 1 && claims[0].name == "rsyslog" {
+		provider, present := records["rsyslog"]
+		if present && provider.architecture == "x86_64" && retentionVersion(provider.version) && validAPKRetentionChecksum(provider.checksum) && claims[0].token == name+"="+provider.version {
+			return provider, nil
+		}
+	}
+	return apkRetentionRecord{}, errors.New("APK historical dependency is missing or its provider is ambiguous; native repair is required")
 }
 
 // Retention shares the native add transaction, so APK resolves these roots

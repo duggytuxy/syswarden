@@ -89,6 +89,62 @@ func TestAPKRetentionSelectedProductChecksumRoot(t *testing.T) {
 	}
 }
 
+func TestAPKRetentionVersionedUxsockProvider(t *testing.T) {
+	const version = "8.2604.0-r0"
+	provider := "P:rsyslog\nV:" + version + "\nA:x86_64\nC:" + apkRetentionFixtureChecksum + "\np:rsyslog-uxsock=" + version + " rsyslog-omuxsock=" + version + " cmd:rsyslogd=" + version + "\nf:S\n\n"
+	alias := "rsyslog-uxsock=" + version
+	for _, packageName := range nativeProductPackageNames {
+		owner := "P:" + packageName + "\nV:5.00.0-r0\nA:x86_64\nC:" + apkRetentionFixtureChecksum + "\nD:rsyslog rsyslog-uxsock\n\n"
+		for _, test := range []struct {
+			name, world, database string
+			want                  []string
+			valid                 bool
+		}{
+			{"both roots retained", "rsyslog\nrsyslog-uxsock\n", provider, nil, true},
+			{"virtual root retained", "rsyslog\n", provider, []string{"rsyslog-uxsock"}, true},
+			{"both implicit roots retained", "", provider, []string{"rsyslog", "rsyslog-uxsock"}, true},
+			{"pinned virtual root preserved", "rsyslog\nrsyslog-uxsock=" + version + "\n", provider, nil, true},
+			{"tagged virtual root preserved", "rsyslog\nrsyslog-uxsock@local~8\n", provider, nil, true},
+			{"legacy separate module", "", strings.Replace(provider, alias+" ", "", 1) + "P:rsyslog-uxsock\nV:" + version + "\n\n", []string{"rsyslog", "rsyslog-uxsock"}, true},
+			{"missing provider", "", strings.Replace(provider, alias+" ", "", 1), nil, false},
+			{"unversioned provider", "", strings.Replace(provider, alias, "rsyslog-uxsock", 1), nil, false},
+			{"different virtual version", "", strings.Replace(provider, alias, "rsyslog-uxsock=8.0-r0", 1), nil, false},
+			{"constrained provider", "", strings.Replace(provider, alias, "rsyslog-uxsock~"+version, 1), nil, false},
+			{"repeated claim", "", strings.Replace(provider, alias, alias+" "+alias, 1), nil, false},
+			{"unrelated additional claimant", "", provider + "P:other\nV:1-r0\np:" + alias + "\n\n", nil, false},
+			{"unrelated sole claimant", "", strings.Replace(provider, alias+" ", "", 1) + "P:other\nV:1-r0\np:" + alias + "\n\n", nil, false},
+			{"direct and virtual module", "", provider + "P:rsyslog-uxsock\nV:" + version + "\n\n", nil, false},
+			{"broken provider", "", strings.Replace(provider, "f:S\n", "f:Ss\n", 1), nil, false},
+			{"missing checksum", "", strings.Replace(provider, "C:"+apkRetentionFixtureChecksum+"\n", "", 1), nil, false},
+			{"malformed checksum", "", strings.Replace(provider, apkRetentionFixtureChecksum, "Q1invalid", 1), nil, false},
+			{"unsupported architecture", "", strings.Replace(provider, "A:x86_64\n", "A:noarch\n", 1), nil, false},
+			{"missing architecture", "", strings.Replace(provider, "A:x86_64\n", "", 1), nil, false},
+			{"invalid version", "", strings.ReplaceAll(provider, version, "8 invalid"), nil, false},
+			{"duplicate provides field", "", strings.Replace(provider, "p:", "p:"+alias+"\np:", 1), nil, false},
+			{"duplicate provider record", "", provider + provider, nil, false},
+			{"conflicting world requirement", "!rsyslog-uxsock\n", provider, nil, false},
+			{"duplicate world requirement", "rsyslog-uxsock\nrsyslog-uxsock\n", provider, nil, false},
+		} {
+			t.Run(packageName+"/"+test.name, func(t *testing.T) {
+				world := []byte(packageName + "\n" + test.world)
+				installed := []byte(owner + test.database)
+				beforeWorld, beforeInstalled := bytes.Clone(world), bytes.Clone(installed)
+				got, err := apkDependencyRetentionNamesForName(packageName, world, installed)
+				if test.valid {
+					if err != nil || !reflect.DeepEqual(got, test.want) {
+						t.Fatalf("retention %q, error %v, want %q", got, err, test.want)
+					}
+				} else if err == nil || len(got) != 0 {
+					t.Fatalf("ambiguous provider accepted: %q %v", got, err)
+				}
+				if !bytes.Equal(world, beforeWorld) || !bytes.Equal(installed, beforeInstalled) {
+					t.Fatal("provider inspection modified native inventory")
+				}
+			})
+		}
+	}
+}
+
 func TestAPKRetentionPreservesExistingChoices(t *testing.T) {
 	database := apkRetentionFixtureDatabase()
 	for _, test := range []struct {

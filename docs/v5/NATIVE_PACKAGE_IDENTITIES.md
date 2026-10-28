@@ -168,6 +168,12 @@ and admits only cut signature/control tar segments. Generic historical header
 inspection does not establish this execution compatibility. Signature framing
 recognizes the native signing producer's RSA256 member and its exact zero-valued
 `atime` and `ctime` metadata, as well as the bounded legacy RSA member form.
+The inventory accepts the pinned builder's `0600` `.PKGINFO` mode and the
+historical `0644` mode. Metadata and signatures remain limited to 64 KiB per
+member. Generated executable lifecycle hooks have a separate 256 KiB member
+limit because their preservation checks exceed the metadata limit. Hook mode,
+exact bytes, aggregate archive bounds and all other path/type restrictions still
+apply. The build-time payload gate enforces the same member bounds.
 Recognizing archive framing never replaces native cryptographic verification or
 the authenticated release manifest. Failure after start remains unresolved, even
 if APK returns zero. Completion with engine or terminal effect-resource closure uncertainty is not

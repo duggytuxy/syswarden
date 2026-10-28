@@ -142,6 +142,38 @@ class APKTransitionPayloadGateTests(unittest.TestCase):
                 with self.assertRaises(gate.APKTransitionPayloadError):
                     gate.validate(self.archive, self.stage, self.scripts)
 
+    def test_generated_metadata_modes_and_distinct_control_bounds(self):
+        for mode in (0o600, 0o644, 0o400, 0o620, 0o666, 0o755):
+            with self.subTest(metadata_mode=mode):
+                self.controls[0][0].mode = mode
+                self.write_archive()
+                if mode in (0o600, 0o644):
+                    gate.validate(self.archive, self.stage, self.scripts)
+                else:
+                    with self.assertRaises(gate.APKTransitionPayloadError):
+                        gate.validate(self.archive, self.stage, self.scripts)
+        self.controls[0][0].mode = 0o600
+        original = list(self.controls)
+        for name, limit in ((".PKGINFO", gate.MAX_METADATA_BYTES),
+                            (".pre-install", gate.MAX_LIFECYCLE_SCRIPT_BYTES)):
+            index = next(i for i, (member, _) in enumerate(original) if member.name == name)
+            for size in (limit, limit + 1):
+                with self.subTest(control=name, size=size):
+                    self.controls = list(original)
+                    member = tarfile.TarInfo(name)
+                    member.mode = 0o600 if name == ".PKGINFO" else 0o755
+                    member.size = size
+                    data = b"x" * size
+                    self.controls[index] = (member, data)
+                    if name in gate.HOOKS:
+                        (self.scripts / gate.HOOKS[name]).write_bytes(data)
+                    self.write_archive()
+                    if size == limit:
+                        gate.validate(self.archive, self.stage, self.scripts)
+                    else:
+                        with self.assertRaises(gate.APKTransitionPayloadError):
+                            gate.validate(self.archive, self.stage, self.scripts)
+
     def test_reference_descriptor_cannot_claim_unbound_runtime_capability(self):
         self.write_archive()
         descriptor = self.stage / gate.package_stage_gate.native_activation_descriptor.DESCRIPTOR_PATH
