@@ -37,10 +37,10 @@ func verifyAPKTerminalEffectPlan(raw []byte, prepared *verifiedPreparedAPKTransi
 	}
 	plan := prepared.plan
 	capability := prepared.capability.Review()
-	if result.Schema != nativeActivationBindingSchema || result.PackageName != plan.PackageName || result.Format != packageFormatAPK || result.Installer != plan.Installer || result.CandidateVersion != plan.CandidateVersion || result.Artifact != plan.Artifact || result.ManifestSHA256 != plan.ManifestSHA256 || result.SignatureSHA256 != plan.SignatureSHA256 || result.InstalledVersion != plan.InstalledVersion || result.Installed.CLI.SHA256 != plan.InstalledCLISHA256 || !validSHA256(result.Installed.Core.SHA256) || result.RuntimePolicy != plan.Policy || result.Offline != plan.Offline || !reflect.DeepEqual(result.Capability, capability) || prepared.capability.SHA256() != plan.CandidateCapabilitySHA256 || capability.CLISHA256 != plan.CandidateCLISHA256 || !validSHA256(result.HostObservationSHA256) {
+	if !result.RuntimePolicy.valid() || result.Schema != result.RuntimePolicy.effectSchema() || result.PackageName != plan.PackageName || result.Format != packageFormatAPK || result.Installer != plan.Installer || result.CandidateVersion != plan.CandidateVersion || result.Artifact != plan.Artifact || result.ManifestSHA256 != plan.ManifestSHA256 || result.SignatureSHA256 != plan.SignatureSHA256 || result.InstalledVersion != plan.InstalledVersion || result.Installed.CLI.SHA256 != plan.InstalledCLISHA256 || !validSHA256(result.Installed.Core.SHA256) || result.RuntimePolicy != plan.Policy || result.Offline != plan.Offline || !reflect.DeepEqual(result.Capability, capability) || prepared.capability.SHA256() != plan.CandidateCapabilitySHA256 || capability.CLISHA256 != plan.CandidateCLISHA256 || !validSHA256(result.HostObservationSHA256) {
 		return result, errors.New("APK terminal effect review disagrees with authenticated preparation")
 	}
-	if !validSHA256(result.RuntimePolicy.ApprovalSHA256) || !validSHA256(result.RuntimePolicy.PolicySHA256) || !validSHA256(result.RuntimePolicy.HostSHA256) {
+	if !result.validPublicationBinding(prepared.capability) {
 		return result, errors.New("APK terminal runtime policy review is incomplete")
 	}
 	return result, nil
@@ -59,6 +59,9 @@ type apkTerminalLifecycle struct {
 func openAPKTerminalLifecycle(ctx context.Context, prepared *verifiedPreparedAPKTransition) (apkTerminalBoundary, error) {
 	if prepared == nil || prepared.closed || prepared.directory == nil {
 		return nil, errors.New("APK terminal preparation is unavailable")
+	}
+	if prepared.plan.Policy.inactive() {
+		return nil, errors.New("inactive APK terminal verification requires an independent complete inactivity observer")
 	}
 	return openAPKTerminalLifecycleWith(ctx, prepared, apkTerminalEffectReader(prepared), captureNativeActivationPolicy, prepared.capability.VerifyInstalled)
 }

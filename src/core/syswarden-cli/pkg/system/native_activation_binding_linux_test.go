@@ -40,7 +40,7 @@ func nativeBindingFixture(t *testing.T) (authenticatedAPKCandidate, nativeActiva
 		installedRuntime: func(context.Context, int) (nativeActivationRuntimeSnapshot, error) { return *runtime, nil },
 		policy: func(context.Context) (nativeActivationPolicyObservation, error) {
 			verify := func(ctx context.Context) error { return errors.Join(policyErr, ctx.Err()) }
-			return nativeActivationPolicyObservation{binding: apkTransitionPolicyBinding{strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64)}, hostSHA256: strings.Repeat("1", 64), revalidate: verify, verifyPolicy: verify}, nil
+			return nativeActivationPolicyObservation{binding: apkTransitionPolicyBinding{ApprovalSHA256: strings.Repeat("d", 64), PolicySHA256: strings.Repeat("e", 64), HostSHA256: strings.Repeat("f", 64)}, hostSHA256: strings.Repeat("1", 64), revalidate: verify, verifyPolicy: verify}, nil
 		},
 	}
 	return candidate, services, runtime, &policyErr

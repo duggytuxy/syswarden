@@ -258,6 +258,26 @@ absence cannot replace that record. Appearance of activation state, changed TOML
 or changed protected ancestry invalidates the observation. This read-only check
 does not by itself authorize package execution or establish host inactivity.
 
+The internal APK preparation and terminal record path distinguishes an explicit
+`inactive-preservation-v1` policy mode from the historical applied-policy mode.
+Inactive preparation and effect records use v2 schemas, retain the original
+absence digest and carry no runtime approval. Missing approval in a v1 record
+remains invalid. Mixed active/inactive evidence and schema substitution are
+refused. The source publication descriptor must match the captured original
+CLI/core pair; the authenticated candidate must also declare publication exclusion.
+Reopening retained preparation and independent terminal verification preserve
+these bindings without recapturing replacement bytes as source authority.
+
+Component tests exercise this mode through retained preparation, execution
+records and terminal cleanup using inert payloads and synthetic native hook
+acknowledgments. They do not establish actual host inactivity or signed native
+migration. Production admission still requires the complete independent service,
+scheduling, process and firewall observations, the retained publication lease,
+proven source ownership and the native recovery boundary. Production terminal
+verification refuses the inactive path until those observations are integrated.
+No installer or update command silently switches from missing activation approval
+to inactive migration, and no activation is performed to satisfy an update gate.
+
 Approval and successful application are separate root-private records. An
 approved install permits its nested firewall reload and independent core start
 before the parent can record success; a child reload cannot record completion

@@ -160,6 +160,8 @@ type apkTransitionPolicyBinding struct {
 	ApprovalSHA256 string `json:"approval_sha256"`
 	PolicySHA256   string `json:"policy_sha256"`
 	HostSHA256     string `json:"host_sha256"`
+	LifecycleMode  string `json:"lifecycle_mode,omitempty"`
+	AbsenceSHA256  string `json:"absence_sha256,omitempty"`
 }
 
 type apkTransitionPlan struct {
@@ -230,7 +232,7 @@ func captureAPKTransitionPolicy(ctx context.Context) (apkTransitionPolicyBinding
 	if err := approval.Revalidate(ctx); err != nil {
 		return apkTransitionPolicyBinding{}, err
 	}
-	return apkTransitionPolicyBinding{review.SHA256, review.PolicySHA256, review.HostSHA256}, nil
+	return apkTransitionPolicyBinding{ApprovalSHA256: review.SHA256, PolicySHA256: review.PolicySHA256, HostSHA256: review.HostSHA256}, nil
 }
 
 func verifyAPKTransitionNativeSignature(ctx context.Context, candidate authenticatedAPKCandidate) error {
@@ -388,10 +390,10 @@ func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandida
 	}
 	policy, err := services.policy(ctx)
 	if err != nil {
-		return fmt.Errorf("APK replacement requires prior exact runtime approval: %w", err)
+		return fmt.Errorf("APK replacement requires an exact original lifecycle observation: %w", err)
 	}
-	if !validSHA256(policy.ApprovalSHA256) || !validSHA256(policy.PolicySHA256) || !validSHA256(policy.HostSHA256) {
-		return errors.New("APK runtime approval binding is incomplete")
+	if !policy.valid() {
+		return errors.New("APK lifecycle policy binding is incomplete")
 	}
 	capability, err := attestNativeActivationCandidate(ctx, candidate.target, candidate.file)
 	if err != nil {
@@ -400,6 +402,9 @@ func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandida
 	activation, err := services.activation(ctx, candidate)
 	if err != nil {
 		return err
+	}
+	if policy.inactive() && !capability.publicationExclusion() {
+		return errors.New("inactive APK preservation requires cooperative candidate publication exclusion")
 	}
 	if activation == nil || !validSHA256(activation.EffectPlanSHA256()) {
 		return errors.New("APK candidate effect evidence is incomplete")
@@ -414,10 +419,15 @@ func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandida
 	if err := writeAPKTransitionBytes(directory, "native-effects.json", effects); err != nil {
 		return err
 	}
-	plan := apkTransitionPlan{CandidateAPKChecksum: candidateChecksum, CandidateCapabilitySHA256: capability.SHA256(), EffectPlanSHA256: activation.EffectPlanSHA256(), Schema: apkTransitionSchema, PackageName: candidate.target.packageName, Installer: candidate.target.installer, CandidateVersion: candidate.version,
+	plan := apkTransitionPlan{CandidateAPKChecksum: candidateChecksum, CandidateCapabilitySHA256: capability.SHA256(), EffectPlanSHA256: activation.EffectPlanSHA256(), Schema: policy.preparationSchema(), PackageName: candidate.target.packageName, Installer: candidate.target.installer, CandidateVersion: candidate.version,
 		Artifact: artifact, CandidateCLISHA256: cliDigest, ManifestSHA256: apkTransitionDigest(candidate.manifest), SignatureSHA256: apkTransitionDigest(candidate.signature),
 		InstalledVersion: installed.version, InstalledCLISHA256: installed.cliSHA256, Inventory: inventory, HostSnapshotSHA256: apkTransitionDigest(hostBytes), Policy: policy,
 		RetainedDependencyNames: dependencies, Offline: candidate.offline}
+	if policy.inactive() {
+		if _, err := verifyAPKTerminalEffectPlan(effects, &verifiedPreparedAPKTransition{plan: plan, capability: capability}); err != nil {
+			return err
+		}
+	}
 	planBytes, err := json.Marshal(plan)
 	if err != nil {
 		return err
@@ -427,7 +437,7 @@ func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandida
 	if err := writeAPKTransitionBytes(directory, "plan.json", planBytes); err != nil {
 		return err
 	}
-	if err := writeAPKTransitionBytes(directory, "prepared.json", []byte("{\"schema\":\""+apkTransitionSchema+"\",\"state\":\"prepared-only\",\"plan_sha256\":\""+digest+"\"}\n")); err != nil {
+	if err := writeAPKTransitionBytes(directory, "prepared.json", []byte("{\"schema\":\""+plan.Schema+"\",\"state\":\"prepared-only\",\"plan_sha256\":\""+digest+"\"}\n")); err != nil {
 		return err
 	}
 	current, err := captureAPKTransitionHost(ctx, services.hostRoot)
@@ -436,7 +446,7 @@ func prepareAPKTransition(ctx context.Context, candidate authenticatedAPKCandida
 	}
 	currentPolicy, err := services.policy(ctx)
 	if err != nil || currentPolicy != policy {
-		return errors.Join(errors.New("APK runtime approval changed during preparation"), err)
+		return errors.Join(errors.New("APK lifecycle policy changed during preparation"), err)
 	}
 	if err := verifySecurePackageForInstallation(candidate.file, candidate.path, artifact, candidate.uid); err != nil {
 		return err
@@ -781,11 +791,11 @@ func openRetainedAPKTransition(ctx context.Context, digest string, keys map[stri
 	if err := decodeAPKTransitionJSON(planBytes, &plan); err != nil {
 		return nil, err
 	}
-	if plan.Schema != apkTransitionSchema || plan.PackageName != compatibilityNativePackageName || plan.NativeExecutionAuthorized || plan.ProductAccepted || !validAPKRetentionChecksum(plan.CandidateAPKChecksum) || !validSHA256(plan.CandidateCapabilitySHA256) || !validSHA256(plan.EffectPlanSHA256) {
+	if !plan.Policy.valid() || plan.Schema != plan.Policy.preparationSchema() || plan.PackageName != compatibilityNativePackageName || plan.NativeExecutionAuthorized || plan.ProductAccepted || !validAPKRetentionChecksum(plan.CandidateAPKChecksum) || !validSHA256(plan.CandidateCapabilitySHA256) || !validSHA256(plan.EffectPlanSHA256) {
 		return nil, errors.New("APK stored plan claims unsupported identity, execution or acceptance")
 	}
 	prepared, err := readAPKTransitionBytes(directory, "prepared.json", 1024)
-	wantPrepared := "{\"schema\":\"" + apkTransitionSchema + "\",\"state\":\"prepared-only\",\"plan_sha256\":\"" + digest + "\"}\n"
+	wantPrepared := "{\"schema\":\"" + plan.Schema + "\",\"state\":\"prepared-only\",\"plan_sha256\":\"" + digest + "\"}\n"
 	if err != nil || string(prepared) != wantPrepared {
 		return nil, errors.New("APK plan preparation is incomplete")
 	}
@@ -865,13 +875,13 @@ func openRetainedAPKTransition(ctx context.Context, digest string, keys map[stri
 	}
 	policy, err := services.policy(ctx)
 	if err != nil || policy != plan.Policy {
-		return nil, errors.Join(errors.New("APK current runtime approval differs from the stored plan"), err)
+		return nil, errors.Join(errors.New("APK current lifecycle policy differs from the stored plan"), err)
 	}
 	if err := errors.Join(ctx.Err(), attestRetainedDirectoryParent(services.root, parent, false), attestRetainedDirectoryParent(path, directory, false)); err != nil {
 		return nil, err
 	}
 	capability, err := attestNativeActivationCandidate(ctx, candidate.target, candidate.file)
-	if err != nil || capability.SHA256() != plan.CandidateCapabilitySHA256 {
+	if err != nil || capability.SHA256() != plan.CandidateCapabilitySHA256 || plan.Policy.inactive() && !capability.publicationExclusion() {
 		return nil, errors.Join(errors.New("APK stored runtime capability changed"), err)
 	}
 	if original {
@@ -889,6 +899,11 @@ func openRetainedAPKTransition(ctx context.Context, digest string, keys map[stri
 	}
 	opened.capability = capability
 	opened.plan, opened.candidate, opened.snapshot = plan, candidate, snapshot
+	if plan.Policy.inactive() {
+		if _, err := verifyAPKTerminalEffectPlan(effects, opened); err != nil {
+			return nil, err
+		}
+	}
 	return opened, nil
 }
 
@@ -900,7 +915,7 @@ func approvePreparedAPKTransition(ctx context.Context, digest string, keys map[s
 	}
 	defer func() { returnErr = errors.Join(returnErr, prepared.Close()) }()
 	directory := prepared.directory
-	approval := []byte("{\"schema\":\"" + apkTransitionSchema + "\",\"state\":\"reviewed-preparation-only\",\"plan_sha256\":\"" + digest + "\",\"native_execution_authorized\":false}\n")
+	approval := []byte("{\"schema\":\"" + prepared.plan.Schema + "\",\"state\":\"reviewed-preparation-only\",\"plan_sha256\":\"" + digest + "\",\"native_execution_authorized\":false}\n")
 	if err := writeAPKTransitionBytes(directory, "approval.json", approval); err != nil {
 		if !errors.Is(err, os.ErrExist) {
 			return err

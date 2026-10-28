@@ -63,7 +63,14 @@ func apkTerminalCompleteFixtureWithSetup(t *testing.T, setup func(*authenticated
 		if err != nil {
 			return nil, err
 		}
-		plan := nativeActivationBindingPlan{Schema: nativeActivationBindingSchema, PackageName: c.target.packageName, Format: packageFormatAPK, Installer: c.target.installer, CandidateVersion: c.version, Artifact: c.artifact, ManifestSHA256: apkTransitionDigest(c.manifest), SignatureSHA256: apkTransitionDigest(c.signature), Capability: capability.Review(), InstalledVersion: installed.version, Installed: original, RuntimePolicy: policy, HostObservationSHA256: strings.Repeat("a", 64), Offline: c.offline}
+		plan := nativeActivationBindingPlan{Schema: policy.effectSchema(), PackageName: c.target.packageName, Format: packageFormatAPK, Installer: c.target.installer, CandidateVersion: c.version, Artifact: c.artifact, ManifestSHA256: apkTransitionDigest(c.manifest), SignatureSHA256: apkTransitionDigest(c.signature), Capability: capability.Review(), InstalledVersion: installed.version, Installed: original, RuntimePolicy: policy, HostObservationSHA256: strings.Repeat("a", 64), Offline: c.offline}
+		if policy.inactive() {
+			source, _, _, err := observeNativePublicationExclusionSource(ctx, services.hostRoot)
+			if err != nil {
+				return nil, err
+			}
+			plan.SourcePublicationSHA256 = source.SHA256()
+		}
 		raw, err := apkExecutionJSON(plan)
 		if err != nil {
 			return nil, err

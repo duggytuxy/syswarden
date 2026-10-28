@@ -38,20 +38,21 @@ func (binding *nativeActivationBinding) OriginalRuntime() nativeActivationRuntim
 }
 
 type nativeActivationBindingPlan struct {
-	Schema                string                          `json:"schema"`
-	PackageName           string                          `json:"package_name"`
-	Format                string                          `json:"format"`
-	Installer             string                          `json:"installer"`
-	CandidateVersion      string                          `json:"candidate_version"`
-	Artifact              updateArtifact                  `json:"artifact"`
-	ManifestSHA256        string                          `json:"manifest_sha256"`
-	SignatureSHA256       string                          `json:"signature_sha256"`
-	Capability            NativeActivationCandidateReview `json:"capability"`
-	InstalledVersion      string                          `json:"installed_version"`
-	Installed             nativeActivationRuntimeSnapshot `json:"installed_runtime"`
-	RuntimePolicy         apkTransitionPolicyBinding      `json:"runtime_policy"`
-	HostObservationSHA256 string                          `json:"host_observation_sha256"`
-	Offline               bool                            `json:"offline"`
+	Schema                  string                          `json:"schema"`
+	PackageName             string                          `json:"package_name"`
+	Format                  string                          `json:"format"`
+	Installer               string                          `json:"installer"`
+	CandidateVersion        string                          `json:"candidate_version"`
+	Artifact                updateArtifact                  `json:"artifact"`
+	ManifestSHA256          string                          `json:"manifest_sha256"`
+	SignatureSHA256         string                          `json:"signature_sha256"`
+	Capability              NativeActivationCandidateReview `json:"capability"`
+	InstalledVersion        string                          `json:"installed_version"`
+	Installed               nativeActivationRuntimeSnapshot `json:"installed_runtime"`
+	RuntimePolicy           apkTransitionPolicyBinding      `json:"runtime_policy"`
+	HostObservationSHA256   string                          `json:"host_observation_sha256"`
+	SourcePublicationSHA256 string                          `json:"source_publication_sha256,omitempty"`
+	Offline                 bool                            `json:"offline"`
 }
 
 type nativeActivationRuntimeFile struct {
@@ -76,6 +77,7 @@ type nativeActivationBindingServices struct {
 	classify         func(context.Context, packageTarget, *os.File) (NativeActivationCandidate, error)
 	policy           func(context.Context) (nativeActivationPolicyObservation, error)
 	installedRuntime func(context.Context, int) (nativeActivationRuntimeSnapshot, error)
+	publication      func(context.Context) (NativeActivationCandidate, error)
 }
 
 func productionNativeActivationBindingServices() nativeActivationBindingServices {
@@ -145,7 +147,7 @@ func captureNativeActivationPolicy(ctx context.Context) (nativeActivationPolicyO
 		return verifyPolicy(check)
 	}
 	result := nativeActivationPolicyObservation{
-		binding:    apkTransitionPolicyBinding{review.SHA256, review.PolicySHA256, review.HostSHA256},
+		binding:    apkTransitionPolicyBinding{ApprovalSHA256: review.SHA256, PolicySHA256: review.PolicySHA256, HostSHA256: review.HostSHA256},
 		hostSHA256: host.Digest(), revalidate: revalidate, verifyPolicy: verifyPolicy,
 	}
 	return result, revalidate(ctx)
@@ -323,10 +325,23 @@ func captureNativeActivationBindingWith(ctx context.Context, candidate authentic
 	if err != nil {
 		return nil, err
 	}
-	if policy.revalidate == nil || policy.verifyPolicy == nil || !validSHA256(policy.binding.ApprovalSHA256) || !validSHA256(policy.binding.PolicySHA256) || !validSHA256(policy.binding.HostSHA256) || !validSHA256(policy.hostSHA256) {
+	if policy.revalidate == nil || policy.verifyPolicy == nil || !policy.binding.valid() || !validSHA256(policy.hostSHA256) {
 		return nil, errors.New("native activation policy and host binding is incomplete")
 	}
-	plan := nativeActivationBindingPlan{Schema: nativeActivationBindingSchema, PackageName: candidate.target.packageName, Format: candidate.target.format, Installer: candidate.target.installer, CandidateVersion: candidate.version, Artifact: artifact, ManifestSHA256: apkTransitionDigest(candidate.manifest), SignatureSHA256: apkTransitionDigest(candidate.signature), Capability: review, InstalledVersion: installed.version, Installed: runtime, RuntimePolicy: policy.binding, HostObservationSHA256: policy.hostSHA256, Offline: candidate.offline}
+	var sourcePublication NativeActivationCandidate
+	if policy.binding.inactive() {
+		if candidate.target.format != packageFormatAPK || !capability.publicationExclusion() || services.publication == nil {
+			return nil, errors.New("inactive native preservation requires both publication capabilities and the APK coordinator")
+		}
+		sourcePublication, err = services.publication(ctx)
+		if err != nil || !sourcePublication.publicationExclusion() || sourcePublication.Review().CLISHA256 != runtime.CLI.SHA256 || sourcePublication.Review().CoreSHA256 != runtime.Core.SHA256 {
+			return nil, errors.Join(errors.New("inactive source publication capability differs from original runtime"), err)
+		}
+	}
+	plan := nativeActivationBindingPlan{Schema: policy.binding.effectSchema(), PackageName: candidate.target.packageName, Format: candidate.target.format, Installer: candidate.target.installer, CandidateVersion: candidate.version, Artifact: artifact, ManifestSHA256: apkTransitionDigest(candidate.manifest), SignatureSHA256: apkTransitionDigest(candidate.signature), Capability: review, InstalledVersion: installed.version, Installed: runtime, RuntimePolicy: policy.binding, HostObservationSHA256: policy.hostSHA256, Offline: candidate.offline}
+	if policy.binding.inactive() {
+		plan.SourcePublicationSHA256 = sourcePublication.SHA256()
+	}
 	raw, err := json.Marshal(plan)
 	if err != nil {
 		return nil, err
@@ -357,6 +372,12 @@ func captureNativeActivationBindingWith(ctx context.Context, candidate authentic
 		}
 		if currentRuntime != runtime {
 			return errors.New("native installed executable bytes or identity changed after review")
+		}
+		if policy.binding.inactive() {
+			currentPublication, err := services.publication(check)
+			if err != nil || currentPublication != sourcePublication {
+				return errors.Join(errors.New("inactive source publication capability changed after review"), err)
+			}
 		}
 		if err := policy.revalidate(check); err != nil {
 			return err

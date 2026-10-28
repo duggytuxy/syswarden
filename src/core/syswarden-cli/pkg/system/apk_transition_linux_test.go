@@ -192,7 +192,7 @@ func apkTransitionFixture(t *testing.T) (authenticatedAPKCandidate, apkTransitio
 	}, root: filepath.Join(t.TempDir(), filepath.Base(apkTransitionRoot)), hostRoot: host,
 		verifyNative: func(context.Context, authenticatedAPKCandidate) error { return nil },
 		policy: func(context.Context) (apkTransitionPolicyBinding, error) {
-			return apkTransitionPolicyBinding{strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)}, nil
+			return apkTransitionPolicyBinding{ApprovalSHA256: strings.Repeat("b", 64), PolicySHA256: strings.Repeat("c", 64), HostSHA256: strings.Repeat("d", 64)}, nil
 		}}
 	return candidate, services, data
 }
