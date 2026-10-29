@@ -15,6 +15,7 @@ RPM_SCRIPTLETS="${TEST_WORKSPACE}/rpm-scriptlets"
 IMAGE_ROOT="${TEST_WORKSPACE}/image-root"
 CHROOT_ROOT="${TEST_WORKSPACE}/rpm-chroot"
 CLEAN_CHROOT_ROOT="${TEST_WORKSPACE}/clean-rpm-chroot"
+LEGACY_CHROOT_ROOT="${TEST_WORKSPACE}/legacy-rpm-chroot"
 STANDARD_STAGE="${TEST_WORKSPACE}/standard-stage"
 
 cleanup() {
@@ -23,14 +24,14 @@ cleanup() {
     case "${TEST_WORKSPACE}" in
         /tmp/syswarden-rhel-profile-rpm-test.*)
             if [ "${RPM_ROOT_MODE:-}" = user-namespace ]; then
-                for root in "${CHROOT_ROOT}" "${CLEAN_CHROOT_ROOT}"; do
+                for root in "${CHROOT_ROOT}" "${CLEAN_CHROOT_ROOT}" "${LEGACY_CHROOT_ROOT}"; do
                     if [ -d "${root}/usr/lib" ] && [ ! -L "${root}/usr/lib" ]; then
                         chmod u+w -- "${root}/usr/lib" || status=1
                     fi
                 done
             fi
             if [ "${RPM_ROOT_MODE:-}" = sudo ]; then
-                for root in "${CHROOT_ROOT}" "${CLEAN_CHROOT_ROOT}"; do
+                for root in "${CHROOT_ROOT}" "${CLEAN_CHROOT_ROOT}" "${LEGACY_CHROOT_ROOT}"; do
                     if [ -d "${root}" ]; then
                         sudo -n rm -rf -- "${root}" || status=1
                     fi
@@ -218,6 +219,13 @@ for binary in syswarden-cli syswarden-core syswarden-tui; do
     printf '%s\n' '#!/bin/sh' 'exit 0' > "${PROFILE_STAGE}/payload/opt/syswarden/bin/${binary}"
     chmod 0750 "${PROFILE_STAGE}/payload/opt/syswarden/bin/${binary}"
 done
+PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${EXTENSION_DIRECTORY}/../../scripts/ci/native_activation_descriptor.py" \
+    --root "${PROFILE_STAGE}/payload"
+ACTIVATION_DESCRIPTOR_SHA256="$(sha256sum \
+    "${PROFILE_STAGE}/payload/opt/syswarden/activation-contract-v1.json" | awk 'NF == 2 { print $1 }')"
+ACTIVATION_DESCRIPTOR_SIZE="$(stat -c '%s' \
+    "${PROFILE_STAGE}/payload/opt/syswarden/activation-contract-v1.json")"
 printf '%s\n' '{"fixture":true}' > "${PROFILE_STAGE}/payload/opt/syswarden/signatures.json"
 chmod 0640 "${PROFILE_STAGE}/payload/opt/syswarden/signatures.json"
 ln -s /opt/syswarden/bin/syswarden-cli "${PROFILE_STAGE}/payload/usr/local/bin/syswarden"
@@ -323,7 +331,7 @@ if python3 "${EXTENSION_DIRECTORY}/verify-rpm.py" \
     exit 1
 fi
 
-# Exercise the exact RPM scriptlets through two offline chroots. Every command
+# Exercise the exact RPM scriptlets through separate offline chroots. Every command
 # used by a scriptlet is the real host binary with its real dynamic libraries;
 # only systemctl is replaced because no systemd manager runs in the chroot.
 install_chroot_executable() {
@@ -469,6 +477,7 @@ initialize_rpm_chroot() {
 
 initialize_rpm_chroot "${CLEAN_CHROOT_ROOT}"
 initialize_rpm_chroot "${CHROOT_ROOT}"
+initialize_rpm_chroot "${LEGACY_CHROOT_ROOT}"
 
 rpm_at_root() {
     local root="$1"
@@ -668,19 +677,96 @@ assert_standard_units_unowned() {
     done
 }
 
+snapshot_native_refusal_state() {
+    local root="$1"
+    # RPM may update its own lock/journal bytes even when PREIN refuses. Compare
+    # its logical installed identities and owned inventory separately, then all
+    # other fixture entries without following symlinks. Access times and directory
+    # timestamps are not policy state; leaf identities, bytes and metadata are.
+    rpm_at_root "${root}" --query --all --queryformat \
+        '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\tepoch=%{EPOCHNUM}\tinstalled=%{INSTALLTIME}\n' | sort
+    rpm_at_root "${root}" --query --all --dump | sort
+    chroot_admin python3 - "${root}" <<'PYTHON'
+import hashlib
+import json
+import os
+import stat
+import sys
+
+root = sys.argv[1]
+excluded = {"proc", "usr/lib/sysimage/rpm"}
+
+def capture(relative):
+    path = os.path.join(root, relative)
+    entry = os.lstat(path)
+    record = [relative, entry.st_dev, entry.st_ino, entry.st_mode,
+              entry.st_uid, entry.st_gid]
+    if stat.S_ISDIR(entry.st_mode):
+        children = sorted(os.listdir(path))
+    else:
+        children = []
+        record.extend([entry.st_nlink, entry.st_size, entry.st_mtime_ns,
+                       entry.st_ctime_ns])
+        if stat.S_ISREG(entry.st_mode):
+            with open(path, "rb") as stream:
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(65536), b""):
+                    digest.update(chunk)
+                record.append(digest.hexdigest())
+        elif stat.S_ISLNK(entry.st_mode):
+            record.append(os.readlink(path))
+        else:
+            record.append(entry.st_rdev)
+    print(json.dumps(record, separators=(",", ":")))
+    for child in children:
+        nested = os.path.join(relative, child)
+        if nested not in excluded:
+            capture(nested)
+
+capture("")
+PYTHON
+}
+
+expect_native_nonfresh_refusal() {
+    local root="$1"
+    local reason="$2"
+    shift 2
+    local before="${TEST_WORKSPACE}/native-refusal.before"
+    local after="${TEST_WORKSPACE}/native-refusal.after"
+    local output="${TEST_WORKSPACE}/native-refusal.log"
+    snapshot_native_refusal_state "${root}" > "${before}"
+    if rpm_at_root "${root}" --upgrade --nodeps --nosignature --nodigest --nocontexts \
+        "$@" "${PACKAGE_PATH}" > "${output}" 2>&1; then
+        printf 'RHEL package-owned non-fresh transaction accepted %s.\n' "${reason}" >&2
+        exit 1
+    fi
+    if ! grep -Fqx 'Non-fresh RHEL package-owned installation is refused before scriptlet effects. A separately approved coordinated native transaction is required.' "${output}"; then
+        cat "${output}" >&2
+        printf 'Non-fresh transaction did not reach the explicit refusal gate: %s.\n' "${reason}" >&2
+        exit 1
+    fi
+    snapshot_native_refusal_state "${root}" > "${after}"
+    if ! cmp -s -- "${before}" "${after}"; then
+        diff -u -- "${before}" "${after}" >&2 || :
+        printf 'Refused non-fresh transaction changed native state: %s.\n' "${reason}" >&2
+        exit 1
+    fi
+    printf 'Verified non-fresh refusal with unchanged native state: %s.\n' "${reason}"
+}
+
 expect_rhel_upgrade_refusal() {
     local root="$1"
     local reason="$2"
-    if rpm_at_root "${root}" --upgrade --nodeps --nosignature --nodigest --nocontexts \
-        "${PACKAGE_PATH}" >/dev/null 2>&1; then
-        printf 'RHEL package-owned migration accepted %s.\n' "${reason}" >&2
-        exit 1
-    fi
+    expect_native_nonfresh_refusal "${root}" "${reason}"
     assert_package_identity "${root}" syswarden-4.04.3-1.x86_64
 }
 
 assert_rhel_authority() {
     local root="$1"
+    assert_exact_chroot_regular_file "${root}" \
+        /opt/syswarden/activation-contract-v1.json 644 \
+        "${ACTIVATION_DESCRIPTOR_SIZE}" "${ACTIVATION_DESCRIPTOR_SHA256}" \
+        'Native activation contract descriptor'
     assert_chroot_path_absent "${root}" /etc/systemd/system/syswarden-core.service
     assert_chroot_path_absent "${root}" /etc/systemd/system/syswarden-firewall.service
     chroot_path_is_regular "${root}" /usr/lib/systemd/system/syswarden-core.service
@@ -697,6 +783,7 @@ assert_rhel_authority() {
 
 assert_standard_authority() {
     local root="$1"
+    assert_chroot_path_absent "${root}" /opt/syswarden/activation-contract-v1.json
     chroot_path_is_regular "${root}" /etc/systemd/system/syswarden-core.service
     chroot_path_is_regular "${root}" /etc/systemd/system/syswarden-firewall.service
     [[ "$(run_in_chroot "${root}" /usr/bin/sha256sum /etc/systemd/system/syswarden-core.service |
@@ -737,7 +824,8 @@ prepare_exact_erase_state() {
         ! -name syswarden-cli ! -name syswarden-core ! -name syswarden-tui \
         -exec rm -rf -- '{}' +
     chroot_admin find "${root}/opt/syswarden" -mindepth 1 -maxdepth 1 \
-        ! -name bin ! -name signatures.json -exec rm -rf -- '{}' +
+        ! -name bin ! -name signatures.json ! -name activation-contract-v1.json \
+        -exec rm -rf -- '{}' +
     printf '%s' 'SYSWARDEN_REMOVAL_V1
 state=in-progress
 ' > "${TEST_WORKSPACE}/removal-in-progress-v1"
@@ -771,6 +859,7 @@ assert_final_absence() {
         usr/share/doc/syswarden \
         usr/share/bash-completion/completions/syswarden \
         opt/syswarden \
+        opt/syswarden/activation-contract-v1.json \
         usr/local/bin/syswarden \
         usr/local/bin/syswarden-tui \
         etc/systemd/system/multi-user.target.wants/syswarden-core.service \
@@ -825,7 +914,7 @@ reset_after_test_noscripts_erase() {
     done
 }
 
-for root in "${CLEAN_CHROOT_ROOT}" "${CHROOT_ROOT}"; do
+for root in "${CLEAN_CHROOT_ROOT}" "${CHROOT_ROOT}" "${LEGACY_CHROOT_ROOT}"; do
     [[ "$(run_in_chroot "${root}" /usr/bin/rpm --eval '%{_dbpath}')" == \
         /usr/lib/sysimage/rpm ]]
     rpm_at_root "${root}" --initdb
@@ -1051,18 +1140,15 @@ for preset_mode in fail partial-success; do
     assert_exact_preset_marker "${CLEAN_CHROOT_ROOT}"
     assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 1
     chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/preset-mode"
-    rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-        "${PACKAGE_PATH}"
-    assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
-    assert_exact_initial_enablement "${CLEAN_CHROOT_ROOT}"
-    assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 2
-    for marker in \
-        /var/lib/.syswarden-rhelpo-preset-pending-v1 \
-        /var/lib/.syswarden-rhelpo-preset-pending-v1.new; do
-        assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" "${marker}"
-    done
+    expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+        "unapproved reinstall after ${preset_mode} fresh preset" --replacepkgs
+    assert_exact_preset_marker "${CLEAN_CHROOT_ROOT}"
+    assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 1
+    # Tear down this failed, test-owned installation only to isolate the next
+    # fresh scenario. This is not a successful recovery or removal assertion.
     rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
     chroot_admin rm -f -- \
+        "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" \
         "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service" \
         "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service"
     reset_after_test_noscripts_erase "${CLEAN_CHROOT_ROOT}"
@@ -1079,26 +1165,28 @@ assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
 assert_exact_preset_marker "${CLEAN_CHROOT_ROOT}"
 assert_exact_initial_enablement "${CLEAN_CHROOT_ROOT}"
 assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 1
-rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}"
+expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+    'unapproved reinstall after fresh preset durability failure' --replacepkgs
 assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
 assert_exact_initial_enablement "${CLEAN_CHROOT_ROOT}"
-assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 2
-for marker in \
-    /var/lib/.syswarden-rhelpo-preset-pending-v1 \
-    /var/lib/.syswarden-rhelpo-preset-pending-v1.new; do
-    assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" "${marker}"
-done
+assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 1
+assert_exact_preset_marker "${CLEAN_CHROOT_ROOT}"
+# Fixture-only teardown keeps the following fresh install independent of the
+# refused recovery path and does not claim a coordinated recovery succeeded.
 rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
 chroot_admin rm -f -- \
+    "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1" \
     "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service" \
     "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service"
 reset_after_test_noscripts_erase "${CLEAN_CHROOT_ROOT}"
 
+chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/systemctl.log"
 rpm_at_root "${CLEAN_CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
     "${PACKAGE_PATH}"
 assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
 assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
+assert_exact_initial_enablement "${CLEAN_CHROOT_ROOT}"
+assert_exact_preset_invocation_count "${CLEAN_CHROOT_ROOT}" 1
 operator_recovery_helper="${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-postun-recovery-v1"
 chroot_admin install -m 0700 -- \
     "${PROFILE_STAGE}/payload/usr/libexec/syswarden/rhelpo-postun-recovery-v1" \
@@ -1118,57 +1206,56 @@ chroot_path_is_regular "${CLEAN_CHROOT_ROOT}" \
 chroot_admin rm -f -- "${operator_recovery_helper}"
 chroot_admin ln -- "${CLEAN_CHROOT_ROOT}/opt/syswarden/bin/syswarden-cli" \
     "${CLEAN_CHROOT_ROOT}/opt/syswarden/bin/syswarden-cli.hardlink"
-if rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}" >/dev/null 2>&1; then
-    printf '%s\n' 'RHEL package-owned RPM accepted a hard-linked shared payload leaf.' >&2
-    exit 1
-fi
+expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+    'a hard-linked shared payload leaf' --replacepkgs
 assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
 chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/opt/syswarden/bin/syswarden-cli.hardlink"
 chroot_admin ln -s -- /usr/lib/systemd/system/syswarden-core.service \
     "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration"
-rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}"
+expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+    'interrupted vendor enablement migration' --replacepkgs
 assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
-assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" \
-    /etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration
+chroot_admin rm -f -- \
+    "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration"
 printf '%s' 'tampered' > "${TEST_WORKSPACE}/preset-pending-invalid-prefix"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-pending-invalid-prefix" \
     "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
-if rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}" >/dev/null 2>&1; then
-    printf '%s\n' 'RHEL package-owned RPM accepted a substituted partial preset marker.' >&2
-    exit 1
-fi
+expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+    'a substituted partial preset marker' --replacepkgs
 assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
 chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
 printf '%s\n' SYSWARDEN_RHELPO_PRESET_PENDING_V1 | head -c 11 > \
     "${TEST_WORKSPACE}/preset-pending-prefix"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-pending-prefix" \
     "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1"
-if rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}" >/dev/null 2>&1; then
-    printf '%s\n' 'RHEL package-owned RPM accepted a partial final preset marker.' >&2
-    exit 1
-fi
+expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+    'a partial final preset marker' --replacepkgs
 assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
 chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-pending-prefix" \
     "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
-rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}"
+expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+    'an interrupted partial preset marker' --replacepkgs
 assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
-assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" \
-    /var/lib/.syswarden-rhelpo-preset-pending-v1.new
+chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-pending.new" \
     "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
-rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}"
+expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+    'an interrupted complete preset marker' --replacepkgs
 assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
 assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" \
     /var/lib/.syswarden-rhelpo-preset-pending-v1
+chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
+expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+    'an otherwise clean installed profile' --replacepkgs
+chroot_admin rm -- \
+    "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service"
+expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+    'an administrator-disabled core service' --replacepkgs
 assert_chroot_path_absent "${CLEAN_CHROOT_ROOT}" \
-    /var/lib/.syswarden-rhelpo-preset-pending-v1.new
+    /etc/systemd/system/multi-user.target.wants/syswarden-core.service
+chroot_admin ln -s -- /usr/lib/systemd/system/syswarden-core.service \
+    "${CLEAN_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service"
 if rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1; then
     printf '%s\n' 'RHEL package-owned RPM erased without the CLI authorization barriers.' >&2
     exit 1
@@ -1183,6 +1270,61 @@ chroot_admin mkfifo -m 0600 "${CLEAN_CHROOT_ROOT}/opt/syswarden/untrusted-fifo"
 prepare_exact_erase_state "${CLEAN_CHROOT_ROOT}"
 prepare_exact_erase_state "${CLEAN_CHROOT_ROOT}"
 chroot_admin cmp -s "${TEST_WORKSPACE}/outside-sentinel" "${outside_sentinel}"
+for descriptor_change in bytes mode symlink hardlink cli-binding; do
+    descriptor_path="${CLEAN_CHROOT_ROOT}/opt/syswarden/activation-contract-v1.json"
+    descriptor_alias="${CLEAN_CHROOT_ROOT}/var/lib/syswarden-scriptlet-test/descriptor-alias"
+    case "${descriptor_change}" in
+        bytes)
+            chroot_admin install -m 0644 -- "${TEST_WORKSPACE}/blocked" "${descriptor_path}"
+            ;;
+        mode)
+            chroot_admin chmod 0600 -- "${descriptor_path}"
+            ;;
+        symlink)
+            chroot_admin rm -- "${descriptor_path}"
+            chroot_admin ln -s -- /opt/syswarden/signatures.json "${descriptor_path}"
+            ;;
+        hardlink)
+            chroot_admin ln -- "${descriptor_path}" "${descriptor_alias}"
+            ;;
+        cli-binding)
+            chroot_admin install -m 0750 -- "${TEST_WORKSPACE}/blocked" \
+                "${CLEAN_CHROOT_ROOT}/opt/syswarden/bin/syswarden-cli"
+            ;;
+    esac
+    if rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1; then
+        printf 'RHEL package-owned RPM erased with changed activation descriptor state: %s.\n' \
+            "${descriptor_change}" >&2
+        exit 1
+    fi
+    assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
+    case "${descriptor_change}" in
+        bytes)
+            chroot_admin cmp -- "${TEST_WORKSPACE}/blocked" "${descriptor_path}"
+            ;;
+        mode)
+            [[ "$(chroot_admin stat -c '%a' -- "${descriptor_path}")" == 600 ]]
+            ;;
+        symlink)
+            [[ "$(chroot_admin readlink -- "${descriptor_path}")" == /opt/syswarden/signatures.json ]]
+            ;;
+        hardlink)
+            [[ "$(chroot_admin stat -c '%h' -- "${descriptor_path}")" == 2 ]]
+            chroot_admin rm -- "${descriptor_alias}"
+            ;;
+        cli-binding)
+            chroot_admin cmp -- "${TEST_WORKSPACE}/blocked" \
+                "${CLEAN_CHROOT_ROOT}/opt/syswarden/bin/syswarden-cli"
+            chroot_admin install -m 0750 -- \
+                "${PROFILE_STAGE}/payload/opt/syswarden/bin/syswarden-cli" \
+                "${CLEAN_CHROOT_ROOT}/opt/syswarden/bin/syswarden-cli"
+            ;;
+    esac
+    chroot_admin rm -- "${descriptor_path}"
+    chroot_admin install -m 0644 -- \
+        "${PROFILE_STAGE}/payload/opt/syswarden/activation-contract-v1.json" "${descriptor_path}"
+    assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
+done
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/blocked" \
     "${CLEAN_CHROOT_ROOT}/var/lib/.syswarden-removal-finalizing-v1"
 if rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase syswarden >/dev/null 2>&1; then
@@ -1229,103 +1371,104 @@ chroot_admin install -m 0700 -- \
 rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase syswarden
 assert_final_absence "${CLEAN_CHROOT_ROOT}"
 
-# Contract cycle: exact standard v4.04.3, migration to RHELPO v4.10.4,
-# rollback to standard, reupgrade to RHELPO, then adversarial and final purge.
-rpm_at_root "${CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
+# Preserve the installed standard v4.04.3 and administrator state when direct
+# migration is refused. No successful migration or rollback cycle is claimed.
+rpm_at_root "${LEGACY_CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
     "${STANDARD_PACKAGE_PATH}"
-assert_package_identity "${CHROOT_ROOT}" syswarden-4.04.3-1.x86_64
-assert_standard_authority "${CHROOT_ROOT}"
-assert_standard_units_unowned "${CHROOT_ROOT}"
+assert_package_identity "${LEGACY_CHROOT_ROOT}" syswarden-4.04.3-1.x86_64
+assert_standard_authority "${LEGACY_CHROOT_ROOT}"
+assert_standard_units_unowned "${LEGACY_CHROOT_ROOT}"
 for unit in syswarden-core.service syswarden-firewall.service; do
-    chroot_admin chmod 0644 -- "${CHROOT_ROOT}/etc/systemd/system/${unit}"
-    [[ "$(run_in_chroot "${CHROOT_ROOT}" /usr/bin/stat -Lc '%u:%g:%a:%h' -- \
+    chroot_admin chmod 0644 -- "${LEGACY_CHROOT_ROOT}/etc/systemd/system/${unit}"
+    [[ "$(run_in_chroot "${LEGACY_CHROOT_ROOT}" /usr/bin/stat -Lc '%u:%g:%a:%h' -- \
         "/etc/systemd/system/${unit}")" == 0:0:644:1 ]]
 done
 printf '%s\n' '[network]' 'whitelist_ips = ["192.0.2.10/32"]' > "${TEST_WORKSPACE}/99-user.toml"
 chroot_admin install -m 0640 -- "${TEST_WORKSPACE}/99-user.toml" \
-    "${CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
+    "${LEGACY_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
 OPERATOR_CONFIG_SHA256="$(chroot_admin sha256sum \
-    "${CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml" | awk 'NF == 2 { print $1 }')"
+    "${LEGACY_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml" | awk 'NF == 2 { print $1 }')"
 
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/preset-pending.new" \
-    "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
-expect_rhel_upgrade_refusal "${CHROOT_ROOT}" 'preset recovery state owned by no RHEL package-owned install'
-chroot_admin rm -f -- "${CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
+    "${LEGACY_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
+expect_rhel_upgrade_refusal "${LEGACY_CHROOT_ROOT}" 'preset recovery state owned by no RHEL package-owned install'
+chroot_admin rm -f -- "${LEGACY_CHROOT_ROOT}/var/lib/.syswarden-rhelpo-preset-pending-v1.new"
 
 for unsafe_legacy_mode in 0640 0664 0755 1644 2644 4644; do
     chroot_admin chmod "${unsafe_legacy_mode}" -- \
-        "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
-    [[ "$(run_in_chroot "${CHROOT_ROOT}" /usr/bin/stat -Lc '%a' -- \
+        "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
+    [[ "$(run_in_chroot "${LEGACY_CHROOT_ROOT}" /usr/bin/stat -Lc '%a' -- \
         /etc/systemd/system/syswarden-core.service)" == "${unsafe_legacy_mode#0}" ]]
-    expect_rhel_upgrade_refusal "${CHROOT_ROOT}" \
+    expect_rhel_upgrade_refusal "${LEGACY_CHROOT_ROOT}" \
         "an exact legacy unit with unsupported mode ${unsafe_legacy_mode}"
-    chroot_admin chmod 0644 -- "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
+    chroot_admin chmod 0644 -- "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
 done
 
-chroot_admin ln -- "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service" \
-    "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service.hardlink"
-expect_rhel_upgrade_refusal "${CHROOT_ROOT}" 'a hard-linked legacy unit'
-chroot_admin rm -f -- "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service.hardlink"
+chroot_admin ln -- "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service" \
+    "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service.hardlink"
+expect_rhel_upgrade_refusal "${LEGACY_CHROOT_ROOT}" 'a hard-linked legacy unit'
+chroot_admin rm -f -- "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service.hardlink"
 
-chroot_admin rm -f -- "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
-chroot_admin ln -s -- /tmp/attacker "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
-expect_rhel_upgrade_refusal "${CHROOT_ROOT}" 'a symlinked legacy unit'
-chroot_admin rm -f -- "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
+chroot_admin rm -f -- "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
+chroot_admin ln -s -- /tmp/attacker "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
+expect_rhel_upgrade_refusal "${LEGACY_CHROOT_ROOT}" 'a symlinked legacy unit'
+chroot_admin rm -f -- "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
 chroot_admin install -m 0644 -- \
-    "${CHROOT_ROOT}/usr/share/syswarden-standard-fixture/syswarden-core.service" \
-    "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
+    "${LEGACY_CHROOT_ROOT}/usr/share/syswarden-standard-fixture/syswarden-core.service" \
+    "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
 
 printf '%s\n' 'substituted' > "${TEST_WORKSPACE}/substituted-unit"
 chroot_admin install -m 0600 -- "${TEST_WORKSPACE}/substituted-unit" \
-    "${CHROOT_ROOT}/etc/systemd/system/syswarden-firewall.service"
-expect_rhel_upgrade_refusal "${CHROOT_ROOT}" 'a byte-substituted legacy unit'
+    "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-firewall.service"
+expect_rhel_upgrade_refusal "${LEGACY_CHROOT_ROOT}" 'a byte-substituted legacy unit'
 chroot_admin install -m 0644 -- \
-    "${CHROOT_ROOT}/usr/share/syswarden-standard-fixture/syswarden-firewall.service" \
-    "${CHROOT_ROOT}/etc/systemd/system/syswarden-firewall.service"
+    "${LEGACY_CHROOT_ROOT}/usr/share/syswarden-standard-fixture/syswarden-firewall.service" \
+    "${LEGACY_CHROOT_ROOT}/etc/systemd/system/syswarden-firewall.service"
 
 chroot_admin ln -s -- /usr/lib/systemd/system/syswarden-core.service \
+    "${LEGACY_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration"
+expect_rhel_upgrade_refusal "${LEGACY_CHROOT_ROOT}" 'interrupted migration owned by the standard package'
+chroot_admin rm -f -- \
+    "${LEGACY_CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration"
+
+expect_rhel_upgrade_refusal "${LEGACY_CHROOT_ROOT}" 'an otherwise exact standard v4.04.3 installation'
+[[ "$(chroot_admin sha256sum "${LEGACY_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml" |
+    awk 'NF == 2 { print $1 }')" == "${OPERATOR_CONFIG_SHA256}" ]]
+printf '%s\n' 'Coordinated migration, reinstall recovery, and the migration/rollback/reupgrade cycle remain unqualified.'
+
+# Exercise profile removal independently through a real fresh install. Its
+# reachability must not depend on bypassing the non-fresh transaction guard.
+# Model the distribution-owned systemd directory that the old migration setup
+# inherited from the standard fixture. Product directories remain absent.
+chroot_admin install -d -m 0755 -- "${CHROOT_ROOT}/etc/systemd/system"
+rpm_at_root "${CHROOT_ROOT}" --install --nodeps --nosignature --nodigest --nocontexts \
+    "${PACKAGE_PATH}"
+assert_package_identity "${CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
+assert_rhel_authority "${CHROOT_ROOT}"
+assert_exact_initial_enablement "${CHROOT_ROOT}"
+assert_exact_preset_invocation_count "${CHROOT_ROOT}" 1
+chroot_admin install -m 0640 -- "${TEST_WORKSPACE}/99-user.toml" \
+    "${CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
+chroot_admin ln -s -- /usr/lib/systemd/system/syswarden-core.service \
     "${CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration"
-expect_rhel_upgrade_refusal "${CHROOT_ROOT}" 'interrupted migration owned by the standard package'
+expect_native_nonfresh_refusal "${CHROOT_ROOT}" \
+    'an installed profile with interrupted enablement migration' --replacepkgs
 chroot_admin rm -f -- \
     "${CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration"
 
-rpm_at_root "${CHROOT_ROOT}" --upgrade --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}"
-assert_package_identity "${CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
-assert_rhel_authority "${CHROOT_ROOT}"
-[[ "$(chroot_admin sha256sum "${CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml" |
-    awk 'NF == 2 { print $1 }')" == "${OPERATOR_CONFIG_SHA256}" ]]
-chroot_admin ln -s -- /usr/lib/systemd/system/syswarden-core.service \
-    "${CHROOT_ROOT}/etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration"
-rpm_at_root "${CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}"
-assert_rhel_authority "${CHROOT_ROOT}"
-assert_chroot_path_absent "${CHROOT_ROOT}" \
-    /etc/systemd/system/multi-user.target.wants/syswarden-core.service.syswarden-rhelpo-migration
-
-# A retry after an interrupted POSTIN may see exact legacy units even though
-# the installed identity is already RHELPO. It must complete deterministically.
-chroot_admin install -m 0600 -- \
-    "${PROFILE_STAGE}/payload/usr/lib/systemd/system/syswarden-core.service" \
-    "${CHROOT_ROOT}/etc/systemd/system/syswarden-core.service"
-chroot_admin install -m 0600 -- \
-    "${PROFILE_STAGE}/payload/usr/lib/systemd/system/syswarden-firewall.service" \
-    "${CHROOT_ROOT}/etc/systemd/system/syswarden-firewall.service"
-rpm_at_root "${CHROOT_ROOT}" --upgrade --replacepkgs --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}"
-assert_rhel_authority "${CHROOT_ROOT}"
-
-rpm_at_root "${CHROOT_ROOT}" --upgrade --oldpackage --nodeps --nosignature --nodigest --nocontexts \
-    "${STANDARD_PACKAGE_PATH}"
-assert_package_identity "${CHROOT_ROOT}" syswarden-4.04.3-1.x86_64
-assert_standard_authority "${CHROOT_ROOT}"
-assert_standard_units_unowned "${CHROOT_ROOT}"
-[[ "$(chroot_admin sha256sum "${CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml" |
-    awk 'NF == 2 { print $1 }')" == "${OPERATOR_CONFIG_SHA256}" ]]
-
-rpm_at_root "${CHROOT_ROOT}" --upgrade --nodeps --nosignature --nodigest --nocontexts \
-    "${PACKAGE_PATH}"
-assert_package_identity "${CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
+# Even exact legacy priority units do not grant a repair transaction. Verify
+# they survive refusal, then remove only these injected fixture files so the
+# independent removal assertions below still exercise the normal profile.
+for unit in syswarden-core.service syswarden-firewall.service; do
+    chroot_admin install -m 0600 -- \
+        "${PROFILE_STAGE}/payload/usr/lib/systemd/system/${unit}" \
+        "${CHROOT_ROOT}/etc/systemd/system/${unit}"
+done
+expect_native_nonfresh_refusal "${CHROOT_ROOT}" \
+    'an installed profile with exact legacy priority units' --replacepkgs
+for unit in syswarden-core.service syswarden-firewall.service; do
+    chroot_admin rm -f -- "${CHROOT_ROOT}/etc/systemd/system/${unit}"
+done
 assert_rhel_authority "${CHROOT_ROOT}"
 [[ "$(chroot_admin sha256sum "${CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml" |
     awk 'NF == 2 { print $1 }')" == "${OPERATOR_CONFIG_SHA256}" ]]
@@ -1509,36 +1652,27 @@ rpm_at_root "${CHROOT_ROOT}" --erase syswarden
 assert_final_absence "${CHROOT_ROOT}"
 
 # Metadata fixtures seed only an installed RPM owner; they do not claim to
-# replay historical scriptlets. The candidate's real PREIN/POSTIN/erase paths
-# must accept the exact previous profile and reject an unknown profile owner.
+# replay historical scriptlets. Neither a recognized previous profile nor an
+# unknown profile owner grants a replacement transaction to the candidate.
 for identity_version in 4.10.0 4.10.1 4.10.2 4.10.3 4.10.5; do
     identity_package="${PACKAGE_DIRECTORY}/syswarden-${identity_version}-1.rhelpo.x86_64.rpm"
     assemble_profile_rpm "${identity_version}" "${identity_package}"
     rpm_at_root "${CLEAN_CHROOT_ROOT}" --install --noscripts --nodeps --nosignature --nodigest --nocontexts \
         "${identity_package}"
     assert_package_identity "${CLEAN_CHROOT_ROOT}" "syswarden-${identity_version}-1.rhelpo.x86_64"
-    if [ "${identity_version}" = 4.10.0 ] || [ "${identity_version}" = 4.10.1 ] || [ "${identity_version}" = 4.10.2 ] || [ "${identity_version}" = 4.10.3 ]; then
-        printf '%s\n' '# operator configuration retained across profile upgrade' > "${TEST_WORKSPACE}/previous-profile-config"
-        chroot_admin install -m 0640 -- "${TEST_WORKSPACE}/previous-profile-config" \
-            "${CLEAN_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
-        rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --nodeps --nosignature --nodigest --nocontexts \
-            "${PACKAGE_PATH}"
-        assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.4-1.rhelpo.x86_64
-        assert_rhel_authority "${CLEAN_CHROOT_ROOT}"
-        chroot_admin cmp -s "${TEST_WORKSPACE}/previous-profile-config" \
-            "${CLEAN_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
-        prepare_exact_erase_state "${CLEAN_CHROOT_ROOT}"
-        rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase syswarden
-        assert_final_absence "${CLEAN_CHROOT_ROOT}"
-    else
-        if rpm_at_root "${CLEAN_CHROOT_ROOT}" --upgrade --oldpackage --nodeps --nosignature --nodigest --nocontexts \
-            "${PACKAGE_PATH}" >/dev/null 2>&1; then
-            printf '%s\n' 'RHEL profile upgrade accepted an unknown installed version.' >&2
-            exit 1
-        fi
-        assert_package_identity "${CLEAN_CHROOT_ROOT}" syswarden-4.10.5-1.rhelpo.x86_64
-        rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
-    fi
+    printf '%s\n' '# operator configuration retained after refused profile replacement' > "${TEST_WORKSPACE}/previous-profile-config"
+    chroot_admin install -m 0640 -- "${TEST_WORKSPACE}/previous-profile-config" \
+        "${CLEAN_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
+    expect_native_nonfresh_refusal "${CLEAN_CHROOT_ROOT}" \
+        "installed profile identity ${identity_version}" --oldpackage
+    assert_package_identity "${CLEAN_CHROOT_ROOT}" "syswarden-${identity_version}-1.rhelpo.x86_64"
+    chroot_admin cmp -s "${TEST_WORKSPACE}/previous-profile-config" \
+        "${CLEAN_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
+    # Fixture teardown only. Real removal coverage above and below starts with
+    # successful fresh installs and runs the installed PREUN/POSTUN scriptlets.
+    chroot_admin rm -f -- "${CLEAN_CHROOT_ROOT}/etc/syswarden/config/modules/99-user.toml"
+    rpm_at_root "${CLEAN_CHROOT_ROOT}" --erase --noscripts syswarden
+    reset_after_test_noscripts_erase "${CLEAN_CHROOT_ROOT}"
 done
 
 
@@ -1593,7 +1727,7 @@ assert_chroot_path_absent "${CHROOT_ROOT}" /etc/syswarden/lists
 assert_chroot_path_absent "${CHROOT_ROOT}" /etc/syswarden/tls
 printf '%s\n' 'RPM retained operator configuration and later edits through failed POSTUN and verified replay.'
 
-for root in "${CLEAN_CHROOT_ROOT}" "${CHROOT_ROOT}"; do
+for root in "${CLEAN_CHROOT_ROOT}" "${CHROOT_ROOT}" "${LEGACY_CHROOT_ROOT}"; do
     [[ "$(run_in_chroot "${root}" /usr/bin/stat -Lc '%u:%g:%a' -- /usr/lib)" == 0:0:555 ]]
 done
-printf '%s\n' 'RHEL package-owned RPM assembly contract passed.'
+printf '%s\n' 'RHEL package-owned RPM assembly, fresh-install, non-fresh refusal, and removal assertions passed.'

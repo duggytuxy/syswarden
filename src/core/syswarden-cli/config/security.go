@@ -1,9 +1,10 @@
 package config
 
 type SecurityConfig struct {
-	Honeyports []string         `mapstructure:"honeyports" validate:"port_slice"`
-	L2         L2Config         `mapstructure:"l2"`
-	Compliance ComplianceConfig `mapstructure:"compliance"`
+	DetectionEnabled bool             `mapstructure:"detection_enabled"`
+	Honeyports       []string         `mapstructure:"honeyports" validate:"port_slice"`
+	L2               L2Config         `mapstructure:"l2"`
+	Compliance       ComplianceConfig `mapstructure:"compliance"`
 }
 
 type L2Config struct {

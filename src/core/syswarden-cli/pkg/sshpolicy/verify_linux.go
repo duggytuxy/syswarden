@@ -304,7 +304,7 @@ func (daemon *pinnedSSHD) run(parent context.Context, image *parserImage, mode, 
 	command.WaitDelay = time.Second
 	var stdout, stderr parserOutput
 	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
+	if err := runSSHQueryProcess(ctx, command); err != nil {
 		// Do not expose raw stderr, which may contain private configuration.
 		return nil, fmt.Errorf("installed SSH parser refused the configuration or exceeded execution bounds")
 	}

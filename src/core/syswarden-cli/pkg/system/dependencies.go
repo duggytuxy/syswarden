@@ -13,10 +13,12 @@ import (
 
 var offlineQualificationDependencyLookPath = exec.LookPath
 
-// InstallDependencies installs core system prerequisites securely with timeout context
+// InstallDependencies installs only base prerequisites for a manual install.
+// Native package scripts never launch a nested package transaction. Selected
+// optional modules are checked separately and require administrator-installed
+// prerequisites from operator-approved repositories.
 func InstallDependencies() error {
-	fmt.Println("[INFO] Checking and installing dependencies securely...")
-
+	fmt.Println("[INFO] Checking base system prerequisites...")
 	if os.Getenv("SYSWARDEN_PKG_INSTALL") == "1" {
 		if OfflineQualificationOperation() {
 			if err := attestOfflineQualificationDependencies(); err != nil {
@@ -27,43 +29,127 @@ func InstallDependencies() error {
 		return nil
 	}
 
-	// 5-minute timeout for dependency installation
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	return installBaseDependenciesWith(ctx, exec.LookPath, func(path string) error {
+		if err := validateOfflineQualificationDependency(path, 0); err != nil {
+			return err
+		}
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return err
+		}
+		return attestCronProviderDirectoryChain(filepath.Dir(canonical))
+	}, runBaseDependencyCommand)
+}
 
-	// Detect package manager
-	if _, err := exec.LookPath("apt-get"); err == nil {
-		fmt.Println(" -> Detected Debian/Ubuntu (APT)")
-		_ = exec.CommandContext(ctx, "apt-get", "update").Run()                                                                         // #nosec
-		cmd := exec.CommandContext(ctx, "apt-get", "install", "-y", "nftables", "wireguard-tools", "qrencode", "curl", "jq", "rsyslog") // #nosec
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("APT installation failed: %w", err)
+// baseDependencyArguments contains no optional module, repository setup,
+// removal or trust override. An existing module selection does not authorize
+// changing its prerequisites as a side effect of installing the base product.
+func baseDependencyArguments(manager string, refresh bool) ([]string, error) {
+	switch manager {
+	case "/usr/bin/apt-get":
+		if refresh {
+			return []string{"update"}, nil
 		}
-	} else if _, err := exec.LookPath("dnf"); err == nil {
-		fmt.Println(" -> Detected RHEL/Alma/Rocky/Oracle (DNF)")
-		cmd := exec.CommandContext(ctx, "dnf", "install", "-y", "nftables", "wireguard-tools", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec G204 -- executable and package arguments are fixed constants
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("DNF installation failed: %w", err)
+		return []string{"install", "-y", "--no-install-recommends", "--no-remove",
+			"bash-completion", "cron", "curl", "jq", "nftables", "procps", "wget"}, nil
+	case "/usr/bin/dnf", "/usr/bin/yum":
+		if !refresh {
+			return []string{"install", "-y", "--setopt=install_weak_deps=False",
+				"--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False",
+				"bash-completion", "cronie", "curl", "jq", "nftables", "procps-ng", "wget"}, nil
 		}
-		fmt.Println("[INFO] Terminal WireGuard QR rendering is optional on RHEL-family systems and is enabled only when qrencode is already available from an operator-approved repository.")
-	} else if _, err := exec.LookPath("yum"); err == nil {
-		fmt.Println(" -> Detected CentOS/Legacy RHEL (YUM)")
-		cmd := exec.CommandContext(ctx, "yum", "install", "-y", "nftables", "wireguard-tools", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec G204 -- executable and package arguments are fixed constants
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("YUM installation failed: %w", err)
+	case "/sbin/apk", "/usr/sbin/apk":
+		if !refresh {
+			// OpenRC, the cron.d-capable provider and lifecycle account tools
+			// are required on Alpine even with every optional module disabled.
+			return []string{"add", "--no-cache", "bash-completion", "cronie", "cronie-openrc",
+				"curl", "jq", "nftables", "openrc", "procps-ng", "shadow", "wget"}, nil
 		}
-		fmt.Println("[INFO] Terminal WireGuard QR rendering is optional on RHEL-family systems and is enabled only when qrencode is already available from an operator-approved repository.")
-	} else if _, err := exec.LookPath("apk"); err == nil {
-		fmt.Println(" -> Detected Alpine Linux (APK)")
-		cmd := exec.CommandContext(ctx, "apk", "add", "--no-cache", "nftables", "wireguard-tools", "libqrencode-tools", "curl", "jq", "rsyslog", "rsyslog-uxsock") // #nosec
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("APK installation failed: %w", err)
-		}
-	} else {
-		fmt.Println("[WARN] No supported package manager found. Please install dependencies manually.")
 	}
+	return nil, errors.New("unsupported base dependency operation")
+}
 
-	return nil
+func installBaseDependenciesWith(ctx context.Context, look func(string) (string, error), validate func(string) error, run func(context.Context, string, bool) error) error {
+	if ctx == nil || look == nil || validate == nil || run == nil {
+		return errors.New("base dependency resolution is unavailable")
+	}
+	for _, name := range []string{"apt-get", "dnf", "yum", "apk"} {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		path, err := look(name)
+		if errors.Is(err, exec.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("resolve base dependency package manager %s: %w", name, err)
+		}
+		if !trustedPackageManagerPath(name, path) {
+			return fmt.Errorf("package manager %q resolved to untrusted path %q", name, path)
+		}
+		if err := validate(path); err != nil {
+			return fmt.Errorf("package manager %q is untrusted: %w", name, err)
+		}
+		if name == "apt-get" {
+			if err := run(ctx, path, true); err != nil {
+				return fmt.Errorf("refresh base dependency package metadata: %w", err)
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := validate(path); err != nil {
+			return fmt.Errorf("revalidate package manager %q before installation: %w", name, err)
+		}
+		if err := run(ctx, path, false); err != nil {
+			return fmt.Errorf("install base dependencies with %s: %w", name, err)
+		}
+		return nil
+	}
+	return errors.New("no supported package manager found; install the required base prerequisites before retrying")
+}
+
+func runBaseDependencyCommand(ctx context.Context, manager string, refresh bool) error {
+	if ctx == nil {
+		return errors.New("base dependency context is unavailable")
+	}
+	command, err := baseDependencyCommand(manager, refresh)
+	if err != nil {
+		return err
+	}
+	return runQualificationProcessGroup(ctx, command)
+}
+
+// Build only the fixed base operation. Ambient package roots, configuration,
+// loader/interpreter settings and working directories cannot redirect this
+// transaction away from the system inspected by the installer.
+func baseDependencyCommand(manager string, refresh bool) (*exec.Cmd, error) {
+	args, err := baseDependencyArguments(manager, refresh)
+	if err != nil {
+		return nil, err
+	}
+	var cmd *exec.Cmd
+	switch manager {
+	case "/usr/bin/apt-get":
+		cmd = exec.Command("/usr/bin/apt-get")
+	case "/usr/bin/dnf":
+		cmd = exec.Command("/usr/bin/dnf")
+	case "/usr/bin/yum":
+		cmd = exec.Command("/usr/bin/yum")
+	case "/sbin/apk":
+		cmd = exec.Command("/sbin/apk")
+	case "/usr/sbin/apk":
+		cmd = exec.Command("/usr/sbin/apk")
+	default:
+		return nil, errors.New("untrusted base dependency package manager")
+	}
+	cmd.Args = append([]string{cmd.Path}, args...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd.Env = productionNativeCommandEnvironment()
+	cmd.Dir = "/"
+	return cmd, nil
 }
 
 func attestOfflineQualificationDependencies() error {
@@ -127,21 +213,28 @@ func attestOfflineQualificationDependenciesWith(
 }
 
 func validateOfflineQualificationDependency(path string, expectedUID int) error {
+	return validateDependencyWithParentAttestation(path, expectedUID, attestCronProviderDirectoryChain)
+}
+
+// A protected executable alone is insufficient when an enclosing directory
+// permits replacement. Optional-module and offline prerequisite checks share
+// the same parent attestation used by native retention and base installation.
+// This read-only observation is not a retained execution lease.
+func validateDependencyWithParentAttestation(path string, expectedUID int, attestParents func(string) error) error {
+	if expectedUID < 0 || attestParents == nil {
+		return errors.New("dependency attestation is unavailable")
+	}
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return fmt.Errorf("dependency path is not canonical and absolute: %q", path)
 	}
-	canonical, err := filepath.EvalSymlinks(path)
+	if !nativeDependencySystemPath(path) {
+		return errors.New("dependency lookup is outside trusted system directories")
+	}
+	canonical, err := resolveDependencyExecutableAt("/", path, expectedUID)
 	if err != nil {
 		return err
 	}
-	trusted := false
-	for _, directory := range []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin"} {
-		if filepath.Dir(canonical) == directory {
-			trusted = true
-			break
-		}
-	}
-	if !trusted {
+	if !nativeDependencySystemPath(canonical) {
 		return fmt.Errorf("dependency resolves outside trusted system directories: %q", canonical)
 	}
 	info, err := os.Stat(canonical)
@@ -153,5 +246,13 @@ func validateOfflineQualificationDependency(path string, expectedUID int) error 
 		int(status.Uid) != expectedUID {
 		return errors.New("dependency is not an owner-controlled regular executable")
 	}
-	return nil
+	return attestParents(filepath.Dir(canonical))
+}
+
+func nativeDependencySystemPath(path string) bool {
+	switch filepath.Dir(path) {
+	case "/bin", "/sbin", "/usr/bin", "/usr/sbin":
+		return true
+	}
+	return false
 }

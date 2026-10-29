@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"syswarden-cli/config"
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
 	"syswarden-cli/pkg/network"
@@ -48,8 +50,32 @@ var retireCreatedProductLogsForRemoval = system.RetireCreatedProductLogsForRemov
 var retireGeneratedListsForRemoval = system.RetireGeneratedListsForRemoval
 var retireCreatedUISnapshotsForRemoval = system.RetireCreatedUISnapshotsForRemoval
 var removeEmptyFirewallWrapperStateForRemoval = system.RemoveEmptyFirewallWrapperStateForRemoval
+var retireActivationStateForRemoval = retireApprovedActivationStateForRemoval
+var preflightAPKLaunchersForRemoval = system.PreflightAPKLauncherRemoval
+var retireAPKLaunchersForRemoval = system.RetireAPKLaunchersForRemoval
+
+// Retire only the verified product approval inventory. This short custody is
+// acquired after the removal barrier and released before configuration or
+// executable retirement; ambiguous state remains available for recovery.
+func retireApprovedActivationStateForRemoval() (result error) {
+	removal, err := config.InspectActivationStateForRemoval()
+	if err != nil || removal == nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, removal.Close()) }()
+	if err := removal.Revalidate(); err != nil {
+		return err
+	}
+	return removal.Retire()
+}
 
 func prepareVerifiedFirewallRemoval() error {
+	if err := preflightAPKLaunchersForRemoval(); err != nil {
+		return fmt.Errorf("APK launcher ownership requires recovery before removal starts; preserve aliases, their targets and native ownership evidence: %w", err)
+	}
+	if err := preflightWireGuardPolicyTransition(); err != nil {
+		return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
+	}
 	if err := preflightKnownNFTPersistenceForRemoval(); err != nil {
 		return fmt.Errorf("persistent firewall recovery is required before removal starts; this read-only preflight has not stopped services or published a new removal barrier: %w", err)
 	}
@@ -173,6 +199,12 @@ func prepareVerifiedFirewallRemoval() error {
 	if err := removeEmptyFirewallWrapperStateForRemoval(); err != nil {
 		return fmt.Errorf("compatibility receipt retirement remains incomplete; preserve the CLI and removal barrier: %w", err)
 	}
+	if err := retireActivationStateForRemoval(); err != nil {
+		return fmt.Errorf("activation approval retirement remains incomplete; preserve ambiguous records, the CLI and removal barrier, then retry the original removal command after recovery: %w", err)
+	}
+	if err := retireAPKLaunchersForRemoval(); err != nil {
+		return fmt.Errorf("APK launcher retirement remains incomplete; preserve inherited aliases, payload, the CLI and removal barrier: %w", err)
+	}
 	if err := removePristineDefaultConfigurationForRemoval(); err != nil {
 		return fmt.Errorf("default configuration retirement remains incomplete; preserve the CLI and removal barrier: %w", err)
 	}
@@ -191,12 +223,24 @@ func prepareVerifiedFirewallRemoval() error {
 	return nil
 }
 
+var retainAPKPayload bool
+
+var preserveAPKRemovalPayload = system.PreserveAPKRemovalPayload
+
 var preparePackageRemovalCmd = &cobra.Command{
 	Use:    "prepare-package-removal",
 	Short:  "Publish the removal barrier and verify owned firewall cleanup",
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if retainAPKPayload {
+			path, err := preserveAPKRemovalPayload()
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "[INFO] Verified private APK recovery payload: %s\n", path)
+			return err
+		}
 		if err := prepareVerifiedFirewallRemoval(); err != nil {
 			return err
 		}
@@ -208,5 +252,6 @@ var preparePackageRemovalCmd = &cobra.Command{
 }
 
 func init() {
+	preparePackageRemovalCmd.Flags().BoolVar(&retainAPKPayload, "retain-apk-payload", false, "Preserve exact payload before an APK transaction without changing host policy")
 	rootCmd.AddCommand(preparePackageRemovalCmd)
 }

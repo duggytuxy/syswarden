@@ -73,6 +73,12 @@ func hashStandalonePayload(file *os.File, mode os.FileMode) (removalArtifactIden
 }
 
 func inspectStandalonePayload(directory *pinnedServiceDirectory, expected map[string]string) (retainedDirectorySnapshot, error) {
+	return inspectBoundPayload(directory, expected, false)
+}
+
+// Source-only copies may coexist with administrator files. They never copy or
+// grant retirement authority to anything outside the four compiled bindings.
+func inspectBoundPayload(directory *pinnedServiceDirectory, expected map[string]string, additionalSourceEntries bool) (retainedDirectorySnapshot, error) {
 	result := retainedDirectorySnapshot{files: map[string]removalArtifactIdentity{}, content: map[string][]byte{}}
 	if len(expected) != 4 {
 		return result, fmt.Errorf("standalone payload bindings are incomplete")
@@ -97,12 +103,29 @@ func inspectStandalonePayload(directory *pinnedServiceDirectory, expected map[st
 			names = append(names, entry.Name())
 		}
 		slices.Sort(names)
-		if !slices.Equal(names, want) {
+		if additionalSourceEntries {
+			for _, name := range want {
+				if !slices.Contains(names, name) {
+					return fmt.Errorf("compiled payload is incomplete")
+				}
+			}
+		} else if !slices.Equal(names, want) {
 			return fmt.Errorf("standalone payload contains missing or unrelated entries; preserve the original tree")
 		}
 		return nil
 	}
-	if err := checkNames(directory.root, []string{"bin", "signatures.json"}); err != nil {
+	// Older payloads have no descriptor. A present descriptor is product-owned
+	// only when its exact canonical bytes derive from already bound runtimes.
+	descriptorName := filepath.Base(nativeActivationDescriptorPath)
+	rootNames := []string{"bin", "signatures.json"}
+	descriptorPresent := false
+	if _, err := directory.root.Lstat(descriptorName); err == nil {
+		descriptorPresent = true
+		rootNames = append([]string{descriptorName}, rootNames...)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return result, err
+	}
+	if err := checkNames(directory.root, rootNames); err != nil {
 		return result, err
 	}
 	binInfo, err := directory.root.Lstat("bin")
@@ -155,7 +178,48 @@ func inspectStandalonePayload(directory *pinnedServiceDirectory, expected map[st
 		result.files[name], result.content[name] = identity, []byte(actual)
 		_, _ = digest.Write([]byte(name + "\x00" + actual + "\n"))
 	}
-	if err := checkNames(directory.root, []string{"bin", "signatures.json"}); err != nil {
+	if descriptorPresent {
+		expectedDescriptors := make(map[string]int64)
+		for _, descriptor := range []nativeActivationDescriptor{
+			nativeActivationLegacyDescriptorFor(expected["bin/syswarden-cli"], expected["bin/syswarden-core"]),
+			nativeActivationDescriptorFor(expected["bin/syswarden-cli"], expected["bin/syswarden-core"]),
+		} {
+			raw, err := canonicalNativeActivationDescriptor(descriptor)
+			if err != nil {
+				return result, err
+			}
+			expectedDescriptors[fmt.Sprintf("%x", sha256.Sum256(raw))] = int64(len(raw))
+		}
+		before, err := directory.root.Lstat(descriptorName)
+		if err != nil || !before.Mode().IsRegular() || before.Size() > maximumNativeActivationDescriptorBytes {
+			return result, errors.New("native activation removal descriptor is ambiguous")
+		}
+		beforeIdentity, err := exactRemovalArtifactIdentity(before)
+		if err != nil {
+			return result, err
+		}
+		file, err := directory.root.OpenFile(descriptorName, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return result, err
+		}
+		identity, actual, readErr := hashStandalonePayload(file, 0644)
+		closeErr := file.Close()
+		size, known := expectedDescriptors[actual]
+		if readErr != nil || closeErr != nil || identity != beforeIdentity || !known || before.Size() != size {
+			return result, errors.New("native activation removal descriptor does not match bound runtimes")
+		}
+		after, err := directory.root.Lstat(descriptorName)
+		if err != nil {
+			return result, err
+		}
+		afterIdentity, err := exactRemovalArtifactIdentity(after)
+		if err != nil || afterIdentity != identity {
+			return result, errors.New("native activation removal descriptor changed")
+		}
+		result.files[descriptorName], result.content[descriptorName] = identity, []byte(actual)
+		_, _ = digest.Write([]byte(descriptorName + "\x00" + actual + "\n"))
+	}
+	if err := checkNames(directory.root, rootNames); err != nil {
 		return result, err
 	}
 	if err := checkNames(bin, []string{"syswarden-cli", "syswarden-core", "syswarden-tui"}); err != nil {
@@ -168,8 +232,24 @@ func inspectStandalonePayload(directory *pinnedServiceDirectory, expected map[st
 			return result, fmt.Errorf("standalone payload directory changed during inspection")
 		}
 	}
+	if err := attestBoundPayloadLeaves(directory.root, result); err != nil {
+		return result, err
+	}
 	result.digest = fmt.Sprintf("%x", digest.Sum(nil))
 	return result, nil
+}
+
+// Recheck the complete captured set after the final read. A directory identity
+// alone cannot witness an in-place change to an earlier file during hashing.
+func attestBoundPayloadLeaves(root *os.Root, snapshot retainedDirectorySnapshot) error {
+	for name, expected := range snapshot.files {
+		info, err := root.Lstat(name)
+		actual, identityErr := exactRemovalArtifactIdentity(info)
+		if err != nil || identityErr != nil || actual != expected {
+			return fmt.Errorf("standalone payload changed before the complete snapshot was witnessed: %s", name)
+		}
+	}
+	return nil
 }
 
 func retireStandalonePayloadForRemoval() error {
@@ -237,7 +317,8 @@ func retainedStandaloneProcessScanner() (firewallRemovalProcessScanner, error) {
 		return scanner, fmt.Errorf("absent installed CLI has no exact retained executable for finalization")
 	}
 	treePath := filepath.Dir(filepath.Dir(executing))
-	if filepath.Dir(treePath) != parent || !strings.HasPrefix(filepath.Base(treePath), "standalone-payload-") {
+	isAPKCopy := strings.HasPrefix(filepath.Base(treePath), "apk-payload-")
+	if filepath.Dir(treePath) != parent || (!strings.HasPrefix(filepath.Base(treePath), "standalone-payload-") && !isAPKCopy) {
 		return scanner, fmt.Errorf("finalization executable is outside the private retained payload root")
 	}
 	root, err := os.OpenRoot("/")
@@ -263,7 +344,11 @@ func retainedStandaloneProcessScanner() (firewallRemovalProcessScanner, error) {
 	}
 	snapshot, err := inspectStandalonePayload(directory, expected)
 	directory.close()
-	if err != nil || retainedDirectoryBackupName("standalone-payload", snapshot) != filepath.Base(treePath) {
+	expectedName := retainedDirectoryBackupName("standalone-payload", snapshot)
+	if isAPKCopy {
+		expectedName = "apk-payload-" + snapshot.digest
+	}
+	if err != nil || expectedName != filepath.Base(treePath) {
 		return scanner, fmt.Errorf("executing retained payload does not match its exact backup identity")
 	}
 	return bindRetainedStandaloneProcessScanner(scanner, treePath), nil

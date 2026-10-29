@@ -2,7 +2,6 @@ package system
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -119,6 +118,7 @@ func (output *boundedFirewallPreflightOutput) Write(content []byte) (int, error)
 
 type boundedFirewallPreflightStreams struct {
 	mutex    sync.Mutex
+	overflow chan struct{}
 	stdout   bytes.Buffer
 	stderr   bytes.Buffer
 	captured int
@@ -145,6 +145,10 @@ func (writer *boundedFirewallPreflightStreamWriter) Write(content []byte) (int, 
 	}
 	if len(content) > remaining {
 		writer.streams.exceeded = true
+		select {
+		case writer.streams.overflow <- struct{}{}:
+		default:
+		}
 	}
 	return len(content), nil
 }
@@ -217,38 +221,12 @@ func runFirewallPreflightCommandWithTimeout(path string, timeout time.Duration, 
 	if timeout <= 0 || timeout > firewallPreflightTimeout {
 		return nil, fmt.Errorf("invalid firewall preflight command timeout %s", timeout)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	command := exec.CommandContext(ctx, path, arguments...) // #nosec G204 -- path and arguments are validated before execution
-	command.Env = []string{"LC_ALL=C", "LANG=C", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.WaitDelay = time.Second
-	command.Cancel = func() error {
-		if command.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
-	streams := &boundedFirewallPreflightStreams{}
-	command.Stdout = &boundedFirewallPreflightStreamWriter{streams: streams, target: &streams.stdout}
-	command.Stderr = &boundedFirewallPreflightStreamWriter{streams: streams, target: &streams.stderr}
-	err := command.Run()
-	if errors.Is(err, exec.ErrWaitDelay) && command.Process != nil {
-		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	}
+	streams := &boundedFirewallPreflightStreams{overflow: make(chan struct{}, 1)}
+	err := captureFirewallPreflightProcess(path, arguments, timeout, streams)
 	stdout, stderr, exceeded := streams.snapshot()
 	if exceeded {
 		return firewallPreflightCommandEvidence(stdout, stderr), fmt.Errorf(
 			"firewall preflight command output exceeds %d bytes", maximumFirewallPreflightOutput,
-		)
-	}
-	if ctx.Err() != nil {
-		return firewallPreflightCommandEvidence(stdout, stderr), fmt.Errorf(
-			"firewall preflight command exceeded %s: %w", timeout, ctx.Err(),
 		)
 	}
 	if err != nil {

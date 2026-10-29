@@ -1189,5 +1189,88 @@ class NativePackageSignatureGateTests(unittest.TestCase):
         self.assertFalse((unsafe / "rpm-verification.json").exists())
 
 
+
+
+class RPMSignatureVerdictTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.package = Path("/private/fixture/syswarden-base-5.00.0-1.x86_64.rpm")
+        self.fingerprint = '0123456789ABCDEF0123456789ABCDEF01234567'
+        self.day = dt.date(2026, 10, 26)
+        self.records = [
+            'pub:-:3072:1:89ABCDEF01234567:1767225600:1798761600:::::s:'.split(':'),
+            ('fpr:::::::::' + self.fingerprint + ':').split(':'),
+        ]
+
+    def verify(self, lines: list[str], records: list[list[str]] | None = None) -> None:
+        output = str(self.package) + ':\n' + '\n'.join('    ' + line for line in lines) + '\n'
+        gate.validate_rpm_signature_verdicts(output, self.package, records or self.records, self.day)
+
+    def test_observed_rpm4_and_rpm6_forms_bind_same_signer(self) -> None:
+        for label in ('Header V4', 'V4', 'Header OpenPGP V4', 'Legacy OpenPGP V4'):
+            for identity in ('key ID ' + self.fingerprint[-8:],
+                             'key ID ' + self.fingerprint[-16:],
+                             'key ID ' + self.fingerprint,
+                             'key fingerprint: ' + self.fingerprint.lower()):
+                with self.subTest(label=label, identity=identity):
+                    self.verify([label + ' RSA/SHA256 signature, ' + identity + ': OK',
+                                 'Header SHA256 digest: OK', 'Payload SHA256 digest: OK'])
+        self.verify([
+            'Header OpenPGP V4 RSA/SHA256 signature, key fingerprint: ' + self.fingerprint.lower() + ': OK',
+            'Legacy OpenPGP V4 RSA/SHA256 signature, key fingerprint: ' + self.fingerprint.lower() + ': OK',
+        ])
+        self.verify([
+            'Header V4 RSA/SHA256 Signature, key ID ' + self.fingerprint[-8:] + ': OK',
+            'Legacy OpenPGP V4 RSA/SHA256 signature, key fingerprint: ' + self.fingerprint.lower() + ': OK',
+        ])
+
+    def test_ambiguous_truncated_keys_and_foreign_full_fingerprints_refuse(self) -> None:
+        collision = 'A' * 32 + self.fingerprint[-8:]
+        records = self.records + [
+            'sub:-:3072:1:AAAAAAAA01234567:1767225600:1798761600:::::s:'.split(':'),
+            ('fpr:::::::::' + collision + ':').split(':'),
+        ]
+        with self.assertRaises(gate.SignatureGateError):
+            self.verify(['Header V4 RSA/SHA256 Signature, key ID 01234567: OK'], records)
+        self.verify(['Header OpenPGP V4 RSA/SHA256 signature, key fingerprint: ' + collision + ': OK'], records)
+        with self.assertRaises(gate.SignatureGateError):
+            self.verify(['Header OpenPGP V4 RSA/SHA256 signature, key fingerprint: ' + collision + ': OK'])
+        with self.assertRaises(gate.SignatureGateError):
+            self.verify([
+                'Header OpenPGP V4 RSA/SHA256 signature, key fingerprint: ' + collision + ': OK',
+                'Legacy OpenPGP V4 RSA/SHA256 signature, key fingerprint: ' + self.fingerprint + ': OK',
+            ], records)
+
+    def test_success_cannot_hide_unknown_weak_or_failed_signature_line(self) -> None:
+        valid = 'Header V4 RSA/SHA256 Signature, key ID 01234567: OK'
+        invalid = [
+            valid.replace('SHA256', 'SHA1'), valid.replace('RSA', 'DSA'),
+            valid.replace('V4', 'V6'), valid.replace('V4', 'V3'),
+            valid.replace(': OK', ': NOT OK'), valid.replace(': OK', ': NOKEY'),
+            valid + ' unexpected', 'unexpected ' + valid, 'signature: OK',
+            'unrecognized signature mechanism', valid.replace('01234567', '123456789'),
+            valid.replace('01234567', '01234567000000000000000000000000'),
+            valid.replace('key ID 01234567', 'key fingerprint: 01234567'),
+            valid.replace('01234567', 'F' * 40),
+        ]
+        for line in invalid:
+            with self.subTest(line=line), self.assertRaises(gate.SignatureGateError):
+                self.verify([valid, line])
+        for lines in ([], ['Header SHA256 digest: OK'], [valid] * 5,
+                      [valid, 'Payload SHA256 digest: NOT OK'], [valid, 'UNSIGNED']):
+            with self.subTest(lines=lines), self.assertRaises(gate.SignatureGateError):
+                self.verify(lines)
+        with self.assertRaises(gate.SignatureGateError):
+            self.verify([valid, 'x' * gate.MAX_VERIFIER_OUTPUT_BYTES])
+
+    def test_full_fingerprint_still_requires_valid_strong_signing_key(self) -> None:
+        valid = 'Header OpenPGP V4 RSA/SHA256 signature, key fingerprint: ' + self.fingerprint + ': OK'
+        for field, value in ((1, 'r'), (1, 'e'), (2, '2048'), (3, '17'),
+                             (5, '1999999999'), (6, '1767225600'), (11, 'c')):
+            records = copy.deepcopy(self.records)
+            records[0][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(gate.SignatureGateError):
+                self.verify([valid], records)
+
+
 if __name__ == "__main__":
     unittest.main()

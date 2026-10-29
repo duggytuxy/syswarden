@@ -9,6 +9,24 @@ and prepares [WP02 shared schemas](https://github.com/duggytuxy/syswarden/issues
 It includes the explicitly requested BunkerWeb compatibility boundary. No new
 server campaign, paid resource or public v5 release is authorized by this text.
 
+The [minimal native installation contract](MINIMAL_NATIVE_INSTALL.md) tracks
+issue #422, mandatory platform dependencies and preservation during updates.
+The [configuration lifecycle guide](CONFIGURATION_LIFECYCLE.md) distinguishes
+current TOML editing and validation from activation, removal and owned recovery.
+The [managed feed source contract](FEED_SOURCES.md) retires the additional OSINT
+supplement from standard and critical lists while keeping Data-Shield validation.
+
+## Release change traceability
+
+The v5.00.0 entry in `changelog.md` must reference every GitHub issue that
+contributed to the release, including closed issues. Reconcile the milestone
+inventory with issue references in merged pull requests and commits, so that
+issues outside the current milestone are not silently omitted. Link each issue
+to the verified change it supports, distinguish delivered behavior from deferred
+work, and do not treat issue closure as release acceptance. Keep confidential
+operational feedback, reporter identities and private evidence out of this
+public record. Final publication remains subject to the v5.00.0 IVVQ contract.
+
 ## Review order
 
 1. [Scope, authority and sequencing](SCOPE_AND_AUTHORITY.md).
@@ -115,8 +133,9 @@ server campaign, paid resource or public v5 release is authorized by this text.
     from treating an attempted activation as an untouched daemon. Its private
     systemd target now retains the protected helpers and live pidfd through a
     single bounded SIGHUP request and verifies stable replacement of every
-    expected listener generation. It does not enable an installer or CLI caller
-    or claim that the daemon consumed the policy or accepted a fresh login.
+    expected listener generation together with retirement of the prior address
+    space on the surviving process. It does not enable forward activation from an
+    installer or CLI caller, or claim that the daemon consumed the policy or accepted a fresh login.
     The read-only [activation assessment](SSH_ACTIVATION_ASSESSMENT.md) reopens
     interrupted history and verifies current configuration and endpoints while
     retaining the recovery requirement and refusing replay or evidence deletion.
@@ -136,7 +155,20 @@ server campaign, paid resource or public v5 release is authorized by this text.
     Its [read-only observer](SSH_RECORDED_ACCESS_OBSERVATION.md) separates
     historical signatures, current correspondence and expiry without repairing
     uncertain writes or reopening the occupied slot.
-    Causal policy-consumption proof and runtime-aware recovery remain open.
+    A separately approved [runtime recovery coordinator](SSH_RUNTIME_RECOVERY.md)
+    restores original inodes and requests one restoring reload while retaining
+    runtime/access uncertainty. Interrupted inverse transitions can resume;
+    a restoring-reload intent prohibits replay. The root-only
+    [operator restoration command](SSH_OPERATOR_RECOVERY.md) exposes inspection
+    and separately approved application without global configuration loading or
+    firewall recovery, and keeps application behind the removal barrier.
+    The [restoration assessment](SSH_RESTORATION_ASSESSMENT.md) checks complete
+    inverse history, the restored graph and current endpoints after reload
+    intent without repairing records, repeating a request or accepting recovery.
+    The [isolated systemd binder oracle](SSH_SYSTEMD_ORACLE.md) exercises real
+    production reload dispatch and listener replacement, including no-op and
+    restored-file negative controls with fresh pinned authentication.
+    Causal policy-consumption proof and operational recovery completion remain open.
     Production activation, lifecycle integration, the minimal package profile
     in [#422](https://github.com/duggytuxy/syswarden/issues/422) and native
     migration validation remain open.
@@ -402,3 +434,9 @@ read-only appraisal](SSH_CONTROLLER_RECEIPTS.md). Expiring independent challenge
 approval and pinned controller signatures precede exact target-state rechecks;
 durable receipt acceptance, causal runtime proof and migration readiness remain
 open.
+
+The explicit [prepared Alpine standalone-removal scenario](ALPINE_STANDALONE_REMOVAL.md)
+separately exercises `syswarden uninstall` without native package registration.
+It requires preserved independent protection, exact private recovery inventory
+and a real OpenRC restart. It does not replace native remove/purge or fresh
+installation qualification.

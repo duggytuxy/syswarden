@@ -725,6 +725,7 @@ func newManifestLegacyWireGuardTestHost(t *testing.T) (legacyWireGuardRecoveryHo
 	}
 	input := validWireGuardRenderInput()
 	input.ActiveIf = "ens3"
+	input.LegacyPolicy = true
 	server, client, err := renderWireGuardConfigurations(input)
 	if err != nil {
 		t.Fatal(err)

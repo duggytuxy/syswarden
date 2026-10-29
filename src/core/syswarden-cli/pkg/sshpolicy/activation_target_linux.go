@@ -6,25 +6,33 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-// This private adapter has no CLI or installer caller. The dispatcher must
-// durably record intent before request. A successful send never acknowledges
+// This private adapter serves explicit original restoration, but no forward
+// activation CLI or installer caller. Every dispatcher must durably record
+// intent before request. A successful send never acknowledges
 // consumed policy, independent access or a completed migration.
-func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) (_ sshActivationLease, err error) {
+func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) (sshActivationLease, error) {
+	return bindSSHSystemdTarget(parent, policyGuard, nil)
+}
+
+func bindSSHSystemdTarget(parent context.Context, policyGuard func() error, recovery *sshRecoveryPolicyAnchor) (_ sshActivationLease, err error) {
 	if parent == nil || policyGuard == nil {
 		return nil, ErrInventoryUnsafe
 	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	var resources *sshProcessResources
 	var held *sshRetainedProcess
+	var execution *sshExecReload
+	var mounts *sshMountEventFence
 	cleanup := func() error {
 		cancel()
-		return errors.Join(held.Close(), resources.Close())
+		return errors.Join(mounts.Close(), execution.Close(), held.Close(), resources.Close())
 	}
 	defer func() {
 		if err != nil {
@@ -49,7 +57,7 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	}
 	held, err = retainSSHSystemdProcess(ctx, snapshot,
 		func(pid int, group string) (sshProcessLease, error) {
-			return bindSSHProcess(pid, 0, group, resources.daemon.state, resources.daemon.digest)
+			return bindSSHProcessForActivation(pid, 0, group, resources.daemon.state, resources.daemon.digest)
 		}, guard, startup)
 	if err != nil {
 		return nil, err
@@ -58,8 +66,14 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	if !ok || process == nil || held.summary.Startup == nil || !held.summary.Startup.DeclarationVerified {
 		return nil, ErrInventoryUnsafe
 	}
+	mounts, err = pinSSHMountEvents(process)
+	if err != nil {
+		return nil, err
+	}
 	check := func(ctx context.Context) error {
-		return held.recheck(ctx, snapshot, resources.recheck, startup)
+		return mounts.guard(func() error {
+			return held.recheck(ctx, snapshot, resources.recheck, startup)
+		})
 	}
 	// Expectations come from the protected current graph and pinned parser.
 	// They are not supplied by the caller or inferred from current listeners.
@@ -70,6 +84,17 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	values, err := inspectSSHEffective(ctx, inventory, resources.daemon.digest, resources.daemon.run, guard)
 	if err != nil {
 		return nil, err
+	}
+	configuration, err := bindSSHConfigurationSelection(ctx, *held.summary.Startup, resources.daemon.digest,
+		values, resources.daemon.runDefaultConfiguration, guard)
+	if err != nil {
+		return nil, err
+	}
+	if recovery != nil {
+		configuration, err = recovery.selection(*held.summary.Startup, resources.daemon.digest, values)
+		if err := errors.Join(err, guard()); err != nil {
+			return nil, err
+		}
 	}
 	expected, err := sshExpectedEndpoints(values)
 	if err != nil {
@@ -93,19 +118,65 @@ func bindSSHSystemdActivation(parent context.Context, policyGuard func() error) 
 	if err != nil {
 		return nil, err
 	}
-	target, err := sshActivationDigest([]any{"systemd-pidfd-sighup-listeners-v2", held.summary, expected, namespace, listeners.before})
+	memory, err := pinSSHExecMemory(process.proc, process.uid)
+	if err != nil {
+		return nil, err
+	}
+	execution = &sshExecReload{before: memory, open: func() (*sshExecMemory, error) {
+		return pinSSHExecMemory(process.proc, process.uid)
+	}}
+	if err := errors.Join(check(ctx), guard(), execution.beforeRequest()); err != nil {
+		return nil, err
+	}
+	target, err := sshActivationDigest([]any{"systemd-pidfd-sighup-exec-listeners-v4", held.summary, configuration, expected, namespace, listeners.before})
 	if err != nil {
 		return nil, err
 	}
 	// pidfd_send_signal cannot retarget a recycled numeric PID. Only SIGHUP
 	// to the retained thread-group leader is allowed, with no shell, manager
 	// mutation, child signal, numeric-PID fallback or automatic retry.
-	send := func() error { return sendSSHProcessReload(process) }
-	verify := func(ctx context.Context) error { return listeners.check(ctx) }
-	after := func(ctx context.Context, guard func() error) error {
-		return listeners.wait(ctx, guard, pauseSSHListenerObservation)
+	send := func() error {
+		if err := mounts.check(); err != nil {
+			return err
+		}
+		return sendSSHProcessReload(process)
 	}
-	return &sshActivationTarget{ctx: ctx, target: target, verify: verify, send: send, after: after, closeFn: cleanup}, nil
+	verify := func(ctx context.Context) error {
+		return mounts.guard(func() error { return errors.Join(listeners.check(ctx), execution.beforeRequest()) })
+	}
+	preSend := func() error { return mounts.guard(execution.beforeRequest) }
+	lease := &sshActivationTarget{ctx: ctx, target: target, verify: verify, preSend: preSend, send: send, closeFn: cleanup}
+	lease.after = func(ctx context.Context, guard func() error) error {
+		if err := listeners.wait(ctx, guard, pauseSSHListenerObservation); err != nil {
+			return err
+		}
+		if err := execution.observe(ctx, func() error { return errors.Join(check(ctx), guard()) }); err != nil {
+			return err
+		}
+		after, err := listeners.observe(ctx, func() error {
+			return errors.Join(guard(), execution.checkAfter())
+		}, pauseSSHListenerObservation)
+		if err := errors.Join(err, execution.checkAfter(), guard(), ctx.Err()); err != nil {
+			return err
+		}
+		if recovery != nil {
+			processSummary, err := sshActivationDigest(held.summary)
+			if err != nil {
+				return err
+			}
+			// This capability is minted only after the retained production
+			// process has retired its old address space and replaced every
+			// listener. It is neither accepted from a caller nor serialized.
+			observed := &sshRestoringReloadObservation{target: target, processSummary: processSummary,
+				listeners: listeners, execution: execution, after: slices.Clone(after)}
+			if err := observed.recheck(ctx, guard); err != nil {
+				return err
+			}
+			lease.observation = observed
+		}
+		return nil
+	}
+	return lease, nil
 }
 
 func sendSSHProcessReload(process *sshProcessBinding) error {
@@ -123,10 +194,11 @@ type sshActivationTarget struct {
 	ctx               context.Context
 	target            string
 	verify            func(context.Context) error
-	send              func() error
+	preSend, send     func() error
 	after             func(context.Context, func() error) error
 	closeFn           func() error
 	attempted, closed bool
+	observation       *sshRestoringReloadObservation
 }
 
 func (l *sshActivationTarget) identity() string {
@@ -160,7 +232,7 @@ func (l *sshActivationTarget) checkLocked(ctx context.Context) error {
 	return errors.Join(l.verify(ctx), ctx.Err(), l.ctx.Err())
 }
 
-func (l *sshActivationTarget) request(parent context.Context, policyGuard func() error) error {
+func (l *sshActivationTarget) request(parent context.Context, policyGuard func() error) (err error) {
 	if l == nil {
 		return ErrInventoryClosed
 	}
@@ -171,7 +243,12 @@ func (l *sshActivationTarget) request(parent context.Context, policyGuard func()
 	}
 	// Even a rejected dispatch consumes this lease. The durable transaction
 	// must be recovered explicitly; no uncertain request is replayed.
-	defer func() { l.attempted = true }()
+	defer func() {
+		l.attempted = true
+		if err != nil {
+			l.observation = nil
+		}
+	}()
 	if parent == nil || policyGuard == nil || l.ctx == nil {
 		return ErrInventoryUnsafe
 	}
@@ -186,6 +263,17 @@ func (l *sshActivationTarget) request(parent context.Context, policyGuard func()
 		return err
 	}
 	if err := errors.Join(parent.Err(), ctx.Err(), policyGuard()); err != nil {
+		return err
+	}
+	// The production pre-send probe may wait inside the kernel. Recheck both
+	// request and binder cancellation directly after it returns, before signal.
+	// Fixed test targets without a memory observer may omit this private hook.
+	if l.preSend != nil {
+		if err := l.preSend(); err != nil {
+			return err
+		}
+	}
+	if err := errors.Join(parent.Err(), ctx.Err(), l.ctx.Err()); err != nil {
 		return err
 	}
 	if err := errors.Join(l.send(), parent.Err(), ctx.Err(), policyGuard()); err != nil {
@@ -207,11 +295,12 @@ func (l *sshActivationTarget) Close() error {
 		return nil
 	}
 	l.closed = true
+	l.observation = nil
 	if l.closeFn == nil {
 		return ErrInventoryUnsafe
 	}
 	err := l.closeFn()
-	l.verify, l.send, l.after, l.closeFn = nil, nil, nil, nil
+	l.verify, l.preSend, l.send, l.after, l.closeFn = nil, nil, nil, nil, nil
 	return err
 }
 

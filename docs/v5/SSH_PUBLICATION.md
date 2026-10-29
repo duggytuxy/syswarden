@@ -2,8 +2,10 @@
 
 Status: internal v5.00.0 development component. Refs #235 and #337.
 The installation and CIS entry points do not invoke this component yet.
-There is no public apply command or complete migration package. Final IVVQ
-acceptance remains open.
+There is no public forward-publication command or complete migration package.
+The separate [original-restoration command](SSH_OPERATOR_RECOVERY.md) operates
+only on an existing attributable activation transaction. Final IVVQ acceptance
+remains open.
 
 ## Write sequence
 

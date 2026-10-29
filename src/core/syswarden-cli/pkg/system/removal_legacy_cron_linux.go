@@ -20,6 +20,17 @@ import (
 )
 
 const legacyCronSpool = "/var/spool/cron/crontabs"
+const alpineLegacyCronSpool = "/etc/crontabs"
+
+func selectedLegacyCronSpool(paths []string) (string, error) {
+	if len(paths) == 0 {
+		return legacyCronSpool, nil
+	}
+	if len(paths) == 1 && (paths[0] == legacyCronSpool || paths[0] == alpineLegacyCronSpool) {
+		return paths[0], nil
+	}
+	return "", fmt.Errorf("unsupported root cron spool")
+}
 
 type LegacyCronRetirementPlan struct {
 	Schema             string                     `json:"schema"`
@@ -98,8 +109,12 @@ func legacyCronSecurityLabelAt(directory *pinnedServiceDirectory, name string) (
 	return readLegacyCronSecurityLabel(file)
 }
 
-func inspectLegacyCronDirectory(directory *pinnedServiceDirectory, uid uint32) (LegacyCronRetirementPlan, []byte, error) {
-	plan := LegacyCronRetirementPlan{Schema: "syswarden-legacy-root-cron-retirement-v1", Directory: legacyCronSpool, StopsProduct: true, PreservesOtherJobs: true}
+func inspectLegacyCronDirectory(directory *pinnedServiceDirectory, uid uint32, logicalSpool ...string) (LegacyCronRetirementPlan, []byte, error) {
+	spool, err := selectedLegacyCronSpool(logicalSpool)
+	if err != nil {
+		return LegacyCronRetirementPlan{}, nil, err
+	}
+	plan := LegacyCronRetirementPlan{Schema: "syswarden-legacy-root-cron-retirement-v1", Directory: spool, StopsProduct: true, PreservesOtherJobs: true}
 	info, err := directory.root.Stat(".")
 	identity, identityErr := exactRemovalArtifactIdentity(info)
 	if err != nil || identityErr != nil || !safeSharedRemovalParent(info, identity, uid) {
@@ -122,7 +137,7 @@ func inspectLegacyCronDirectory(directory *pinnedServiceDirectory, uid uint32) (
 	if err != nil {
 		return plan, nil, err
 	}
-	plan.Original = LegacyLogRetentionFile{Path: legacyCronSpool + "/root", Identity: legacyLogPlanIdentity(original), Size: original.size, Modified: original.mtime, Changed: original.ctime, SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}
+	plan.Original = LegacyLogRetentionFile{Path: spool + "/root", Identity: legacyLogPlanIdentity(original), Size: original.size, Modified: original.mtime, Changed: original.ctime, SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}
 	plan.ReplacementSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(replacement)))
 	return plan, []byte(replacement), nil
 }
@@ -131,70 +146,100 @@ func inspectLegacyCronDirectory(directory *pinnedServiceDirectory, uid uint32) (
 // Ordinary remove/purge remains read-only toward the shared root crontab. The
 // original inode is retained privately, and only complete historical records
 // selected in the reviewed plan are omitted from the replacement.
-func legacyCronProviderGuard() error {
+func legacyCronSpoolForProvider(evidence CronDProviderEvidence) (string, error) {
+	if evidence.Mode != CronDProviderRuntime {
+		return "", fmt.Errorf("legacy cron recovery requires a verified active provider")
+	}
+	switch {
+	case evidence.Manager == "systemd" && evidence.Unit == "cron.service" && evidence.Daemon == "/usr/sbin/cron" && strings.Join(evidence.Packages, ",") == "cron":
+		return legacyCronSpool, nil
+	case evidence.Manager == "openrc" && evidence.Unit == "cronie" && evidence.Daemon == "/usr/sbin/crond" && evidence.Fragment == "/etc/init.d/cronie" && evidence.DefaultRunlevel && strings.Join(evidence.Packages, ",") == "cronie,cronie-openrc":
+		return alpineLegacyCronSpool, nil
+	default:
+		return "", fmt.Errorf("legacy cron recovery requires the verified Debian cron or Alpine cronie provider")
+	}
+}
+
+func legacyCronProviderSpool() (string, error) {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("legacy cron recovery requires root")
+		return "", fmt.Errorf("legacy cron recovery requires root")
 	}
 	evidence, err := InspectRuntimeCronDProvider()
 	if err != nil {
-		return err
+		return "", err
 	}
-	if evidence.Manager != "systemd" || evidence.Unit != "cron.service" || evidence.Daemon != "/usr/sbin/cron" {
-		return fmt.Errorf("legacy cron recovery requires the verified Debian cron provider")
+	spool, err := legacyCronSpoolForProvider(evidence)
+	if err != nil {
+		return "", err
 	}
 	root, err := os.OpenRoot("/")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = root.Close() }()
-	for _, path := range []string{legacyCronSpool, "/var/backups/syswarden-retired-v1/legacy-cron"} {
+	for _, path := range []string{spool, "/var/backups/syswarden-retired-v1/legacy-cron"} {
 		if _, err := historicalRemovalCandidatePresent(root, path, 0, 0, nil); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
+	return spool, nil
 }
 
 func InspectLegacyCronRetirement() (LegacyCronRetirementPlan, error) {
-	if err := legacyCronProviderGuard(); err != nil {
+	spool, err := legacyCronProviderSpool()
+	if err != nil {
 		return LegacyCronRetirementPlan{}, err
 	}
-	directory, err := openPinnedSharedRemovalParent(legacyCronSpool, 0)
+	directory, err := openPinnedSharedRemovalParent(spool, 0)
 	if err != nil {
 		return LegacyCronRetirementPlan{}, err
 	}
 	defer directory.close()
-	plan, _, err := inspectLegacyCronDirectory(directory, 0)
+	plan, _, err := inspectLegacyCronDirectory(directory, 0, spool)
 	if err != nil {
 		return plan, err
 	}
-	return plan, legacyCronProviderGuard()
+	current, err := legacyCronProviderSpool()
+	if err != nil || current != spool {
+		return plan, errors.Join(fmt.Errorf("legacy cron provider changed during inspection"), err)
+	}
+	return plan, nil
 }
 
 func ApplyLegacyCronRetirement(expected string) (LegacyCronRetirementPlan, string, error) {
-	if err := legacyCronProviderGuard(); err != nil {
+	spool, err := legacyCronProviderSpool()
+	if err != nil {
 		return LegacyCronRetirementPlan{}, "", err
 	}
 	prepare := func() error {
+		current, err := legacyCronProviderSpool()
+		if err != nil || current != spool {
+			return errors.Join(fmt.Errorf("legacy cron provider changed before preparation"), err)
+		}
 		if err := BeginRemoval(); err != nil {
 			return err
 		}
 		return PrepareFirewallStateForRemoval()
 	}
 	guard := func() error {
-		if err := legacyCronProviderGuard(); err != nil {
-			return err
+		current, err := legacyCronProviderSpool()
+		if err != nil || current != spool {
+			return errors.Join(fmt.Errorf("legacy cron provider changed during recovery"), err)
 		}
 		if err := RequireRemovalTombstone(); err != nil {
 			return err
 		}
 		return ReattestFirewallStatePreparedForRemoval()
 	}
-	return applyLegacyCronRetirement(legacyCronSpool, "/var/backups", expected, 0, prepare, guard, unix.Renameat2)
+	return applyLegacyCronRetirement(spool, "/var/backups", expected, 0, prepare, guard, unix.Renameat2, spool)
 }
 
-func applyLegacyCronRetirement(spoolPath, backupParentPath, expected string, uid uint32, prepare, guard func() error, rename serviceArtifactRename) (LegacyCronRetirementPlan, string, error) {
+func applyLegacyCronRetirement(spoolPath, backupParentPath, expected string, uid uint32, prepare, guard func() error, rename serviceArtifactRename, logicalSpool ...string) (LegacyCronRetirementPlan, string, error) {
 	var empty LegacyCronRetirementPlan
+	logical, err := selectedLegacyCronSpool(logicalSpool)
+	if err != nil {
+		return empty, "", err
+	}
 	if len(expected) != 64 || strings.Trim(expected, "0123456789abcdef") != "" || prepare == nil || guard == nil || rename == nil {
 		return empty, "", fmt.Errorf("legacy cron retirement requires the exact reviewed digest and complete guards")
 	}
@@ -212,11 +257,11 @@ func applyLegacyCronRetirement(spoolPath, backupParentPath, expected string, uid
 	// retained for inspection; it never authorizes a guessed overwrite.
 	if saved, err := openExistingPinnedServiceDirectory(backupPath); err == nil {
 		defer saved.close()
-		return finishLegacyCronRetirement(spoolPath, spool, backupPath, saved, expected, uid, prepare, guard, rename)
+		return finishLegacyCronRetirement(spoolPath, spool, backupPath, saved, expected, uid, prepare, guard, rename, logical)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return empty, "", err
 	}
-	plan, replacement, err := inspectLegacyCronDirectory(spool, uid)
+	plan, replacement, err := inspectLegacyCronDirectory(spool, uid, logical)
 	if err != nil {
 		return plan, "", err
 	}
@@ -224,7 +269,7 @@ func applyLegacyCronRetirement(spoolPath, backupParentPath, expected string, uid
 	if err != nil || digest != expected {
 		return plan, "", fmt.Errorf("root cron changed since review; inspect a new plan")
 	}
-	parent, err := openExistingPinnedServiceDirectory(backupParentPath)
+	parent, err := openOrCreateRetirementBackupParent(backupParentPath)
 	if err != nil {
 		return plan, "", err
 	}
@@ -294,11 +339,15 @@ func applyLegacyCronRetirement(spoolPath, backupParentPath, expected string, uid
 	if err := errors.Join(saved.sync(), root.sync(), parent.sync()); err != nil {
 		return plan, "", err
 	}
-	return finishLegacyCronRetirement(spoolPath, spool, backupPath, saved, expected, uid, prepare, guard, rename)
+	return finishLegacyCronRetirement(spoolPath, spool, backupPath, saved, expected, uid, prepare, guard, rename, logical)
 }
 
-func finishLegacyCronRetirement(spoolPath string, spool *pinnedServiceDirectory, backupPath string, saved *pinnedServiceDirectory, expected string, uid uint32, prepare, guard func() error, rename serviceArtifactRename) (LegacyCronRetirementPlan, string, error) {
+func finishLegacyCronRetirement(spoolPath string, spool *pinnedServiceDirectory, backupPath string, saved *pinnedServiceDirectory, expected string, uid uint32, prepare, guard func() error, rename serviceArtifactRename, logicalSpool ...string) (LegacyCronRetirementPlan, string, error) {
 	var plan LegacyCronRetirementPlan
+	logical, err := selectedLegacyCronSpool(logicalSpool)
+	if err != nil {
+		return plan, "", err
+	}
 	privateInfo, err := saved.root.Stat(".")
 	if err != nil || privateInfo.Mode().Perm() != 0700 {
 		return plan, "", fmt.Errorf("legacy cron backup directory is not private")
@@ -309,7 +358,7 @@ func finishLegacyCronRetirement(spoolPath string, spool *pinnedServiceDirectory,
 	}
 	canonical, err := json.Marshal(plan)
 	digest, digestErr := LegacyCronRetirementPlanSHA256(plan)
-	if err != nil || digestErr != nil || string(wire) != string(canonical) || digest != expected || plan.Schema != "syswarden-legacy-root-cron-retirement-v1" || plan.Directory != legacyCronSpool || !plan.StopsProduct || !plan.PreservesOtherJobs || len(plan.RemovedLines) == 0 {
+	if err != nil || digestErr != nil || string(wire) != string(canonical) || digest != expected || plan.Schema != "syswarden-legacy-root-cron-retirement-v1" || plan.Directory != logical || plan.Original.Path != logical+"/root" || !plan.StopsProduct || !plan.PreservesOtherJobs || len(plan.RemovedLines) == 0 {
 		return plan, "", fmt.Errorf("legacy cron backup plan differs from the reviewed inventory")
 	}
 	inspect := func() (bool, error) {

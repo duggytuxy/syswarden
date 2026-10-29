@@ -25,6 +25,17 @@ type modularConfigSource struct {
 // treated as a modular TOML root, a symbolic link is rejected explicitly, and
 // any other path is parsed as the deprecated flat syswarden-auto.conf format.
 func ParseConfig(configPath string) error {
+	return parseConfig(configPath, true)
+}
+
+// ParseConfigForInspection validates the same legacy or modular policy without
+// persisting historical compatibility normalization. It replaces only this
+// process's validated snapshot; it does not activate policy or repair files.
+func ParseConfigForInspection(configPath string) error {
+	return parseConfig(configPath, false)
+}
+
+func parseConfig(configPath string, persistCompatibility bool) error {
 	if info, err := os.Lstat(configPath); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			err := fmt.Errorf("configuration path %s is a symbolic link", configPath)
@@ -32,14 +43,14 @@ func ParseConfig(configPath string) error {
 			return err
 		}
 		if info.IsDir() {
-			if err := loadModularConfig(configPath); err != nil {
+			if err := loadModularConfigWithPersistence(configPath, persistCompatibility); err != nil {
 				return err
 			}
 			return nil
 		}
 	}
 
-	if err := loadOldConfig(configPath); err != nil {
+	if err := loadOldConfigWithPersistence(configPath, persistCompatibility); err != nil {
 		return err
 	}
 	log.Println("[WARNING] Using old flat configuration format (deprecated)")
@@ -47,7 +58,11 @@ func ParseConfig(configPath string) error {
 	return nil
 }
 
-func loadModularConfig(configDir string) (loadErr error) {
+func loadModularConfig(configDir string) error {
+	return loadModularConfigWithPersistence(configDir, true)
+}
+
+func loadModularConfigWithPersistence(configDir string, persistCompatibility bool) (loadErr error) {
 	configLoadMu.Lock()
 	defer configLoadMu.Unlock()
 	defer func() {
@@ -82,6 +97,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 
 	setDefaults(v, configDir)
 	var sources []modularConfigSource
+	var profileInventory unconfiguredProfileInventory
 	observed := make(map[string]struct{})
 
 	// Load master config
@@ -95,6 +111,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 		if err != nil {
 			return err
 		}
+		profileInventory.record("config.toml", document)
 		flattenTOMLKeys("", document, observed)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("failed to load master config: %w", err)
@@ -140,6 +157,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 			if err != nil {
 				return err
 			}
+			profileInventory.record(filepath.ToSlash(filepath.Join("modules", entry.Name())), document)
 			flattenTOMLKeys("", document, observed)
 			if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 				return fmt.Errorf("failed to load module %s: %w", file, err)
@@ -154,8 +172,14 @@ func loadModularConfig(configDir string) (loadErr error) {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("inspect modules directory: %w", err)
 	}
+	if err := profileInventory.validate(); err != nil {
+		return err
+	}
 	resolveModularSaaSAlias(v, observed)
 
+	if err := resolveOptionalModules(v); err != nil {
+		return err
+	}
 	var modConfig ModularConfig
 	if err := v.Unmarshal(&modConfig); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
@@ -164,7 +188,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 	if len(retiredWhitelistEntries) != 0 {
 		v.Set("network.whitelist_ips", modConfig.Network.WhitelistIPs)
 	}
-	if err := normalizeHistoricalModularHA(&modConfig, sources); err != nil {
+	if err := normalizeHistoricalModularHA(&modConfig, sources, persistCompatibility); err != nil {
 		return err
 	}
 
@@ -195,6 +219,9 @@ func loadModularConfig(configDir string) (loadErr error) {
 		}
 	}
 	logRetiredUnspecifiedWhitelistEntries(retiredWhitelistEntries)
+	if err := RefusePendingModuleEdit(configDir); err != nil {
+		return err
+	}
 	commitGlobalConfig(candidate, configDir)
 	return nil
 }
@@ -237,11 +264,24 @@ func resolveModularSaaSAlias(v *viper.Viper, observed map[string]struct{}) {
 	_, legacyFile := observed["integrations.saas.enabled"]
 	_, officialEnv := os.LookupEnv("SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS")
 	_, legacyEnv := os.LookupEnv("SYSWARDEN_INTEGRATIONS_SAAS_ENABLED")
-	if officialFile || officialEnv {
+	resolveModularSaaSAliasPresence(v, officialFile || officialEnv, legacyFile || legacyEnv)
+}
+
+// Preview and editor validation merge TOML only. Environment presence must not
+// cause an absent official key to override an explicit deprecated TOML alias.
+// The caller supplies a Viper instance without automatic environment overlays.
+func resolveModularSaaSAliasFromTOML(v *viper.Viper, observed map[string]struct{}) {
+	_, official := observed["network.saas.allow_monitors"]
+	_, legacy := observed["integrations.saas.enabled"]
+	resolveModularSaaSAliasPresence(v, official, legacy)
+}
+
+func resolveModularSaaSAliasPresence(v *viper.Viper, official, legacy bool) {
+	if official {
 		v.Set("network.saas.allow_monitors", v.GetBool("network.saas.allow_monitors"))
 		return
 	}
-	if legacyFile || legacyEnv {
+	if legacy {
 		v.Set("network.saas.allow_monitors", v.GetBool("integrations.saas.enabled"))
 		return
 	}
@@ -260,6 +300,12 @@ func mapModularToLegacy(m *ModularConfig) *Config {
 	m = &normalized
 	candidate := NewFailSafeConfig()
 
+	candidate.FirewallPolicyMode = m.Network.PolicyMode
+	candidate.InstallProfile = m.Core.InstallProfile
+	candidate.OSINTEnabled = m.Network.Blocklists.OSINTEnabled
+	candidate.WAAPEnabled = m.WAAP.Enabled
+	candidate.LogBridgeEnabled = m.WAAP.LogBridgeEnabled
+	candidate.DetectionEnabled = m.Security.DetectionEnabled
 	candidate.EnterpriseMode = m.Core.EnterpriseMode
 	candidate.EnforcementMode = m.WAAP.EnforcementMode
 	candidate.SSHPort = m.Core.SSHPort

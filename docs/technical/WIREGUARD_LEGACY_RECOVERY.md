@@ -190,3 +190,19 @@ sudo test -x /opt/syswarden/bin/syswarden-cli && printf 'CLI executable present\
 These two checks establish package registration and executable presence only.
 Functional service, firewall, VPN, upgrade and reboot checks remain part of the
 release's native lifecycle validation.
+
+## Bounded command execution
+
+Trusted WireGuard and service-manager commands retain their direct child until
+capture completes. Output overflow, cancellation and inherited-pipe timeout
+stop the original process group before reaping its leader. Bounded stdin uses a
+separate pipe so a tool that stops reading cannot leave a blocked writer behind.
+Successful service commands may intentionally leave a daemon running; their
+remaining processes are preserved. External daemons and descendants that escape
+the process group are outside this runner's cleanup authority.
+
+Command errors include the operation and exit failure without copying raw tool
+output or input, which may contain key material. Bounded output remains available
+internally where an exact service-status classifier needs it. This execution
+boundary does not authorize runtime migration, establish successful service
+activation, or qualify complete native removal and recovery.

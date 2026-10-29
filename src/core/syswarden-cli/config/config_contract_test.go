@@ -623,10 +623,13 @@ func TestInitializeDefaultsIsByteIdempotentAndUsesRestrictiveModes(t *testing.T)
 	}
 }
 
-func TestEnsureDefaultsCompletesPartialConfigWithoutOverwritingOperatorState_SW_CFG_001(t *testing.T) {
+func TestEnsureDefaultsPreservesCompleteConfigAndOperatorState_SW_CFG_001(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "config")
 	modules := filepath.Join(root, "modules")
 	if err := os.MkdirAll(modules, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureDefaults(root); err != nil {
 		t.Fatal(err)
 	}
 	userPath := filepath.Join(modules, "99-user.toml")
@@ -636,7 +639,7 @@ func TestEnsureDefaultsCompletesPartialConfigWithoutOverwritingOperatorState_SW_
 		t.Fatal(err)
 	}
 	defer func() { _ = modulesRoot.Close() }()
-	userFile, err := modulesRoot.OpenFile("99-user.toml", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	userFile, err := modulesRoot.OpenFile("99-user.toml", os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,7 +690,7 @@ func TestEnsureDefaultsCompletesPartialConfigWithoutOverwritingOperatorState_SW_
 		loadStateMu.Unlock()
 	})
 	if err := ParseConfig(root); err != nil {
-		t.Fatalf("ParseConfig() after partial bootstrap = %v", err)
+		t.Fatalf("ParseConfig() after preserving complete configuration = %v", err)
 	}
 	if GlobalConfig == nil {
 		t.Fatalf("completed config is unavailable: %#v", GlobalConfig)

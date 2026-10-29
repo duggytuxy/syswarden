@@ -4,7 +4,8 @@ name="syswarden-firewall"
 description="SYSWARDEN Firewall Persistence & Engine Loader"
 
 depend() {
-	need net rsyslog cronie
+	after rsyslog
+	need net cronie
 	before syswarden-core
 }
 

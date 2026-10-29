@@ -622,6 +622,49 @@ func packageNames(snapshot cronDProviderSnapshot) []string {
 	return []string{"cronie"}
 }
 
+// attestSystemdRuntimeSnapshot retains all checked runtime evidence for the
+// activation consumer. The normal compact provider API remains unchanged.
+func (host cronDProviderHost) attestSystemdRuntimeSnapshot() (cronDProviderSnapshot, error) {
+	if host.alpine {
+		return cronDProviderSnapshot{}, errors.New("systemd activation snapshot refuses an OpenRC provider")
+	}
+	if err := host.validate(); err != nil {
+		return cronDProviderSnapshot{}, err
+	}
+	requireRuntime := func() error {
+		state, err := host.classifyRuntime(false)
+		if err != nil {
+			return err
+		}
+		if state != serviceManagerActive {
+			return errors.New("activation requires a verified live systemd cron provider")
+		}
+		return nil
+	}
+	if err := requireRuntime(); err != nil {
+		return cronDProviderSnapshot{}, err
+	}
+	systemctl, err := resolveFirewallExecutable(host.executor, "systemctl")
+	if err != nil {
+		return cronDProviderSnapshot{}, err
+	}
+	first, err := host.captureSystemdRuntime(systemctl)
+	if err != nil {
+		return cronDProviderSnapshot{}, err
+	}
+	second, err := host.captureSystemdRuntime(systemctl)
+	if err != nil {
+		return cronDProviderSnapshot{}, err
+	}
+	if first != second {
+		return cronDProviderSnapshot{}, errors.New("systemd cron activation snapshot changed during observation")
+	}
+	if err := requireRuntime(); err != nil {
+		return cronDProviderSnapshot{}, err
+	}
+	return second, nil
+}
+
 func (host cronDProviderHost) attest() (CronDProviderEvidence, error) {
 	if err := host.validate(); err != nil {
 		return CronDProviderEvidence{}, err

@@ -1,7 +1,8 @@
 # Protected SSH access request and controller execution
 
 Status: private v5.00.0 integration component. Refs #235, #337 and #422.
-No CLI command, installer call or activation-completion path is enabled.
+The private [exchange commands](SSH_ACCESS_COMMANDS.md) expose request preparation
+and controller execution. No installer call or activation-completion path is enabled.
 
 ## Separate target and controller inputs
 
@@ -98,9 +99,12 @@ durable receipt acceptance, runtime recovery, owned updates and separately
 validated native uninstall, remove and purge remain open. There is no
 migration-ready package or final v5.00.0 IVVQ acceptance.
 
-Issue #422 is unchanged: fresh native installation must select the standard list
-only, with independent explicit TOML choices for SSH, CIS, OS hardening and
-optional modules. Production installer wiring remains incomplete. Administrator
+Issue #422 requires fresh native installation to select no list and defer
+activation until explicit configuration through `syswarden config`, with
+independent explicit TOML choices for SSH, CIS, OS hardening and optional
+modules. The native hooks stage an unconfigured TOML profile and preserve host
+hardening; [native dependency transitions and package qualification](MINIMAL_NATIVE_INSTALL.md)
+remain incomplete. Administrator
 upgrade settings, BunkerWeb independence and Linux AMD64 scope are preserved.
 
 ## Signed controller continuation

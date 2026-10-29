@@ -72,11 +72,6 @@ var wireGuardCommandInputOutput = func(input string, name string, args ...string
 	return runBoundedWireGuardCommand(name, args, input, maximumWireGuardCommandOutput, wireGuardCommandTimeout)
 }
 var wireGuardForwardingTransactionFactory = newPinnedWireGuardForwardingTransaction
-var wireGuardQRCodeRender = func(configuration string) error {
-	return runWireGuardStreamingCommand(
-		"qrencode", []string{"-t", "ansiutf8"}, configuration, os.Stdout, wireGuardCommandTimeout,
-	)
-}
 
 type wireGuardRenderInput struct {
 	Subnet         string
@@ -93,6 +88,8 @@ type wireGuardRenderInput struct {
 	ClientPub      string
 	PresharedKey   string
 	SharedForward  bool
+	// LegacyPolicy is reserved for resuming an already sealed v1 migration.
+	LegacyPolicy bool
 }
 
 type wireGuardNFTExpectation struct {
@@ -157,7 +154,6 @@ var wireGuardExecutableCandidates = map[string][]string{
 	"rc-update":  {"/sbin/rc-update", "/usr/sbin/rc-update"},
 	"nft":        {"/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"},
 	"true":       {"/usr/bin/true", "/bin/true"},
-	"qrencode":   {"/usr/bin/qrencode", "/bin/qrencode"},
 }
 
 var wireGuardFixedCommandEnvironment = []string{
@@ -311,6 +307,12 @@ func runBoundedWireGuardCommandContext(
 	input string,
 	limit int,
 ) ([]byte, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("missing WireGuard command context")
+	}
+	if len(input) > maximumWireGuardCommandOutput {
+		return nil, fmt.Errorf("WireGuard command input exceeds %d bytes", maximumWireGuardCommandOutput)
+	}
 	if limit < 1 || limit > maximumWireGuardCommandOutput {
 		return nil, fmt.Errorf("invalid WireGuard command output limit %d", limit)
 	}
@@ -325,48 +327,20 @@ func runBoundedWireGuardCommandContext(
 	var output boundedWireGuardCommandBuffer
 	output.limit = limit
 	command := exec.CommandContext(ctx, path, args...) // #nosec G204 -- executable is root/ancestry attested and arguments are fixed or previously validated
-	configureWireGuardCommandLifecycle(command)
 	command.Env = append([]string(nil), wireGuardFixedCommandEnvironment...)
-	if input != "" {
-		if len(input) > maximumWireGuardCommandOutput {
-			return nil, fmt.Errorf("WireGuard command input exceeds %d bytes", maximumWireGuardCommandOutput)
-		}
-		command.Stdin = strings.NewReader(input)
-	}
-	command.Stdout = &output
-	command.Stderr = &output
 	if err := wireGuardExecutablePreStartAttestor(executableIdentity); err != nil {
 		return nil, fmt.Errorf("reattest WireGuard command %s immediately before start: %w", name, err)
 	}
-	err = command.Start()
-	if err == nil {
-		err = command.Wait()
-	}
-	if errors.Is(err, exec.ErrWaitDelay) && command.Process != nil {
-		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	}
+	err = captureWireGuardProcess(ctx, command, input, &output)
 	output.mu.Lock()
 	wire := append([]byte(nil), output.buffer.Bytes()...)
 	output.mu.Unlock()
 	if err != nil {
-		return wire, fmt.Errorf("WireGuard command %s failed: %w: %s", name, err, strings.TrimSpace(string(wire)))
+		// Keep bounded private bytes available to typed status classifiers, but
+		// never copy tool output or input into an operator-facing error.
+		return wire, fmt.Errorf("WireGuard command %s failed: %w", name, err)
 	}
 	return wire, nil
-}
-
-func configureWireGuardCommandLifecycle(command *exec.Cmd) {
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.WaitDelay = wireGuardCommandWaitDelay
-	command.Cancel = func() error {
-		if command.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
 }
 
 func runBoundedWireGuardCommand(name string, args []string, input string, limit int, timeout time.Duration) ([]byte, error) {
@@ -380,50 +354,6 @@ func runBoundedWireGuardCommand(name string, args []string, input string, limit 
 		return wire, fmt.Errorf("WireGuard command %s exceeded %s: %w", name, timeout, ctx.Err())
 	}
 	return wire, err
-}
-
-func runWireGuardStreamingCommand(name string, args []string, input string, stdout *os.File, timeout time.Duration) error {
-	if stdout == nil || len(input) > maximumWireGuardCommandOutput || timeout <= 0 || timeout > time.Minute {
-		return fmt.Errorf("invalid streaming WireGuard command parameters")
-	}
-	path, err := wireGuardExecutableResolver(name)
-	if err != nil {
-		return err
-	}
-	executableIdentity, err := wireGuardExecutableIdentityCapture(path)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	var stderr boundedWireGuardCommandBuffer
-	stderr.limit = maximumWireGuardCommandOutput
-	command := exec.CommandContext(ctx, path, args...) // #nosec G204 -- executable is root/ancestry attested and arguments are fixed
-	configureWireGuardCommandLifecycle(command)
-	command.Env = append([]string(nil), wireGuardFixedCommandEnvironment...)
-	command.Stdin = strings.NewReader(input)
-	command.Stdout = stdout
-	command.Stderr = &stderr
-	if err := wireGuardExecutablePreStartAttestor(executableIdentity); err != nil {
-		return fmt.Errorf("reattest streaming WireGuard command %s immediately before start: %w", name, err)
-	}
-	err = command.Start()
-	if err == nil {
-		err = command.Wait()
-	}
-	if errors.Is(err, exec.ErrWaitDelay) && command.Process != nil {
-		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	}
-	if ctx.Err() != nil {
-		return fmt.Errorf("WireGuard command %s exceeded %s: %w", name, timeout, ctx.Err())
-	}
-	if err != nil {
-		stderr.mu.Lock()
-		message := strings.TrimSpace(stderr.buffer.String())
-		stderr.mu.Unlock()
-		return fmt.Errorf("WireGuard command %s failed: %w: %s", name, err, message)
-	}
-	return nil
 }
 
 type pinnedWireGuardForwardingTransaction struct {
@@ -1082,6 +1012,9 @@ func validateExistingWireGuardNFTTable(wire []byte, identity wireguardstate.Serv
 		!wireGuardOwnershipTokenName.MatchString(identity.OwnershipToken) {
 		return 0, fmt.Errorf("invalid expected WireGuard nftables ownership identity")
 	}
+	if err := validateWireGuardPolicyIdentity(identity); err != nil {
+		return 0, err
+	}
 	var envelope struct {
 		NFTables []map[string]json.RawMessage `json:"nftables"`
 	}
@@ -1097,6 +1030,7 @@ func validateExistingWireGuardNFTTable(wire []byte, identity wireguardstate.Serv
 	tableHandle := uint64(0)
 	chains := make(map[string]string)
 	rules := make(map[string]int)
+	var forwardOrder []string
 	chainHandles := make(map[uint64]struct{})
 	ruleHandles := make(map[string]map[uint64]struct{})
 	for _, element := range envelope.NFTables {
@@ -1120,7 +1054,7 @@ func validateExistingWireGuardNFTTable(wire []byte, identity wireguardstate.Serv
 				if table.Family != "inet" || table.Name != "syswarden_wg" {
 					return 0, fmt.Errorf("existing WireGuard nftables table namespace mismatch")
 				}
-				if table.Comment != wireGuardNFTTableOwnershipCommentPrefix+identity.OwnershipToken {
+				if table.Comment != wireGuardPolicyTableComment(identity) {
 					return 0, fmt.Errorf("existing WireGuard nftables table ownership marker does not match the manifest-bound token")
 				}
 				if table.Handle == 0 {
@@ -1171,10 +1105,16 @@ func validateExistingWireGuardNFTTable(wire []byte, identity wireguardstate.Serv
 				}
 				ruleHandles[rule.Chain][rule.Handle] = struct{}{}
 				signature, err := wireGuardNFTExpressionSignature(rule.Expr)
+				if identity.PolicyVersion == 2 {
+					signature, err = wireGuardScopedNFTExpressionSignature(rule.Expr)
+				}
 				if err != nil {
 					return 0, err
 				}
 				rules[rule.Chain+":"+signature]++
+				if rule.Chain == "forward" {
+					forwardOrder = append(forwardOrder, signature)
+				}
 			default:
 				return 0, fmt.Errorf("existing WireGuard nftables table contains unexpected %s state", kind)
 			}
@@ -1195,6 +1135,12 @@ func validateExistingWireGuardNFTTable(wire []byte, identity wireguardstate.Serv
 		"postrouting:oifname=" + identity.ActiveInterface + ":masquerade": 1,
 		"forward:iifname=wg-syswarden:accept":                             1,
 		"forward:oifname=wg-syswarden:accept":                             1,
+	}
+	if identity.PolicyVersion == 2 {
+		expectedRules = wireGuardScopedRuleInventory(identity)
+		if strings.Join(forwardOrder, "\n") != strings.Join(wireGuardScopedForwardOrder(identity), "\n") {
+			return 0, fmt.Errorf("scoped WireGuard forwarding rule order is not owned")
+		}
 	}
 	if len(rules) != len(expectedRules) {
 		return 0, fmt.Errorf("existing WireGuard nftables rule inventory is not owned")
@@ -1231,6 +1177,8 @@ func identifyAttestedOrphanedWireGuardNFTTable(wire []byte) (wireguardstate.Serv
 	tableHandle := uint64(0)
 	ownershipToken := ""
 	activeInterface := ""
+	policyVersion := 0
+	ipv4Subnet := ""
 	masqueradeRules := 0
 	for _, element := range envelope.NFTables {
 		if len(element) != 1 {
@@ -1251,9 +1199,13 @@ func identifyAttestedOrphanedWireGuardNFTTable(wire []byte) (wireguardstate.Serv
 					table.Family != "inet" || table.Name != "syswarden_wg" || table.Handle == 0 {
 					return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table identity mismatch")
 				}
-				token, ok := strings.CutPrefix(table.Comment, wireGuardNFTTableOwnershipCommentPrefix)
+				commentPrefix := wireGuardNFTTableOwnershipCommentPrefix
+				if strings.HasPrefix(table.Comment, "syswarden-wg-v2:") {
+					commentPrefix, policyVersion = "syswarden-wg-v2:", 2
+				}
+				token, ok := strings.CutPrefix(table.Comment, commentPrefix)
 				if !ok || !wireGuardOwnershipTokenName.MatchString(token) ||
-					table.Comment != wireGuardNFTTableOwnershipCommentPrefix+token {
+					table.Comment != commentPrefix+token {
 					return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table has no exact v4.03.2+ ownership marker")
 				}
 				tableCount++
@@ -1273,6 +1225,9 @@ func identifyAttestedOrphanedWireGuardNFTTable(wire []byte) (wireguardstate.Serv
 				}
 				signature, err := wireGuardNFTExpressionSignature(rule.Expr)
 				if err != nil {
+					signature, err = wireGuardScopedNFTExpressionSignature(rule.Expr)
+				}
+				if err != nil {
 					return wireguardstate.ServerConfigurationIdentity{}, 0, err
 				}
 				const prefix = "oifname="
@@ -1285,6 +1240,14 @@ func identifyAttestedOrphanedWireGuardNFTTable(wire []byte) (wireguardstate.Serv
 					masqueradeRules++
 					activeInterface = candidate
 				}
+				if rule.Chain == "postrouting" && strings.HasPrefix(signature, "iifname=wg-syswarden:oifname=") && strings.HasSuffix(signature, suffix) {
+					components := strings.Split(strings.TrimSuffix(strings.TrimPrefix(signature, "iifname=wg-syswarden:oifname="), suffix), ":ip.saddr=")
+					if len(components) != 2 || !wireGuardInterfaceName.MatchString(components[0]) {
+						return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned scoped WireGuard NAT identity is invalid")
+					}
+					masqueradeRules++
+					activeInterface, ipv4Subnet = components[0], components[1]
+				}
 			default:
 				return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table contains unexpected %s state", kind)
 			}
@@ -1296,6 +1259,8 @@ func identifyAttestedOrphanedWireGuardNFTTable(wire []byte) (wireguardstate.Serv
 	identity := wireguardstate.ServerConfigurationIdentity{
 		OwnershipToken:  ownershipToken,
 		ActiveInterface: activeInterface,
+		PolicyVersion:   policyVersion,
+		IPv4Subnet:      ipv4Subnet,
 	}
 	validatedHandle, err := validateExistingWireGuardNFTTable(wire, identity)
 	if err != nil {
@@ -1320,7 +1285,8 @@ func reflectStringMap(actual, expected map[string]string) bool {
 }
 
 func sameWireGuardNFTTableIdentity(left, right wireguardstate.ServerConfigurationIdentity) bool {
-	return left.OwnershipToken == right.OwnershipToken && left.ActiveInterface == right.ActiveInterface
+	return left.OwnershipToken == right.OwnershipToken && left.ActiveInterface == right.ActiveInterface &&
+		left.PolicyVersion == right.PolicyVersion && left.IPv4Subnet == right.IPv4Subnet
 }
 
 func attestWireGuardNFTActivationState(expectation wireGuardNFTExpectation) error {
@@ -1334,7 +1300,7 @@ func attestWireGuardNFTActivationState(expectation wireGuardNFTExpectation) erro
 	if expectation.Identity.SharedForward && expectation.AllowExisting && !expectation.RequirePresent {
 		// Inactive reconciliation can retire a proven partial owned inventory.
 		// The strict zero-rule activation check runs again after exact cleanup.
-		if _, err := inspectWireGuardSharedForward(ctx, runner, expectation.Identity.OwnershipToken); err != nil {
+		if _, err := inspectWireGuardSharedForward(ctx, runner, expectation.Identity.OwnershipToken, expectation.Identity); err != nil {
 			return err
 		}
 	} else if err := attestWireGuardSharedForward(ctx, runner, expectation.Identity, present); err != nil {
@@ -1706,6 +1672,9 @@ func cleanupAttestedInactiveWireGuardNFTTable(expected wireguardstate.ServerConf
 // manifest, transaction, or generated WireGuard artifact remains. Historical
 // unmarked tables and every table with additional state remain fail-closed.
 func CleanupAttestedOrphanedWireGuardNFTStateForRemoval() (resultErr error) {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	release, err := wireGuardNFTActivationGuard()
 	if err != nil {
 		return fmt.Errorf("acquire orphaned WireGuard nftables cleanup guard: %w", err)
@@ -1727,6 +1696,9 @@ func CleanupAttestedOrphanedWireGuardNFTStateForRemoval() (resultErr error) {
 // shared activation guard and the inactive service and interface checks keep
 // this fallback bounded to the stale-table recovery case.
 func CleanupAttestedStaleWireGuardNFTStateForRemoval() (resultErr error) {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	release, err := wireGuardNFTActivationGuard()
 	if err != nil {
 		return fmt.Errorf("acquire stale WireGuard nftables cleanup guard: %w", err)
@@ -1747,6 +1719,9 @@ func CleanupAttestedStaleWireGuardNFTStateForRemoval() (resultErr error) {
 // exact ownership manifest and server-configuration token while holding the
 // shared firewall lock. A same-name replacement is preserved.
 func CleanupOwnedWireGuardNFTState() (resultErr error) {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	release, err := wireGuardNFTActivationGuard()
 	if err != nil {
 		return fmt.Errorf("acquire WireGuard nftables cleanup guard: %w", err)
@@ -2114,7 +2089,7 @@ func renderWireGuardConfigurations(input wireGuardRenderInput) (string, string, 
 		return "", "", fmt.Errorf("invalid WireGuard port %q", input.Port)
 	}
 	port := strconv.Itoa(portNumber)
-	if !wireGuardInterfaceName.MatchString(input.ActiveIf) {
+	if !wireGuardInterfaceName.MatchString(input.ActiveIf) || (!input.LegacyPolicy && input.ActiveIf == "wg-syswarden") {
 		return "", "", fmt.Errorf("invalid WireGuard egress interface %q", input.ActiveIf)
 	}
 	if !wireGuardNFTExecutableName.MatchString(input.NFTPath) {
@@ -2143,8 +2118,15 @@ func renderWireGuardConfigurations(input wireGuardRenderInput) (string, string, 
 	switch input.Backend {
 	case "nftables":
 		postUp = fmt.Sprintf(`%s 'create table inet syswarden_wg { comment "syswarden-wg-v1:%s"; }; add chain inet syswarden_wg prerouting { type nat hook prerouting priority dstnat; }; add chain inet syswarden_wg postrouting { type nat hook postrouting priority srcnat; }; add chain inet syswarden_wg forward { type filter hook forward priority 0; policy accept; }; add rule inet syswarden_wg postrouting oifname "%s" masquerade; add rule inet syswarden_wg forward iifname "wg-syswarden" accept; add rule inet syswarden_wg forward oifname "wg-syswarden" accept'`, input.NFTPath, input.OwnershipToken, input.ActiveIf)
+		sharedSuffix := wireguardstate.SharedForwardPostUpSuffix(input.OwnershipToken)
+		if !input.LegacyPolicy {
+			identity := wireguardstate.ServerConfigurationIdentity{NFTPath: input.NFTPath, OwnershipToken: input.OwnershipToken,
+				ActiveInterface: input.ActiveIf, IPv4Subnet: prefix.String(), PolicyVersion: 2}
+			postUp = wireguardstate.ScopedServerPostUp(identity)
+			sharedSuffix = wireguardstate.ScopedSharedForwardPostUpSuffix(identity)
+		}
 		if input.SharedForward {
-			postUp = strings.TrimSuffix(postUp, "'") + wireguardstate.SharedForwardPostUpSuffix(input.OwnershipToken) + "'"
+			postUp = strings.TrimSuffix(postUp, "'") + sharedSuffix + "'"
 		}
 		// A raw wg-quick deletion hook cannot prove manifest ownership or hold
 		// the shared firewall lock. Lifecycle code uses CleanupOwnedWireGuardNFTState.
@@ -2364,6 +2346,9 @@ func stageAndPublishWireGuardState(
 }
 
 func SetupWireguard() (resultErr error) {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	if config.GlobalConfig == nil {
 		return fmt.Errorf("WireGuard setup requires a loaded configuration")
 	}
@@ -2427,7 +2412,7 @@ func SetupWireguard() (resultErr error) {
 	}
 
 	fmt.Println("[INFO] Configuring WireGuard VPN...")
-	manifest, clientBytes, reused, err := reusableWireGuardState()
+	manifest, _, reused, err := reusableWireGuardState()
 	if err != nil {
 		return err
 	}
@@ -2455,7 +2440,6 @@ func SetupWireguard() (resultErr error) {
 			return err
 		}
 		serverConfiguration = serverConf
-		clientBytes = []byte(clientConf)
 		publication, err = stageAndPublishWireGuardState(
 			backend, serverConf, clientConf, ownOpenRCServiceLink,
 		)
@@ -2613,17 +2597,9 @@ func SetupWireguard() (resultErr error) {
 		fmt.Println("[INFO] Existing fully attested WireGuard keys preserved and service activation verified.")
 	}
 
-	fmt.Println("\n=======================================================")
-	fmt.Println("             WIREGUARD CLIENT CONFIGURATION            ")
-	fmt.Println("=======================================================")
-	fmt.Println("Optional WireGuard mobile-client QR code:")
-
-	if err := wireGuardQRCodeRender(string(clientBytes)); err != nil {
-		fmt.Fprintf(os.Stderr, "[WARN] WireGuard QR rendering is unavailable; use the protected client configuration file instead: %v\n", err)
-	}
-
-	fmt.Println("=======================================================")
-	fmt.Println("Client config saved at: " + wireguardstate.ClientConfigurationPath)
+	// Installation and reactivation output can be retained by package managers,
+	// service managers or terminal recorders. Never render client credentials.
+	fmt.Println("WireGuard client configuration retained in the protected file: " + wireguardstate.ClientConfigurationPath)
 
 	activationRollbackRequired = false
 	persistenceRollbackRequired = false

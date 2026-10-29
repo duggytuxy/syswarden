@@ -7,13 +7,17 @@ set -euo pipefail
 umask 077
 
 RHEL_PACKAGE_OWNED_PROFILE=0
+LOCAL_PACKAGE_VARIANT=compatibility
 case "$#:$*" in
     0:) ;;
     1:--rhel-package-owned-profile)
         RHEL_PACKAGE_OWNED_PROFILE=1
         ;;
+    1:--minimal-package)
+        LOCAL_PACKAGE_VARIANT=minimal
+        ;;
     *)
-        echo "Usage: $0 [--rhel-package-owned-profile]" >&2
+        echo "Usage: $0 [--rhel-package-owned-profile | --minimal-package]" >&2
         exit 2
         ;;
 esac
@@ -54,6 +58,9 @@ SOURCE_ROOT="${PACKAGE_WORKSPACE}/source"
 SOURCE_ARCHIVE="${PACKAGE_WORKSPACE}/source.tar"
 PACKAGE_REPOSITORY_STATE="${PACKAGE_WORKSPACE}/repository-state.json"
 LOCAL_PACKAGE_OUTPUT="${REPOSITORY_ROOT}/dist/packages"
+if [ "${LOCAL_PACKAGE_VARIANT}" = minimal ]; then
+    LOCAL_PACKAGE_OUTPUT="${LOCAL_PACKAGE_OUTPUT}/minimal"
+fi
 PACKAGE_STATE_CAPTURED=0
 PACKAGE_STATE_VERIFIED=0
 
@@ -129,7 +136,10 @@ secure_builder_directory() {
     fi
 }
 secure_builder_directory "${REPOSITORY_ROOT}/dist"
-secure_builder_directory "${LOCAL_PACKAGE_OUTPUT}"
+secure_builder_directory "${REPOSITORY_ROOT}/dist/packages"
+if [ "${LOCAL_PACKAGE_VARIANT}" = minimal ]; then
+    secure_builder_directory "${LOCAL_PACKAGE_OUTPUT}"
+fi
 
 # 1. Detect OS and attest the pinned build toolchain.
 if [ -f /etc/debian_version ]; then
@@ -306,12 +316,27 @@ case "${SOURCE_TAG}" in
         ;;
 esac
 VERSION="${SOURCE_TAG#v}"
+# Read metadata from the same committed source snapshot as the payload.
+source "${SOURCE_ROOT}/scripts/ci/package_variant_metadata.sh"
+syswarden_select_local_package_variant "${LOCAL_PACKAGE_VARIANT}"
+DEB_PACKAGE_FILENAME="${PACKAGE_NAME}_${VERSION}_amd64.deb"
+APK_PACKAGE_FILENAME="${PACKAGE_NAME}_${VERSION}_x86_64.apk"
 RPM_PACKAGE_RELEASE="1"
 if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
+    case "${VERSION}" in
+        4.*) ;;
+        *)
+            echo "[-] The RHEL package-owned profile is unavailable for v5 until inactive fresh installation is qualified." >&2
+            exit 1
+            ;;
+    esac
     RPM_PACKAGE_RELEASE="1.rhelpo"
 fi
-RPM_PACKAGE_FILENAME="syswarden-${VERSION}-${RPM_PACKAGE_RELEASE}.x86_64.rpm"
+RPM_PACKAGE_FILENAME="${PACKAGE_NAME}-${VERSION}-${RPM_PACKAGE_RELEASE}.x86_64.rpm"
 echo "[+] Detected SysWarden Version: v${VERSION}"
+if [ "${LOCAL_PACKAGE_VARIANT}" = minimal ]; then
+    echo "[INFO] Building local syswarden-base metadata; updater and native lifecycle acceptance remain incomplete."
+fi
 
 # 2. Compile Go Binaries
 echo "[*] Compiling SysWarden Native Go Modules..."
@@ -427,8 +452,6 @@ install -d -m 0755 \
     staging-apk/opt/syswarden \
     staging-apk/opt/syswarden/bin \
     staging-apk/usr \
-    staging-apk/usr/local \
-    staging-apk/usr/local/bin \
     staging-apk/usr/share \
     staging-apk/usr/share/bash-completion \
     staging-apk/usr/share/bash-completion/completions \
@@ -456,8 +479,6 @@ install -m 0644 \
     staging/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf
 cp "${SOURCE_ROOT}/src/core/syswarden-core/signatures.json" staging-apk/opt/syswarden/
 cp dist/bin-apk/syswarden-cli dist/bin-apk/syswarden-core dist/bin-apk/syswarden-tui staging-apk/opt/syswarden/bin/
-ln -s /opt/syswarden/bin/syswarden-cli staging-apk/usr/local/bin/syswarden
-ln -s /opt/syswarden/bin/syswarden-tui staging-apk/usr/local/bin/syswarden-tui
 staging-apk/opt/syswarden/bin/syswarden-cli completion bash > \
     staging-apk/usr/share/bash-completion/completions/syswarden
 install -m 0644 \
@@ -467,6 +488,8 @@ install -m 0644 \
     "${SOURCE_ROOT}/LICENSE" \
     staging-apk/usr/share/doc/syswarden/LICENSE.txt
 
+install -D -m 0755 "${SOURCE_ROOT}/scripts/ci/package_apk_recovery_hook.sh" \
+    ./staging-apk/etc/apk/commit_hooks.d/syswarden-recovery
 # Permissions
 chmod 750 staging/opt/syswarden/bin/*
 chmod 640 staging/opt/syswarden/signatures.json
@@ -474,6 +497,10 @@ chmod 644 staging/usr/share/bash-completion/completions/syswarden
 chmod 750 staging-apk/opt/syswarden/bin/*
 chmod 640 staging-apk/opt/syswarden/signatures.json
 chmod 644 staging-apk/usr/share/bash-completion/completions/syswarden
+PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${SOURCE_ROOT}/scripts/ci/native_activation_descriptor.py" --root staging
+PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${SOURCE_ROOT}/scripts/ci/native_activation_descriptor.py" --root staging-apk
 PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging \
@@ -498,6 +525,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging-apk \
     --service-manager openrc \
+    --apk-recovery-contract "${SOURCE_ROOT}/scripts/ci/package_apk_recovery_contract.json" \
+    --apk-recovery-source "${SOURCE_ROOT}/scripts/ci/package_apk_recovery_hook.sh" \
     --completion-contract "${SOURCE_ROOT}/scripts/ci/package_completion_contract.json" \
     --geoip-data-license-contract \
     "${SOURCE_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
@@ -631,14 +660,31 @@ cat "${SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> preinst
 cat "${SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> preinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_preflight.sh" >> preinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_wireguard_preflight.sh" >> preinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_install_phase.sh" >> preinst.sh
 cat << 'EOF' >> preinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
+syswarden_set_native_install_phase preinstall "$@"
+syswarden_require_fresh_native_install || exit 1
+if [ -f /etc/alpine-release ]; then
+    syswarden_preflight_apk_launchers /
+else
+    syswarden_preflight_launchers / before
+fi
 syswarden_preflight_wireguard /
-syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
 syswarden_preflight_systemd_ordering_dropin
 syswarden_preflight_systemd_socket_dropin
+if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
+    if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+       [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+        printf '%s\n' 'Fresh installation refuses retained package-removal barriers.' >&2
+        exit 1
+    fi
+    printf '%s\n' 'SysWarden fresh installation: pre-install host mutation deferred.'
+    exit 0
+fi
+syswarden_preflight_alpine_cronie
 if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
     if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
        [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
@@ -702,10 +748,18 @@ EOF
 cat "${SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > postinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> postinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> postinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_install_phase.sh" >> postinst.sh
 cat << 'EOF' >> postinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
-syswarden_preflight_alpine_cronie
+syswarden_set_native_install_phase postinstall "$@"
+syswarden_require_fresh_native_install || exit 1
+if [ -f /etc/alpine-release ]; then
+    syswarden_preflight_apk_launchers /
+    /opt/syswarden/bin/syswarden-cli internal-apk-launchers --stage-fresh
+else
+    syswarden_preflight_launchers / after
+fi
 syswarden_preflight_install_barriers
 if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
     if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
@@ -716,8 +770,17 @@ if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
     printf '%s\n' 'SysWarden offline qualification staging: post-install host mutation deferred.'
     exit 0
 fi
-ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
-ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
+if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
+    if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+       [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+        printf '%s\n' 'Fresh installation refuses retained package-removal barriers.' >&2
+        exit 1
+    fi
+    # Fresh CLI staging validates TOML only, including on an offline image.
+    /opt/syswarden/bin/syswarden-cli install
+    exit 0
+fi
+syswarden_preflight_alpine_cronie
 
 package_service_manager() {
     if [ -f /etc/alpine-release ]; then
@@ -907,8 +970,10 @@ syswarden_remove_dedicated_root() {
 
 if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     cleanup_generated_runtime_artifacts || exit 1
-    syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
-    syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
+    if [ ! -f /etc/alpine-release ]; then
+        syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
+        syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
+    fi
     syswarden_remove_exact_runtime_socket /run/syswarden.sock || exit 1
     syswarden_remove_exact_runtime_socket /run/syswarden-control.sock || exit 1
     if [ "$1" = "remove" ] || [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
@@ -958,7 +1023,14 @@ syswarden_retire_legacy_webtui / || exit 1
 printf '%s\n' 'Root crontab bytes and ambiguous legacy host artifacts were preserved for manual recovery.' >&2
 EOF
 
-chmod +x preinst.sh postinst.sh postrm.sh prerm.sh
+for package_hook in preinst.sh postinst.sh prerm.sh postrm.sh; do
+    syswarden_render_local_package_hook "${package_hook}" > "${package_hook}.variant"
+    mv -- "${package_hook}.variant" "${package_hook}"
+done
+# Upgrade hooks require the separately approved live native dispatcher.
+cp "${SOURCE_ROOT}/scripts/ci/package_apk_preupgrade.sh" preupgrade.sh
+cp "${SOURCE_ROOT}/scripts/ci/package_apk_postupgrade.sh" postupgrade.sh
+chmod +x preinst.sh preupgrade.sh postinst.sh postupgrade.sh postrm.sh prerm.sh
 
 RPM_SCRIPTS="${PACKAGE_WORKSPACE}/rpm-scripts"
 install -d -m 0700 "${RPM_SCRIPTS}"
@@ -1026,7 +1098,9 @@ normalize_package_mtimes \
     staging-rpm \
     staging-apk \
     preinst.sh \
+    preupgrade.sh \
     postinst.sh \
+    postupgrade.sh \
     prerm.sh \
     postrm.sh \
     "${RPM_SCRIPTS}" \
@@ -1077,7 +1151,7 @@ fi
     # and every other intermediate remain protected by the global 077.
     umask 022
     fpm -f -s dir -t deb \
-        -n syswarden \
+        -n "${PACKAGE_NAME}" \
         -v "${VERSION}" \
         --vendor "SysWarden Security" \
         --maintainer "SysWarden Engineering" \
@@ -1085,13 +1159,13 @@ fi
         --url "https://github.com/duggytuxy/syswarden" \
         --license "GPL-3.0-or-later" \
         --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
-        -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
-        -d "wireguard-tools" -d "qrencode" -d "jq" -d "unattended-upgrades" -d "apt-listchanges" -d "procps" -d "e2fsprogs" \
+        "${DEB_PACKAGE_FPM_DEPENDENCIES[@]}" \
+        --conflicts "${PACKAGE_CONFLICT}" \
         --before-install preinst.sh \
         --after-install postinst.sh \
         --before-remove prerm.sh \
         --after-remove postrm.sh \
-        -p "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb" \
+        -p "${PACKAGE_WORKSPACE}/${DEB_PACKAGE_FILENAME}" \
         -C staging .
 )
 
@@ -1102,7 +1176,7 @@ fi
     # package subprocess while retaining 077 everywhere else.
     umask 022
     fpm -f -s dir -t rpm \
-        -n syswarden \
+        -n "${PACKAGE_NAME}" \
         -v "${VERSION}" \
         --iteration "${RPM_PACKAGE_RELEASE}" \
         --vendor "SysWarden Security" \
@@ -1112,9 +1186,8 @@ fi
         --license "GPL-3.0-or-later" \
         --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
         --rpm-changelog "${RPM_CHANGELOG}" \
-        -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
-        -d "wireguard-tools" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
-        -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
+        "${RPM_PACKAGE_FPM_DEPENDENCIES[@]}" \
+        --conflicts "${PACKAGE_CONFLICT}" \
         "${RPM_PROFILE_DEPENDENCIES[@]}" \
         "${RPM_PROFILE_FPM_OPTIONS[@]}" \
         --before-install "${RPM_SCRIPTS}/preinst.sh" \
@@ -1138,38 +1211,33 @@ fi
 )
 
 # Generate Alpine APK via nfpm
+# Local artifacts use the explicit r0 native revision required for candidates.
 echo "[*] Generating .apk package via nfpm..."
 cat << EOF > nfpm_alpine_amd64.yaml
-name: "syswarden"
+name: "${PACKAGE_NAME}"
 arch: "amd64"
 platform: "linux"
 version: "${VERSION}"
+version_schema: none
+release: "0"
 maintainer: "SysWarden Engineering"
 description: "SysWarden Host-based Security Orchestrator for Alpine Linux"
 vendor: "SysWarden Security"
 homepage: "https://github.com/duggytuxy/syswarden"
 license: "GPL-3.0-or-later"
 depends:
-  - nftables
-  - openrc
-  - cronie
-  - cronie-openrc
-  - curl
-  - wget
-  - rsyslog
-  - rsyslog-uxsock
-  - bash-completion
-  - wireguard-tools
-  - libqrencode-tools
-  - jq
-  - procps-ng
-  - e2fsprogs-extra
-  - shadow
+${APK_PACKAGE_DEPENDENCIES_YAML}
+conflicts:
+  - "${PACKAGE_CONFLICT}"
 contents:
   - src: "./staging-apk/opt"
     dst: "/opt"
   - src: "./staging-apk/usr"
     dst: "/usr"
+  - src: "./staging-apk/etc/apk/commit_hooks.d/syswarden-recovery"
+    dst: "/etc/apk/commit_hooks.d/syswarden-recovery"
+    file_info:
+      mode: 0755
 scripts:
   preinstall: "./preinst.sh"
   postinstall: "./postinst.sh"
@@ -1177,13 +1245,13 @@ scripts:
   postremove: "./postrm.sh"
 apk:
   scripts:
-    preupgrade: "./preinst.sh"
-    postupgrade: "./postinst.sh"
+    preupgrade: "./preupgrade.sh"
+    postupgrade: "./postupgrade.sh"
 EOF
 "${NFPM_BIN}" pkg \
     --config nfpm_alpine_amd64.yaml \
     --packager apk \
-    --target "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"
+    --target "${PACKAGE_WORKSPACE}/${APK_PACKAGE_FILENAME}"
 
 PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
@@ -1195,7 +1263,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
     --artifact socket --format deb \
-    --package "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb" \
+    --package "${PACKAGE_WORKSPACE}/${DEB_PACKAGE_FILENAME}" \
     --source \
     "${SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
     --contract "${SOURCE_ROOT}/scripts/ci/package_systemd_socket_capability_contract.json"
@@ -1219,7 +1287,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
     --format deb \
-    --package "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb" \
+    --package "${PACKAGE_WORKSPACE}/${DEB_PACKAGE_FILENAME}" \
     --source \
     "${SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
     --contract "${SOURCE_ROOT}/scripts/ci/package_systemd_wireguard_ordering_contract.json"
@@ -1234,17 +1302,18 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 validate_local_deb_changelog() {
     local deb_path="$1"
     local deb_data_members deb_changelog_metadata
+    local changelog_path="./usr/share/doc/${PACKAGE_NAME}/changelog.gz"
     deb_data_members="$(ar t "${deb_path}" | awk '$0 == "data.tar.gz" { print }')" || return 1
     [ "${deb_data_members}" = data.tar.gz ] || return 1
     deb_changelog_metadata="$(
         ar p "${deb_path}" data.tar.gz |
-            LC_ALL=C tar -tzvf - ./usr/share/doc/syswarden/changelog.gz
+            LC_ALL=C tar -tzvf - "${changelog_path}"
     )" || return 1
-    if ! printf '%s\n' "${deb_changelog_metadata}" | awk '
+    if ! printf '%s\n' "${deb_changelog_metadata}" | awk -v expected="${changelog_path}" '
         NR == 1 && NF == 6 &&
         $1 == "-rw-r--r--" && $2 == "0/0" &&
         $3 ~ /^[1-9][0-9]*$/ &&
-        $6 == "./usr/share/doc/syswarden/changelog.gz" { valid = 1 }
+        $6 == expected { valid = 1 }
         END { exit !(NR == 1 && valid == 1) }
     '; then
         echo "[-] Debian changelog is not one root-owned 0644 regular file." >&2
@@ -1286,6 +1355,26 @@ validate_local_apk_homepage() {
     local metadata
     metadata="$(LC_ALL=C tar -xOzf "${apk_path}" .PKGINFO)" || return 1
     [ "$(grep -Fxc 'url = https://github.com/duggytuxy/syswarden' <<< "${metadata}")" -eq 1 ]
+}
+
+validate_local_apk_install_hooks() {
+    local apk_path="$1"
+    local hook expected
+    local -a members=()
+    for hook in pre-install pre-upgrade post-install post-upgrade; do
+        case "${hook}" in
+            pre-install) expected=preinst.sh ;;
+            pre-upgrade) expected=preupgrade.sh ;;
+            post-install) expected=postinst.sh ;;
+            post-upgrade) expected=postupgrade.sh ;;
+        esac
+        mapfile -t members < <(
+            tar --list --file "${apk_path}" | awk -v hook=".${hook}" '$0 == hook || $0 == "./" hook { print }'
+        )
+        [ "${#members[@]}" -eq 1 ] || return 1
+        cmp -s "${PACKAGE_WORKSPACE}/${expected}" \
+            <(tar --extract --to-stdout --file "${apk_path}" "${members[0]}") || return 1
+    done
 }
 
 validate_local_rpm_scriptlet() {
@@ -1376,17 +1465,17 @@ validate_local_rpm_build_ids() {
 }
 
 if ! validate_local_deb_changelog \
-    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb"; then
+    "${PACKAGE_WORKSPACE}/${DEB_PACKAGE_FILENAME}"; then
     echo "[-] Local Debian archive validation failed." >&2
     exit 1
 fi
 if ! validate_local_deb_license \
-    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb"; then
+    "${PACKAGE_WORKSPACE}/${DEB_PACKAGE_FILENAME}"; then
     echo "[-] Local Debian license metadata validation failed." >&2
     exit 1
 fi
 if ! validate_local_deb_homepage \
-    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb"; then
+    "${PACKAGE_WORKSPACE}/${DEB_PACKAGE_FILENAME}"; then
     echo "[-] Local Debian homepage metadata validation failed." >&2
     exit 1
 fi
@@ -1412,13 +1501,18 @@ if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
         --rpm "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" \
         --sha256 "${RPM_PROFILE_SHA256}"
 fi
+if ! validate_local_apk_install_hooks \
+    "${PACKAGE_WORKSPACE}/${APK_PACKAGE_FILENAME}"; then
+    echo "[-] Local APK install hook validation failed." >&2
+    exit 1
+fi
 if ! validate_local_apk_license \
-    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; then
+    "${PACKAGE_WORKSPACE}/${APK_PACKAGE_FILENAME}"; then
     echo "[-] Local Alpine license metadata validation failed." >&2
     exit 1
 fi
 if ! validate_local_apk_homepage \
-    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; then
+    "${PACKAGE_WORKSPACE}/${APK_PACKAGE_FILENAME}"; then
     echo "[-] Local Alpine homepage metadata validation failed." >&2
     exit 1
 fi
@@ -1464,9 +1558,9 @@ publish_local_package() {
 publish_local_checksums() {
     local destination expected_group expected_user filename manifest temporary
     local -a filenames=(
-        "syswarden_${VERSION}_amd64.deb"
+        "${DEB_PACKAGE_FILENAME}"
         "${RPM_PACKAGE_FILENAME}"
-        "syswarden_${VERSION}_x86_64.apk"
+        "${APK_PACKAGE_FILENAME}"
     )
     destination="${LOCAL_PACKAGE_OUTPUT}/SHA256SUMS.txt"
     manifest="${PACKAGE_WORKSPACE}/SHA256SUMS.txt"
@@ -1574,9 +1668,9 @@ publish_local_artifacts() (
     expected_user="$(id -un)"
     expected_group="$(id -gn)"
     for artifact in \
-        "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb" \
+        "${PACKAGE_WORKSPACE}/${DEB_PACKAGE_FILENAME}" \
         "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" \
-        "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; do
+        "${PACKAGE_WORKSPACE}/${APK_PACKAGE_FILENAME}"; do
         if [ ! -f "${artifact}" ] || [ -L "${artifact}" ] || \
            [ "$(find "${artifact}" -prune -user "${expected_user}" \
                -group "${expected_group}" -links 1 -print)" != "${artifact}" ]; then
@@ -1600,6 +1694,6 @@ publish_local_artifacts
 
 echo "[SUCCESS] Packages have been generated in ${LOCAL_PACKAGE_OUTPUT}."
 ls -lh \
-    "${LOCAL_PACKAGE_OUTPUT}/syswarden_${VERSION}_amd64.deb" \
+    "${LOCAL_PACKAGE_OUTPUT}/${DEB_PACKAGE_FILENAME}" \
     "${LOCAL_PACKAGE_OUTPUT}/${RPM_PACKAGE_FILENAME}" \
-    "${LOCAL_PACKAGE_OUTPUT}/syswarden_${VERSION}_x86_64.apk"
+    "${LOCAL_PACKAGE_OUTPUT}/${APK_PACKAGE_FILENAME}"

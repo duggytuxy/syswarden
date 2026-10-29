@@ -403,11 +403,11 @@ func TestExternalCommandContractRejectsUnexpectedArguments(t *testing.T) {
 	t.Parallel()
 
 	validPackage := "/var/tmp/syswarden-update-safe/package.deb"
-	validAPT := []string{"-o", aptDPkgLockTimeoutOption, "install", "-y", validPackage}
+	validAPT := []string{"-o", aptDPkgLockTimeoutOption, "--no-install-recommends", "--no-remove", "install", "-y", validPackage}
 	if err := validateExternalCommand("/usr/bin/apt-get", validAPT); err != nil {
 		t.Fatalf("validateExternalCommand() rejected exact installer contract: %v", err)
 	}
-	validRPM := []string{"--setopt=localpkg_gpgcheck=1", "install", "-y", "/var/tmp/syswarden-update-safe/package.rpm"}
+	validRPM := []string{"--setopt=localpkg_gpgcheck=1", "--setopt=install_weak_deps=False", "--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False", "install", "-y", "/var/tmp/syswarden-update-safe/package.rpm"}
 	if err := validateExternalCommand("/usr/bin/dnf", validRPM); err != nil {
 		t.Fatalf("validateExternalCommand() rejected native RPM signature contract: %v", err)
 	}
@@ -550,18 +550,18 @@ func TestUpdaterInstallsOnlyVerifiedPackageAndCleansWorkspace(t *testing.T) {
 				return nil
 			}
 			installs.Add(1)
-			if len(args) != 5 || args[0] != "-o" || args[1] != aptDPkgLockTimeoutOption ||
-				args[2] != "install" || args[3] != "-y" {
+			if len(args) != 7 || args[0] != "-o" || args[1] != aptDPkgLockTimeoutOption ||
+				args[2] != "--no-install-recommends" || args[3] != "--no-remove" || args[4] != "install" || args[5] != "-y" {
 				t.Fatalf("installer arguments = %#v", args)
 			}
-			content, err := os.ReadFile(args[4])
+			content, err := os.ReadFile(args[6])
 			if err != nil {
 				t.Fatalf("ReadFile(installer package) error = %v", err)
 			}
 			if !bytes.Equal(content, packagePayload) {
 				t.Fatalf("installer package content = %q", content)
 			}
-			info, err := os.Lstat(args[4])
+			info, err := os.Lstat(args[6])
 			if err != nil {
 				t.Fatalf("Lstat(installer package) error = %v", err)
 			}
@@ -603,8 +603,8 @@ func TestUpdaterDoesNotRetryFailedDEBInstallation(t *testing.T) {
 				return nil
 			}
 			installs.Add(1)
-			if len(args) != 5 || args[0] != "-o" || args[1] != "DPkg::Lock::Timeout=300" ||
-				args[2] != "install" || args[3] != "-y" {
+			if len(args) != 7 || args[0] != "-o" || args[1] != "DPkg::Lock::Timeout=300" ||
+				args[2] != "--no-install-recommends" || args[3] != "--no-remove" || args[4] != "install" || args[5] != "-y" {
 				t.Fatalf("installer arguments = %#v", args)
 			}
 			return installFailure
@@ -682,6 +682,9 @@ func TestAPKNativeSignatureVerificationIsReachableOnlyAfterManifestAndPackageVer
 					return nil
 				},
 			)
+			u.preflightNativeIdentity = func(context.Context) (nativeUpdateIdentity, error) {
+				return testCompatibilityUpdateIdentity("apk"), nil
+			}
 			u.lookPath = func(name string) (string, error) {
 				switch name {
 				case "apk":
@@ -709,67 +712,26 @@ func TestAPKNativeSignatureVerificationIsReachableOnlyAfterManifestAndPackageVer
 	}
 }
 
-func TestFinishUpgradeReturnsPartialAndMultipleActivationFailures(t *testing.T) {
+func TestFinishUpgradeNeverOverridesNativeActivationDisposition(t *testing.T) {
 	t.Parallel()
-
-	tests := []struct {
-		name       string
-		failures   map[string]error
-		wantErrors []string
-	}{
-		{
-			name: "partial service failure",
-			failures: map[string]error{
-				"/usr/bin/systemctl daemon-reload": errors.New("reload failed"),
-			},
-			wantErrors: []string{"reload systemd manager configuration", "reload failed"},
-		},
-		{
-			name: "multiple activation failures",
-			failures: map[string]error{
-				"/usr/bin/systemctl daemon-reload":          errors.New("reload failed"),
-				"/usr/bin/systemctl restart syswarden-core": errors.New("core failed"),
-			},
-			wantErrors: []string{
-				"reload systemd manager configuration", "reload failed",
-				"restart syswarden-core", "core failed",
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
+	for _, format := range []string{packageFormatDEB, packageFormatRPM, packageFormatAPK} {
+		t.Run(string(format), func(t *testing.T) {
 			var output bytes.Buffer
-			var calls atomic.Int32
+			cleanups := 0
 			u := &updater{
-				stdout: &output,
-				lookPath: func(name string) (string, error) {
-					if name == "systemctl" {
-						return "/usr/bin/systemctl", nil
-					}
-					return "", os.ErrNotExist
-				},
-				runCommand: func(_ context.Context, name string, args ...string) error {
-					calls.Add(1)
-					key := strings.Join(append([]string{name}, args...), " ")
-					return test.failures[key]
-				},
+				stdout:   &output,
+				lookPath: func(string) (string, error) { t.Fatal("unexpected service-manager lookup"); return "", nil },
+				installPackage: guardedTestNativeInstaller(false, func(context.Context, string, ...string) error {
+					t.Fatal("unexpected service-manager mutation")
+					return nil
+				}),
+				retireWebTUI: func() error { cleanups++; return nil },
 			}
-			err := u.finishUpgrade(t.Context(), packageTarget{os: "linux", format: packageFormatDEB})
-			if err == nil {
-				t.Fatal("finishUpgrade() accepted failed activation")
+			if err := u.finishUpgrade(t.Context(), packageTarget{os: "linux", format: format}); err != nil {
+				t.Fatal(err)
 			}
-			for _, expected := range test.wantErrors {
-				if !strings.Contains(err.Error(), expected) {
-					t.Errorf("finishUpgrade() error %q does not contain %q", err, expected)
-				}
-			}
-			if calls.Load() != 2 {
-				t.Errorf("activation command calls = %d, want 2", calls.Load())
-			}
-			if strings.Contains(output.String(), "completed successfully") {
-				t.Fatalf("failed activation printed a success message: %q", output.String())
+			if cleanups != 1 || !strings.Contains(output.String(), "does not establish service or firewall health") {
+				t.Fatalf("cleanup or outcome reporting failed: %d, %q", cleanups, output.String())
 			}
 		})
 	}
@@ -787,7 +749,7 @@ func TestFinishUpgradeReportsRetiredConfigurationCleanupFailure(t *testing.T) {
 			}
 			return "", os.ErrNotExist
 		},
-		runCommand: func(context.Context, string, ...string) error { return nil },
+		installPackage: guardedTestNativeInstaller(false, func(context.Context, string, ...string) error { return nil }),
 		retireWebTUI: func() error {
 			return errors.New("injected cleanup failure")
 		},
@@ -831,13 +793,57 @@ func testUpdater(
 	return testUpdaterForPlatform(client, tempBase, "linux", goarch, keys, runner)
 }
 
+// Existing runner fixtures observe the native command only after the updater's
+// required final descriptor guard. No test-only fallback exists in production.
+func guardedTestNativeInstaller(offline bool, runner commandRunner) nativePackageInstaller {
+	if runner == nil {
+		return nil
+	}
+	return func(ctx context.Context, target packageTarget, path string, beforeExecute func(context.Context) error) error {
+		if beforeExecute == nil {
+			return errors.New("test installer requires the final authenticated package guard")
+		}
+		if err := beforeExecute(ctx); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name, args := target.installer, target.installArguments(path)
+		if offline {
+			name, args = target.qualificationInstallCommand(path)
+		}
+		return runner(ctx, name, args...)
+	}
+}
+
 func testUpdaterForPlatform(
 	client *http.Client,
 	tempBase, goos, goarch string,
 	keys map[string]ed25519.PublicKey,
 	runner commandRunner,
 ) *updater {
+	candidateVersion := testUpdateVersion
+	candidateDigest := strings.Repeat("a", sha256.Size*2)
 	return &updater{
+		// Transport/workspace tests inject opaque package bytes and attestation
+		// evidence. Native parsing and the production gates have separate tests.
+		// These opaque transport fixtures model an independently classified candidate.
+		// Production APK classification and durable refusal have separate tests.
+		// Transport fixtures inject separately approved native authority; production has no bypass.
+		guardNativeActivation: func(context.Context, authenticatedAPKCandidate) error { return nil },
+		prepareAPKTransition:  func(context.Context, authenticatedAPKCandidate) error { return nil },
+		attestPackageIdentity: func(_ context.Context, _ packageTarget, version string, _ *os.File) error {
+			candidateVersion = version
+			return nil
+		},
+		attestCandidateCLI: func(context.Context, packageTarget, *os.File) (string, error) { return candidateDigest, nil },
+		attestInstalled: func(context.Context, packageTarget, int) (installedQualificationEvidence, error) {
+			return installedQualificationEvidence{version: candidateVersion, cliSHA256: candidateDigest}, nil
+		},
+		preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {
+			return testCompatibilityUpdateIdentity("dpkg-query"), nil
+		},
 		client:          client,
 		latestURL:       "https://updates.test/latest",
 		downloadBaseURL: "https://updates.test/download",
@@ -855,12 +861,13 @@ func testUpdaterForPlatform(
 			}
 			return "", os.ErrNotExist
 		},
-		runCommand:      runner,
+		installPackage:  guardedTestNativeInstaller(false, runner),
 		effectiveUID:    os.Geteuid(),
 		stdout:          io.Discard,
 		metadataTimeout: time.Second,
 		packageTimeout:  time.Second,
 		installTimeout:  time.Second,
+		attestTimeout:   time.Second,
 	}
 }
 
@@ -915,4 +922,25 @@ func readUpdaterTestFile(directory, name string) ([]byte, error) {
 	}
 	defer root.Close()
 	return root.ReadFile(name)
+}
+
+func TestOnlineUpdaterRefusesLateInstallerSuccessBeforeFinalization(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("authenticated installer deadline fixture")
+	manifest := testMarshalManifest(t, testUpdateManifest(t, testUpdateVersion, payload))
+	client := newUpdaterTestClient(manifest, testSignManifest(privateKey, manifest), payload)
+	executions, finalizations := 0, 0
+	temporary := t.TempDir()
+	u := testUpdater(client, temporary, "amd64", map[string]ed25519.PublicKey{testReleaseKeyID: publicKey},
+		func(ctx context.Context, _ string, _ ...string) error { executions++; <-ctx.Done(); return nil })
+	u.installTimeout = 50 * time.Millisecond
+	u.retireWebTUI = func() error { finalizations++; return nil }
+	err = u.run(t.Context())
+	if !errors.Is(err, context.DeadlineExceeded) || executions != 1 || finalizations != 0 {
+		t.Fatalf("expired installation result=%v, executions=%d finalizations=%d", err, executions, finalizations)
+	}
+	assertEmptyDirectory(t, temporary)
 }

@@ -593,3 +593,105 @@ func TestSSHRestoredRetirementRejectsChangedAuthorizationAndParser(t *testing.T)
 		})
 	}
 }
+
+// The partial forward history keeps both added-slot cases below the ordinary
+// retirement size limit. Refusal must come from purpose, not entry overflow.
+func TestSSHRestoredRetirementRefusesRestorationAccessSlots(t *testing.T) {
+	for _, name := range []string{sshRestoredAccessIssuanceName, sshRestoredAccessEvidenceName} {
+		t.Run(name, func(t *testing.T) {
+			f, plan, before, main, drop := preparationFixture(t)
+			prepared := fixturePreparation(t, plan, before, main, drop)
+			journal := fixtureJournal(t, f)
+			if err := journal.write(prepared); err != nil {
+				t.Fatal(err)
+			}
+			publication := sshPublicationDefaults()
+			publication.link = func(int, string, int, string, int) error { return unix.EIO }
+			if err := publishSSHConfiguration(t.Context(), journal, plan, main, drop, publicationFixtureParser(f),
+				func() error { return nil }, publication); !errors.Is(err, unix.EIO) {
+				t.Fatal("expected interrupted publication", err)
+			}
+			if err := errors.Join(journal.Close(), main.Close(), drop.Close()); err != nil {
+				t.Fatal(err)
+			}
+			journal = fixtureJournal(t, f)
+			if err := rollbackSSHConfiguration(t.Context(), journal, prepared.PlanSHA256, publicationFixtureParser(f),
+				func() error { return nil }, sshPublicationDefaults()); err != nil {
+				t.Fatal(err)
+			}
+			base, _, err := observeSSHRestoredFiles(journal.directory, journal.uid)
+			if err != nil || len(base) >= 13 {
+				t.Fatal("fixture does not exercise purpose gate below entry limit", len(base), err)
+			}
+			if _, _, err := inspectSSHRestoredHistory(journal); err != nil {
+				t.Fatal("ordinary rollback is not complete", err)
+			}
+			if err := journal.writeRecord(name, []byte("unverified orphan restoration access record")); err != nil {
+				t.Fatal(err)
+			}
+			capture := func(journal *sshJournal) map[string]string {
+				t.Helper()
+				names, err := sshDirectoryNames(journal.directory, 13)
+				if err != nil {
+					t.Fatal(err)
+				}
+				images := make(map[string]string, len(names))
+				for _, entry := range names {
+					image, err := readSSHPrivateChild(journal.directory, entry, journal.uid, maxSSHJournalBytes)
+					if err != nil {
+						t.Fatal(err)
+					}
+					images[entry] = sshImageDigest(image)
+				}
+				return images
+			}
+			records := capture(journal)
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			configuration, err := collectSSHRollback(f.root, os.Geteuid(), prepared.Transaction)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := fixtureOwner(t, f)
+			parent, err := openSSHStateParent(f.root, os.Geteuid())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parent.Close()
+			ownerImage, err := readSSHPrivateChild(parent, sshOwnerName, os.Geteuid(), maxSSHOwnerBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ops := sshProvisionDefaults()
+			ops.sync = func(*os.File) error { t.Fatal("refused retirement attempted synchronization"); return unix.EIO }
+			ops.rename = func(int, string, int, string, uint) error {
+				t.Fatal("refused retirement attempted rename")
+				return unix.EIO
+			}
+			if err := retireRestoredFixture(f, prepared, owner, ops); err == nil {
+				t.Fatal("file-only retirement adopted restoration access")
+			}
+			journal = fixtureJournal(t, f)
+			if after := capture(journal); !reflect.DeepEqual(records, after) {
+				t.Fatal("refusal changed journal records")
+			}
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			after, err := collectSSHRollback(f.root, os.Geteuid(), prepared.Transaction)
+			if err != nil || !reflect.DeepEqual(configuration, after) {
+				t.Fatal("refusal changed configuration or recovery candidates", err)
+			}
+			currentOwner, err := readSSHPrivateChild(parent, sshOwnerName, os.Geteuid(), maxSSHOwnerBytes)
+			if err != nil || !reflect.DeepEqual(ownerImage, currentOwner) {
+				t.Fatal("refusal changed owner image", err)
+			}
+			for _, suffix := range []string{"", ".owner.json", ".intent.json", ".complete.json"} {
+				if err := sshChildAbsent(parent, sshRestoredPrefix+owner.Instance+suffix); err != nil {
+					t.Fatal("refusal created retirement archive", suffix, err)
+				}
+			}
+		})
+	}
+}

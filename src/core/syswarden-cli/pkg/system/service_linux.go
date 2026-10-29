@@ -40,9 +40,26 @@ pidfile="/run/syswarden-core.pid"
 retry="TERM/5/KILL/5"
 
 depend() {
+	after rsyslog
+	need net syswarden-firewall
+}
+`
+
+	historicalV4104OpenRCCoreService = `#!/sbin/openrc-run
+
+name="syswarden-core"
+description="SYSWARDEN WAF and Core Engine"
+command="/opt/syswarden/bin/syswarden-core"
+command_background=true
+pidfile="/run/syswarden-core.pid"
+retry="TERM/5/KILL/5"
+
+depend() {
 	need net rsyslog syswarden-firewall
 }
 `
+	historicalV4104OpenRCCoreServiceLength = 261
+	historicalV4104OpenRCCoreServiceSHA256 = "99adff6d6bcb6c5f0fad472e11668d3f8f4e19136c3b3ce473493101db136558"
 
 	historicalV4028OpenRCCoreService = `#!/sbin/openrc-run
 
@@ -66,6 +83,24 @@ name="syswarden-firewall"
 description="SYSWARDEN Firewall Persistence & Engine Loader"
 
 depend() {
+	after rsyslog
+	need net cronie
+	before syswarden-core
+}
+
+start() {
+	ebegin "Loading SYSWARDEN Firewall Persistence"
+	/opt/syswarden/bin/syswarden-cli reload --no-restart
+	eend $?
+}
+`
+
+	historicalV4104OpenRCFirewallService = `#!/sbin/openrc-run
+
+name="syswarden-firewall"
+description="SYSWARDEN Firewall Persistence & Engine Loader"
+
+depend() {
 	need net rsyslog cronie
 	before syswarden-core
 }
@@ -76,7 +111,9 @@ start() {
 	eend $?
 }
 `
-	historicalV4028OpenRCFirewallService = `#!/sbin/openrc-run
+	historicalV4104OpenRCFirewallServiceLength = 294
+	historicalV4104OpenRCFirewallServiceSHA256 = "d8c57c59dae9493523275026acb2a5c599bd4949ff8993add6760e725f89a5ba"
+	historicalV4028OpenRCFirewallService       = `#!/sbin/openrc-run
 
 name="syswarden-firewall"
 description="SYSWARDEN Firewall Persistence & Engine Loader"
@@ -2042,18 +2079,24 @@ func publishServiceArtifacts(artifacts []serviceArtifact) error {
 }
 
 func publishOpenRCServices() error {
-	return publishServiceArtifacts([]serviceArtifact{
+	return publishOpenRCServicesWithEnablement(true)
+}
+
+func publishOpenRCServicesWithEnablement(enable bool) error {
+	return publishInstallationServiceArtifacts(enable, []serviceArtifact{
 		{
 			path: filepath.Join(serviceOpenRCUnitDir, "syswarden-core"), content: openRCCoreService, mode: 0755,
 			historicalContent:       historicalV4028OpenRCCoreService,
 			historicalContentLength: historicalV4028OpenRCCoreServiceLength,
 			historicalContentSHA256: historicalV4028OpenRCCoreServiceSHA256,
+			historicalAlternates:    []historicalServiceContent{{historicalV4104OpenRCCoreService, historicalV4104OpenRCCoreServiceLength, historicalV4104OpenRCCoreServiceSHA256}},
 		},
 		{
 			path: filepath.Join(serviceOpenRCUnitDir, "syswarden-firewall"), content: openRCFirewallService, mode: 0755,
 			historicalContent:       historicalV4028OpenRCFirewallService,
 			historicalContentLength: historicalV4028OpenRCFirewallServiceLength,
 			historicalContentSHA256: historicalV4028OpenRCFirewallServiceSHA256,
+			historicalAlternates:    []historicalServiceContent{{historicalV4104OpenRCFirewallService, historicalV4104OpenRCFirewallServiceLength, historicalV4104OpenRCFirewallServiceSHA256}},
 		},
 		{path: filepath.Join(serviceOpenRCRunlevelDir, "syswarden-core"), target: "/etc/init.d/syswarden-core"},
 		{path: filepath.Join(serviceOpenRCRunlevelDir, "syswarden-firewall"), target: "/etc/init.d/syswarden-firewall"},
@@ -2069,12 +2112,16 @@ func publishSystemdServices() error {
 }
 
 func publishSystemdServicesWithCore(content string) error {
+	return publishSystemdServicesWithEnablement(content, true)
+}
+
+func publishSystemdServicesWithEnablement(content string, enable bool) error {
 	if content != systemdCoreService && content != historicalV4043SystemdCoreService {
 		return fmt.Errorf("refusing unknown core service publication content")
 	}
 	coreUnitPath := filepath.Join(serviceSystemdUnitDir, "syswarden-core.service")
 	firewallUnitPath := filepath.Join(serviceSystemdUnitDir, "syswarden-firewall.service")
-	return publishServiceArtifacts([]serviceArtifact{
+	return publishInstallationServiceArtifacts(enable, []serviceArtifact{
 		{
 			path: coreUnitPath, content: content, mode: sourceSystemdUnitMode,
 			historicalContent:       historicalV4028SystemdCoreService,
@@ -2146,8 +2193,21 @@ func PreflightSystemdFirewallOrdering() error {
 	return attestSystemdFirewallOrderingBeforeActivation()
 }
 
-// SetupService publishes and enables the two native SysWarden services.
+// SetupService handles an explicit non-package installation. Native installation
+// carries the pair observation made before any automatic host mutation.
 func SetupService() error {
+	plan, err := PrepareNativeServiceInstallation()
+	if err != nil {
+		return err
+	}
+	return SetupServiceWithInstallation(plan)
+}
+
+func SetupServiceWithInstallation(plan *NativeServiceInstallation) error {
+	if err := plan.Revalidate(); err != nil {
+		return err
+	}
+	enable := plan == nil || plan.fresh
 	alpine := IsAlpine()
 	managerState, err := classifyServiceManagerRuntime(alpine)
 	if err != nil {
@@ -2165,12 +2225,15 @@ func SetupService() error {
 
 	if alpine {
 		fmt.Println("[INFO] Configuring OpenRC services (Alpine Linux)...")
-		if err := publishOpenRCServices(); err != nil {
+		if err := publishOpenRCServicesWithEnablement(enable); err != nil {
 			return fmt.Errorf("publish OpenRC services: %w", err)
 		}
 		if managerState == serviceManagerOffline {
 			fmt.Println("[INFO] OpenRC runtime is offline; service start is deferred to boot.")
 			return nil
+		}
+		if !enable {
+			return plan.activateExisting(runServiceManagerCommand)
 		}
 		if err := activateOpenRCService(runServiceManagerCommand, "syswarden-firewall", "start"); err != nil {
 			return err
@@ -2186,12 +2249,19 @@ func SetupService() error {
 	if err := attestSystemdFirewallOrderingBeforeActivation(); err != nil {
 		return err
 	}
-	if err := publishSystemdServices(); err != nil {
+	content, err := selectedSystemdCoreServiceContent(hostFirewallExecutor())
+	if err != nil {
+		return err
+	}
+	if err := publishSystemdServicesWithEnablement(content, enable); err != nil {
 		return fmt.Errorf("publish systemd services: %w", err)
 	}
 	if managerState == serviceManagerOffline {
 		fmt.Println("[INFO] systemd runtime is offline; service start is deferred to boot.")
 		return nil
+	}
+	if !enable {
+		return plan.activateExisting(runServiceManagerCommand)
 	}
 	if err := activateSystemdService(runServiceManagerCommand, "syswarden-firewall.service", false); err != nil {
 		return err

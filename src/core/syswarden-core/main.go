@@ -22,6 +22,8 @@ import (
 	"syswarden-core/telemetry"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/spf13/viper"
 )
 
 const (
@@ -157,16 +159,20 @@ func main() {
 	}
 	defer closeRuntimeHistory()
 
-	// Load WAAP Config to get global threshold defaults
-	waapConfig := network.LoadWAAPConfig()
-
-	// Initialize Threat Engine
-	threatEngine, err := engine.NewEngine(runtimepaths.Signatures(), waapConfig.Threshold, int(waapConfig.Window.Seconds()))
-	if err != nil {
-		haStartupLease.Close()
-		log.Fatalf("[SYSWARDEN-Core] Failed to initialize threat engine: %v", err)
+	// The maintenance runtime keeps expiry, HA and control ownership alive even
+	// when optional detection and log ingestion have not been selected.
+	waapEnabled := viper.GetBool("waap.enabled")
+	bridgeEnabled := viper.GetBool("waap.log_bridge_enabled")
+	var threatEngine *engine.Engine
+	if waapEnabled {
+		waapConfig := network.LoadWAAPConfig()
+		threatEngine, err = engine.NewEngine(runtimepaths.Signatures(), waapConfig.Threshold, int(waapConfig.Window.Seconds()))
+		if err != nil {
+			haStartupLease.Close()
+			log.Fatalf("[SYSWARDEN-Core] Failed to initialize threat engine: %v", err)
+		}
+		log.Printf("[SYSWARDEN-Core] Loaded %d threat signatures", threatEngine.RuleCount())
 	}
-	log.Printf("[SYSWARDEN-Core] Loaded %d threat signatures", threatEngine.RuleCount())
 
 	// Start HA before exposing any daemon-originated firewall writer. In HA v2
 	// mode this returns the fail-closed replicated manager used by every worker.
@@ -181,10 +187,12 @@ func main() {
 	}
 	defer controlServer.Stop()
 
-	// Initialize Unix Domain Socket
-	udsServer := network.NewUDSServer(ctx, "/var/run/syswarden.sock", threatEngine, fwManager, telemetryLogger)
-	if err := udsServer.Start(); err != nil {
-		log.Fatalf("[SYSWARDEN-Core] Failed to start UDS server: %v", err)
+	var udsServer *network.UDSServer
+	if waapEnabled && bridgeEnabled {
+		udsServer = network.NewUDSServer(ctx, "/var/run/syswarden.sock", threatEngine, fwManager, telemetryLogger)
+		if err := udsServer.Start(); err != nil {
+			log.Fatalf("[SYSWARDEN-Core] Failed to start UDS server: %v", err)
+		}
 	}
 
 	// Start Native Telemetry Worker
@@ -205,29 +213,32 @@ func main() {
 			ObservationDisposition:  evidence.ObservationDisposition,
 		}
 	}
-	telemetry.StartWorker(
-		ctx,
-		&wg,
-		fwManager,
-		telemetryLogger.LogAllowed,
-		func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
-			telemetryLogger.LogBanWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
-		},
-		func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
-			telemetryLogger.LogShadowAlertWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
-		},
-		func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
-			telemetryLogger.LogDetectedWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
-		},
-	)
+	if viper.GetBool("security.detection_enabled") {
+		telemetry.StartWorker(
+			ctx,
+			&wg,
+			fwManager,
+			telemetryLogger.LogAllowed,
+			func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
+				telemetryLogger.LogShadowAlertWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
+			},
+			func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
+				telemetryLogger.LogDetectedWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
+			},
+		)
+
+	}
 
 	// Start SaaS Monitors Downloader
 	saasDownloader := network.NewSaasMonitorDownloader(telemetryLogger)
 	saasDownloader.Start()
 
 	// Start L7 WAAP Analytics Engine (Log Forwarder)
-	waapEngine := network.NewWAAPEngine(fwManager, telemetryLogger, threatEngine)
-	waapEngine.StartContext(ctx)
+	var waapEngine *network.WAAPEngine
+	if waapEnabled {
+		waapEngine = network.NewWAAPEngine(fwManager, telemetryLogger, threatEngine)
+		waapEngine.StartContext(ctx)
+	}
 
 	// Start the selected local hardening checks. These checks are not a
 	// compliance assessment.
@@ -241,8 +252,12 @@ func main() {
 	log.Println("[SYSWARDEN-Core] Shutting down gracefully...")
 	cancel()
 	controlServer.Stop()
-	udsServer.Stop()
+	if udsServer != nil {
+		udsServer.Stop()
+	}
 	wg.Wait()
-	waapEngine.Wait()
+	if waapEngine != nil {
+		waapEngine.Wait()
+	}
 	telemetryLogger.Close()
 }

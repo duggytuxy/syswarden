@@ -2,8 +2,6 @@ package config
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,8 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-
-	"github.com/spf13/viper"
 )
 
 const userModuleName = "99-user.toml"
@@ -35,6 +31,8 @@ var (
 )
 
 type mergedConfigSnapshot struct {
+	report          ValidationReport
+	effects         []ConfigurationEffect
 	configRootInfo  os.FileInfo
 	modulesRootInfo os.FileInfo
 	marker          *secureFileIdentity
@@ -127,146 +125,13 @@ func writeValidatedUserModuleLocked(configDir string, content []byte, expected *
 }
 
 func validateModularUserCandidate(configDir string, userContent []byte, expectedUser *secureFileIdentity) (*mergedConfigSnapshot, error) {
-	if err := rejectOperatorPolicyEnvironment(); err != nil {
-		return nil, err
-	}
-	root, err := openConfigDirectory(configDir, false, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = root.Close() }()
-	configRootInfo, err := rootDirectoryInfo(root)
-	if err != nil {
-		return nil, err
-	}
-	markerIdentity, err := readOptionalSecureFileIdentity(
-		root,
-		migrationMarkerName,
-		filepath.Join(configDir, migrationMarkerName),
-	)
-	if err != nil {
-		return nil, err
-	}
-	if markerIdentity != nil {
-		return nil, fmt.Errorf("configuration migration is incomplete; rerun syswarden migrate-config before editing operator state")
-	}
-
-	v := viper.New()
-	v.SetConfigType("toml")
-	setDefaults(v, configDir)
-	var masterIdentity *secureFileIdentity
-	if _, err := root.Lstat("config.toml"); err == nil {
-		content, identity, readErr := readSecureRegularFileIdentity(root, "config.toml", filepath.Join(configDir, "config.toml"))
-		if readErr != nil {
-			return nil, readErr
-		}
-		if _, err := parseTOMLDocument(content, "config.toml"); err != nil {
-			return nil, err
-		}
-		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
-			return nil, err
-		}
-		masterIdentity = identity
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, err
-	}
-
-	modulesDir := filepath.Join(configDir, "modules")
-	modulesRoot, err := openConfigDirectory(modulesDir, false, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = modulesRoot.Close() }()
-	modulesRootInfo, err := rootDirectoryInfo(modulesRoot)
-	if err != nil {
-		return nil, err
-	}
-	directory, err := modulesRoot.Open(".")
-	if err != nil {
-		return nil, err
-	}
-	entries, err := directory.ReadDir(-1)
-	_ = directory.Close()
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	snapshot := &mergedConfigSnapshot{
-		configRootInfo:  configRootInfo,
-		modulesRootInfo: modulesRootInfo,
-		marker:          markerIdentity,
-		master:          masterIdentity,
-		modules:         make(map[string]*secureFileIdentity),
-		user:            expectedUser,
-	}
-	mergedUser := false
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".toml" {
-			continue
-		}
-		snapshot.moduleNames = append(snapshot.moduleNames, entry.Name())
-		content, identity, readErr := readSecureRegularFileIdentity(modulesRoot, entry.Name(), filepath.Join(modulesDir, entry.Name()))
-		if readErr != nil {
-			return nil, readErr
-		}
-		var previousUserContent []byte
-		if entry.Name() == userModuleName {
-			if expectedUser == nil || !expectedUser.matches(content, identity.info) {
-				return nil, fmt.Errorf("operator user module changed before merged validation")
-			}
-			previousUserContent = content
-			content = userContent
-			mergedUser = true
-		} else {
-			snapshot.modules[entry.Name()] = identity
-		}
-		relative := filepath.ToSlash(filepath.Join("modules", entry.Name()))
-		document, err := parseTOMLDocument(content, relative)
-		if err != nil {
-			return nil, err
-		}
-		if entry.Name() == userModuleName {
-			if err := rejectNewRetiredUnspecifiedWhitelistEntries(previousUserContent, document); err != nil {
-				return nil, err
-			}
-		}
-		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
-			return nil, fmt.Errorf("merge module %s: %w", entry.Name(), err)
-		}
-	}
-	if !mergedUser {
-		if expectedUser != nil {
-			return nil, fmt.Errorf("operator user module disappeared before merged validation")
-		}
-		document, err := parseTOMLDocument(userContent, filepath.ToSlash(filepath.Join("modules", userModuleName)))
-		if err != nil {
-			return nil, err
-		}
-		if err := rejectNewRetiredUnspecifiedWhitelistEntries(nil, document); err != nil {
-			return nil, err
-		}
-		if err := v.MergeConfig(bytes.NewReader(userContent)); err != nil {
-			return nil, fmt.Errorf("merge new operator module: %w", err)
-		}
-	}
-	var candidate ModularConfig
-	if err := v.Unmarshal(&candidate); err != nil {
-		return nil, err
-	}
-	neutralizeRetiredUnspecifiedWhitelistConfig(&candidate)
-	if err := validateConfig(&candidate); err != nil {
-		return nil, err
-	}
-	if err := snapshot.revalidate(configDir, false, nil); err != nil {
-		return nil, fmt.Errorf("configuration changed during merged validation: %w", err)
-	}
-	return snapshot, nil
+	return validateModuleCandidate(configDir, userTOMLTarget(), userContent, expectedUser)
 }
 
-func rejectNewRetiredUnspecifiedWhitelistEntries(previousContent []byte, candidate map[string]any) error {
+func rejectNewRetiredUnspecifiedWhitelistEntriesAt(relative string, previousContent []byte, candidate map[string]any) error {
 	previous := map[string]int{}
 	if len(previousContent) != 0 {
-		if document, err := parseTOMLDocument(previousContent, filepath.ToSlash(filepath.Join("modules", userModuleName))); err == nil {
+		if document, err := parseTOMLDocument(previousContent, relative); err == nil {
 			previous = retiredUnspecifiedWhitelistEntryCounts(document)
 		}
 	}
@@ -274,8 +139,8 @@ func rejectNewRetiredUnspecifiedWhitelistEntries(previousContent []byte, candida
 	for _, value := range []string{"0.0.0.0", "0.0.0.0/32"} {
 		if candidateCounts[value] > previous[value] {
 			return fmt.Errorf(
-				"modules/%s cannot add retired network.whitelist_ips value %q; remove it because exact IGMP control traffic is handled internally",
-				userModuleName,
+				"%s cannot add retired network.whitelist_ips value %q; remove it because exact IGMP control traffic is handled internally",
+				relative,
 				value,
 			)
 		}
@@ -350,6 +215,14 @@ func (snapshot *mergedConfigSnapshot) revalidateMigrationMarker(configDir string
 }
 
 func (snapshot *mergedConfigSnapshot) revalidate(configDir string, published bool, publishedContent []byte) error {
+	target := tomlEditTarget{}
+	if published {
+		target = userTOMLTarget()
+	}
+	return snapshot.revalidateTarget(configDir, target, publishedContent)
+}
+
+func (snapshot *mergedConfigSnapshot) revalidateTarget(configDir string, publishedTarget tomlEditTarget, publishedContent []byte) error {
 	if snapshot == nil {
 		return fmt.Errorf("merged configuration snapshot is missing")
 	}
@@ -370,7 +243,11 @@ func (snapshot *mergedConfigSnapshot) revalidate(configDir string, published boo
 	); err != nil {
 		return err
 	}
-	if err := revalidateOptionalSecureFile(root, "config.toml", filepath.Join(configDir, "config.toml"), snapshot.master); err != nil {
+	if publishedTarget.master {
+		if err := revalidatePublishedTOML(root, "config.toml", filepath.Join(configDir, "config.toml"), publishedContent); err != nil {
+			return err
+		}
+	} else if err := revalidateOptionalSecureFile(root, "config.toml", filepath.Join(configDir, "config.toml"), snapshot.master); err != nil {
 		return err
 	}
 
@@ -388,7 +265,7 @@ func (snapshot *mergedConfigSnapshot) revalidate(configDir string, published boo
 	if err != nil {
 		return err
 	}
-	entries, err := directory.ReadDir(-1)
+	entries, err := readBoundedEditEntries(directory)
 	_ = directory.Close()
 	if err != nil {
 		return err
@@ -401,50 +278,68 @@ func (snapshot *mergedConfigSnapshot) revalidate(configDir string, published boo
 	}
 	sort.Strings(names)
 	expectedNames := append([]string(nil), snapshot.moduleNames...)
-	if published && snapshot.user == nil {
-		expectedNames = append(expectedNames, userModuleName)
+	if publishedTarget.relative != "" && !publishedTarget.master && snapshot.identity(publishedTarget) == nil {
+		expectedNames = append(expectedNames, publishedTarget.name)
 		sort.Strings(expectedNames)
 	}
 	if !reflect.DeepEqual(names, expectedNames) {
 		return fmt.Errorf("TOML module inventory changed during user-module transaction")
 	}
 	for name, identity := range snapshot.modules {
+		if publishedTarget.relative != "" && !publishedTarget.master && name == publishedTarget.name {
+			continue
+		}
 		if err := revalidateOptionalSecureFile(modulesRoot, name, filepath.Join(modulesDir, name), identity); err != nil {
 			return err
 		}
 	}
-	if published {
-		content, _, err := readSecureRegularFileSnapshot(modulesRoot, userModuleName, filepath.Join(modulesDir, userModuleName))
-		if err != nil {
+	if publishedTarget.relative != "" && !publishedTarget.master {
+		if err := revalidatePublishedTOML(modulesRoot, publishedTarget.name, filepath.Join(modulesDir, publishedTarget.name), publishedContent); err != nil {
 			return err
 		}
-		if !bytes.Equal(content, publishedContent) {
-			return fmt.Errorf("published operator user module changed during commit")
+		if publishedTarget.name == userModuleName {
+			return nil
 		}
-		return nil
 	}
+
 	return revalidateOptionalSecureFile(modulesRoot, userModuleName, filepath.Join(modulesDir, userModuleName), snapshot.user)
 }
 
-func sameFileAndMode(expected, current os.FileInfo) bool {
-	return expected != nil && current != nil && os.SameFile(expected, current) && expected.Mode() == current.Mode()
-}
-
-func revalidateOptionalSecureFile(root *os.Root, name, displayPath string, expected *secureFileIdentity) error {
-	content, info, err := readSecureRegularFileSnapshot(root, name, displayPath)
-	if expected == nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		if err == nil {
-			return fmt.Errorf("configuration file %s appeared during user-module transaction", displayPath)
-		}
-		return err
-	}
+func revalidatePublishedTOML(root *os.Root, name, path string, expected []byte) error {
+	content, _, err := readSecureRegularFileSnapshotBounded(root, name, path, max(int64(len(expected)), 1))
 	if err != nil {
 		return err
 	}
-	if !expected.matches(content, info) {
+	if !bytes.Equal(content, expected) {
+		return fmt.Errorf("published configuration file %s changed during commit", name)
+	}
+	return nil
+}
+
+func sameFileAndMode(expected, current os.FileInfo) bool {
+	if expected == nil || current == nil {
+		return false
+	}
+	expectedUID, expectedGID, expectedOK := fileOwnerUIDGID(expected)
+	currentUID, currentGID, currentOK := fileOwnerUIDGID(current)
+	return expectedOK && currentOK && expectedUID == currentUID && expectedGID == currentGID && os.SameFile(expected, current) && expected.Mode() == current.Mode()
+}
+
+func revalidateOptionalSecureFile(root *os.Root, name, displayPath string, expected *secureFileIdentity) error {
+	if expected == nil {
+		if _, err := root.Lstat(name); errors.Is(err, fs.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		return fmt.Errorf("configuration file %s appeared during user-module transaction", displayPath)
+	}
+	content, info, err := readSecureRegularFileSnapshotBounded(root, name, displayPath, max(expected.info.Size(), 1))
+
+	if err != nil {
+		return err
+	}
+	if !expected.matches(content, info) || !sameSecureFileMetadata(expected.info, info) {
 		return fmt.Errorf("configuration file %s changed during user-module transaction", displayPath)
 	}
 	return nil
@@ -460,255 +355,7 @@ func replaceSecureFileAtomicallyIfUnchangedValidated(
 	expected *secureFileIdentity,
 	preCommit, prePublish, postCommit func() error,
 ) error {
-	root, err := openConfigDirectory(directory, false, 0)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
-	randomSuffix := make([]byte, 16)
-	if _, err := rand.Read(randomSuffix); err != nil {
-		return err
-	}
-	suffix := hex.EncodeToString(randomSuffix)
-	temporaryName := "." + name + ".tmp-" + suffix
-	backupName := "." + name + ".rollback-" + suffix
-	temporary, err := root.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return err
-	}
-	temporaryOpen := true
-	backupExists := false
-	preserveBackup := false
-	defer func() {
-		if temporaryOpen {
-			_ = temporary.Close()
-		}
-		_ = root.Remove(temporaryName)
-		if backupExists && !preserveBackup {
-			_ = root.Remove(backupName)
-		}
-	}()
-	if expected != nil && expected.info != nil {
-		uid, gid, ok := fileOwnerUIDGID(expected.info)
-		if !ok {
-			return fmt.Errorf("capture existing secure file ownership")
-		}
-		if err := applySecureFileOwnership(temporary, int(uid), int(gid)); err != nil {
-			return fmt.Errorf("preserve existing secure file ownership: %w", err)
-		}
-		// Apply the mode after chown because some kernels clear special mode bits
-		// when ownership changes.
-		if err := temporary.Chmod(expected.info.Mode().Perm()); err != nil {
-			return err
-		}
-	}
-	if _, err := temporary.Write(content); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	temporaryInfo, err := temporary.Stat()
-	if err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	temporaryOpen = false
-
-	revalidateDestination := func() error {
-		currentContent, currentInfo, readErr := readSecureRegularFileSnapshot(root, name, filepath.Join(directory, name))
-		if expected == nil {
-			if errors.Is(readErr, fs.ErrNotExist) {
-				return nil
-			}
-			if readErr == nil {
-				return fmt.Errorf("secure file appeared before publish")
-			}
-			return readErr
-		}
-		if readErr != nil || !expected.matches(currentContent, currentInfo) {
-			return fmt.Errorf("secure file changed before publish")
-		}
-		return nil
-	}
-	if err := revalidateDestination(); err != nil {
-		return err
-	}
-	if preCommit != nil {
-		if err := preCommit(); err != nil {
-			return fmt.Errorf("pre-commit configuration CAS: %w", err)
-		}
-	}
-	if err := revalidateDestination(); err != nil {
-		return err
-	}
-
-	restoreBackup := func() error {
-		if !backupExists {
-			return nil
-		}
-		if _, err := root.Lstat(name); err == nil {
-			preserveBackup = true
-			return fmt.Errorf("destination reappeared before rollback")
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			preserveBackup = true
-			return err
-		}
-		if err := root.Link(backupName, name); err != nil {
-			preserveBackup = true
-			return err
-		}
-		if err := root.Remove(backupName); err != nil {
-			preserveBackup = true
-			return err
-		}
-		backupExists = false
-		return nil
-	}
-	restoreBackupAfterPublishConflict := func() error {
-		if !backupExists {
-			return nil
-		}
-		conflictName := "." + name + ".conflict-" + suffix
-		if _, err := root.Lstat(conflictName); err == nil {
-			preserveBackup = true
-			return fmt.Errorf("operator-module conflict quarantine already exists")
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			preserveBackup = true
-			return err
-		}
-		conflictInfo, err := root.Lstat(name)
-		if errors.Is(err, fs.ErrNotExist) {
-			return restoreBackup()
-		}
-		if err != nil {
-			preserveBackup = true
-			return err
-		}
-		if err := root.Rename(name, conflictName); err != nil {
-			preserveBackup = true
-			return fmt.Errorf("quarantine conflicting operator-module publication: %w", err)
-		}
-		quarantined, err := root.Lstat(conflictName)
-		if err != nil || !os.SameFile(conflictInfo, quarantined) {
-			preserveBackup = true
-			return fmt.Errorf("conflicting operator-module inode changed during quarantine")
-		}
-		// The previous operator inode remains authoritative until this writer has
-		// committed. In particular, a migration that observed the temporary name
-		// gap must not make its generated 99-user.toml effective.
-		if err := root.Rename(backupName, name); err != nil {
-			preserveBackup = true
-			_ = root.Rename(conflictName, name)
-			return fmt.Errorf("restore previous operator module after publication conflict: %w", err)
-		}
-		backupExists = false
-		restoredContent, restoredInfo, err := readSecureRegularFileSnapshot(root, name, filepath.Join(directory, name))
-		if err != nil || expected == nil || !expected.matches(restoredContent, restoredInfo) {
-			return fmt.Errorf("restored operator module failed identity verification")
-		}
-		if err := root.Remove(conflictName); err != nil {
-			return fmt.Errorf("remove conflicting operator-module inode: %w", err)
-		}
-		return syncRootDirectory(root)
-	}
-	if expected != nil {
-		if err := root.Rename(name, backupName); err != nil {
-			return fmt.Errorf("quarantine previous operator module: %w", err)
-		}
-		backupExists = true
-		backupContent, backupInfo, readErr := readSecureRegularFileSnapshot(root, backupName, filepath.Join(directory, backupName))
-		if readErr != nil || !expected.matches(backupContent, backupInfo) {
-			restoreErr := restoreBackup()
-			return fmt.Errorf("secure file changed while quarantining previous inode (restore: %v)", restoreErr)
-		}
-	}
-	if prePublish != nil {
-		if err := prePublish(); err != nil {
-			restoreErr := restoreBackup()
-			return fmt.Errorf("pre-publication configuration CAS: %w (restore: %v)", err, restoreErr)
-		}
-	}
-	// Link is the no-replace publication primitive. A destination created after
-	// the last CAS check is never overwritten by the candidate. When replacing
-	// an existing operator module, however, the quarantined previous inode stays
-	// authoritative until commit and is restored over the conflicting publish.
-	if err := root.Link(temporaryName, name); err != nil {
-		restoreErr := restoreBackupAfterPublishConflict()
-		return fmt.Errorf("publish operator module without replacement: %w (restore: %v)", err, restoreErr)
-	}
-
-	rollback := func() error {
-		failedName := "." + name + ".failed-" + suffix
-		if err := root.Rename(name, failedName); err != nil {
-			if backupExists {
-				preserveBackup = true
-			}
-			return fmt.Errorf("quarantine published inode for rollback: %w", err)
-		}
-		failed, statErr := root.Lstat(failedName)
-		if statErr != nil || !os.SameFile(temporaryInfo, failed) {
-			if _, err := root.Lstat(name); errors.Is(err, fs.ErrNotExist) {
-				if linkErr := root.Link(failedName, name); linkErr == nil {
-					_ = root.Remove(failedName)
-				}
-			}
-			if backupExists {
-				preserveBackup = true
-			}
-			return fmt.Errorf("published inode changed before rollback")
-		}
-		if err := restoreBackup(); err != nil {
-			return err
-		}
-		if err := root.Remove(failedName); err != nil {
-			return err
-		}
-		return syncRootDirectory(root)
-	}
-	if err := root.Remove(temporaryName); err != nil {
-		rollbackErr := rollback()
-		return fmt.Errorf("remove operator module publication link: %w (rollback: %v)", err, rollbackErr)
-	}
-	if err := syncRootDirectory(root); err != nil {
-		rollbackErr := rollback()
-		return fmt.Errorf("sync operator module replacement: %w (rollback: %v)", err, rollbackErr)
-	}
-	revalidatePublishedInode := func() error {
-		current, err := root.Lstat(name)
-		temporaryUID, temporaryGID, temporaryOwnerOK := fileOwnerUIDGID(temporaryInfo)
-		currentUID, currentGID, currentOwnerOK := fileOwnerUIDGID(current)
-		if err != nil || !os.SameFile(temporaryInfo, current) || current.Mode() != temporaryInfo.Mode() ||
-			!temporaryOwnerOK || !currentOwnerOK || temporaryUID != currentUID || temporaryGID != currentGID {
-			return fmt.Errorf("published operator-module inode changed during commit")
-		}
-		return nil
-	}
-	if err := revalidatePublishedInode(); err != nil {
-		rollbackErr := rollback()
-		return fmt.Errorf("post-publication inode CAS: %w (rollback: %v)", err, rollbackErr)
-	}
-	if postCommit != nil {
-		if err := postCommit(); err != nil {
-			rollbackErr := rollback()
-			return fmt.Errorf("post-commit configuration CAS: %w (rollback: %v)", err, rollbackErr)
-		}
-	}
-	if err := revalidatePublishedInode(); err != nil {
-		rollbackErr := rollback()
-		return fmt.Errorf("post-commit inode CAS: %w (rollback: %v)", err, rollbackErr)
-	}
-	if expected != nil {
-		if err := root.Remove(backupName); err != nil {
-			rollbackErr := rollback()
-			return fmt.Errorf("remove operator module rollback inode: %w (rollback: %v)", err, rollbackErr)
-		}
-		backupExists = false
-	}
-	_ = syncRootDirectory(root)
-	return nil
+	return replaceSecureConfigFile(directory, name, content, expected, preCommit, prePublish, postCommit)
 }
 
 func updateProfileInUserModule(content []byte, profileName string) []byte {
@@ -729,7 +376,8 @@ func updateProfileInUserModule(content []byte, profileName string) []byte {
 				inUserBlock = false
 			}
 		}
-		if inUserBlock && strings.HasPrefix(trimmed, "profile_name") {
+		key, _, assignment := strings.Cut(trimmed, "=")
+		if inUserBlock && assignment && strings.TrimSpace(key) == "profile_name" {
 			updated = append(updated, fmt.Sprintf("profile_name = %q", profileName))
 			profileSet = true
 			continue

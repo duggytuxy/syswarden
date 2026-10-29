@@ -35,12 +35,21 @@ type qualificationFixture struct {
 
 func newQualificationFixture(t *testing.T) qualificationFixture {
 	t.Helper()
+	return newVersionedQualificationFixture(t, testQualificationCandidate)
+}
+
+func newVersionedQualificationFixture(t *testing.T, version string) qualificationFixture {
+	t.Helper()
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := []byte("authenticated v4.10.0 qualification package")
-	manifest := testUpdateManifest(t, testQualificationCandidate, payload)
+	payload := []byte("authenticated " + version + " qualification package")
+	manifest := testUpdateManifest(t, version, payload)
+	packageName, err := packageFilename(version, packageFormatDEB, "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
 	bundle := filepath.Join(t.TempDir(), "bundle")
 	if err := os.Mkdir(bundle, 0700); err != nil {
 		t.Fatal(err)
@@ -49,7 +58,7 @@ func newQualificationFixture(t *testing.T) qualificationFixture {
 	files := map[string][]byte{
 		updateManifestAssetName:          manifestBytes,
 		updateManifestSignatureAssetName: testSignManifest(privateKey, manifestBytes),
-		"syswarden_4.10.0_amd64.deb":     payload,
+		packageName:                      payload,
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(bundle, name), content, 0600); err != nil {
@@ -73,6 +82,17 @@ func qualificationTestUpdater(
 	output := new(bytes.Buffer)
 	var attestationCalls atomic.Int32
 	u := &updater{
+		// Bundle/workspace tests model attestors independently; real native
+		// header parsing and refusal before installation have separate tests.
+		// These opaque transport fixtures model an independently classified candidate.
+		// Production APK classification and durable refusal have separate tests.
+		// Transport fixtures inject separately approved native authority; production has no bypass.
+		guardNativeActivation: func(context.Context, authenticatedAPKCandidate) error { return nil },
+		prepareAPKTransition:  func(context.Context, authenticatedAPKCandidate) error { return nil },
+		attestPackageIdentity: func(context.Context, packageTarget, string, *os.File) error { return nil },
+		preflightNativeIdentity: func(context.Context) (nativeUpdateIdentity, error) {
+			return testCompatibilityUpdateIdentity("dpkg-query"), nil
+		},
 		// A hostile client is deliberately present. The offline path must never
 		// reach it, even though the candidate CLI itself is network-capable.
 		client: staticHTTPClient(func(*http.Request) (*http.Response, error) {
@@ -98,7 +118,7 @@ func qualificationTestUpdater(
 				return "", os.ErrNotExist
 			}
 		},
-		runCommand: func(_ context.Context, name string, arguments ...string) error {
+		installPackage: guardedTestNativeInstaller(true, func(_ context.Context, name string, arguments ...string) error {
 			if name != "/usr/bin/dpkg" {
 				return nil
 			}
@@ -114,7 +134,7 @@ func qualificationTestUpdater(
 				t.Fatalf("installer package = %q", content)
 			}
 			return nil
-		},
+		}),
 		effectiveUID:   os.Geteuid(),
 		stdout:         output,
 		installTimeout: time.Second,
@@ -350,7 +370,7 @@ func TestInstalledVersionAttestationRejectsPackageAndBinaryDisagreement(t *testi
 	}
 	_, err := attestInstalledQualificationVersionWith(
 		t.Context(),
-		packageTarget{format: packageFormatRPM, installer: "/usr/bin/dnf"},
+		packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/dnf"},
 		os.Geteuid(),
 		binaryPath,
 		query,
@@ -475,7 +495,7 @@ func TestInstalledBinaryAttestationRejectsConcurrentContentMutation(t *testing.T
 		}
 		switch {
 		case name == "/usr/bin/dpkg-query" && args[0] == "--show":
-			return []byte("ii \t4.04.2\n"), nil
+			return []byte("syswarden\tii \t4.04.2\tamd64\n"), nil
 		case name == "/usr/bin/dpkg-query" && args[0] == "--search":
 			return []byte("syswarden: " + binaryPath + "\n"), nil
 		default:
@@ -483,7 +503,7 @@ func TestInstalledBinaryAttestationRejectsConcurrentContentMutation(t *testing.T
 		}
 	}
 	_, err := attestInstalledQualificationVersionWith(
-		t.Context(), packageTarget{format: packageFormatDEB}, os.Geteuid(), binaryPath, query,
+		t.Context(), packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, os.Geteuid(), binaryPath, query,
 	)
 	if err == nil || !strings.Contains(err.Error(), "changed during package attestation") {
 		t.Fatalf("concurrent installed CLI mutation error = %v", err)
@@ -500,11 +520,11 @@ func TestInstalledVersionParsersRequireExactPackageAndBinaryIdentity(t *testing.
 	}{
 		{
 			name:   "deb",
-			target: packageTarget{format: packageFormatDEB},
+			target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB},
 			query: func(_ context.Context, name string, args ...string) ([]byte, error) {
 				switch {
 				case name == "/usr/bin/dpkg-query" && args[0] == "--show":
-					return []byte("ii \t4.04.2\n"), nil
+					return []byte("syswarden\tii \t4.04.2\tamd64\n"), nil
 				case name == "/usr/bin/dpkg-query" && args[0] == "--search":
 					return []byte("syswarden: " + binaryPath + "\n"), nil
 				default:
@@ -515,7 +535,7 @@ func TestInstalledVersionParsersRequireExactPackageAndBinaryIdentity(t *testing.
 		},
 		{
 			name:   "rpm",
-			target: packageTarget{format: packageFormatRPM},
+			target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM},
 			query: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 				if args[0] == "--verify" {
 					return []byte("S.5....T.  c /etc/syswarden/config/modules/99-user.toml\n"),
@@ -527,12 +547,16 @@ func TestInstalledVersionParsersRequireExactPackageAndBinaryIdentity(t *testing.
 		},
 		{
 			name:   "apk",
-			target: packageTarget{format: packageFormatAPK, installer: "/sbin/apk"},
+			target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK, installer: "/sbin/apk"},
 			query: func(_ context.Context, _ string, args ...string) ([]byte, error) {
-				if args[1] == "--verbose" {
-					return []byte("syswarden-4.04.2-r0\n"), nil
+				if strings.Join(args, " ") == "--no-network --repositories-file /dev/null list --installed syswarden" {
+					return []byte("syswarden-4.04.2-r0 x86_64 {syswarden} (AGPL-3.0-only) [installed]\n"), nil
 				}
-				return []byte(binaryPath + " is owned by syswarden-4.04.2-r0\n"), nil
+				if strings.Join(args, " ") == "info --who-owns "+binaryPath {
+					return []byte(binaryPath + " is owned by syswarden-4.04.2-r0\n"), nil
+				}
+				t.Fatalf("unexpected installed APK query: %q", args)
+				return nil, nil
 			},
 			want: "v4.04.2",
 		},
@@ -738,8 +762,8 @@ func TestQualificationPackagePayloadBindsExpectedCLIDigestForEveryFormat(t *test
 		packageIn []byte
 		converter qualificationRPMPayloadConverter
 	}{
-		{name: "deb", target: packageTarget{format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", tarPayload)},
-		{name: "rpm", target: packageTarget{format: packageFormatRPM}, packageIn: rpmPackage, converter: func(ctx context.Context, packageFile *os.File, output io.Writer) error {
+		{name: "deb", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", tarPayload)},
+		{name: "rpm", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM}, packageIn: rpmPackage, converter: func(ctx context.Context, packageFile *os.File, output io.Writer) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -753,7 +777,7 @@ func TestQualificationPackagePayloadBindsExpectedCLIDigestForEveryFormat(t *test
 			_, err = output.Write(rpmPayload)
 			return err
 		}},
-		{name: "apk", target: packageTarget{format: packageFormatAPK}, packageIn: tarPayload},
+		{name: "apk", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK}, packageIn: tarPayload},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -828,9 +852,9 @@ func TestQualificationPackagePayloadRejectsUnsafeCLIInventoryForEveryFormat(t *t
 				packageIn []byte
 				converter qualificationRPMPayloadConverter
 			}{
-				{name: "deb", target: packageTarget{format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", tarPayload)},
-				{name: "rpm", target: packageTarget{format: packageFormatRPM}, packageIn: []byte("rpm"), converter: func(context.Context, *os.File, io.Writer) error { return nil }},
-				{name: "apk", target: packageTarget{format: packageFormatAPK}, packageIn: tarPayload},
+				{name: "deb", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", tarPayload)},
+				{name: "rpm", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM}, packageIn: []byte("rpm"), converter: func(context.Context, *os.File, io.Writer) error { return nil }},
+				{name: "apk", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK}, packageIn: tarPayload},
 			}
 			formats[1].converter = func(_ context.Context, _ *os.File, output io.Writer) error {
 				_, err := output.Write(cpioPayload)
@@ -853,7 +877,7 @@ func TestQualificationDEBPayloadCompressionIsFailClosed(t *testing.T) {
 		name: qualificationPackageCLIPath, payload: []byte("cli"), mode: 0750,
 	}})
 	file := openQualificationPayloadFixture(t, "candidate.deb", qualificationDEBFixture(t, "data.tar.xz", payload))
-	_, err := attestQualificationPackageCLIWith(t.Context(), packageTarget{format: packageFormatDEB}, file, nil)
+	_, err := attestQualificationPackageCLIWith(t.Context(), packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, file, nil)
 	if err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("unsupported DEB data member error = %v", err)
 	}
@@ -871,9 +895,9 @@ func TestQualificationPayloadAttestationHonorsCanceledContextForEveryFormat(t *t
 		packageIn []byte
 		converter qualificationRPMPayloadConverter
 	}{
-		{name: "deb", target: packageTarget{format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", payload)},
-		{name: "rpm", target: packageTarget{format: packageFormatRPM}, packageIn: []byte("rpm"), converter: func(ctx context.Context, _ *os.File, _ io.Writer) error { return ctx.Err() }},
-		{name: "apk", target: packageTarget{format: packageFormatAPK}, packageIn: payload},
+		{name: "deb", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB}, packageIn: qualificationDEBFixture(t, "data.tar.gz", payload)},
+		{name: "rpm", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM}, packageIn: []byte("rpm"), converter: func(ctx context.Context, _ *os.File, _ io.Writer) error { return ctx.Err() }},
+		{name: "apk", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK}, packageIn: payload},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file := openQualificationPayloadFixture(t, "candidate."+test.name, test.packageIn)
@@ -980,7 +1004,7 @@ func TestQualificationPackageVerificationHandlesRPMAndDPKGDriftExitSeparately(t 
 func TestAllowedQualificationQueriesAreClosed(t *testing.T) {
 	if !allowedQualificationQuery(
 		"/usr/bin/dpkg-query",
-		[]string{"--show", "--showformat=${db:Status-Abbrev}\t${Version}\n", "syswarden"},
+		[]string{"--show", "--showformat=${Package}\t${db:Status-Abbrev}\t${Version}\t${Architecture}\n", "syswarden"},
 	) {
 		t.Fatal("exact installed-version query was rejected")
 	}
@@ -990,8 +1014,13 @@ func TestAllowedQualificationQueriesAreClosed(t *testing.T) {
 	}{
 		{name: "/tmp/dpkg-query", args: []string{"--show", "syswarden"}},
 		{name: "/usr/bin/dpkg-query", args: []string{"--show", "operator-package"}},
+		{name: "/usr/bin/dpkg-query", args: []string{"--show", "--showformat=${db:Status-Abbrev}\t${Version}\n", "syswarden"}},
 		{name: "/usr/bin/rpm", args: []string{"--erase", "syswarden"}},
 		{name: "/sbin/apk", args: []string{"add", "syswarden"}},
+		{name: "/sbin/apk", args: []string{"info", "--verbose", "syswarden"}},
+		{name: "/sbin/apk", args: []string{"list", "--installed", "syswarden"}},
+		{name: "/sbin/apk", args: []string{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", "--quiet", "syswarden"}},
+		{name: "/sbin/apk", args: []string{"--no-network", "--repositories-file", "/dev/null", "list", "--installed", "--verbose", "syswarden"}},
 	} {
 		if allowedQualificationQuery(query.name, query.args) {
 			t.Fatalf("unsafe query accepted: %s %#v", query.name, query.args)
@@ -1062,11 +1091,7 @@ func TestQualificationBundleRejectsFalseInstallSuccessBeforeActivation(t *testin
 		}, nil
 	}
 	serviceCalls := atomic.Int32{}
-	originalRunner := u.runCommand
-	u.runCommand = func(ctx context.Context, name string, args ...string) error {
-		if name == "/usr/bin/dpkg" {
-			return originalRunner(ctx, name, args...)
-		}
+	u.activateCandidate = func(context.Context, installedQualificationEvidence) error {
 		serviceCalls.Add(1)
 		return nil
 	}
@@ -1221,9 +1246,9 @@ func TestQualificationDependencyPreflightFailsBeforePackageTransaction(t *testin
 
 func TestQualificationDependencyPreflightAttestsEveryDeclaredPackage(t *testing.T) {
 	for _, target := range []packageTarget{
-		{format: packageFormatDEB, installer: "/usr/bin/apt-get"},
-		{format: packageFormatRPM, installer: "/usr/bin/dnf"},
-		{format: packageFormatAPK, installer: "/sbin/apk"},
+		{packageName: compatibilityNativePackageName, format: packageFormatDEB, installer: "/usr/bin/apt-get"},
+		{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/dnf"},
+		{packageName: compatibilityNativePackageName, format: packageFormatAPK, installer: "/sbin/apk"},
 	} {
 		t.Run(target.format, func(t *testing.T) {
 			calls := 0
@@ -1248,7 +1273,7 @@ func TestQualificationDependencyPreflightAttestsEveryDeclaredPackage(t *testing.
 }
 
 func TestQualificationDependencyPreflightRejectsMissingPackage(t *testing.T) {
-	target := packageTarget{format: packageFormatRPM, installer: "/usr/bin/dnf"}
+	target := packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/dnf"}
 	err := attestOfflineQualificationPackageDependenciesWith(
 		t.Context(),
 		target,
@@ -1328,19 +1353,19 @@ func TestQualificationInstallCommandsCannotResolveRepositoryDependencies(t *test
 		want      []string
 	}{
 		{
-			name: "deb", target: packageTarget{format: packageFormatDEB, installer: "/usr/bin/apt-get"}, installer: "/usr/bin/dpkg",
+			name: "deb", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatDEB, installer: "/usr/bin/apt-get"}, installer: "/usr/bin/dpkg",
 			want: []string{"--install", packagePath},
 		},
 		{
-			name: "rpm dnf", target: packageTarget{format: packageFormatRPM, installer: "/usr/bin/dnf"}, installer: "/usr/bin/dnf",
-			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "install", "-y", packagePath},
+			name: "rpm dnf", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/dnf"}, installer: "/usr/bin/dnf",
+			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "--setopt=install_weak_deps=False", "--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False", "install", "-y", packagePath},
 		},
 		{
-			name: "rpm yum", target: packageTarget{format: packageFormatRPM, installer: "/usr/bin/yum"}, installer: "/usr/bin/yum",
-			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "install", "-y", packagePath},
+			name: "rpm yum", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatRPM, installer: "/usr/bin/yum"}, installer: "/usr/bin/yum",
+			want: []string{"--noplugins", "--cacheonly", "--disablerepo=*", "--setopt=localpkg_gpgcheck=1", "--setopt=install_weak_deps=False", "--setopt=clean_requirements_on_remove=False", "--setopt=obsoletes=False", "install", "-y", packagePath},
 		},
 		{
-			name: "apk", target: packageTarget{format: packageFormatAPK, installer: "/sbin/apk"}, installer: "/sbin/apk",
+			name: "apk", target: packageTarget{packageName: compatibilityNativePackageName, format: packageFormatAPK, installer: "/sbin/apk"}, installer: "/sbin/apk",
 			want: []string{"--no-network", "--no-cache", "--repositories-file", "/dev/null", "add", packagePath},
 		},
 	}
@@ -1448,6 +1473,7 @@ func TestQualificationActivationEnvironmentIsExactAndDistinct(t *testing.T) {
 		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
 		offlineQualificationEnvironment + "=" + offlineQualificationActivationValue,
 		"SYSWARDEN_PKG_INSTALL=1",
+		nativeInstallPhaseEnvironment + "=upgrade",
 	}
 	if got := qualificationActivationEnvironment(); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("qualification activation environment = %#v, want %#v", got, want)
@@ -1546,5 +1572,64 @@ func TestQualificationProcessRejectsLingeringDescendantAfterParentSuccess(t *tes
 	err := runQualificationProcessGroup(t.Context(), command)
 	if err == nil || !strings.Contains(err.Error(), "left a live descendant process") {
 		t.Fatalf("lingering qualification descendant error = %v", err)
+	}
+}
+
+// A callback's nil return does not override the actual bounded operation's
+// deadline. No later installation or activation may consume expired evidence.
+func TestQualificationRefusesLateSuccessAtEveryBoundedCallback(t *testing.T) {
+	for _, stage := range []string{"dependencies", "candidate-cli", "install", "activation"} {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newQualificationFixture(t)
+			var networkCalls, installCalls atomic.Int32
+			u, output, tempBase := qualificationTestUpdater(t, fixture, "v4.04.2", &networkCalls, &installCalls)
+			u.attestTimeout = 50 * time.Millisecond
+			u.installTimeout = 50 * time.Millisecond
+			activationCalls := 0
+			u.activateCandidate = func(ctx context.Context, _ installedQualificationEvidence) error {
+				activationCalls++
+				if stage == "activation" {
+					<-ctx.Done()
+				}
+				return nil
+			}
+			switch stage {
+			case "dependencies":
+				u.attestDependencies = func(ctx context.Context, _ packageTarget) error { <-ctx.Done(); return nil }
+			case "candidate-cli":
+				u.attestCandidateCLI = func(ctx context.Context, _ packageTarget, _ *os.File) (string, error) {
+					<-ctx.Done()
+					return strings.Repeat("a", sha256.Size*2), nil
+				}
+			case "install":
+				original := u.installPackage
+				u.installPackage = func(ctx context.Context, target packageTarget, path string, guard func(context.Context) error) error {
+					if err := original(ctx, target, path, guard); err != nil {
+						return err
+					}
+					<-ctx.Done()
+					return nil
+				}
+			}
+			err := u.runQualificationBundle(t.Context(), fixture.bundle, testQualificationCandidate)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("late %s success accepted: %v", stage, err)
+			}
+			if networkCalls.Load() != 0 || strings.Contains(output.String(), "upgrade completed successfully") {
+				t.Fatal("expired operation made a completion claim or network request")
+			}
+			expectedInstalls := int32(0)
+			if stage == "install" || stage == "activation" {
+				expectedInstalls = 1
+			}
+			expectedActivations := 0
+			if stage == "activation" {
+				expectedActivations = 1
+			}
+			if installCalls.Load() != expectedInstalls || activationCalls != expectedActivations {
+				t.Fatalf("late success crossed boundary: installs=%d activation=%d", installCalls.Load(), activationCalls)
+			}
+			assertEmptyDirectory(t, tempBase)
+		})
 	}
 }

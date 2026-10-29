@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -22,6 +23,14 @@ class StageError(RuntimeError):
 
 
 EXTENSION_ROOT = Path(__file__).resolve().parent
+DESCRIPTOR_SPEC = importlib.util.spec_from_file_location(
+    "syswarden_rhel_native_activation_descriptor",
+    EXTENSION_ROOT.parent.parent / "scripts/ci/native_activation_descriptor.py",
+)
+if DESCRIPTOR_SPEC is None or DESCRIPTOR_SPEC.loader is None:
+    raise RuntimeError("cannot load the native activation descriptor contract")
+native_activation_descriptor = importlib.util.module_from_spec(DESCRIPTOR_SPEC)
+DESCRIPTOR_SPEC.loader.exec_module(native_activation_descriptor)
 REPOSITORY_ROOT = EXTENSION_ROOT.parent.parent
 INVENTORY_PATH = EXTENSION_ROOT / "inventory.json"
 PROFILE = "rhel-package-owned-runtime/v2"
@@ -377,6 +386,20 @@ def protected_file_identity(path: Path, root: Path, label: str) -> tuple[bytes, 
         os.close(descriptor)
 
 
+def verify_optional_activation_descriptor(base_payload: Path) -> None:
+    # Historical profiles predate this capability. Absence does not establish
+    # replacement or activation authority; a present descriptor must be exact.
+    descriptor = base_payload / native_activation_descriptor.DESCRIPTOR_PATH
+    try:
+        descriptor.lstat()
+    except FileNotFoundError:
+        return
+    try:
+        native_activation_descriptor.validate(base_payload)
+    except (OSError, ValueError) as exc:
+        fail(f"invalid optional native activation descriptor: {exc}")
+
+
 def verify_shared_payloads(profile_payload: Path, base_payload: Path) -> None:
     try:
         lexical = base_payload.absolute()
@@ -392,6 +415,7 @@ def verify_shared_payloads(profile_payload: Path, base_payload: Path) -> None:
         or stat.S_IMODE(metadata.st_mode) & 0o022
     ):
         fail("shared base payload must be an owner-controlled real directory")
+    verify_optional_activation_descriptor(base_payload)
     for relative in SHARED_PAYLOADS:
         profile_path = profile_payload.joinpath(*relative.parts)
         base_path = base_payload.joinpath(*relative.parts)

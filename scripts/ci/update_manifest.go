@@ -27,19 +27,21 @@ import (
 )
 
 const (
-	manifestSchema       = "syswarden-update-manifest/v1"
-	trustRootsSchema     = "syswarden-release-trust-roots/v1"
-	manifestName         = "syswarden-update-manifest-v1.json"
-	signatureName        = manifestName + ".sig"
-	packageChecksumName  = "SHA256SUMS.txt"
-	privateKeyEnv        = "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"
-	firstSignedVersion   = "v4.02.9"
-	maxManifestBytes     = 64 << 10
-	maxSignatureBytes    = 256
-	maxTrustRootsBytes   = 64 << 10
-	maxChecksumBytes     = 64 << 10
-	maxPackageBytes      = 1 << 30
-	trustRootsRepository = "src/core/syswarden-cli/pkg/system/release_trust_roots.json"
+	manifestSchema          = "syswarden-update-manifest/v1"
+	identityManifestSchema  = "syswarden-update-manifest/v3"
+	nativeRetentionContract = "syswarden-native-dependency-retention/v1"
+	trustRootsSchema        = "syswarden-release-trust-roots/v1"
+	manifestName            = "syswarden-update-manifest-v1.json"
+	signatureName           = manifestName + ".sig"
+	packageChecksumName     = "SHA256SUMS.txt"
+	privateKeyEnv           = "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"
+	firstSignedVersion      = "v4.02.9"
+	maxManifestBytes        = 64 << 10
+	maxSignatureBytes       = 256
+	maxTrustRootsBytes      = 64 << 10
+	maxChecksumBytes        = 64 << 10
+	maxPackageBytes         = 1 << 30
+	trustRootsRepository    = "src/core/syswarden-cli/pkg/system/release_trust_roots.json"
 )
 
 type trustRootSet struct {
@@ -53,13 +55,15 @@ type trustRoot struct {
 }
 
 type manifest struct {
-	Schema    string     `json:"schema"`
-	KeyID     string     `json:"key_id"`
-	Version   string     `json:"version"`
-	Artifacts []artifact `json:"artifacts"`
+	Schema           string     `json:"schema"`
+	KeyID            string     `json:"key_id"`
+	Version          string     `json:"version"`
+	NativeTransition string     `json:"native_transition,omitempty"`
+	Artifacts        []artifact `json:"artifacts"`
 }
 
 type artifact struct {
+	PackageName  string `json:"package_name,omitempty"`
 	OS           string `json:"os"`
 	Architecture string `json:"architecture"`
 	Format       string `json:"format"`
@@ -69,6 +73,7 @@ type artifact struct {
 }
 
 type artifactIdentity struct {
+	packageName  string
 	os           string
 	architecture string
 	format       string
@@ -86,10 +91,22 @@ type semanticVersion struct {
 	patch int64
 }
 
-var manifestIdentities = []artifactIdentity{
-	{os: "linux", architecture: "amd64", format: "deb"},
-	{os: "linux", architecture: "amd64", format: "rpm"},
-	{os: "linux", architecture: "amd64", format: "apk"},
+func manifestIdentitiesForVersion(tag string) ([]artifactIdentity, error) {
+	version, err := parseVersion(tag)
+	if err != nil {
+		return nil, err
+	}
+	packageNames := []string{"syswarden"}
+	if version.major >= 5 {
+		packageNames = append(packageNames, "syswarden-base")
+	}
+	identities := make([]artifactIdentity, 0, len(packageNames)*3)
+	for _, name := range packageNames {
+		for _, format := range []string{"deb", "rpm", "apk"} {
+			identities = append(identities, artifactIdentity{packageName: name, os: "linux", architecture: "amd64", format: format})
+		}
+	}
+	return identities, nil
 }
 
 func parseVersion(raw string) (semanticVersion, error) {
@@ -153,37 +170,49 @@ func requireSignedVersion(tag string) error {
 }
 
 func packageFilename(tag, format, architecture string) (string, error) {
-	if _, err := parseVersion(tag); err != nil {
+	return packageFilenameForName(tag, format, architecture, "syswarden")
+}
+
+func packageFilenameForName(tag, format, architecture, packageName string) (string, error) {
+	parsed, err := parseVersion(tag)
+	if err != nil {
 		return "", err
+	}
+	if packageName != "syswarden" && (packageName != "syswarden-base" || parsed.major < 5) {
+		return "", fmt.Errorf("unsupported native package identity %q for %s", packageName, tag)
 	}
 	version := strings.TrimPrefix(tag, "v")
 	switch format {
 	case "deb":
 		if architecture == "amd64" {
-			return fmt.Sprintf("syswarden_%s_amd64.deb", version), nil
+			return fmt.Sprintf("%s_%s_amd64.deb", packageName, version), nil
 		}
 	case "rpm":
 		if architecture == "amd64" {
-			return fmt.Sprintf("syswarden-%s-1.x86_64.rpm", version), nil
+			return fmt.Sprintf("%s-%s-1.x86_64.rpm", packageName, version), nil
 		}
 	case "apk":
 		if architecture == "amd64" {
-			return fmt.Sprintf("syswarden_%s_x86_64.apk", version), nil
+			return fmt.Sprintf("%s_%s_x86_64.apk", packageName, version), nil
 		}
 	}
 	return "", fmt.Errorf("unsupported package target %s/%s", format, architecture)
 }
 
 func packageNames(tag string) ([]string, error) {
-	if _, err := parseVersion(tag); err != nil {
+	identities, err := manifestIdentitiesForVersion(tag)
+	if err != nil {
 		return nil, err
 	}
-	version := strings.TrimPrefix(tag, "v")
-	return []string{
-		fmt.Sprintf("syswarden_%s_amd64.deb", version),
-		fmt.Sprintf("syswarden-%s-1.x86_64.rpm", version),
-		fmt.Sprintf("syswarden_%s_x86_64.apk", version),
-	}, nil
+	names := make([]string, 0, len(identities))
+	for _, identity := range identities {
+		name, err := packageFilenameForName(tag, identity.format, identity.architecture, identity.packageName)
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, nil
 }
 
 func canonicalJSON(value any) ([]byte, error) {
@@ -479,10 +508,35 @@ func loadPackages(directory, tag string, allowAdditionalFiles bool) (map[string]
 	return records, nil
 }
 
+// The v3 contract binds both native identities and requires dependency retention.
+// Keep the asset locator stable so historical clients refuse the new schema
+// before installation, while v4 canonical manifest bytes remain unchanged.
+func manifestSchemaForVersion(tag string) (string, error) {
+	version, err := parseVersion(tag)
+	if err != nil {
+		return "", err
+	}
+	if version.major >= 5 {
+		return identityManifestSchema, nil
+	}
+	return manifestSchema, nil
+}
+
 func buildManifest(tag, keyID string, packages map[string]packageRecord) (*manifest, error) {
-	result := &manifest{Schema: manifestSchema, KeyID: keyID, Version: tag}
-	for _, identity := range manifestIdentities {
-		name, err := packageFilename(tag, identity.format, identity.architecture)
+	schema, err := manifestSchemaForVersion(tag)
+	if err != nil {
+		return nil, err
+	}
+	result := &manifest{Schema: schema, KeyID: keyID, Version: tag}
+	if schema == identityManifestSchema {
+		result.NativeTransition = nativeRetentionContract
+	}
+	identities, err := manifestIdentitiesForVersion(tag)
+	if err != nil {
+		return nil, err
+	}
+	for _, identity := range identities {
+		name, err := packageFilenameForName(tag, identity.format, identity.architecture, identity.packageName)
 		if err != nil {
 			return nil, err
 		}
@@ -490,21 +544,36 @@ func buildManifest(tag, keyID string, packages map[string]packageRecord) (*manif
 		if !exists {
 			return nil, fmt.Errorf("package record %s is missing", name)
 		}
-		result.Artifacts = append(result.Artifacts, artifact{
+		item := artifact{
 			OS:           identity.os,
 			Architecture: identity.architecture,
 			Format:       identity.format,
 			Filename:     record.name,
 			Size:         record.size,
 			SHA256:       record.sha256,
-		})
+		}
+		if schema == identityManifestSchema {
+			item.PackageName = identity.packageName
+		}
+		result.Artifacts = append(result.Artifacts, item)
 	}
 	return result, nil
 }
 
 func validateManifestStructure(candidate *manifest, tag string) error {
-	if candidate.Schema != manifestSchema {
-		return fmt.Errorf("unsupported update manifest schema %q", candidate.Schema)
+	expectedSchema, err := manifestSchemaForVersion(candidate.Version)
+	if err != nil {
+		return err
+	}
+	if candidate.Schema != expectedSchema {
+		return fmt.Errorf("update manifest schema %q is not %q required for %s", candidate.Schema, expectedSchema, candidate.Version)
+	}
+	wantTransition := ""
+	if expectedSchema == identityManifestSchema {
+		wantTransition = nativeRetentionContract
+	}
+	if candidate.NativeTransition != wantTransition {
+		return errors.New("update manifest native transition contract does not match its version")
 	}
 	if !validKeyID(candidate.KeyID) {
 		return fmt.Errorf("invalid update manifest key ID %q", candidate.KeyID)
@@ -515,15 +584,23 @@ func validateManifestStructure(candidate *manifest, tag string) error {
 	if err := requireSignedVersion(candidate.Version); err != nil {
 		return err
 	}
-	if len(candidate.Artifacts) != len(manifestIdentities) {
-		return fmt.Errorf("manifest contains %d artifacts, expected %d", len(candidate.Artifacts), len(manifestIdentities))
+	identities, err := manifestIdentitiesForVersion(tag)
+	if err != nil {
+		return err
 	}
-	for index, identity := range manifestIdentities {
+	if len(candidate.Artifacts) != len(identities) {
+		return fmt.Errorf("manifest contains %d artifacts, expected %d", len(candidate.Artifacts), len(identities))
+	}
+	for index, identity := range identities {
 		item := candidate.Artifacts[index]
-		if item.OS != identity.os || item.Architecture != identity.architecture || item.Format != identity.format {
-			return fmt.Errorf("manifest artifact %d has the wrong OS/architecture/format identity", index)
+		packageName := ""
+		if expectedSchema == identityManifestSchema {
+			packageName = identity.packageName
 		}
-		name, err := packageFilename(tag, item.Format, item.Architecture)
+		if item.PackageName != packageName || item.OS != identity.os || item.Architecture != identity.architecture || item.Format != identity.format {
+			return fmt.Errorf("manifest artifact %d has the wrong package/OS/architecture/format identity", index)
+		}
+		name, err := packageFilenameForName(tag, item.Format, item.Architecture, identity.packageName)
 		if err != nil {
 			return err
 		}

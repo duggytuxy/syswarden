@@ -2,15 +2,9 @@
 set -eu
 umask 077
 
-case "${1:-}" in
-    ''|*[!0-9]*)
-        printf '%s\n' 'Refusing an invalid RPM post-install transaction state.' >&2
-        exit 1
-        ;;
-esac
-
-if [ "$1" -lt 1 ]; then
-    printf '%s\n' 'Refusing an invalid RPM post-install transaction count.' >&2
+# Existing identities and service state do not approve replacement effects.
+if [ "$#" -ne 1 ] || [ "${1:-}" != 1 ]; then
+    printf '%s\n' 'Non-fresh RHEL package-owned installation is refused before scriptlet effects. A separately approved coordinated native transaction is required.' >&2
     exit 1
 fi
 

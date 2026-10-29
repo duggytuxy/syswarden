@@ -32,6 +32,7 @@ type sshAccessEvidence struct {
 	Challenge        []byte `json:"challenge"`
 	Receipt          []byte `json:"receipt"`
 	RecoveryRequired bool   `json:"recovery_required"`
+	Issuance         string `json:"issuance_image_sha256,omitempty"`
 }
 
 // A durable observation does not acknowledge policy consumption or authorize
@@ -51,11 +52,17 @@ func recheckSSHAccessEvidence(a *sshActivationAssessment) error {
 	if err != nil || !reflect.DeepEqual(current, a.owned.inventory) {
 		return errors.Join(ErrInventoryChanged, err)
 	}
-	records, err := observeSSHRecordMembership(a.owned.journal, true, true)
-	if err != nil || records[sshAccessEvidenceName] != sshImageDigest(*a.evidence) ||
-		records[sshActivationIntentName] != sshImageDigest(a.intent) {
+	records, err := observeSSHIssuedRecordMembership(a.owned.journal, true, a.evidence != nil, a.issuance != nil)
+	if err != nil || records[sshActivationIntentName] != sshImageDigest(a.intent) {
 		return errors.Join(ErrInventoryChanged, err)
 	}
+	if a.evidence != nil && records[sshAccessEvidenceName] != sshImageDigest(*a.evidence) {
+		return ErrInventoryChanged
+	}
+	if a.issuance != nil && records[sshAccessIssuanceName] != sshImageDigest(*a.issuance) {
+		return ErrInventoryChanged
+	}
+	delete(records, sshAccessIssuanceName)
 	delete(records, sshAccessEvidenceName)
 	delete(records, sshActivationIntentName)
 	if !reflect.DeepEqual(records, a.owned.records) {
@@ -72,7 +79,13 @@ func recheckSSHAccessEvidence(a *sshActivationAssessment) error {
 func recordSSHActivationAccessEvidence(ctx context.Context, journal *sshJournal, approved, parser string,
 	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, pins []sshAccessRoutePins,
 	input sshAccessReceiptInput, clock func() time.Time, authorize func() error) (result sshAccessEvidenceResult, err error) {
-	_, err = withSSHActivationAccessReceipt(ctx, journal, approved, parser, run, parserCheck, observe, pins, input, clock, authorize,
+	return recordSSHIssuedAccessEvidence(ctx, journal, approved, parser, run, parserCheck, observe, pins, input, clock, authorize, nil)
+}
+
+func recordSSHIssuedAccessEvidence(ctx context.Context, journal *sshJournal, approved, parser string,
+	run sshParserRun, parserCheck func() error, observe sshEndpointObserver, pins []sshAccessRoutePins,
+	input sshAccessReceiptInput, clock func() time.Time, authorize func() error, issuance *sshFileImage) (result sshAccessEvidenceResult, err error) {
+	_, err = withSSHIssuedAccessReceipt(ctx, journal, approved, parser, run, parserCheck, observe, pins, input, clock, authorize, issuance,
 		func(a *sshActivationAssessment, frozen sshAccessReceiptInput, assessed time.Time, guard func() error) error {
 			history, err := sshActivationDigest(a.owned.records)
 			if err != nil {
@@ -80,7 +93,10 @@ func recordSSHActivationAccessEvidence(ctx context.Context, journal *sshJournal,
 			}
 			record := sshAccessEvidence{1, sshAccessEvidenceDomain, a.owned.prepared.Transaction,
 				approved, parser, digestBytes(a.intent.data), a.target, history, digestBytes(frozen.Controller),
-				assessed.Unix(), frozen.Request, frozen.Challenge, frozen.Receipt, true}
+				assessed.Unix(), frozen.Request, frozen.Challenge, frozen.Receipt, true, ""}
+			if issuance != nil {
+				record.Issuance = sshImageDigest(*issuance)
+			}
 			wire, err := json.Marshal(record)
 			if err != nil || len(wire) > maxSSHAccessEvidenceBytes {
 				return errors.Join(ErrInventoryUnsafe, err)

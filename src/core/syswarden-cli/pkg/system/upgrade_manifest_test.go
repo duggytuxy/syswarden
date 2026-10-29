@@ -146,6 +146,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 		name          string
 		goos          string
 		manager       string
+		authority     string
 		managerPath   string
 		architecture  string
 		wantFormat    string
@@ -156,6 +157,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 			name:          "deb amd64",
 			goos:          "linux",
 			manager:       "apt-get",
+			authority:     "dpkg-query",
 			managerPath:   "/usr/bin/apt-get",
 			architecture:  "amd64",
 			wantFormat:    packageFormatDEB,
@@ -166,6 +168,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 			name:          "rpm amd64",
 			goos:          "linux",
 			manager:       "dnf",
+			authority:     "rpm",
 			managerPath:   "/usr/bin/dnf",
 			architecture:  "amd64",
 			wantFormat:    packageFormatRPM,
@@ -176,6 +179,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 			name:          "apk amd64",
 			goos:          "linux",
 			manager:       "apk",
+			authority:     "apk",
 			managerPath:   "/sbin/apk",
 			architecture:  "amd64",
 			wantFormat:    packageFormatAPK,
@@ -187,7 +191,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			target, err := detectPackageTarget(test.goos, test.architecture, testUpdateVersion, func(name string) (string, error) {
+			target, err := detectPackageTarget(test.goos, test.architecture, testUpdateVersion, testCompatibilityUpdateIdentity(test.authority), func(name string) (string, error) {
 				if name == test.manager {
 					return test.managerPath, nil
 				}
@@ -196,7 +200,7 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 			if err != nil {
 				t.Fatalf("detectPackageTarget() error = %v", err)
 			}
-			if target.format != test.wantFormat || target.filename != test.wantFilename || target.installer != test.wantInstaller {
+			if target.packageName != compatibilityNativePackageName || target.format != test.wantFormat || target.filename != test.wantFilename || target.installer != test.wantInstaller {
 				t.Fatalf("target = %#v, want format=%q filename=%q installer=%q", target, test.wantFormat, test.wantFilename, test.wantInstaller)
 			}
 		})
@@ -227,8 +231,9 @@ func TestDEBInstallArgumentsUseExactBoundedDPkgLockWait(t *testing.T) {
 	}
 	packagePath := "/var/tmp/syswarden-update-safe/package.deb"
 	arguments := (packageTarget{format: packageFormatDEB}).installArguments(packagePath)
-	if len(arguments) != 5 || arguments[0] != "-o" || arguments[1] != aptDPkgLockTimeoutOption ||
-		arguments[2] != "install" || arguments[3] != "-y" || arguments[4] != packagePath {
+	if len(arguments) != 7 || arguments[0] != "-o" || arguments[1] != aptDPkgLockTimeoutOption ||
+		arguments[2] != "--no-install-recommends" || arguments[3] != "--no-remove" ||
+		arguments[4] != "install" || arguments[5] != "-y" || arguments[6] != packagePath {
 		t.Fatalf("DEB install arguments = %#v", arguments)
 	}
 }
@@ -238,8 +243,9 @@ func TestRPMInstallArgumentsRequireLocalPackageSignatureVerification(t *testing.
 
 	packagePath := "/var/tmp/syswarden-update-safe/package.rpm"
 	arguments := (packageTarget{format: packageFormatRPM}).installArguments(packagePath)
-	if len(arguments) != 4 || arguments[0] != "--setopt=localpkg_gpgcheck=1" ||
-		arguments[1] != "install" || arguments[2] != "-y" || arguments[3] != packagePath {
+	if len(arguments) != 7 || arguments[0] != "--setopt=localpkg_gpgcheck=1" ||
+		arguments[1] != "--setopt=install_weak_deps=False" || arguments[2] != "--setopt=clean_requirements_on_remove=False" ||
+		arguments[3] != "--setopt=obsoletes=False" || arguments[4] != "install" || arguments[5] != "-y" || arguments[6] != packagePath {
 		t.Fatalf("RPM install arguments = %#v", arguments)
 	}
 	if err := validateExternalCommand("/usr/bin/dnf", []string{"install", "-y", packagePath}); err == nil {
@@ -265,7 +271,7 @@ func TestDetectPackageTargetRejectsWrongOSArchitectureAndPath(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := detectPackageTarget(test.goos, test.goarch, testUpdateVersion, func(string) (string, error) {
+			_, err := detectPackageTarget(test.goos, test.goarch, testUpdateVersion, testCompatibilityUpdateIdentity("dpkg-query"), func(string) (string, error) {
 				return test.resolved, nil
 			})
 			if err == nil {
@@ -278,27 +284,43 @@ func TestDetectPackageTargetRejectsWrongOSArchitectureAndPath(t *testing.T) {
 func testUpdateManifest(t *testing.T, version string, payload []byte) updateManifest {
 	t.Helper()
 	digest := fmt.Sprintf("%x", sha256.Sum256(payload))
-	identities := expectedManifestIdentities()
+	identities, err := expectedManifestIdentities(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := manifestSchemaForVersion(version)
+	if err != nil {
+		t.Fatal(err)
+	}
 	artifacts := make([]updateArtifact, 0, len(identities))
 	for _, identity := range identities {
-		filename, err := packageFilename(version, identity.format, identity.architecture)
+		filename, err := packageFilenameForName(version, identity.format, identity.architecture, identity.packageName)
 		if err != nil {
 			t.Fatalf("packageFilename() error = %v", err)
 		}
-		artifacts = append(artifacts, updateArtifact{
+		artifact := updateArtifact{
 			OS:           identity.os,
 			Architecture: identity.architecture,
 			Format:       identity.format,
 			Filename:     filename,
 			Size:         int64(len(payload)),
 			SHA256:       digest,
-		})
+		}
+		if schema == updateManifestIdentitySchema {
+			artifact.PackageName = identity.packageName
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	transition := ""
+	if schema == updateManifestIdentitySchema {
+		transition = nativeDependencyRetentionContract
 	}
 	return updateManifest{
-		Schema:    updateManifestSchema,
-		KeyID:     testReleaseKeyID,
-		Version:   version,
-		Artifacts: artifacts,
+		NativeTransition: transition,
+		Schema:           schema,
+		KeyID:            testReleaseKeyID,
+		Version:          version,
+		Artifacts:        artifacts,
 	}
 }
 
@@ -334,4 +356,150 @@ func testTamperedSignature(t *testing.T, signatureAsset []byte) []byte {
 		t.Fatal("signature tampering did not change bytes")
 	}
 	return tampered
+}
+
+func TestV3SharedWireVectorVerifiesBothNativeIdentities(t *testing.T) {
+	t.Parallel()
+
+	// PUBLIC TEST vector shared with the independent producer serializer. Its
+	// six payloads are synthetic; this is the existing producer's public test key.
+	// Read the signed bytes directly and never manufacture a consumer fixture.
+	const publicTestKeyID = "syswarden-update-test-01"
+	const publicTestKeyBase64 = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=" // gitleaks:allow -- Published RFC 8032 test public key, never a release credential.
+	data, err := os.ReadFile("../../../../../scripts/ci/testdata/native-identity-v3/syswarden-update-manifest-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := os.ReadFile("../../../../../scripts/ci/testdata/native-identity-v3/syswarden-update-manifest-v1.json.sig")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, err := base64.StdEncoding.Strict().DecodeString(publicTestKeyBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := verifySignedManifest(data, signature, "v5.00.0",
+		map[string]ed25519.PublicKey{publicTestKeyID: ed25519.PublicKey(publicKey)})
+	if err != nil {
+		t.Fatalf("verify shared producer wire vector: %v", err)
+	}
+	want := []struct{ name, format, filename string }{
+		{"syswarden", "deb", "syswarden_5.00.0_amd64.deb"},
+		{"syswarden", "rpm", "syswarden-5.00.0-1.x86_64.rpm"},
+		{"syswarden", "apk", "syswarden_5.00.0_x86_64.apk"},
+		{"syswarden-base", "deb", "syswarden-base_5.00.0_amd64.deb"},
+		{"syswarden-base", "rpm", "syswarden-base-5.00.0-1.x86_64.rpm"},
+		{"syswarden-base", "apk", "syswarden-base_5.00.0_x86_64.apk"},
+	}
+	if len(manifest.Artifacts) != len(want) {
+		t.Fatalf("shared vector artifact count = %d, want %d", len(manifest.Artifacts), len(want))
+	}
+	for index, expected := range want {
+		target := packageTarget{packageName: expected.name, os: "linux", architecture: "amd64", format: expected.format, filename: expected.filename}
+		artifact, err := manifest.artifactFor(target)
+		if err != nil {
+			t.Fatalf("select shared vector artifact for %#v: %v", target, err)
+		}
+		payload := []byte("qualified package:" + expected.filename + "\n")
+		if artifact != manifest.Artifacts[index] || artifact.PackageName != expected.name || artifact.Filename != expected.filename ||
+			artifact.Size != int64(len(payload)) || artifact.SHA256 != fmt.Sprintf("%x", sha256.Sum256(payload)) {
+			t.Fatalf("shared vector selection = %#v, want synthetic payload for %#v", artifact, target)
+		}
+	}
+}
+
+func TestV3SignedManifestSelectsExactNativeIdentity(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := testUpdateManifest(t, "v5.00.0", []byte("package"))
+	data := testMarshalManifest(t, candidate)
+	manifest, err := verifySignedManifest(data, testSignManifest(privateKey, data), "v5.00.0",
+		map[string]ed25519.PublicKey{testReleaseKeyID: publicKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ name, format, filename string }{
+		{"syswarden", "deb", "syswarden_5.00.0_amd64.deb"},
+		{"syswarden", "rpm", "syswarden-5.00.0-1.x86_64.rpm"},
+		{"syswarden", "apk", "syswarden_5.00.0_x86_64.apk"},
+		{"syswarden-base", "deb", "syswarden-base_5.00.0_amd64.deb"},
+		{"syswarden-base", "rpm", "syswarden-base-5.00.0-1.x86_64.rpm"},
+		{"syswarden-base", "apk", "syswarden-base_5.00.0_x86_64.apk"},
+	}
+	if len(manifest.Artifacts) != len(want) {
+		t.Fatalf("artifact count=%d, want %d", len(manifest.Artifacts), len(want))
+	}
+	for index, expected := range want {
+		target := packageTarget{packageName: expected.name, os: "linux", architecture: "amd64", format: expected.format, filename: expected.filename}
+		artifact, err := manifest.artifactFor(target)
+		if err != nil || artifact != manifest.Artifacts[index] || artifact.PackageName != expected.name || artifact.Filename != expected.filename {
+			t.Fatalf("selected=%#v, target=%#v, error=%v", artifact, target, err)
+		}
+		otherName := compatibilityNativePackageName
+		if expected.name == otherName {
+			otherName = baseNativePackageName
+		}
+		target.packageName = otherName
+		if _, err := manifest.artifactFor(target); err == nil {
+			t.Fatalf("selected %s bytes under %s authority", expected.name, otherName)
+		}
+	}
+	for _, name := range []string{"", "syswarden-custom"} {
+		if _, err := manifest.artifactFor(packageTarget{packageName: name, os: "linux", architecture: "amd64", format: "deb", filename: "syswarden_5.00.0_amd64.deb"}); err == nil {
+			t.Fatalf("accepted target with unverified package identity %q", name)
+		}
+	}
+}
+
+func TestV3SignedManifestRejectsClosedInventoryViolations(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := map[string]func(*updateManifest){
+		"missing artifact":       func(manifest *updateManifest) { manifest.Artifacts = manifest.Artifacts[:5] },
+		"extra artifact":         func(manifest *updateManifest) { manifest.Artifacts = append(manifest.Artifacts, manifest.Artifacts[0]) },
+		"duplicate identity":     func(manifest *updateManifest) { manifest.Artifacts[3] = manifest.Artifacts[0] },
+		"missing package name":   func(manifest *updateManifest) { manifest.Artifacts[3].PackageName = "" },
+		"unknown package name":   func(manifest *updateManifest) { manifest.Artifacts[3].PackageName = "syswarden-custom" },
+		"cross package name":     func(manifest *updateManifest) { manifest.Artifacts[3].PackageName = "syswarden" },
+		"cross package filename": func(manifest *updateManifest) { manifest.Artifacts[3].Filename = manifest.Artifacts[0].Filename },
+		"noncanonical order": func(manifest *updateManifest) {
+			manifest.Artifacts[0], manifest.Artifacts[3] = manifest.Artifacts[3], manifest.Artifacts[0]
+		},
+		"downgraded schema": func(manifest *updateManifest) { manifest.Schema = "syswarden-update-manifest/v2" },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			manifest := testUpdateManifest(t, "v5.00.0", []byte("package"))
+			mutate(&manifest)
+			data := testMarshalManifest(t, manifest)
+			if _, err := verifySignedManifest(data, testSignManifest(privateKey, data), "v5.00.0",
+				map[string]ed25519.PublicKey{testReleaseKeyID: publicKey}); err == nil {
+				t.Fatal("accepted a signed native identity contract violation")
+			}
+		})
+	}
+}
+
+func TestLegacyManifestAllowsOnlyImplicitCompatibilityIdentity(t *testing.T) {
+	manifest := testUpdateManifest(t, "v4.10.4", []byte("package"))
+	data := testMarshalManifest(t, manifest)
+	if bytes.Contains(data, []byte("package_name")) || len(manifest.Artifacts) != 3 {
+		t.Fatalf("legacy canonical shape changed: %s", data)
+	}
+	target := packageTarget{packageName: "syswarden", os: "linux", architecture: "amd64", format: "deb", filename: "syswarden_4.10.4_amd64.deb"}
+	if _, err := manifest.artifactFor(target); err != nil {
+		t.Fatal(err)
+	}
+	target.packageName = "syswarden-base"
+	if _, err := manifest.artifactFor(target); err == nil {
+		t.Fatal("selected legacy compatibility package for base authority")
+	}
+	manifest.Artifacts[0].PackageName = "syswarden"
+	if err := manifest.validate(); err == nil {
+		t.Fatal("accepted explicit package identity in historical schema")
+	}
 }

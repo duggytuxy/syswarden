@@ -356,32 +356,29 @@ func TestConfigMigrationDryRunCobraLifecycleDoesNotNormalizeHistoricalFiles_SW_C
 	}
 }
 
-func TestRootCobraLifecycleStillInitializesNormalCommands_SW_CFG_001(t *testing.T) {
+func TestRootCobraLifecycleConsumesApprovedConfigurationForNormalCommands_SW_CFG_001(t *testing.T) {
 	const commandName = "config-initialization-probe"
-	initializations := 0
+	approvals, normalizations := 0, 0
 	ran := false
-	probe := &cobra.Command{
-		Use: commandName,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ran = true
-			return nil
-		},
-	}
+	previous := consumeApprovedOperationalConfigurationHook
+	consumeApprovedOperationalConfigurationHook = func(*cobra.Command) error { approvals++; return nil }
+	probe := &cobra.Command{Use: commandName, RunE: func(*cobra.Command, []string) error { ran = true; return nil }}
 	rootCmd.AddCommand(probe)
 	degradedConfigAllowlist[commandName] = struct{}{}
 	t.Cleanup(func() {
+		consumeApprovedOperationalConfigurationHook = previous
 		rootCmd.RemoveCommand(probe)
 		delete(degradedConfigAllowlist, commandName)
 	})
-	_, err := executeRootCobraLifecycle(t, []string{commandName}, func() { initializations++ })
+	_, err := executeRootCobraLifecycle(t, []string{commandName}, func() { normalizations++ })
 	if err != nil {
-		t.Fatalf("normal command lifecycle error = %v", err)
+		t.Fatal(err)
 	}
-	if initializations != 1 || !ran {
-		t.Fatalf("normal lifecycle initialization/run = %d/%t, want 1/true", initializations, ran)
+	if approvals != 1 || normalizations != 0 || !ran {
+		t.Fatalf("approval/normalization/run=%d/%d/%t", approvals, normalizations, ran)
 	}
 	if !commandRequiresAutomaticConfigLoad(probe) {
-		t.Fatal("normal command unexpectedly opted out of automatic configuration loading")
+		t.Fatal("normal command skipped configuration authority")
 	}
 }
 

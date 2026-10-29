@@ -39,6 +39,10 @@ func selectExactSystemdRemovalContent(
 	expectedUID uint32,
 	expectedGID uint32,
 ) (string, error) {
+	return selectExactRemovalServiceContent(path, current, historical, []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode}, expectedUID, expectedGID)
+}
+
+func selectExactRemovalServiceContent(path, current string, historical []historicalRemovalServiceTemplate, modes []os.FileMode, expectedUID, expectedGID uint32) (string, error) {
 	if current == "" {
 		return "", fmt.Errorf("current systemd removal template is empty")
 	}
@@ -50,7 +54,7 @@ func selectExactSystemdRemovalContent(
 		}
 	}
 	snapshot, err := readFirewallRemovalFileWithOwnerModes(
-		path, []os.FileMode{sourceSystemdUnitMode, historicalSourceSystemdUnitMode},
+		path, modes,
 		expectedUID, expectedGID,
 	)
 	if errors.Is(err, os.ErrNotExist) {
@@ -70,4 +74,20 @@ func selectExactSystemdRemovalContent(
 		}
 	}
 	return "", fmt.Errorf("refusing modified systemd removal service file %s; no exact current or historical template matches", path)
+}
+
+func selectedOpenRCRemovalContent(path string, expectedUID, expectedGID uint32) (string, error) {
+	var current string
+	var historical []historicalRemovalServiceTemplate
+	switch path {
+	case "/etc/init.d/syswarden-core":
+		current = openRCCoreService
+		historical = []historicalRemovalServiceTemplate{{historicalV4104OpenRCCoreService, historicalV4104OpenRCCoreServiceLength, historicalV4104OpenRCCoreServiceSHA256}, {historicalV4028OpenRCCoreService, historicalV4028OpenRCCoreServiceLength, historicalV4028OpenRCCoreServiceSHA256}}
+	case "/etc/init.d/syswarden-firewall":
+		current = openRCFirewallService
+		historical = []historicalRemovalServiceTemplate{{historicalV4104OpenRCFirewallService, historicalV4104OpenRCFirewallServiceLength, historicalV4104OpenRCFirewallServiceSHA256}, {historicalV4028OpenRCFirewallService, historicalV4028OpenRCFirewallServiceLength, historicalV4028OpenRCFirewallServiceSHA256}}
+	default:
+		return "", fmt.Errorf("unsupported OpenRC product service")
+	}
+	return selectExactRemovalServiceContent(path, current, historical, []os.FileMode{0755}, expectedUID, expectedGID)
 }

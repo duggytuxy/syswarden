@@ -427,7 +427,7 @@ func TestCoreServiceRequiresSuccessfulFirewallLoaderAtBoot_SW2_FWBACKEND_001(t *
 			t.Fatalf("systemd core unit lacks %q", required)
 		}
 	}
-	if !strings.Contains(openRCCoreService, "need net rsyslog syswarden-firewall\n") {
+	if !strings.Contains(openRCCoreService, "need net syswarden-firewall\n") {
 		t.Fatal("OpenRC core unit does not require the firewall loader")
 	}
 }
@@ -460,7 +460,7 @@ func TestSystemdFirewallServiceWaitsForInstalledCronProviderAtBoot(t *testing.T)
 }
 
 func TestOpenRCFirewallServiceRequiresExactRuntimeProvidersAtBoot(t *testing.T) {
-	const dependencies = "\tneed net rsyslog cronie\n"
+	const dependencies = "\tneed net cronie\n"
 	if strings.Count(openRCFirewallService, dependencies) != 1 {
 		t.Fatalf("OpenRC firewall service lacks exact runtime provider dependencies %q", dependencies)
 	}
@@ -494,7 +494,7 @@ func TestFirewallBootOrderingGraphIsAcyclicAndDoesNotPullWireGuard(t *testing.T)
 		t.Fatal("systemd service graph contains a reverse edge")
 	}
 	if !strings.Contains(openRCFirewallService, "\tbefore syswarden-core\n") ||
-		!strings.Contains(openRCCoreService, "need net rsyslog syswarden-firewall\n") {
+		!strings.Contains(openRCCoreService, "need net syswarden-firewall\n") {
 		t.Fatal("OpenRC service graph does not preserve firewall to core ordering")
 	}
 }
@@ -544,7 +544,7 @@ func TestHistoricalV4028ServiceAnchors(t *testing.T) {
 	}
 }
 
-func TestCurrentFirewallUnitsRemainByteCompatibleWithV4042(t *testing.T) {
+func TestHistoricalFirewallUnitsRemainByteCompatibleWithV4042(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		content    string
@@ -559,7 +559,7 @@ func TestCurrentFirewallUnitsRemainByteCompatibleWithV4042(t *testing.T) {
 		},
 		{
 			name:       "openrc",
-			content:    openRCFirewallService,
+			content:    historicalV4104OpenRCFirewallService,
 			wantLength: 294,
 			wantSHA256: "d8c57c59dae9493523275026acb2a5c599bd4949ff8993add6760e725f89a5ba",
 		},
