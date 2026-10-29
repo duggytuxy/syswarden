@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -19,7 +20,8 @@ func assertPreflightPIDStopped(t *testing.T, pid int) {
 	until := time.Now().Add(2 * time.Second)
 	for time.Now().Before(until) {
 		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-		if errors.Is(err, os.ErrNotExist) {
+		// A process reaped between opening and reading procfs can return ESRCH.
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
 			return
 		}
 		if err != nil {
