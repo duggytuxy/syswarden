@@ -28,6 +28,7 @@ func TestCustomValidators(t *testing.T) {
 		{name: "ASN prefixed", value: "AS64500", tag: "asn"},
 		{name: "ASN numeric", value: "64500", tag: "asn"},
 		{name: "invalid ASN", value: "AS-example", tag: "asn", wantErr: true},
+		{name: "empty optional duration", value: "", tag: "duration"},
 		{name: "duration", value: "24h", tag: "duration"},
 		{name: "invalid duration", value: "daily", tag: "duration", wantErr: true},
 		{name: "canonical LAN", value: []string{"10.0.0.0/8", "2001:db8::/32"}, tag: "canonical_cidr_slice"},
