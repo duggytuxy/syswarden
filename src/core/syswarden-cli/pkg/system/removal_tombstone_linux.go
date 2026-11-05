@@ -880,6 +880,9 @@ func transitionRemovalTombstoneToFinalizing(
 // BeginRemoval publishes the durable host-removal barrier. An exact existing
 // record makes the operation resumable; any modified record fails closed.
 func BeginRemoval() error {
+	if err := refusePendingWireGuardPolicyForRemoval(); err != nil {
+		return err
+	}
 	if os.Geteuid() != 0 || os.Getegid() != 0 {
 		return fmt.Errorf("removal preparation must be executed as root")
 	}

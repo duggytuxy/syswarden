@@ -172,7 +172,8 @@ syswarden_defer_or_reject_alpine_cronie() {
         # Exit the maintainer script, rather than returning to its caller, so
         # no install barrier, migration, symlink, configuration, or service
         # mutation can run in this hook. apk still commits the package-owned
-        # payload, which already includes both global launcher symlinks.
+        # payload. Shared launcher paths remain outside APK ownership and
+        # require the separate exact post-commit fresh intent consumer.
         exit 0
     fi
     printf '%s\n' "${syswarden_alpine_reason}" >&2

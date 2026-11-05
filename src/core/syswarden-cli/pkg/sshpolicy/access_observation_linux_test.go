@@ -415,7 +415,7 @@ func FuzzSSHRecordedAccessCanonical(f *testing.F) {
 	receipt := sshAccessReceipt{1, sshAccessReceiptDomain, digestBytes(challenge), now.Unix(), now.Unix(), sshAccessBatchObservation{digestBytes(requestWire), []sshAccessObservation{{binding, strings.Repeat("1", 64), strings.Repeat("2", 64), "", true}}, true}}
 	payload, _ := json.Marshal(receipt)
 	signed, _ := json.Marshal(sshAccessSignedReceipt{payload, ed25519.Sign(key, payload)})
-	record := sshAccessEvidence{1, sshAccessEvidenceDomain, request.Transaction, request.Plan, strings.Repeat("f", 64), request.Intent, request.Target, strings.Repeat("9", 64), digestBytes(public), now.Unix(), requestWire, challenge, signed, true}
+	record := sshAccessEvidence{1, sshAccessEvidenceDomain, request.Transaction, request.Plan, strings.Repeat("f", 64), request.Intent, request.Target, strings.Repeat("9", 64), digestBytes(public), now.Unix(), requestWire, challenge, signed, true, ""}
 	valid, _ := json.Marshal(record)
 	approvedChallenge := digestBytes(challenge)
 	if _, _, _, err := decodeSSHAccessEvidence(valid, sshAccessEvidenceApproval{digestBytes(valid), approvedChallenge, public}, now); err != nil {

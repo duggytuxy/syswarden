@@ -1,6 +1,8 @@
 package config
 
 type WAAPConfig struct {
+	Enabled                 bool   `mapstructure:"enabled"`
+	LogBridgeEnabled        bool   `mapstructure:"log_bridge_enabled"`
 	TrustedLogProducers     string `mapstructure:"trusted_log_producers"`
 	EnforcementMode         string `mapstructure:"enforcement_mode" validate:"required,oneof=enforcing audit"`
 	BruteforceLogs          string `mapstructure:"bruteforce_logs" validate:"log_path_or_auto"`

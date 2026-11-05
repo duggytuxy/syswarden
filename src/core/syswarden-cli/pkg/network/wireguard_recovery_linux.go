@@ -26,6 +26,9 @@ func RecoverPendingWireguardState() (resultErr error) {
 }
 
 func recoverPendingWireguardStateLocked() error {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	operation, present, err := wireguardstate.InspectTransaction(
 		wireGuardFilesystemRoot, wireGuardExpectedOwnerUID, wireGuardExpectedOwnerGID,
 	)

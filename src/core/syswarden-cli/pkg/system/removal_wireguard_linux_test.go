@@ -53,8 +53,9 @@ func runWireGuardRemovalCrashWorker(t *testing.T) {
 	uid := uint32(uidValue)
 	gid := uint32(gidValue)
 	tail := wireGuardRemovalTail{
-		requireBarrier:   func() error { return nil },
-		reattestServices: func() error { return nil },
+		refusePolicyTransition: func() error { return nil },
+		requireBarrier:         func() error { return nil },
+		reattestServices:       func() error { return nil },
 		recoverForwarding: func() error {
 			return nil
 		},
@@ -161,6 +162,7 @@ func prepareWireGuardRemovalCrashRoot(t *testing.T) (string, uint32, uint32, str
 
 func testWireGuardRemovalTail(order *[]string) wireGuardRemovalTail {
 	return wireGuardRemovalTail{
+		refusePolicyTransition: func() error { return nil },
 		requireBarrier: func() error {
 			*order = append(*order, "barrier")
 			return nil
@@ -586,8 +588,9 @@ func TestWireGuardRemovalTailRecoversRealSIGKILLBoundaries_SW2_FWBACKEND_001(t *
 			}
 
 			retry := wireGuardRemovalTail{
-				requireBarrier:   func() error { return nil },
-				reattestServices: func() error { return nil },
+				refusePolicyTransition: func() error { return nil },
+				requireBarrier:         func() error { return nil },
+				reattestServices:       func() error { return nil },
 				recoverForwarding: func() error {
 					return nil
 				},
@@ -660,5 +663,35 @@ func TestWireGuardRemovalTailOfflineRetainsOwnedRuntimeEvidenceWithoutNFT_SW2_FW
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("offline owned state invoked %s: %q", forbidden, got)
 		}
+	}
+}
+
+func TestWireGuardPolicyTransitionStopsRemovalBeforeRuntimeOrRecovery(t *testing.T) {
+	var order []string
+	tail := testWireGuardRemovalTail(&order)
+	failure := errors.New("pending policy transition")
+	tail.refusePolicyTransition = func() error { return failure }
+	if err := tail.remove(); !errors.Is(err, failure) {
+		t.Fatalf("policy transition refusal lost: %v", err)
+	}
+	if len(order) != 0 {
+		t.Fatalf("removal ran callbacks before policy acceptance: %v", order)
+	}
+}
+
+func TestWireGuardPolicyTransitionStopsRemovalBarrierAndPreparation(t *testing.T) {
+	old := refusePendingWireGuardPolicyForRemoval
+	t.Cleanup(func() { refusePendingWireGuardPolicyForRemoval = old })
+	failure := errors.New("pending policy debt")
+	refusePendingWireGuardPolicyForRemoval = func() error { return failure }
+	for name, run := range map[string]func() error{
+		"begin-removal":    BeginRemoval,
+		"prepare-services": PrepareFirewallStateForRemoval,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := run(); !errors.Is(err, failure) {
+				t.Fatalf("policy guard not first: %v", err)
+			}
+		})
 	}
 }

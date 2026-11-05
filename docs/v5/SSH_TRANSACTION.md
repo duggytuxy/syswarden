@@ -1,8 +1,11 @@
 # Shared SSH configuration transaction
 
 Status: internal v5.00.0 development component. Refs #235, #337 and #422.
-The public SSH commands remain read-only. Installation and CIS callers do not
-invoke this engine yet. Configuration publication is not daemon activation,
+The public planning and observation commands remain read-only. The separate
+[original-restoration command](SSH_OPERATOR_RECOVERY.md) operates only on an
+existing activation transaction, without enabling forward application.
+Installation and CIS callers do not invoke this engine yet. Configuration
+publication is not daemon activation,
 proof of a successful login, a migration-ready package or final IVVQ acceptance.
 
 ## Explicit operator choice

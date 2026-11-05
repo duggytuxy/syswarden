@@ -176,7 +176,15 @@ and at completion.
 
 Each parser invocation is limited to ten seconds, the complete verification to
 two minutes, and each output stream to one MiB. The child receives a fixed
-minimal environment. Raw parser output and configuration contents never appear
+minimal environment. The parser, default-configuration trace, systemd/bus
+queries and SELinux label lookup retain their direct child until capture and
+private process-group cleanup finish. Output overflow and cancellation stop
+capture immediately; inherited pipes cannot keep the query running past its
+execution bound. Cleanup also stops remaining members of the original group
+before reaping its leader, without targeting a recycled process identifier.
+This assumes trusted tools remain in their group; it does not control external
+daemons, escaped descendants or uninterruptible kernel operations.
+Raw parser output and configuration contents never appear
 in the JSON result or diagnostic messages. Successful JSON contains the plan,
 parser hash and declared-context count, with `parser_verified: true`,
 `runtime_activated: false` and `apply_available: false`. Refusal returns no

@@ -19,9 +19,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// This private transport is for a future independently authorized controller.
+// This transport serves the separately authorized controller command.
 // Digests supplied here are bindings, not proof of approval or protected state.
-// No installer, CLI, activation completion or journal mutation calls it.
+// No installer, activation completion or target journal mutation calls it.
 type sshAccessBinding struct {
 	Transaction string
 	Plan        string

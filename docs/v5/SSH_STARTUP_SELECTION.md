@@ -19,8 +19,10 @@ invalid types, excessive sizes and unsupported signatures.
 
 The declaration must select exactly the pinned installed daemon path. The
 supported static arguments are `-D`, optional `-e`, and an optional separate
-`-f /etc/ssh/sshd_config` pair. Without `-f`, this is OpenSSH's documented default
-configuration path. The check binds the command's recorded PID and monotonic
+`-f /etc/ssh/sshd_config` pair. Without `-f`, a separate activation binder verifies
+the retained parser's compiled default selection and effective configuration as
+described in [the activation boundary](SSH_ACTIVATION_BOUNDARY.md). The read-only
+startup declaration alone does not establish that selection. The check binds the command's recorded PID and monotonic
 start to the current service observation and rejects a completed invocation.
 The complete declaration must remain identical across the process observation.
 
@@ -114,8 +116,9 @@ The complete activation/recovery path, fresh independent authenticated access,
 already-owned updates and separate uninstall/remove/purge validation remain
 open. Component tests do not establish native acceptance or final v5.00.0 IVVQ.
 
-Issue422 still requires a standard-list-only fresh APK/DEB/RPM installation,
-independent explicit TOML choices for SSH, CIS, OS and optional modules, and
+Issue #422 requires fresh APK/DEB/RPM installation to select no list and defer
+activation until explicit configuration through `syswarden config`, with
+independent explicit TOML choices for SSH, CIS, OS and optional modules and
 preservation of administrator settings and existing protection during upgrades.
 Its complete production wiring is not implemented by this component. BunkerWeb
 remains independent, including source ownership, expiry and HA. Linux AMD64 only.

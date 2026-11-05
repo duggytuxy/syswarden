@@ -11,7 +11,7 @@ import (
 // state. That release shipped enabled=true with no token and no peers. Partial
 // states, environment overrides, and operator-owned 99-user overrides are not
 // rewritten and remain fail-closed validation errors.
-func normalizeHistoricalModularHA(candidate *ModularConfig, sources []modularConfigSource) error {
+func normalizeHistoricalModularHA(candidate *ModularConfig, sources []modularConfigSource, persist bool) error {
 	if candidate == nil || !candidate.Integrations.HA.Enabled ||
 		candidate.Integrations.HA.Token != "" || len(candidate.Integrations.HA.PeerIPs) != 0 ||
 		candidate.Integrations.BunkerWeb.Enabled {
@@ -85,9 +85,13 @@ func normalizeHistoricalModularHA(candidate *ModularConfig, sources []modularCon
 		rewritten = append(rewritten, []byte("\n[integrations.bunkerweb]\nenabled = false\n")...)
 	}
 
-	if err := replaceSecureFileAtomicallyIfUnchanged(filepath.Dir(target.path), filepath.Base(target.path), rewritten, target.identity); err != nil {
-		return fmt.Errorf("persist historical HA compatibility normalization: %w", err)
+	if persist {
+		if err := replaceSecureFileAtomicallyIfUnchanged(filepath.Dir(target.path), filepath.Base(target.path), rewritten, target.identity); err != nil {
+			return fmt.Errorf("persist historical HA compatibility normalization: %w", err)
+		}
 	}
+	// Inspection retains every eligibility check and the same safe in-memory
+	// interpretation, while leaving the original bytes and inode untouched.
 	*candidate = normalized
 	return nil
 }

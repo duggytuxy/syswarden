@@ -18,6 +18,7 @@ import (
 )
 
 type ValidationReport struct {
+	ModulePlan     []string
 	SchemaVersion  int
 	Historical     bool
 	UnknownKeys    []string
@@ -51,11 +52,13 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	v.SetConfigType("toml")
 	setDefaults(v, configDir)
 	observed := make(map[string]struct{})
+	var profileInventory unconfiguredProfileInventory
 	merge := func(relative string, content []byte) error {
 		document, err := parseTOMLDocument(content, relative)
 		if err != nil {
 			return err
 		}
+		profileInventory.record(relative, document)
 		flattenTOMLKeys("", document, observed)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("merge %s: %w", relative, err)
@@ -111,20 +114,15 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 		return report, fmt.Errorf("inspect modules directory: %w", err)
 	}
 
-	known := make(map[string]struct{})
-	collectMapstructureKeys(reflect.TypeOf(ModularConfig{}), "", known)
-	for key := range observed {
-		if replacement, deprecated := deprecatedModularKeys[key]; deprecated {
-			report.DeprecatedKeys = append(report.DeprecatedKeys, key+" (use "+replacement+")")
-			continue
-		}
-		if _, ok := known[key]; !ok {
-			report.UnknownKeys = append(report.UnknownKeys, key)
-		}
-	}
-	sort.Strings(report.UnknownKeys)
-	sort.Strings(report.DeprecatedKeys)
+	classifyModularKeys(observed, &report)
 
+	if err := profileInventory.validate(); err != nil {
+		return report, err
+	}
+	resolveModularSaaSAliasFromTOML(v, observed)
+	if err := resolveOptionalModules(v); err != nil {
+		return report, err
+	}
 	var candidate ModularConfig
 	if err := v.Unmarshal(&candidate); err != nil {
 		return report, fmt.Errorf("unmarshal modular configuration: %w", err)
@@ -144,7 +142,25 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	if err := validateConfig(&validationCandidate); err != nil {
 		return report, err
 	}
+	report.ModulePlan = ModulePlan(mapModularToLegacy(&validationCandidate))
 	return report, nil
+}
+
+func classifyModularKeys(observed map[string]struct{}, report *ValidationReport) {
+	known := make(map[string]struct{})
+	collectMapstructureKeys(reflect.TypeOf(ModularConfig{}), "", known)
+	for key := range observed {
+		if replacement, deprecated := deprecatedModularKeys[key]; deprecated {
+			report.DeprecatedKeys = append(report.DeprecatedKeys, key+" (use "+replacement+")")
+			continue
+		}
+		if _, ok := known[key]; !ok {
+			report.UnknownKeys = append(report.UnknownKeys, key)
+		}
+	}
+	sort.Strings(report.UnknownKeys)
+	sort.Strings(report.DeprecatedKeys)
+
 }
 
 // GetValidatedModularValue reads one effective value only after the same typed
@@ -179,10 +195,15 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	_ = v.BindEnv("network.whitelist_ips")
 	setDefaults(v, configDir)
+	observed := make(map[string]struct{})
+	var profileInventory unconfiguredProfileInventory
 	merge := func(relative string, content []byte) error {
-		if _, err := parseTOMLDocument(content, relative); err != nil {
+		document, err := parseTOMLDocument(content, relative)
+		if err != nil {
 			return err
 		}
+		profileInventory.record(relative, document)
+		flattenTOMLKeys("", document, observed)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("merge %s: %w", relative, err)
 		}
@@ -234,7 +255,14 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", false, err
 	}
+	if err := profileInventory.validate(); err != nil {
+		return "", false, err
+	}
 	whitelistWasSet := v.IsSet("network.whitelist_ips")
+	resolveModularSaaSAlias(v, observed)
+	if err := resolveOptionalModules(v); err != nil {
+		return "", false, err
+	}
 	var candidate ModularConfig
 	if err := v.Unmarshal(&candidate); err != nil {
 		return "", false, fmt.Errorf("unmarshal modular configuration: %w", err)
@@ -284,6 +312,9 @@ func parseTOMLDocument(content []byte, relative string) (map[string]any, error) 
 		if version < 0 || version > int64(CurrentSchemaVersion) {
 			return nil, fmt.Errorf("%s has unsupported schema_version %d", relative, version)
 		}
+	}
+	if err := validateOptionalModuleDocument(relative, document); err != nil {
+		return nil, err
 	}
 	if err := sshselection.ValidateDocument(relative, document); err != nil {
 		return nil, err

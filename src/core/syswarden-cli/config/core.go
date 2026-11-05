@@ -1,6 +1,7 @@
 package config
 
 type CoreConfig struct {
+	InstallProfile  string `mapstructure:"install_profile"`
 	ConfigDir       string `mapstructure:"config_dir" validate:"required,absolute_path"`
 	EnterpriseMode  bool   `mapstructure:"enterprise_mode"`
 	LogLevel        string `mapstructure:"log_level" validate:"required,oneof=DEBUG INFO WARN ERROR"`

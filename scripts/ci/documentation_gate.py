@@ -61,6 +61,9 @@ COBRA_UTILITY_COMMANDS = frozenset({"completion", "help"})
 WORKFLOW_PACKAGE_NAME_RE = re.compile(
     r"syswarden[${}A-Za-z0-9_.-]+\.(?:deb|rpm|apk)"
 )
+WORKFLOW_VARIANT_PACKAGE_NAME_RE = re.compile(
+    r"\$\{PACKAGE_NAME\}[${}A-Za-z0-9_.-]+\.(?:deb|rpm|apk)"
+)
 CURRENT_SURFACE_RETIRED_TERMS = (
     "free" + "bsd",
     "web" + "-tui",
@@ -822,14 +825,14 @@ def validate_package_source_contract(
             errors.append(f"duplicate documentation package coordinate: {coordinate!r}")
         coordinates.add(coordinate)
         try:
-            release_name = artifact["release_name"].format(version="9.99.9")
+            release_name = artifact["release_name"].format(version=documented_version)
         except (KeyError, ValueError) as exc:
             errors.append(f"invalid package release_name template at index {index}: {exc}")
             continue
         expected_release_name = {
-            "DEB": f"syswarden_9.99.9_{architecture}.deb",
-            "RPM": f"syswarden-9.99.9-1.{architecture}.rpm",
-            "APK": f"syswarden_9.99.9_{architecture}.apk",
+            "DEB": f"syswarden_{documented_version}_{architecture}.deb",
+            "RPM": f"syswarden-{documented_version}-1.{architecture}.rpm",
+            "APK": f"syswarden_{documented_version}_{architecture}.apk",
         }.get(family)
         if expected_release_name is None:
             errors.append(f"unsupported documentation package family: {family!r}")
@@ -879,7 +882,9 @@ def validate_package_source_contract(
             f"{sorted(overlap)}"
         )
 
-    expected_release_names = release_gate.package_names("9.99.9")
+    # Bind this historical operational matrix to its own public version. A
+    # future inventory capability must not redefine already published packages.
+    expected_release_names = release_gate.package_names(documented_version)
     if release_names != expected_release_names:
         errors.append(
             "documentation/release package inventory mismatch; "
@@ -934,6 +939,24 @@ def validate_package_source_contract(
 
     workflow = read_text(repo_root / ".github/workflows/package.yml")
     discovered_workflow_names = set(WORKFLOW_PACKAGE_NAME_RE.findall(workflow))
+    variant_templates = set(WORKFLOW_VARIANT_PACKAGE_NAME_RE.findall(workflow))
+    if variant_templates:
+        expected_templates = {
+            "${PACKAGE_NAME}_${VERSION}_amd64.deb",
+            "${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm",
+            "${PACKAGE_NAME}_${VERSION}_x86_64.apk",
+        }
+        if variant_templates != expected_templates:
+            errors.append(
+                "documentation/package workflow variant templates mismatch; "
+                f"expected={sorted(expected_templates)}, actual={sorted(variant_templates)}"
+            )
+        # The historical public matrix describes the compatibility identity.
+        # Variant-helper tests separately bind candidate generation acceptance.
+        discovered_workflow_names.update(
+            name.replace("${PACKAGE_NAME}", "syswarden")
+            for name in variant_templates
+        )
     documented_workflow_names = set(workflow_names) | set(optional_workflow_names)
     if discovered_workflow_names != documented_workflow_names:
         errors.append(

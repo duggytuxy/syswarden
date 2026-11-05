@@ -122,12 +122,14 @@ between package authentication and the SBOM inventory.
 
 ## Intelligence Sources
 
+The v5 candidate uses Data-Shield alone for lists 1 and 2. See the
+[development source contract](docs/v5/FEED_SOURCES.md) for migration boundaries.
+
 | Source | Use and trust boundary |
 | --- | --- |
 | [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Official maintainer-curated IPv4 feed for the standard and critical profiles; SysWarden accepts it locally only after canonical validation and quorum controls |
 | [IPverse country IP blocks](https://github.com/ipverse/country-ip-blocks) | Pinned CC0-1.0 RIR allocation snapshot embedded in the release-bound CLI; allocation country is not physical or current operational geolocation |
 | [WiredAlter IP Service](https://ip.wiredalter.com/) ([source](https://github.com/buildplan/ip-service)) | Best-effort cached country, ASN, organization and threat labels for Top Attackers / OSINT History display only; responses never influence severity or firewall decisions |
-| [CINS Score](https://cinsscore.com/list/ci-badguys.txt) and [blocklist.de](https://lists.blocklist.de/lists/all.txt) | Only exact entries found at both independent origins are published |
 | [Spamhaus](https://www.spamhaus.org/) and [RADB](https://www.radb.net/) | Signals may be operator-provisioned; neither source is accepted as firewall authority by itself |
 | Custom HTTPS feed | Choice 3 requires an HTTPS URL and its exact SHA-256 digest for each configured address family |
 

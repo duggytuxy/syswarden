@@ -53,7 +53,7 @@ func TestWireGuardForwardingTransitionRecoversEveryMutationBoundary_SW2_WGSTATE_
 		t.Run(point, func(t *testing.T) {
 			_, _ = prepareEnabledWireGuardForDisable(t, false)
 			_, before := currentWireGuardForwardingState(t)
-			identity := exactWireGuardNFTIdentity()
+			identity := scopedWireGuardIdentity()
 			target, err := canonicalWireGuardForwardingContent(identity, false, true, "0")
 			if err != nil {
 				t.Fatal(err)
@@ -125,7 +125,7 @@ func TestWireGuardForwardingTransitionRecoversDirectorySyncFailure_SW2_WGSTATE_0
 		t.Run(test.name, func(t *testing.T) {
 			harness, _ := prepareEnabledWireGuardForDisable(t, false)
 			_, before := currentWireGuardForwardingState(t)
-			identity := exactWireGuardNFTIdentity()
+			identity := scopedWireGuardIdentity()
 			target, err := canonicalWireGuardForwardingContent(identity, false, true, "0")
 			if err != nil {
 				t.Fatal(err)
@@ -168,7 +168,7 @@ func TestWireGuardForwardingTransitionRecoversDirectorySyncFailure_SW2_WGSTATE_0
 
 func TestDisabledLegacyWireGuardNeutralizesBootWithoutGuessingRuntime_SW2_WGSTATE_001(t *testing.T) {
 	harness, before := prepareEnabledWireGuardForDisable(t, false)
-	identity := exactWireGuardNFTIdentity()
+	identity := scopedWireGuardIdentity()
 	if err := transitionWireGuardForwardingPersistenceGuarded(
 		identity, []byte(wireGuardForwardingSetting),
 	); err != nil {
@@ -315,9 +315,6 @@ func TestSetupWireGuardManifestExchangeFaultRestoresNeutralPersistenceAndRuntime
 	if pending, err := wireGuardForwardingTransitionPending(); err != nil || pending {
 		t.Fatalf("failed re-enable left transition debt: pending=%v err=%v", pending, err)
 	}
-	if strings.Contains(strings.Join(harness.events, ","), "qr") {
-		t.Fatal("failed persistence publication reached the success-only QR step")
-	}
 }
 
 func TestNeutralizedForwardingArtifactRemainsRemovableByManifest_SW2_WGSTATE_001(t *testing.T) {
@@ -344,7 +341,7 @@ func TestNeutralizedForwardingArtifactRemainsRemovableByManifest_SW2_WGSTATE_001
 
 func TestForwardingCrashRecoveryPrecedesExactOwnershipRemoval_SW2_WGSTATE_001(t *testing.T) {
 	harness, _ := prepareEnabledWireGuardForDisable(t, false)
-	identity := exactWireGuardNFTIdentity()
+	identity := scopedWireGuardIdentity()
 	target, err := canonicalWireGuardForwardingContent(identity, false, true, "0")
 	if err != nil {
 		t.Fatal(err)
@@ -426,7 +423,7 @@ func TestSetupAndDisableRecoverPendingForwardingUnderSingleGuard_SW2_WGSTATE_001
 		}
 		t.Run(name, func(t *testing.T) {
 			harness, _ := prepareEnabledWireGuardForDisable(t, false)
-			identity := exactWireGuardNFTIdentity()
+			identity := scopedWireGuardIdentity()
 			target, err := canonicalWireGuardForwardingContent(identity, false, true, "0")
 			if err != nil {
 				t.Fatal(err)

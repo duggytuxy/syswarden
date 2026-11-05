@@ -167,7 +167,7 @@ func TestIncompleteQualificationPreflightFailsBeforeAllHooks(t *testing.T) {
 	}
 }
 
-func TestProductionUpdatePreflightRetainsRecoveryAndConfigurationHooks(t *testing.T) {
+func TestProductionUpdatePreflightDefersMutationUntilAuthenticatedCandidateGate(t *testing.T) {
 	setQualificationUpdateFlags(t, "", "")
 	originalRecovery := recoverPendingFirewallTransactionHook
 	originalInit := initConfigHook
@@ -185,7 +185,7 @@ func TestProductionUpdatePreflightRetainsRecoveryAndConfigurationHooks(t *testin
 	})
 
 	_ = rootCmd.PersistentPreRunE(updateCmd, nil)
-	if recoveryCalls != 1 || configLoads != 1 || removalChecks != 1 {
+	if recoveryCalls != 0 || configLoads != 0 || removalChecks != 1 {
 		t.Fatalf("production recovery=%d config=%d removal=%d", recoveryCalls, configLoads, removalChecks)
 	}
 }

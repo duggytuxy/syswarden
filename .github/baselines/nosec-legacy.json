@@ -1,16 +1,8 @@
 {
   "schema_version": 2,
   "baseline_commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
-  "policy": "The 28 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
+  "policy": "The 23 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
   "legacy": [
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
-      "source_sha256": "1ec8f45115f957c3c629ef5a09d34b1db96e855e62dbfc2f22246311eeb2269b"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
-      "source_sha256": "24d9e7157e11fdc1e60779e2bba270eebc86fcd824d4246b8f45b3e872ab8bff"
-    },
     {
       "file": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
       "source_sha256": "50790cf39b22e9568c2e3f260faf61c4708b296a39f7d51d3df5667c02eed720"
@@ -67,18 +59,6 @@
     {
       "file": "src/core/syswarden-cli/pkg/system/audit_linux.go",
       "source_sha256": "e6a4f51d493f960e2d11acbd6c041a08896b225f38c207c04b1e8b589e76ace3"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/dependencies.go",
-      "source_sha256": "1d170dc40e8645a7e7d85c571750cbe7af8c47eb89624f983820a4e766cd4d5e"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/dependencies.go",
-      "source_sha256": "3dc4952ccbf72ca15c8bdea31eb3101086ad3039c8f568ddcc328f5928db818f"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/dependencies.go",
-      "source_sha256": "5b35f6201747123ac2c2f1137ea1247a5190ec5d9a2d81c088fb562d5c18bd41"
     },
     {
       "file": "src/core/syswarden-core/engine/ahocorasick.go",

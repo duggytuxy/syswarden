@@ -67,9 +67,10 @@ to reload SSH. It cannot justify closing an administrator port.
 
 ## Minimal installation integration boundary
 
-Issue #422 requires a fresh native package installation to select only the
-standard blocklist profile and its required infrastructure. Reading SSH
-configuration must never imply consent to change it.
+Issue #422 requires fresh native installation to select no list and defer
+activation until explicit configuration through `syswarden config`. Mandatory
+platform prerequisites remain installed. Reading SSH configuration must never
+imply consent to change it.
 
 The current production `system.ConfigureSSH` both writes SSH configuration and
 sets the in-memory port used by the firewall. Production integration must remove

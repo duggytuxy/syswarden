@@ -1798,10 +1798,22 @@ func getHAPeers() []string {
 }
 
 func loadTUIHAConfig(modularDirectory, legacyFile string) (tuiHAConfig, error) {
+	return loadTUIHAConfigWithRead(modularDirectory, legacyFile, readTUIConfigFile)
+}
+
+func loadTUIHAConfigWithRead(modularDirectory, legacyFile string, readFile func(string) ([]byte, error)) (tuiHAConfig, error) {
 	info, err := os.Lstat(modularDirectory)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return tuiHAConfig{}, fmt.Errorf("modular HA config must be a real directory")
+		}
+		root, openErr := os.OpenRoot(modularDirectory)
+		if openErr != nil {
+			return tuiHAConfig{}, fmt.Errorf("open modular HA configuration: %w", openErr)
+		}
+		defer root.Close()
+		if err := verifyTUIConfigurationReadBarrier(root, modularDirectory, info); err != nil {
+			return tuiHAConfig{}, err
 		}
 		cfg := tuiHAConfig{PeerPort: "62026"}
 		files := make([]string, 0)
@@ -1832,7 +1844,7 @@ func loadTUIHAConfig(modularDirectory, legacyFile string) (tuiHAConfig, error) {
 			return tuiHAConfig{}, fmt.Errorf("inspect modular HA modules: %w", statErr)
 		}
 		for _, file := range files {
-			wire, readErr := readTUIConfigFile(file)
+			wire, readErr := readFile(file)
 			if readErr != nil {
 				return tuiHAConfig{}, readErr
 			}
@@ -1840,18 +1852,24 @@ func loadTUIHAConfig(modularDirectory, legacyFile string) (tuiHAConfig, error) {
 				return tuiHAConfig{}, fmt.Errorf("parse modular HA configuration: %w", err)
 			}
 		}
+		if err := verifyTUIConfigurationReadBarrier(root, modularDirectory, info); err != nil {
+			return tuiHAConfig{}, err
+		}
 		return validateTUIHAConfig(cfg)
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
 		return tuiHAConfig{}, fmt.Errorf("inspect modular HA configuration: %w", err)
 	}
-	wire, err := readTUIConfigFile(legacyFile)
+	wire, err := readFile(legacyFile)
 	if err != nil {
 		return tuiHAConfig{}, fmt.Errorf("read legacy HA configuration: %w", err)
 	}
 	cfg, err := parseTUILegacyHAConfig(wire)
 	if err != nil {
 		return tuiHAConfig{}, err
+	}
+	if _, err := os.Lstat(modularDirectory); !errors.Is(err, fs.ErrNotExist) {
+		return tuiHAConfig{}, errors.New("modular configuration appeared or became inaccessible during legacy HA reading")
 	}
 	return validateTUIHAConfig(cfg)
 }

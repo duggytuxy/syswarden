@@ -57,8 +57,9 @@ migration, administrator edits and separate uninstall/remove/purge outcomes,
 including unrelated protections after reload and reboot, remain required for
 the v5.00.0 IVVQ campaign.
 
-Issue422 remains mandatory: standard-list-only fresh APK/DEB/RPM installation,
-independent explicit TOML choices for SSH/CIS/OS and optional modules, and
+Issue #422 requires fresh APK/DEB/RPM installation to select no list and defer
+activation until explicit configuration through `syswarden config`, with
+independent explicit TOML choices for SSH/CIS/OS and optional modules and
 preservation of administrator settings and existing protection during upgrade.
 BunkerWeb's independent API, source ownership, expiry and HA are unchanged.
 Linux AMD64 only.

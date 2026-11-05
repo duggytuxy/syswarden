@@ -212,6 +212,22 @@ func renderLegacyV4032WAFRsyslogConfig(rawPatterns string) (string, int, error) 
 
 // SetupWAFLogForwarder configures Rsyslog to bridge local Web/Docker logs into the Go WAF Socket
 func SetupWAFLogForwarder() error {
+	if config.GlobalConfig == nil {
+		return fmt.Errorf("WAF bridge selection is unavailable")
+	}
+	if !config.GlobalConfig.LogBridgeEnabled {
+		// A disabled choice is not evidence that an existing persistent bridge
+		// was removed. Preserve it and require bounded ownership recovery.
+		path := filepath.Join(wafRsyslogParentDirectory, wafRsyslogDirectoryName, wafRsyslogConfigName)
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			return fmt.Errorf("WAF bridge is disabled but its configuration absence is not established; recover the retained bridge before retrying")
+		}
+		fmt.Println("[INFO] WAF log bridge is disabled by configuration.")
+		return nil
+	}
+	if !config.GlobalConfig.WAAPEnabled {
+		return fmt.Errorf("WAF bridge requires waap.enabled = true")
+	}
 	fmt.Println("[INFO] Configuring WAF Multi-Tenant Log Bridge (Rsyslog -> UDS)...")
 
 	rsyslogConf, activePatterns, err := renderWAFRsyslogWithProducers(

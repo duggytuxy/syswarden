@@ -510,3 +510,40 @@ func TestLoadConfigDirectoryValidatesTrustedLogProducers(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeLogBridgeRefusalKeepsLastValidConfiguration(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	root := writeConfigFixture(t, validMaster("schema_version = 1"), map[string]string{"99-user.toml": "[waap]\nenabled=false\nlog_bridge_enabled=false\n"})
+	if _, err := LoadConfigDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	override := filepath.Join(root, "modules", "99-user.toml")
+	content := []byte("[waap]\nenabled=false\nlog_bridge_enabled=true\n")
+	if err := os.WriteFile(override, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfigDirectory(root); err == nil || !strings.Contains(err.Error(), "waap.log_bridge_enabled requires explicit waap.enabled=true") {
+		t.Fatal("runtime accepted a bridge without its consumer", err)
+	}
+	if viper.GetBool("waap.enabled") || viper.GetBool("waap.log_bridge_enabled") {
+		t.Fatal("invalid candidate replaced runtime configuration")
+	}
+	fixtureRoot, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixtureRoot.Close()
+	got, err := fixtureRoot.ReadFile("modules/99-user.toml")
+	if err != nil || string(got) != string(content) {
+		t.Fatal("runtime rewrote administrator selection", err)
+	}
+	if err := os.WriteFile(override, []byte("[waap]\nenabled=true\nlog_bridge_enabled=true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfigDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	if !viper.GetBool("waap.enabled") || !viper.GetBool("waap.log_bridge_enabled") {
+		t.Fatal("explicit producer/consumer pair refused")
+	}
+}

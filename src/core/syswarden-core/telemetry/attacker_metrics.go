@@ -345,9 +345,17 @@ func validObservationDisposition(event TelemetryEvent) bool {
 	if event.ObservationDisposition == "" {
 		return true
 	}
-	return event.ObservationDisposition == "kernel-packet-dropped" && event.Action == "DETECTED" &&
-		event.RuleID == "L2-ARP-FLOOD" && event.Jail == "L2-ARP-FLOOD" &&
-		isKernelObservationModel(event.ObservationModel)
+	if event.Action != "DETECTED" || event.RuleID != event.Jail || !isKernelObservationModel(event.ObservationModel) {
+		return false
+	}
+	switch event.ObservationDisposition {
+	case "kernel-packet-dropped":
+		return event.RuleID == "L2-ARP-FLOOD"
+	case "packet-source-unverified":
+		return event.RuleID == "L3-PORTSCAN" || event.RuleID == "L3-HONEYPORT-SCAN"
+	default:
+		return false
+	}
 }
 
 func hasRuleAttestation(event TelemetryEvent) bool {

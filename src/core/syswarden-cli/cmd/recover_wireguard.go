@@ -14,20 +14,38 @@ var inspectLegacyWireGuardRetirement = network.InspectLegacyWireGuardRetirement
 var applyLegacyWireGuardRetirement = network.ApplyLegacyWireGuardRetirement
 var inspectLegacyWireGuardMigration = network.InspectLegacyWireGuardMigration
 var applyLegacyWireGuardMigration = network.ApplyLegacyWireGuardMigration
+var inspectOwnedWireGuardPolicy = network.InspectOwnedWireGuardPolicy
 
 func newRecoverWireGuardCommand() *cobra.Command {
 	var apply bool
 	var retireLegacyWG0 bool
 	var migrateLegacyCurrent bool
+	var assessOwnedPolicy bool
 	var planSHA256 string
 	command := &cobra.Command{
 		Use:   "recover-wireguard",
 		Short: "Inspect and explicitly recover exact historical WireGuard nftables state",
 		Long: "Inspects supported historical SysWarden WireGuard state without changing the host. " +
 			"Use --retire-legacy-wg0 to explicitly retire the exact historical wg0 configuration, including proven unmanifested historical wg-syswarden. Use --migrate-legacy-wg-syswarden to preserve that VPN and migrate its exact generated hooks after historical wg0 retirement. " +
-			"Recovery is fail-closed and requires a second invocation with --apply and the exact SHA-256 digest printed by the dry run.",
+			"Use --assess-owned-policy for a read-only assessment of an already manifest-owned policy; it cannot apply changes. " +
+			"Historical recovery is fail-closed and requires a second invocation with --apply and the exact SHA-256 digest printed by the dry run.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if assessOwnedPolicy {
+				if apply || planSHA256 != "" || retireLegacyWG0 || migrateLegacyCurrent {
+					return fmt.Errorf("--assess-owned-policy is read-only and cannot be combined with apply, plan authorization or historical recovery modes")
+				}
+				assessment, err := inspectOwnedWireGuardPolicy()
+				if err != nil {
+					return err
+				}
+				wire, err := network.RenderOwnedWireGuardPolicyAssessment(assessment)
+				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\n\nRead-only assessment. No migration or activation is authorized or performed.\n", wire)
+				return err
+			}
 			if !apply && planSHA256 != "" {
 				return fmt.Errorf("--plan-sha256 is accepted only with --apply")
 			}
@@ -88,6 +106,7 @@ func newRecoverWireGuardCommand() *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&apply, "apply", false, "Apply the exact reviewed recovery plan")
+	command.Flags().BoolVar(&assessOwnedPolicy, "assess-owned-policy", false, "Inspect the exact owned policy and scoped successor without publishing or applying changes")
 	command.Flags().BoolVar(&retireLegacyWG0, "retire-legacy-wg0", false, "Inspect explicit historical wg0 retirement with a private backup, including proven historical wg-syswarden without a manifest")
 	command.Flags().BoolVar(&migrateLegacyCurrent, "migrate-legacy-wg-syswarden", false, "Inspect preservation of the exact historical wg-syswarden VPN, with private backups and manifest-bound hooks")
 	command.Flags().StringVar(

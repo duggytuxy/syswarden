@@ -226,8 +226,8 @@ func TestHistoricalDefaultFirewallCompatibilityPublishesAtomicallyAndIsIdempoten
 	}); err != nil {
 		t.Fatalf("ApplyHistoricalDefaultFirewallCompatibility() error = %v", err)
 	}
-	if hostRevalidations != 3 {
-		t.Fatalf("successful host revalidations = %d, want 3 transaction barriers", hostRevalidations)
+	if hostRevalidations != 4 {
+		t.Fatalf("successful host revalidations = %d, want 4 transaction barriers", hostRevalidations)
 	}
 	if got := readHistoricalDefaultCore(t, configDir); !bytes.Equal(got, []byte(historicalDefaultCompatibleCoreModule)) {
 		t.Fatalf("published core = %q", got)
@@ -514,11 +514,12 @@ func TestHistoricalDefaultFirewallCompatibilityRejectsPreCommitRaces(t *testing.
 	}
 }
 
-func TestHistoricalDefaultFirewallCompatibilityRollsBackPublicationRaces(t *testing.T) {
+func TestHistoricalDefaultFirewallCompatibilityRejectsPublicationRacesWithoutOverwritingConcurrentState(t *testing.T) {
 	installHistoricalDefaultFirewallCompatibilityTestGlobals(t)
 	tests := []struct {
-		name string
-		hook func(
+		name      string
+		ambiguous bool
+		hook      func(
 			t *testing.T,
 			configDir string,
 			prePublish func() error,
@@ -538,7 +539,8 @@ func TestHistoricalDefaultFirewallCompatibilityRollsBackPublicationRaces(t *test
 			},
 		},
 		{
-			name: "post-publication target content",
+			name:      "post-publication target content",
+			ambiguous: true,
 			hook: func(t *testing.T, configDir string, prePublish, postCommit func() error) (func() error, func() error) {
 				return prePublish, func() error {
 					path := filepath.Join(configDir, "modules", historicalDefaultCoreModuleName)
@@ -557,6 +559,7 @@ func TestHistoricalDefaultFirewallCompatibilityRollsBackPublicationRaces(t *test
 			if err != nil || plan == nil {
 				t.Fatalf("inspection = (%#v, %v)", plan, err)
 			}
+			var concurrent *secureFileIdentity
 			publishHistoricalDefaultFirewallCompatibility = func(
 				directory, name string,
 				content []byte,
@@ -564,17 +567,67 @@ func TestHistoricalDefaultFirewallCompatibilityRollsBackPublicationRaces(t *test
 				preCommit, prePublish, postCommit func() error,
 			) error {
 				wrappedPrePublish, wrappedPostCommit := test.hook(t, configDir, prePublish, postCommit)
+				if test.ambiguous {
+					observedPostCommit := wrappedPostCommit
+					wrappedPostCommit = func() error {
+						callbackErr := observedPostCommit()
+						root, err := os.OpenRoot(directory)
+						if err != nil {
+							t.Fatal(err)
+						}
+						_, concurrent, err = readSecureRegularFileIdentity(root, name, name)
+						_ = root.Close()
+						if err != nil {
+							t.Fatal(err)
+						}
+						return callbackErr
+					}
+				}
 				return replaceSecureFileAtomicallyIfUnchangedValidated(
 					directory, name, content, expected, preCommit, wrappedPrePublish, wrappedPostCommit,
 				)
 			}
-			if err := ApplyHistoricalDefaultFirewallCompatibility(plan, func() error { return nil }); err == nil {
+			applyErr := ApplyHistoricalDefaultFirewallCompatibility(plan, func() error { return nil })
+			if applyErr == nil {
 				t.Fatal("compatibility apply accepted a publication race")
 			}
-			if got := readHistoricalDefaultCore(t, configDir); !bytes.Equal(got, []byte(historicalDefaultCoreModule)) {
-				t.Fatalf("publication race did not restore historical core: %q", got)
+			modules, err := os.OpenRoot(filepath.Join(configDir, "modules"))
+			if err != nil {
+				t.Fatal(err)
 			}
-			assertNoHistoricalDefaultTransactionFiles(t, configDir)
+			defer func() { _ = modules.Close() }()
+			content, info, err := readSecureRegularFileSnapshot(modules, historicalDefaultCoreModuleName, historicalDefaultCoreModuleName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.ambiguous {
+				if !strings.Contains(applyErr.Error(), "ambiguous") || concurrent == nil || !concurrent.matches(content, info) || string(content) != "# post-publication race\n" {
+					t.Fatal("concurrent live edit was overwritten or ambiguity was hidden", applyErr)
+				}
+				entries, err := os.ReadDir(filepath.Join(configDir, "modules"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				retained := 0
+				for _, entry := range entries {
+					if !strings.HasPrefix(entry.Name(), "."+historicalDefaultCoreModuleName+".") {
+						continue
+					}
+					retained++
+					original, originalInfo, err := readSecureRegularFileSnapshot(modules, entry.Name(), entry.Name())
+					if err != nil || !plan.target.matches(original, originalInfo) || !originalInfo.ModTime().Equal(plan.target.info.ModTime()) {
+						t.Fatal("exact original recovery inode, bytes or metadata were lost", err)
+					}
+				}
+				if retained != 1 {
+					t.Fatalf("retained original recovery files = %d, want 1", retained)
+				}
+			} else {
+				if !plan.target.matches(content, info) {
+					t.Fatal("pre-publication refusal did not preserve exact historical core inode")
+				}
+				assertNoHistoricalDefaultTransactionFiles(t, configDir)
+			}
 			publishHistoricalDefaultFirewallCompatibility = replaceSecureFileAtomicallyIfUnchangedValidated
 		})
 	}
@@ -586,9 +639,10 @@ func TestHistoricalDefaultFirewallCompatibilityRollsBackHostStateRaces(t *testin
 		name   string
 		failAt int
 	}{
-		{name: "before quarantine", failAt: 1},
-		{name: "while target quarantined", failAt: 2},
-		{name: "after publication", failAt: 3},
+		{name: "before publication", failAt: 1},
+		{name: "last pre-publication callback", failAt: 2},
+		{name: "final pre-publication recheck", failAt: 3},
+		{name: "after publication", failAt: 4},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configDir := writeHistoricalDefaultFirewallCompatibilityFixture(t)

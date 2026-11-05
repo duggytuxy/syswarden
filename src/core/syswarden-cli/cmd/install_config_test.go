@@ -54,7 +54,6 @@ func TestInstallRejectsMissingManagedSystemdOrderingBeforeHostMutation(t *testin
 	previousForwardingRecovery := recoverPendingWireGuardForwardingForInstall
 	previousWireGuardRecovery := recoverPendingWireGuardForInstall
 	previousWireGuardPreflight := preflightWireGuardForInstall
-	previousSSH := configureSSHForInstall
 	previousPolicies := applyPoliciesForInstall
 	t.Cleanup(func() {
 		preflightSystemdFirewallOrderingForInstall = previousOrdering
@@ -65,7 +64,6 @@ func TestInstallRejectsMissingManagedSystemdOrderingBeforeHostMutation(t *testin
 		recoverPendingWireGuardForwardingForInstall = previousForwardingRecovery
 		recoverPendingWireGuardForInstall = previousWireGuardRecovery
 		preflightWireGuardForInstall = previousWireGuardPreflight
-		configureSSHForInstall = previousSSH
 		applyPoliciesForInstall = previousPolicies
 	})
 
@@ -82,7 +80,6 @@ func TestInstallRejectsMissingManagedSystemdOrderingBeforeHostMutation(t *testin
 	recoverPendingWireGuardForwardingForInstall = func() error { unexpected("forwarding recovery"); return nil }
 	recoverPendingWireGuardForInstall = func() error { unexpected("WireGuard recovery"); return nil }
 	preflightWireGuardForInstall = func() error { unexpected("WireGuard preflight"); return nil }
-	configureSSHForInstall = func() error { unexpected("SSH mutation"); return nil }
 	applyPoliciesForInstall = func() error { unexpected("firewall mutation"); return nil }
 
 	err := installCmd.RunE(installCmd, nil)
@@ -1090,7 +1087,6 @@ func TestInstallWireGuardRecoveryAndPreflightPrecedeSensitiveMutation_SW2_WG_001
 	previousForwardingRecovery := recoverPendingWireGuardForwardingForInstall
 	previousRecovery := recoverPendingWireGuardForInstall
 	previousWireGuardPreflight := preflightWireGuardForInstall
-	previousConfigureSSH := configureSSHForInstall
 	previousApply := applyPoliciesForInstall
 	t.Cleanup(func() {
 		config.GlobalConfig = previousConfig
@@ -1101,7 +1097,6 @@ func TestInstallWireGuardRecoveryAndPreflightPrecedeSensitiveMutation_SW2_WG_001
 		recoverPendingWireGuardForwardingForInstall = previousForwardingRecovery
 		recoverPendingWireGuardForInstall = previousRecovery
 		preflightWireGuardForInstall = previousWireGuardPreflight
-		configureSSHForInstall = previousConfigureSSH
 		applyPoliciesForInstall = previousApply
 	})
 	t.Setenv("SYSWARDEN_PKG_INSTALL", "0")
@@ -1125,10 +1120,6 @@ func TestInstallWireGuardRecoveryAndPreflightPrecedeSensitiveMutation_SW2_WG_001
 	preflightWireGuardForInstall = func() error {
 		events = append(events, "preflight")
 		return errors.New("existing WireGuard nftables table provenance mismatch")
-	}
-	configureSSHForInstall = func() error {
-		t.Fatal("SSH mutation ran after WireGuard preflight refusal")
-		return nil
 	}
 	applyPoliciesForInstall = func() error {
 		t.Fatal("firewall mutation ran after WireGuard preflight refusal")
@@ -1329,10 +1320,10 @@ func TestReloadRejectsCronSchedulingBeforeMutation_SW2_CRON_001(t *testing.T) {
 	}
 }
 
-func TestPrepareInstallConfigurationCompletesPartialConfig_SW_CFG_001(t *testing.T) {
+func TestPrepareInstallConfigurationPreservesCompleteConfig_SW_CFG_001(t *testing.T) {
 	configRoot := filepath.Join(t.TempDir(), "config")
 	modules := filepath.Join(configRoot, "modules")
-	if err := os.MkdirAll(modules, 0750); err != nil {
+	if err := config.EnsureDefaults(configRoot); err != nil {
 		t.Fatal(err)
 	}
 	root, err := os.OpenRoot(modules)
@@ -1343,6 +1334,9 @@ func TestPrepareInstallConfigurationCompletesPartialConfig_SW_CFG_001(t *testing
 	const userConfig = "# operator-owned\n[user]\nwebtui_password = \"remove-this-secret\"\nprofile_name = \"preserve-exactly\"\n"
 	const cleanedUserConfig = "# operator-owned\n[user]\nprofile_name = \"preserve-exactly\"\n"
 	if err := root.WriteFile("99-user.toml", []byte(userConfig), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Chmod("99-user.toml", 0640); err != nil {
 		t.Fatal(err)
 	}
 

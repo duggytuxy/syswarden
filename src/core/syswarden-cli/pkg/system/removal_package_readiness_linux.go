@@ -16,6 +16,9 @@ import (
 // package payload or directory contents; the native manager retains its own
 // package integrity and payload removal responsibilities.
 func AttestRuntimeRetirementBeforeNativeErase() error {
+	if _, err := attestAPKLauncherRetirement(); err != nil {
+		return err
+	}
 	if err := RequireRemovalTombstone(); err != nil {
 		return err
 	}

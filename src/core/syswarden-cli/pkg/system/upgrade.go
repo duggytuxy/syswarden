@@ -20,17 +20,16 @@ import (
 var Version = "v4.10.4"
 
 const (
-	latestReleaseAPI             = "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
-	releaseDownloadBase          = "https://github.com/duggytuxy/syswarden/releases/download"
-	firstSignedUpdaterMajor      = 4
-	firstSignedUpdaterMinor      = 2
-	firstSignedUpdaterPatch      = 9
-	metadataDownloadTimeout      = 30 * time.Second
-	packageDownloadTimeout       = 10 * time.Minute
-	packageInstallationTimeout   = 30 * time.Minute
-	qualificationAttestTimeout   = 2 * time.Minute
-	postInstallationCommandLimit = 2 * time.Minute
-	productionTempBase           = "/var/tmp"
+	latestReleaseAPI           = "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
+	releaseDownloadBase        = "https://github.com/duggytuxy/syswarden/releases/download"
+	firstSignedUpdaterMajor    = 4
+	firstSignedUpdaterMinor    = 2
+	firstSignedUpdaterPatch    = 9
+	metadataDownloadTimeout    = 30 * time.Second
+	packageDownloadTimeout     = 10 * time.Minute
+	packageInstallationTimeout = 30 * time.Minute
+	qualificationAttestTimeout = 2 * time.Minute
+	productionTempBase         = "/var/tmp"
 )
 
 // The public baseline predates this manifest contract. Its one-time transition
@@ -42,36 +41,40 @@ func firstSignedUpdaterVersion() string {
 }
 
 type commandRunner func(context.Context, string, ...string) error
-type installedRPMReleaseAttestor func(context.Context, string) error
+type installedRPMReleaseAttestor func(context.Context, string, string) error
 type installedVersionAttestor func(context.Context, packageTarget, int) (installedQualificationEvidence, error)
 type qualificationActivator func(context.Context, installedQualificationEvidence) error
 type qualificationDependencyAttestor func(context.Context, packageTarget) error
 type qualificationCandidateCLIAttestor func(context.Context, packageTarget, *os.File) (string, error)
 
 type updater struct {
-	client             *http.Client
-	latestURL          string
-	downloadBaseURL    string
-	currentVersion     string
-	goos               string
-	goarch             string
-	tempBase           string
-	trustedKeys        map[string]ed25519.PublicKey
-	lookPath           func(string) (string, error)
-	runCommand         commandRunner
-	effectiveUID       int
-	requireRoot        bool
-	stdout             io.Writer
-	metadataTimeout    time.Duration
-	packageTimeout     time.Duration
-	installTimeout     time.Duration
-	attestTimeout      time.Duration
-	retireWebTUI       func() error
-	attestRPM          installedRPMReleaseAttestor
-	attestInstalled    installedVersionAttestor
-	attestDependencies qualificationDependencyAttestor
-	attestCandidateCLI qualificationCandidateCLIAttestor
-	activateCandidate  qualificationActivator
+	client                  *http.Client
+	latestURL               string
+	downloadBaseURL         string
+	currentVersion          string
+	goos                    string
+	goarch                  string
+	tempBase                string
+	trustedKeys             map[string]ed25519.PublicKey
+	lookPath                func(string) (string, error)
+	installPackage          nativePackageInstaller
+	prepareAPKTransition    apkTransitionPreparer
+	guardNativeActivation   func(context.Context, authenticatedAPKCandidate) error
+	effectiveUID            int
+	requireRoot             bool
+	stdout                  io.Writer
+	metadataTimeout         time.Duration
+	packageTimeout          time.Duration
+	installTimeout          time.Duration
+	attestTimeout           time.Duration
+	retireWebTUI            func() error
+	attestRPM               installedRPMReleaseAttestor
+	preflightNativeIdentity func(context.Context) (nativeUpdateIdentity, error)
+	attestInstalled         installedVersionAttestor
+	attestDependencies      qualificationDependencyAttestor
+	attestCandidateCLI      qualificationCandidateCLIAttestor
+	attestPackageIdentity   nativePackageHeaderAttestor
+	activateCandidate       qualificationActivator
 }
 
 func productionHTTPClient() *http.Client {
@@ -104,11 +107,22 @@ func productionHTTPClient() *http.Client {
 	}
 }
 
-func runExternalCommand(ctx context.Context, name string, args ...string) error {
-	if err := validateExternalCommand(name, args); err != nil {
-		return err
+func productionCommandEnvironment(name string) []string {
+	if productionPackageManager(name) {
+		return productionNativeCommandEnvironment()
 	}
-	return executeExternalCommand(ctx, name, productionExternalCommandEnvironment(), args...)
+	return productionExternalCommandEnvironment()
+}
+
+// The package execution boundary is independent of the manager-specific
+// retention backend. APK retains requirements within its add transaction.
+func productionPackageManager(name string) bool {
+	switch name {
+	case "/usr/bin/apt-get", "/usr/bin/dnf", "/usr/bin/yum", "/sbin/apk", "/usr/sbin/apk":
+		return true
+	default:
+		return false
+	}
 }
 
 func productionExternalCommandEnvironment() []string {
@@ -117,6 +131,7 @@ func productionExternalCommandEnvironment() []string {
 	privatePrefixes := []string{
 		offlineQualificationEnvironment + "=",
 		"SYSWARDEN_PKG_INSTALL=",
+		nativeInstallPhaseEnvironment + "=",
 	}
 	for _, entry := range environment {
 		private := false
@@ -135,6 +150,16 @@ func productionExternalCommandEnvironment() []string {
 }
 
 func executeExternalCommand(ctx context.Context, name string, environment []string, args ...string) error {
+	cmd, err := productionExternalCommand(ctx, name, environment, args...)
+	if err != nil {
+		return err
+	}
+	return cmd.Run()
+}
+
+// Construct without executing so callers can inspect the actual fixed-path
+// command boundary without invoking a package manager or changing its database.
+func productionExternalCommand(ctx context.Context, name string, environment []string, args ...string) (*exec.Cmd, error) {
 	var cmd *exec.Cmd
 	switch name {
 	case "/usr/bin/apt-get":
@@ -158,7 +183,10 @@ func executeExternalCommand(ctx context.Context, name string, environment []stri
 	case "/usr/bin/systemctl":
 		cmd = exec.CommandContext(ctx, "/usr/bin/systemctl")
 	default:
-		return fmt.Errorf("refusing untrusted executable path %q", name)
+		return nil, fmt.Errorf("refusing untrusted executable path %q", name)
+	}
+	if productionPackageManager(name) {
+		cmd.Dir = "/"
 	}
 	cmd.Args = append([]string{cmd.Path}, args...)
 	if environment != nil {
@@ -166,25 +194,26 @@ func executeExternalCommand(ctx context.Context, name string, environment []stri
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return cmd, nil
 }
 
 func validateExternalCommand(name string, args []string) error {
 	switch name {
 	case "/usr/bin/apt-get":
-		if len(args) != 5 {
+		if len(args) != 7 {
 			break
 		}
-		if args[0] == "-o" && args[1] == aptDPkgLockTimeoutOption && args[2] == "install" &&
-			args[3] == "-y" && validSecurePackageArgument(args[4]) {
+		if args[0] == "-o" && args[1] == aptDPkgLockTimeoutOption && args[2] == "--no-install-recommends" &&
+			args[3] == "--no-remove" && args[4] == "install" && args[5] == "-y" && validSecurePackageArgument(args[6]) {
 			return nil
 		}
 	case "/usr/bin/dnf", "/usr/bin/yum":
-		if len(args) != 4 {
+		if len(args) != 7 {
 			break
 		}
-		if args[0] == "--setopt=localpkg_gpgcheck=1" && args[1] == "install" &&
-			args[2] == "-y" && validSecurePackageArgument(args[3]) {
+		if args[0] == "--setopt=localpkg_gpgcheck=1" && args[1] == "--setopt=install_weak_deps=False" &&
+			args[2] == "--setopt=clean_requirements_on_remove=False" && args[3] == "--setopt=obsoletes=False" &&
+			args[4] == "install" && args[5] == "-y" && validSecurePackageArgument(args[6]) {
 			return nil
 		}
 	case "/sbin/apk", "/usr/sbin/apk":
@@ -232,24 +261,30 @@ func newProductionUpdater() (*updater, error) {
 	}
 
 	return &updater{
-		client:          productionHTTPClient(),
-		latestURL:       latestReleaseAPI,
-		downloadBaseURL: releaseDownloadBase,
-		currentVersion:  Version,
-		goos:            runtime.GOOS,
-		goarch:          runtime.GOARCH,
-		tempBase:        productionTempBase,
-		trustedKeys:     trustedKeys,
-		lookPath:        exec.LookPath,
-		runCommand:      runExternalCommand,
-		effectiveUID:    os.Geteuid(),
-		requireRoot:     true,
-		stdout:          os.Stdout,
-		metadataTimeout: metadataDownloadTimeout,
-		packageTimeout:  packageDownloadTimeout,
-		installTimeout:  packageInstallationTimeout,
-		attestRPM:       attestInstalledStandardRPMRelease,
-		attestInstalled: attestInstalledQualificationVersion,
+		client:                  productionHTTPClient(),
+		latestURL:               latestReleaseAPI,
+		downloadBaseURL:         releaseDownloadBase,
+		currentVersion:          Version,
+		goos:                    runtime.GOOS,
+		goarch:                  runtime.GOARCH,
+		tempBase:                productionTempBase,
+		trustedKeys:             trustedKeys,
+		lookPath:                exec.LookPath,
+		installPackage:          runAuthenticatedNativeInstall,
+		prepareAPKTransition:    prepareProductionAPKTransition,
+		guardNativeActivation:   requireProductionNativeActivationTransaction,
+		effectiveUID:            os.Geteuid(),
+		requireRoot:             true,
+		stdout:                  os.Stdout,
+		metadataTimeout:         metadataDownloadTimeout,
+		packageTimeout:          packageDownloadTimeout,
+		installTimeout:          packageInstallationTimeout,
+		attestTimeout:           qualificationAttestTimeout,
+		attestRPM:               attestInstalledStandardRPMRelease,
+		preflightNativeIdentity: preflightStandardNativeUpdate,
+		attestInstalled:         attestInstalledQualificationVersion,
+		attestCandidateCLI:      attestQualificationPackageCLI,
+		attestPackageIdentity:   attestNativePackageHeader,
 		retireWebTUI: func() error {
 			return config.RemoveRetiredWebTUIConfiguration("/etc/syswarden/config")
 		},
@@ -257,7 +292,7 @@ func newProductionUpdater() (*updater, error) {
 }
 
 // UpgradeSystem checks for a newer release and installs only a package bound to
-// an authenticated v1 update manifest.
+// an authenticated release manifest.
 func UpgradeSystem() error {
 	u, err := newProductionUpdater()
 	if err != nil {
@@ -268,6 +303,11 @@ func UpgradeSystem() error {
 
 func (u *updater) run(ctx context.Context) (returnErr error) {
 	if err := u.validateConfiguration(); err != nil {
+		return err
+	}
+
+	identity, err := u.preflightStandardNativeIdentity(ctx, u.metadataTimeout)
+	if err != nil {
 		return err
 	}
 
@@ -288,13 +328,17 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		if u.attestInstalled == nil {
 			return errors.New("current release cannot be confirmed without installed-package attestation")
 		}
-		target, err := detectPackageTarget(u.goos, u.goarch, latestVersion, u.lookPath)
+		target, err := detectPackageTarget(u.goos, u.goarch, latestVersion, identity, u.lookPath)
 		if err != nil {
 			return err
 		}
 		attestationCtx, cancel := context.WithTimeout(ctx, u.metadataTimeout)
 		defer cancel()
+		if err := attestationCtx.Err(); err != nil {
+			return fmt.Errorf("attest current installed package: %w", err)
+		}
 		evidence, err := u.attestInstalled(attestationCtx, target, u.effectiveUID)
+		err = errors.Join(err, attestationCtx.Err())
 		if err != nil {
 			return fmt.Errorf("release version is current, but installed package state or integrity is not verified; inspect the native package manager and resolve any incomplete configuration: %w", err)
 		}
@@ -316,7 +360,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return fmt.Errorf("release %s predates the signed updater contract", latestVersion)
 	}
 
-	target, err := detectPackageTarget(u.goos, u.goarch, latestVersion, u.lookPath)
+	target, err := detectPackageTarget(u.goos, u.goarch, latestVersion, identity, u.lookPath)
 	if err != nil {
 		return err
 	}
@@ -327,7 +371,7 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	fmt.Fprintln(u.stdout, "[+] A new Enterprise version is available!")
 	fmt.Fprintf(u.stdout, "[INFO] Selected %s package %s for %s/%s.\n", target.format, target.filename, u.goos, u.goarch)
 
-	manifest, err := u.fetchAndVerifyManifest(ctx, latestVersion)
+	manifest, manifestBytes, signatureBytes, err := u.fetchAndVerifyManifestProof(ctx, latestVersion)
 	if err != nil {
 		return err
 	}
@@ -341,6 +385,9 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 		return fmt.Errorf("create secure update workspace: %w", err)
 	}
 	defer func() {
+		if retainAPKTransitionWorkspace(returnErr, workspace) {
+			return
+		}
 		if cleanupErr := removeSecureWorkspace(workspace); cleanupErr != nil {
 			returnErr = errors.Join(returnErr, fmt.Errorf("clean update workspace: %w", cleanupErr))
 		}
@@ -373,29 +420,89 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
 		return fmt.Errorf("verify package immediately before installation: %w", err)
 	}
+	if err := u.attestAuthenticatedPackageIdentity(ctx, target, latestVersion, packageFile, u.metadataTimeout); err != nil {
+		return fmt.Errorf("attest authenticated native package identity before installation: %w", err)
+	}
+	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
+		return fmt.Errorf("reverify package after native header attestation: %w", err)
+	}
+	payloadAttestationCtx, cancelPayloadAttestation := context.WithTimeout(ctx, u.attestTimeout)
+	if err := payloadAttestationCtx.Err(); err != nil {
+		cancelPayloadAttestation()
+		return fmt.Errorf("attest candidate CLI from authenticated package: %w", err)
+	}
+	expectedCandidateCLISHA256, err := u.attestCandidateCLI(payloadAttestationCtx, target, packageFile)
+	err = errors.Join(err, payloadAttestationCtx.Err())
+	cancelPayloadAttestation()
+	if err != nil {
+		return fmt.Errorf("attest candidate CLI from authenticated package: %w", err)
+	}
+	if !validSHA256(expectedCandidateCLISHA256) {
+		return errors.New("authenticated package CLI attestation lacks a valid SHA-256 digest")
+	}
+	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
+		return fmt.Errorf("reverify package after candidate CLI attestation: %w", err)
+	}
 	if err := u.attestStandardRPMChannel(ctx, target, "immediately before package installation"); err != nil {
+		return err
+	}
+
+	if err := u.recheckStandardNativeIdentity(ctx, u.metadataTimeout, identity); err != nil {
+		return fmt.Errorf("native package identity changed before installation: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
+		return fmt.Errorf("reverify package after native installation preflight: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if err := u.preflightNativeActivation(ctx, target, latestVersion, artifact, packageFile, packagePath, manifestBytes, signatureBytes, expectedCandidateCLISHA256, false); err != nil {
+		return err
+	}
+	if err := u.preflightAPKTransition(ctx, target, latestVersion, artifact, packageFile, packagePath, manifestBytes, signatureBytes, expectedCandidateCLISHA256, false); err != nil {
 		return err
 	}
 
 	fmt.Fprintf(u.stdout, "[INFO] Installing authenticated %s package...\n", target.format)
 	installCtx, cancelInstall := context.WithTimeout(ctx, u.installTimeout)
-	err = u.runCommand(installCtx, target.installer, target.installArguments(packagePath)...)
+	err = u.installPackage(installCtx, target, packagePath, func(ctx context.Context) error {
+		return verifyPackageAtNativeExecution(ctx, packageFile, packagePath, artifact, u.effectiveUID)
+	})
+	err = errors.Join(err, installCtx.Err())
 	cancelInstall()
 	if err != nil {
 		return fmt.Errorf("install %s package: %w", target.format, err)
 	}
 
+	if err := u.recheckStandardNativeIdentity(ctx, u.attestTimeout, identity); err != nil {
+		return fmt.Errorf("package transaction completed but native package identity changed: %w", err)
+	}
+	installedCandidate, err := u.attestQualificationInstallation(ctx, target, "post-install")
+	if err != nil {
+		return fmt.Errorf("package transaction completed but candidate attestation failed: %w", err)
+	}
+	if installedCandidate.version != latestVersion {
+		return fmt.Errorf("package transaction installed version %s, want exact candidate %s", installedCandidate.version, latestVersion)
+	}
+	if installedCandidate.cliSHA256 != expectedCandidateCLISHA256 {
+		return fmt.Errorf("installed candidate CLI SHA-256 %s does not match authenticated package payload %s", installedCandidate.cliSHA256, expectedCandidateCLISHA256)
+	}
+
 	if err := u.finishUpgrade(ctx, target); err != nil {
-		return fmt.Errorf("package installed but post-install activation failed: %w", err)
+		return fmt.Errorf("package installed but post-install finalization failed: %w", err)
 	}
 	return nil
 }
 
 func (u *updater) validateConfiguration() error {
-	if u.client == nil || u.lookPath == nil || u.runCommand == nil || u.stdout == nil {
+	if u.client == nil || u.lookPath == nil || u.installPackage == nil || u.stdout == nil || u.preflightNativeIdentity == nil || u.attestPackageIdentity == nil || u.attestInstalled == nil || u.attestCandidateCLI == nil || u.guardNativeActivation == nil {
 		return errors.New("updater dependencies are incomplete")
 	}
-	if u.metadataTimeout <= 0 || u.packageTimeout <= 0 || u.installTimeout <= 0 {
+	if u.metadataTimeout <= 0 || u.packageTimeout <= 0 || u.installTimeout <= 0 || u.attestTimeout <= 0 {
 		return errors.New("updater timeouts must be positive")
 	}
 	for label, rawURL := range map[string]string{"release API": u.latestURL, "release download base": u.downloadBaseURL} {
@@ -432,37 +539,37 @@ func (u *updater) fetchLatestVersion(ctx context.Context) (string, error) {
 	return latestVersion, nil
 }
 
-func (u *updater) fetchAndVerifyManifest(ctx context.Context, version string) (*updateManifest, error) {
+func (u *updater) fetchAndVerifyManifestProof(ctx context.Context, version string) (*updateManifest, []byte, []byte, error) {
 	if len(u.trustedKeys) == 0 {
-		return nil, errors.New("no trusted Ed25519 release keys are embedded; refusing update")
+		return nil, nil, nil, errors.New("no trusted Ed25519 release keys are embedded; refusing update")
 	}
 	manifestURL, err := releaseAssetURL(u.downloadBaseURL, version, updateManifestAssetName)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	signatureURL, err := releaseAssetURL(u.downloadBaseURL, version, updateManifestSignatureAssetName)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	metadataCtx, cancel := context.WithTimeout(ctx, u.metadataTimeout)
 	manifestBytes, err := downloadBoundedBytes(metadataCtx, u.client, manifestURL, maxManifestBytes)
 	cancel()
 	if err != nil {
-		return nil, fmt.Errorf("download update manifest: %w", err)
+		return nil, nil, nil, fmt.Errorf("download update manifest: %w", err)
 	}
 	metadataCtx, cancel = context.WithTimeout(ctx, u.metadataTimeout)
 	signatureBytes, err := downloadBoundedBytes(metadataCtx, u.client, signatureURL, maxSignatureAssetBytes)
 	cancel()
 	if err != nil {
-		return nil, fmt.Errorf("download update manifest signature: %w", err)
+		return nil, nil, nil, fmt.Errorf("download update manifest signature: %w", err)
 	}
 
 	manifest, err := verifySignedManifest(manifestBytes, signatureBytes, version, u.trustedKeys)
 	if err != nil {
-		return nil, fmt.Errorf("verify update manifest: %w", err)
+		return nil, nil, nil, fmt.Errorf("verify update manifest: %w", err)
 	}
-	return manifest, nil
+	return manifest, manifestBytes, signatureBytes, nil
 }
 
 func releaseAssetURL(baseURL, version, assetName string) (string, error) {
@@ -484,45 +591,28 @@ func releaseAssetURL(baseURL, version, assetName string) (string, error) {
 }
 
 func (u *updater) finishUpgrade(ctx context.Context, target packageTarget) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if target.os != "linux" {
 		return errors.New("package target operating system is not supported")
 	}
-	fmt.Fprintln(u.stdout, "[INFO] Restarting services to apply the new version...")
-	errorsFound := make([]error, 0, 3)
+	// Native hooks own activation and may deliberately stage a package while
+	// preserving stopped, disabled or masked services. Never override that
+	// disposition with a second restart here.
+	errorsFound := make([]error, 0, 1)
 	if u.retireWebTUI != nil {
 		if err := u.retireWebTUI(); err != nil {
 			errorsFound = append(errorsFound, fmt.Errorf("retire Web-TUI configuration: %w", err))
 		}
 	}
-	if target.format == packageFormatAPK {
-		if err := u.runResolvedCommand(ctx, "rc-service", "syswarden-core", "restart"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("restart syswarden-core: %w", err))
-		}
-	} else {
-		if err := u.runResolvedCommand(ctx, "systemctl", "daemon-reload"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("reload systemd manager configuration: %w", err))
-		}
-		if err := u.runResolvedCommand(ctx, "systemctl", "restart", "syswarden-core"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("restart syswarden-core: %w", err))
-		}
-	}
+	errorsFound = append(errorsFound, ctx.Err())
 	if err := errors.Join(errorsFound...); err != nil {
 		return err
 	}
-	fmt.Fprintln(u.stdout, "\n[+] In-place upgrade completed successfully!")
-	fmt.Fprintln(u.stdout, "[INFO] Please restart your terminal session to use the new version.")
+	fmt.Fprintln(u.stdout, "\n[+] Native package transaction completed successfully!")
+	fmt.Fprintln(u.stdout, "[INFO] Native hooks control activation; package success does not establish service or firewall health.")
 	return nil
-}
-
-func (u *updater) runResolvedCommand(ctx context.Context, name string, args ...string) error {
-	resolved, err := u.lookPath(name)
-	if err != nil {
-		return fmt.Errorf("locate %s: %w", name, err)
-	}
-	commandCtx, cancel := context.WithTimeout(ctx, postInstallationCommandLimit)
-	err = u.runCommand(commandCtx, resolved, args...)
-	cancel()
-	return err
 }
 
 func safeAssetName(name string) bool {

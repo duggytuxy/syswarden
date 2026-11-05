@@ -15,6 +15,9 @@ import (
 // exact historical table lineage. Unmanifested installations still require
 // explicit operator recovery; a reserved name alone never authorizes deletion.
 func CleanupAttestedStaleOrLegacyWireGuardNFTStateForRemoval() error {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	staleErr := CleanupAttestedStaleWireGuardNFTStateForRemoval()
 	if staleErr == nil {
 		return nil
@@ -32,6 +35,9 @@ func CleanupAttestedStaleOrLegacyWireGuardNFTStateForRemoval() error {
 }
 
 func (host legacyWireGuardRecoveryHost) remove(requireRemoval func() error) error {
+	if err := wireguardstate.RefusePendingPolicyTransition(host.filesystemRoot); err != nil {
+		return err
+	}
 	if requireRemoval == nil {
 		return fmt.Errorf("legacy removal requires an attested removal barrier and stopped services")
 	}
@@ -77,6 +83,9 @@ func (host legacyWireGuardRecoveryHost) remove(requireRemoval func() error) erro
 // removal barrier can strand an installation whose ownership cannot be proved.
 // A durable transaction is left to the operation-aware removal recovery path.
 func PreflightWireGuardRemoval() error {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	return preflightWireGuardRemovalInventory(func() (wireguardstate.Inventory, error) {
 		inventory, err := wireguardstate.Inspect(wireGuardFilesystemRoot)
 		if err == nil && !inventory.Transaction {

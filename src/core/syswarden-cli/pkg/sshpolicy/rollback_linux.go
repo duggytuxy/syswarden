@@ -134,8 +134,18 @@ func rollbackSSHConfiguration(ctx context.Context, journal *sshJournal, approved
 }
 
 func sshRollbackGuard(ctx context.Context, journal *sshJournal, transaction string, expected sshStoredInventory, parserCheck func() error) func() error {
+	return sshRollbackInventoryGuard(ctx, journal, transaction, expected, parserCheck, journal.requireNoSSHActivation)
+}
+
+// The caller supplies a live mutation fence, not a flag bypassing activation.
+// Ordinary rollback always supplies requireNoSSHActivation. Runtime recovery
+// instead holds a separately approved recovery history and retained process.
+func sshRollbackInventoryGuard(ctx context.Context, journal *sshJournal, transaction string, expected sshStoredInventory, parserCheck, fence func() error) func() error {
 	return func() error {
-		if err := errors.Join(ctx.Err(), journal.requireNoSSHActivation(), parserCheck()); err != nil {
+		if fence == nil || parserCheck == nil || ctx == nil {
+			return ErrInventoryUnsafe
+		}
+		if err := errors.Join(ctx.Err(), fence(), parserCheck()); err != nil {
 			return err
 		}
 		current, err := stableSSHRollback(journal, transaction)
@@ -147,7 +157,11 @@ func sshRollbackGuard(ctx context.Context, journal *sshJournal, transaction stri
 }
 
 func syncSSHRollback(ctx context.Context, journal *sshJournal, transaction string, expected sshStoredInventory, parserCheck func() error, ops sshPublicationOps) error {
-	guard := sshRollbackGuard(ctx, journal, transaction, expected, parserCheck)
+	return syncSSHRollbackGuarded(ctx, journal, transaction, expected, parserCheck, ops, journal.requireNoSSHActivation)
+}
+
+func syncSSHRollbackGuarded(ctx context.Context, journal *sshJournal, transaction string, expected sshStoredInventory, parserCheck func() error, ops sshPublicationOps, fence func() error) error {
+	guard := sshRollbackInventoryGuard(ctx, journal, transaction, expected, parserCheck, fence)
 	if err := guard(); err != nil {
 		return err
 	}
@@ -174,7 +188,11 @@ func syncSSHRollback(ctx context.Context, journal *sshJournal, transaction strin
 }
 
 func executeSSHRollback(ctx context.Context, journal *sshJournal, phase sshPublicationRecord, prepared sshPreparation, applied int, parserCheck func() error, ops sshPublicationOps) (sshStoredInventory, error) {
-	guard := sshRollbackGuard(ctx, journal, prepared.Transaction, phase.Before, parserCheck)
+	return executeSSHRollbackGuarded(ctx, journal, phase, prepared, applied, parserCheck, ops, journal.requireNoSSHActivation)
+}
+
+func executeSSHRollbackGuarded(ctx context.Context, journal *sshJournal, phase sshPublicationRecord, prepared sshPreparation, applied int, parserCheck func() error, ops sshPublicationOps, fence func() error) (sshStoredInventory, error) {
+	guard := sshRollbackInventoryGuard(ctx, journal, prepared.Transaction, phase.Before, parserCheck, fence)
 	if err := guard(); err != nil {
 		return sshStoredInventory{}, err
 	}
@@ -223,7 +241,7 @@ func executeSSHRollback(ctx context.Context, journal *sshJournal, phase sshPubli
 	if err != nil {
 		return sshStoredInventory{}, err
 	}
-	if err := errors.Join(checkSSHRollbackTransition(phase.Before, after, prepared, applied, phase.Step), ctx.Err(), parserCheck(), journal.recheck()); err != nil {
+	if err := errors.Join(checkSSHRollbackTransition(phase.Before, after, prepared, applied, phase.Step), ctx.Err(), parserCheck(), journal.recheck(), fence()); err != nil {
 		return sshStoredInventory{}, err
 	}
 	return after, nil

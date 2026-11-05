@@ -77,6 +77,9 @@ type ServerConfigurationIdentity struct {
 	OwnershipToken  string
 	ActiveInterface string
 	SharedForward   bool
+	// Zero identifies the original v1 policy for backward-compatible recovery.
+	PolicyVersion int
+	IPv4Subnet    string
 }
 
 // Artifact records the exact file identity accepted as SysWarden-owned.
@@ -340,7 +343,12 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 	if err != nil {
 		return ServerConfigurationIdentity{}, err
 	}
+	policyVersion := 0
 	tokenMarker := `comment "syswarden-wg-v1:`
+	if strings.Contains(postUp, `comment "syswarden-wg-v2:`) {
+		policyVersion = 2
+		tokenMarker = `comment "syswarden-wg-v2:`
+	}
 	tokenStart := strings.Index(postUp, tokenMarker)
 	if tokenStart < 0 {
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp has no ownership token")
@@ -355,12 +363,19 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp ownership token is invalid")
 	}
 	interfaceMarker := `add rule inet syswarden_wg postrouting oifname "`
+	if policyVersion == 2 {
+		interfaceMarker = `add rule inet syswarden_wg postrouting iifname "wg-syswarden" oifname "`
+	}
 	interfaceStart := strings.Index(postUp, interfaceMarker)
 	if interfaceStart < 0 {
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp has no exact masquerade rule")
 	}
 	interfaceStart += len(interfaceMarker)
-	interfaceEnd := strings.Index(postUp[interfaceStart:], `" masquerade;`)
+	interfaceSuffix := `" masquerade;`
+	if policyVersion == 2 {
+		interfaceSuffix = `" ip saddr `
+	}
+	interfaceEnd := strings.Index(postUp[interfaceStart:], interfaceSuffix)
 	if interfaceEnd < 0 {
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp has no canonical masquerade interface")
 	}
@@ -369,7 +384,19 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp has an invalid masquerade interface")
 	}
 	expectedPostUp := fmt.Sprintf(`%s 'create table inet syswarden_wg { comment "syswarden-wg-v1:%s"; }; add chain inet syswarden_wg prerouting { type nat hook prerouting priority dstnat; }; add chain inet syswarden_wg postrouting { type nat hook postrouting priority srcnat; }; add chain inet syswarden_wg forward { type filter hook forward priority 0; policy accept; }; add rule inet syswarden_wg postrouting oifname "%s" masquerade; add rule inet syswarden_wg forward iifname "wg-syswarden" accept; add rule inet syswarden_wg forward oifname "wg-syswarden" accept'`, nftPath, ownershipToken, activeInterface)
-	sharedForward := postUp == strings.TrimSuffix(expectedPostUp, "'")+SharedForwardPostUpSuffix(ownershipToken)+"'"
+	sharedSuffix := SharedForwardPostUpSuffix(ownershipToken)
+	ipv4Subnet := ""
+	if policyVersion == 2 {
+		if activeInterface == "wg-syswarden" {
+			return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard egress cannot be its tunnel interface")
+		}
+		ipv4Subnet = networkPrefix.String()
+		identity := ServerConfigurationIdentity{NFTPath: nftPath, OwnershipToken: ownershipToken,
+			ActiveInterface: activeInterface, IPv4Subnet: ipv4Subnet, PolicyVersion: 2}
+		expectedPostUp = ScopedServerPostUp(identity)
+		sharedSuffix = ScopedSharedForwardPostUpSuffix(identity)
+	}
+	sharedForward := postUp == strings.TrimSuffix(expectedPostUp, "'")+sharedSuffix+"'"
 	if postUp != expectedPostUp && !sharedForward {
 		return ServerConfigurationIdentity{}, fmt.Errorf("WireGuard PostUp is not the exact owned nftables hook")
 	}
@@ -408,6 +435,7 @@ func ParseServerConfiguration(content []byte) (ServerConfigurationIdentity, erro
 	}
 	return ServerConfigurationIdentity{
 		NFTPath: nftPath, TruePath: truePath, OwnershipToken: ownershipToken, ActiveInterface: activeInterface, SharedForward: sharedForward,
+		PolicyVersion: policyVersion, IPv4Subnet: ipv4Subnet,
 	}, nil
 }
 
@@ -1028,6 +1056,12 @@ func stageEntry(root, logical, stageName, quarantineName string, content []byte,
 func StageOwnedArtifacts(root string, contents map[string][]byte, expectedUID, expectedGID uint32) (*StagedPublication, error) {
 	if err := preflightLegacyMigration(root); err != nil {
 		return nil, err
+	}
+	// Fixed private successor archives cannot be rebound to a new generation.
+	// Reinstallation needs a separately reviewed lineage-retirement plan; never
+	// delete recovery evidence or begin publication to make it appear absent.
+	if present, err := inventoryLogicalExists(root, PolicyTransitionReceiptPath); err != nil || present {
+		return nil, errors.Join(fmt.Errorf("retained WireGuard policy lineage blocks fresh publication; preserve private recovery archives"), err)
 	}
 	if len(contents) != len(canonicalArtifactPaths) {
 		return nil, fmt.Errorf("WireGuard staging requires the exact generated-artifact inventory")
@@ -1820,6 +1854,9 @@ func removeTransactionJournal(root string, expected Artifact, expectedUID, expec
 
 // CaptureManifest records the exact current identities of all generated files.
 func CaptureManifest(root string, expectedUID, expectedGID uint32) (Manifest, error) {
+	if err := RefusePendingPolicyTransition(root); err != nil {
+		return Manifest{}, err
+	}
 	manifest := Manifest{Schema: manifestSchema, Artifacts: make([]Artifact, 0, len(canonicalArtifactPaths))}
 	for _, path := range canonicalArtifactPaths {
 		record, _, err := captureLogical(root, path, expectedUID, expectedGID, maximumOwnedArtifactBytes)
@@ -1861,6 +1898,9 @@ func readManifestWithRecord(root string, expectedUID, expectedGID uint32) (Manif
 // ReadManifest reads and validates the canonical manifest envelope and its own
 // root-owned 0600 regular-file identity. It does not verify artifact contents.
 func ReadManifest(root string, expectedUID, expectedGID uint32) (Manifest, error) {
+	if err := RefusePendingPolicyTransition(root); err != nil {
+		return Manifest{}, err
+	}
 	manifest, _, err := readManifestWithRecord(root, expectedUID, expectedGID)
 	return manifest, err
 }
@@ -1924,6 +1964,9 @@ func ReadAndVerify(root string, expectedUID, expectedGID uint32) (Manifest, erro
 		return Manifest{}, err
 	}
 	if err := VerifyManifest(root, manifest, expectedUID, expectedGID); err != nil {
+		return Manifest{}, err
+	}
+	if err := verifyFinalizedPolicyManifest(root, manifest, expectedUID, expectedGID); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil
@@ -2455,6 +2498,14 @@ func recoverRemovalTransaction(
 	expectedUID, expectedGID uint32,
 	retainReloadDebt bool,
 ) error {
+	proofs, err := removalIdentityProofs(root, journal, expectedUID, expectedGID)
+	if err != nil {
+		return err
+	}
+	if err := preflightRemovalIdentities(root, proofs, expectedUID, expectedGID); err != nil {
+		return err
+	}
+	journal = proofs
 	if journal.OpenRCServiceLink != nil {
 		if err := removeJournalSymlink(
 			root, *journal.OpenRCServiceLink, false, expectedUID, expectedGID,
@@ -2605,6 +2656,17 @@ func beginOwnedArtifactRemoval(
 	}
 	if err := VerifyManifest(root, manifest, expectedUID, expectedGID); err != nil {
 		return err
+	}
+	if err := verifyFinalizedPolicyManifest(root, manifest, expectedUID, expectedGID); err != nil {
+		return err
+	}
+	manifest, err = captureRemovalIdentities(root, manifest, expectedUID, expectedGID)
+	if err != nil {
+		return err
+	}
+	_, currentManifestRecord, err := readManifestWithRecord(root, expectedUID, expectedGID)
+	if err != nil || !sameArtifact(currentManifestRecord, manifestRecord) {
+		return errors.Join(fmt.Errorf("ownership manifest changed before removal journal publication"), err)
 	}
 	manifestQuarantine, err := randomTemporaryName(filepath.Base(ManifestPath), "quarantine")
 	if err != nil {

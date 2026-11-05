@@ -128,14 +128,14 @@ func TestOfflineQualificationInstallAttestsFeedsWithoutNetworkCalls(t *testing.T
 	t.Setenv("SYSWARDEN_OFFLINE_QUALIFICATION", "1")
 	t.Setenv("SYSWARDEN_PKG_INSTALL", "1")
 	config.GlobalConfig = &config.Config{ListChoice: "4", GeoCodes: "be", GeoAllowed: "fr"}
-	downloadFeedsForInstall = func(string, string, string, string, string, string, string, string, string, bool, bool) error {
+	downloadFeedsForInstall = func(string, string, string, string, string, string, string, string, string, bool, bool, bool) error {
 		t.Fatal("offline qualification invoked the feed downloader")
 		return nil
 	}
 	attestCalls := 0
 	attestOfflineQualificationFeedsForInstall = func(
 		mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, geoAllowed string,
-		lanMode bool,
+		lanMode, osintEnabled bool,
 	) error {
 		attestCalls++
 		if mirrorURL != "https://codeberg.org/" || customURLIPv6 != "" || customHash != "" ||
@@ -167,14 +167,14 @@ func TestOrdinaryPackageInstallDownloadsFeedsWithoutHomepageProbe(t *testing.T) 
 	t.Setenv("SYSWARDEN_PKG_INSTALL", "1")
 	config.GlobalConfig = &config.Config{ListChoice: "4"}
 	downloadCalls := 0
-	downloadFeedsForInstall = func(mirror string, _ string, _ string, _ string, choice string, _ string, _ string, _ string, _ string, _ bool, _ bool) error {
+	downloadFeedsForInstall = func(mirror string, _ string, _ string, _ string, choice string, _ string, _ string, _ string, _ string, _ bool, _ bool, _ bool) error {
 		downloadCalls++
 		if mirror != "https://codeberg.org/" || choice != "4" {
 			t.Fatalf("feed selection changed: mirror=%q choice=%q", mirror, choice)
 		}
 		return nil
 	}
-	attestOfflineQualificationFeedsForInstall = func(string, string, string, string, string, string, string, bool) error {
+	attestOfflineQualificationFeedsForInstall = func(string, string, string, string, string, string, string, bool, bool) error {
 		t.Fatal("ordinary package install entered the offline qualification path")
 		return nil
 	}
@@ -185,7 +185,7 @@ func TestOrdinaryPackageInstallDownloadsFeedsWithoutHomepageProbe(t *testing.T) 
 	if downloadCalls != 1 {
 		t.Fatalf("ordinary path downloads=%d, want 1", downloadCalls)
 	}
-	downloadFeedsForInstall = func(string, string, string, string, string, string, string, string, string, bool, bool) error {
+	downloadFeedsForInstall = func(string, string, string, string, string, string, string, string, string, bool, bool, bool) error {
 		return errors.New("feed mirror quorum unavailable")
 	}
 	if err := prepareNetworkIntelligenceForInstall(); err == nil || !strings.Contains(err.Error(), "feed mirror quorum unavailable") {

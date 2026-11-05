@@ -26,12 +26,24 @@ var setupAbuseForReload = integration.SetupAbuseIPDB
 var reloadCmd = &cobra.Command{
 	Use:   "reload",
 	Short: "Reapply policy and normally restart syswarden-core",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (result error) {
+		defer func() { recordConfigurationActivationFailure(cmd, result) }()
+		if err := preflightWireGuardPolicyTransition(); err != nil {
+			return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
+		}
+		if configurationActivationExecution(cmd) != nil {
+			if err := beginConfigurationActivationApplication(cmd); err != nil {
+				return fmt.Errorf("activation authority changed before reload effects: %w", err)
+			}
+		}
 		if err := preflightConfiguredCronScheduling(); err != nil {
 			return fmt.Errorf("cron scheduling preflight failed before reload mutation: %w", err)
 		}
 		if err := preflightConfiguredFirewallBackend(); err != nil {
 			return fmt.Errorf("firewall backend preflight failed before reload mutation: %w", err)
+		}
+		for _, line := range config.ModulePlan(config.GlobalConfig) {
+			fmt.Println("[PLAN] " + line)
 		}
 		if err := recoverPendingWireGuardForwardingForReload(); err != nil {
 			return fmt.Errorf("WireGuard forwarding persistence recovery failed before reload mutation: %w", err)
@@ -41,6 +53,9 @@ var reloadCmd = &cobra.Command{
 		}
 		if err := preflightWireGuardForReload(); err != nil {
 			return fmt.Errorf("WireGuard preflight failed before reload mutation: %w", err)
+		}
+		if err := preflightModuleDependencies(); err != nil {
+			return fmt.Errorf("selected module prerequisite failed before reload mutation: %w", err)
 		}
 		if err := ensurePersistentBlocklistPairForReload(); err != nil {
 			return fmt.Errorf("persistent blocklist initialization failed before policy reload: %w", err)
@@ -108,7 +123,7 @@ var reloadCmd = &cobra.Command{
 		if len(failures) > 0 {
 			return fmt.Errorf("reload sequence did not reach a verified state: %w", errors.Join(failures...))
 		}
-		return nil
+		return markConfigurationActivationApplied(cmd)
 	},
 }
 

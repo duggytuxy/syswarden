@@ -2,12 +2,86 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestValidateAndGetPreserveSaaSAliasSourceAndEnvironmentPrecedence(t *testing.T) {
+	for _, scenario := range []struct {
+		name, master, early, late string
+		officialEnv, legacyEnv    *bool
+		wantValidation, wantGet   bool
+	}{
+		{name: "absent"},
+		{name: "legacy-file", early: "[integrations.saas]\nenabled=true\n", wantValidation: true, wantGet: true},
+		{name: "official-false-over-legacy-true", early: "[network.saas]\nallow_monitors=false\n", late: "[integrations.saas]\nenabled=true\n"},
+		{name: "official-lexical-last-false", master: "[network.saas]\nallow_monitors=true\n", early: "[integrations.saas]\nenabled=true\n", late: "[network.saas]\nallow_monitors=false\n"},
+		{name: "official-lexical-last-true", early: "[network.saas]\nallow_monitors=false\n", late: "[network.saas]\nallow_monitors=true\n[integrations.saas]\nenabled=false\n", wantValidation: true, wantGet: true},
+		{name: "legacy-lexical-last-false", master: "[integrations.saas]\nenabled=true\n", late: "[integrations.saas]\nenabled=false\n"},
+		{name: "legacy-lexical-last-true", early: "[integrations.saas]\nenabled=false\n", late: "[integrations.saas]\nenabled=true\n", wantValidation: true, wantGet: true},
+		{name: "legacy-environment-overrides-alias", early: "[integrations.saas]\nenabled=true\n", legacyEnv: boolValue(false), wantValidation: true},
+		{name: "official-environment-overrides-alias", early: "[integrations.saas]\nenabled=true\n", officialEnv: boolValue(false), wantValidation: true},
+		{name: "official-environment-overrides-official-false", early: "[network.saas]\nallow_monitors=false\n[integrations.saas]\nenabled=true\n", officialEnv: boolValue(true), wantGet: true},
+		{name: "official-environment-only", officialEnv: boolValue(true), wantGet: true},
+		{name: "legacy-environment-only", legacyEnv: boolValue(true), wantGet: true},
+		{name: "official-file-over-legacy-environment", early: "[network.saas]\nallow_monitors=false\n", legacyEnv: boolValue(true)},
+		{name: "official-environment-over-legacy-environment", officialEnv: boolValue(false), legacyEnv: boolValue(true)},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			preserveOperatorPolicyGlobals(t)
+			setOptionalBooleanEnvironment(t, "SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS", scenario.officialEnv)
+			setOptionalBooleanEnvironment(t, "SYSWARDEN_INTEGRATIONS_SAAS_ENABLED", scenario.legacyEnv)
+			root := t.TempDir()
+			if err := writeModuleFixture(filepath.Join(root, "config.toml"), []byte(minimalModularConfig+"\n"+scenario.master), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(root, "modules"), 0750); err != nil {
+				t.Fatal(err)
+			}
+			for name, content := range map[string]string{"10-alias.toml": scenario.early, "99-alias.toml": scenario.late} {
+				if content == "" {
+					continue
+				}
+				if err := writeModuleFixture(filepath.Join(root, "modules", name), []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, _, err := captureModuleInputs(root, userTOMLTarget(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := intentFixtureFiles(t, root)
+			global, load := GlobalConfig, CurrentLoadState()
+			report, err := ValidateModularConfig(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(report.ModulePlan, "\n"), fmt.Sprintf("SaaS allowlists selected: %t", scenario.wantValidation)) {
+				t.Fatalf("validation did not use TOML-only alias precedence: %v", report.ModulePlan)
+			}
+			value, present, err := GetValidatedModularValue(root, "network.saas.allow_monitors")
+			if err != nil || !present || value != fmt.Sprint(scenario.wantGet) {
+				t.Fatalf("config-get effective SaaS selection = %q, %t, %v", value, present, err)
+			}
+			if err := before.revalidate(root, false, nil); err != nil {
+				t.Fatal("configuration readers changed source metadata", err)
+			}
+			if !reflect.DeepEqual(files, intentFixtureFiles(t, root)) || global != GlobalConfig || !reflect.DeepEqual(load, CurrentLoadState()) {
+				t.Fatal("configuration readers changed bytes or global state")
+			}
+			if err := ParseConfigForInspection(root); err != nil {
+				t.Fatal(err)
+			}
+			if GlobalConfig.AllowSaaSMonitors != scenario.wantGet {
+				t.Fatal("config-get differs from runtime alias semantics")
+			}
+		})
+	}
+}
 
 func TestValidateModularConfigIsNonMutatingAndReportsSchema_SW_CFG_002(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "config")
@@ -222,11 +296,11 @@ func TestCLIValidatorMatchesCoreParityContract_SW_CFG_002(t *testing.T) {
 		{name: "noncanonical log pattern spacing", module: "[waap]\nbruteforce_logs = \"/var/log/nginx/*.log  /var/log/auth.log\"\n", wantErr: true},
 		{name: "duplicate log pattern", module: "[waap]\nbruteforce_logs = \"/var/log/auth.log /var/log/auth.log\"\n", wantErr: true},
 		{name: "invalid log glob", module: "[waap]\nmodsec_logs = \"/var/log/modsec/[.log\"\n", wantErr: true},
-		{name: "canonical IPv4 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n"},
-		{name: "WireGuard with keep backend", module: "[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n", wantErr: true},
-		{name: "IPv6 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"2001:db8::/64\"\n", wantErr: true},
-		{name: "distinct SSH and HA ports with WireGuard", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"2222\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n"},
-		{name: "HA port collides with SSH while WireGuard enabled", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"62026\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n", wantErr: true},
+		{name: "canonical IPv4 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n"},
+		{name: "WireGuard with keep backend", module: "[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n", wantErr: true},
+		{name: "IPv6 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"2001:db8::/64\"\n", wantErr: true},
+		{name: "distinct SSH and HA ports with WireGuard", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"2222\"\n[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n"},
+		{name: "HA port collides with SSH while WireGuard enabled", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"62026\"\n[network]\npolicy_mode = \"host\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n", wantErr: true},
 	}
 	previous := GlobalConfig
 	t.Cleanup(func() { GlobalConfig = previous })

@@ -785,9 +785,17 @@ func attestSystemdFirewallRemovalUnitFile(path string) error {
 func attestOpenRCFirewallRemovalUnit(service firewallRemovalService) error {
 	switch service.name {
 	case "syswarden-core":
-		return readExactFirewallRemovalFile("/etc/init.d/syswarden-core", openRCCoreService, 0755)
+		content, err := selectedOpenRCRemovalContent("/etc/init.d/syswarden-core", 0, 0)
+		if err != nil {
+			return err
+		}
+		return readExactFirewallRemovalFile("/etc/init.d/syswarden-core", content, 0755)
 	case "syswarden-firewall":
-		return readExactFirewallRemovalFile("/etc/init.d/syswarden-firewall", openRCFirewallService, 0755)
+		content, err := selectedOpenRCRemovalContent("/etc/init.d/syswarden-firewall", 0, 0)
+		if err != nil {
+			return err
+		}
+		return readExactFirewallRemovalFile("/etc/init.d/syswarden-firewall", content, 0755)
 	case "wg-quick@wg-syswarden":
 		return attestOpenRCWireGuardDefinitionWith(productionOpenRCWireGuardDefinitionPaths())
 	default:

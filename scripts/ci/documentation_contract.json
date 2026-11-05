@@ -201,23 +201,23 @@
     {
       "case": "help:syswarden update",
       "stream": "stdout",
-      "reason": "Approve the exact offline qualification description and its two inseparable explicit selector flags.",
+      "reason": "Approve the explicit preparation-only APK review selector, with no download or package execution authority, alongside the inseparable offline qualification selectors.",
       "before": "Check and install SYSWARDEN updates\n\nUsage:\n  syswarden update [flags]\n\nFlags:\n  -h, --help   help for update\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
-      "after": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. The v4.02.8 first upgrade must use a separately verified manual package procedure.\n\nUsage:\n  syswarden update [flags]\n\nFlags:\n      --candidate-version string      exact candidate version required from the offline qualification bundle\n  -h, --help                          help for update\n      --qualification-bundle string   absolute path to a protected local signed-candidate bundle; disables all network discovery\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n"
+      "after": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. --review-apk-plan records only review of an existing protected APK preparation, without network discovery or package execution; it does not authorize package effects. The v4.02.8 first upgrade must use a separately verified manual package procedure.\n\nUsage:\n  syswarden update [flags]\n\nFlags:\n      --candidate-version string      exact candidate version required from the offline qualification bundle\n  -h, --help                          help for update\n      --qualification-bundle string   absolute path to a protected local signed-candidate bundle; disables all network discovery\n      --review-apk-plan string        record review of an existing protected APK preparation by exact SHA-256; no download or package execution\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n"
     },
     {
       "case": "help:syswarden",
       "stream": "stdout",
-      "reason": "Approve the exact Linux-only root help transition, including the explicit digest-authorized historical WireGuard recovery command and wider command-column padding; the internal package-removal command remains absent from the rendered help. Include the authenticated runtime-unblock command without changing the existing command descriptions. Include the explicit bounded recover-removal command with its exact public description. The recovery description covers complete removal, including independently preserved administrator policy. Include the read-only ssh-policy planning entry point with its exact public description; no migration application is exposed.",
+      "reason": "Approve the exact Linux-only root help transition, including the explicit digest-authorized historical WireGuard recovery command and wider command-column padding; the internal package-removal command remains absent from the rendered help. Include the authenticated runtime-unblock command without changing the existing command descriptions. Include the explicit bounded recover-removal command with its exact public description. The recovery description covers complete removal, including independently preserved administrator policy. Include the read-only ssh-policy planning entry point with its exact public description; no migration application is exposed. Preserve the same visible commands and descriptions with Cobra padding widened by the hidden authenticated APK transaction helper.",
       "before": "SYSWARDEN v4.02.8 is a Next-Gen Host-based WAF and Security Orchestrator.\n\nUsage:\n  syswarden [flags]\n  syswarden [command]\n\nAvailable Commands:\n  alerts          Launch the real-time TUI dashboard for alerts\n  allow-ssh       Allows direct SSH bypass for this IP\n  audit           Performs a full Enterprise SYSWARDEN Audit\n  block           Hot-adds an IP to the kernel drop set\n  check           Perform a global diagnostic on an IP\n  completion      Generate the autocompletion script for the specified shell\n  config          Open the interactive configuration editor\n  config-get      Get a configuration value by key\n  ha-sync         Synchronizes the firewall blocklist with the configured HA peer\n  help            Help about any command\n  install         Install SYSWARDEN and configure security modules\n  list            Displays all custom IP registries\n  manual          Comprehensive SysAdmin Manual and Documentation\n  migrate-config  Migrate from old config format to modular TOML format\n  reload          Reload configuration and restart security engines\n  revoke-ssh      Revokes direct SSH bypass\n  tui             Launch the SYSWARDEN Enterprise Dashboard (TUI)\n  unblock         Purges an IP from the blocklist\n  uninstall       Completely remove SYSWARDEN from the system\n  unwhitelist     Revokes global VIP access\n  update          Check and install SYSWARDEN updates\n  update-feeds    Silently update Threat Intelligence feeds and reload firewall\n  web-token       Manage the Web-TUI secure access token\n  web-tui         Start the Web-TUI server (WebTTY)\n  whitelist       Grants global VIP access and bypasses the firewall\n  whitelist-infra Auto-detects and whitelists infrastructure IPs\n\nFlags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n  -h, --help            help for syswarden\n\nUse \"syswarden [command] --help\" for more information about a command.\n",
-      "after": "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.\n\nUsage:\n  syswarden [flags]\n  syswarden [command]\n\nAvailable Commands:\n  alerts                  Stream kernel and WAAP alert events\n  allow-ssh               Add an address to the SSH exception registry\n  audit                   Run a local SYSWARDEN operational diagnostic\n  block                   Add addresses or CIDRs to the persistent blocklist\n  check                   Inspect recorded firewall state for an address or CIDR\n  completion              Generate the autocompletion script for the specified shell\n  config                  Open the interactive configuration editor\n  config-get              Get a configuration value by key\n  ha-fence                Administer the native-sync migration fence\n  ha-sync                 Push missing local blocklist entries to configured HA peers\n  help                    Help about any command\n  install                 Install SYSWARDEN and configure security modules\n  list                    Displays all custom IP registries\n  manual                  Display the built-in operator reference\n  migrate-config          Migrate from old config format to modular TOML format\n  recover-removal         Inspect bounded recovery for complete product removal\n  recover-wireguard       Inspect and explicitly recover exact historical WireGuard nftables state\n  reload                  Reapply policy and normally restart syswarden-core\n  revoke-ssh              Remove an address from the SSH exception registry\n  runtime-unblock         Remove local runtime claims through the authenticated core\n  ssh-policy              Inspect the dedicated SSH policy migration\n  tui                     Launch the local SYSWARDEN terminal dashboard\n  unblock                 Remove addresses or CIDRs from the persistent blocklist\n  uninstall               Delete SysWarden services, rules, configuration, data, and logs\n  unwhitelist             Remove addresses or CIDRs from the persistent whitelist\n  update                  Install a release verified by a signed manifest\n  update-feeds            Refresh remote intelligence, validate embedded GeoIP data, and reapply firewall policy\n  whitelist               Add addresses or CIDRs to the persistent whitelist\n  whitelist-infra         Auto-detects and whitelists infrastructure IPs\n\nFlags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n  -h, --help            help for syswarden\n\nUse \"syswarden [command] --help\" for more information about a command.\n"
+      "after": "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.\n\nUsage:\n  syswarden [flags]\n  syswarden [command]\n\nAvailable Commands:\n  alerts                       Stream kernel and WAAP alert events\n  allow-ssh                    Add an address to the SSH exception registry\n  audit                        Run a local SYSWARDEN operational diagnostic\n  block                        Add addresses or CIDRs to the persistent blocklist\n  check                        Inspect recorded firewall state for an address or CIDR\n  completion                   Generate the autocompletion script for the specified shell\n  config                       Open the interactive configuration editor\n  config-get                   Get a configuration value by key\n  ha-fence                     Administer the native-sync migration fence\n  ha-sync                      Push missing local blocklist entries to configured HA peers\n  help                         Help about any command\n  install                      Install SYSWARDEN and configure security modules\n  list                         Displays all custom IP registries\n  manual                       Display the built-in operator reference\n  migrate-config               Migrate from old config format to modular TOML format\n  recover-removal              Inspect bounded recovery for complete product removal\n  recover-wireguard            Inspect and explicitly recover exact historical WireGuard nftables state\n  reload                       Reapply policy and normally restart syswarden-core\n  revoke-ssh                   Remove an address from the SSH exception registry\n  runtime-unblock              Remove local runtime claims through the authenticated core\n  ssh-policy                   Inspect the dedicated SSH policy migration\n  tui                          Launch the local SYSWARDEN terminal dashboard\n  unblock                      Remove addresses or CIDRs from the persistent blocklist\n  uninstall                    Delete SysWarden services, rules, configuration, data, and logs\n  unwhitelist                  Remove addresses or CIDRs from the persistent whitelist\n  update                       Install a release verified by a signed manifest\n  update-feeds                 Refresh remote intelligence, validate embedded GeoIP data, and reapply firewall policy\n  whitelist                    Add addresses or CIDRs to the persistent whitelist\n  whitelist-infra              Auto-detects and whitelists infrastructure IPs\n\nFlags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n  -h, --help            help for syswarden\n\nUse \"syswarden [command] --help\" for more information about a command.\n"
     },
     {
       "case": "help:syswarden config",
       "stream": "stdout",
-      "reason": "Approve the exact addition of the non-mutating validation and migration subcommands to configuration help.",
+      "reason": "Approve the exact configuration subcommand help including explicit activation review. Editing and preview remain separate from activation.",
       "before": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
-      "after": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n  syswarden config [command]\n\nAvailable Commands:\n  migrate     Migrate the historical configuration to modular TOML\n  validate    Validate modular configuration without modifying it\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nUse \"syswarden config [command] --help\" for more information about a command.\n"
+      "after": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n  syswarden config [command]\n\nAvailable Commands:\n  activate     Review and explicitly approve activation of the complete TOML configuration\n  migrate      Migrate the historical configuration to modular TOML\n  preview      Review configured host effects without activating them\n  recover-edit Review and recover an interrupted TOML file publication\n  validate     Validate modular configuration without modifying it\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nUse \"syswarden config [command] --help\" for more information about a command.\n"
     },
     {
       "case": "help:syswarden whitelist",
@@ -232,6 +232,20 @@
       "reason": "Approve the exact zero-argument usage transition induced by the service-scoped whitelist flag.",
       "before": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden whitelist <IP>... [PORT] [flags]\n\nFlags:\n  -h, --help   help for whitelist\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n",
       "after": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden whitelist <IP|CIDR>... [PORT] [flags]\n\nFlags:\n  -h, --help          help for whitelist\n      --port string   Scope every whitelist entry to this TCP destination port\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n"
+    },
+    {
+      "case": "help:syswarden install",
+      "stream": "stdout",
+      "before": "Executes the fully automated SYSWARDEN installation pipeline.\n\nUsage:\n  syswarden install [flags]\n\nFlags:\n  -h, --help   help for install\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Installs the selected firewall services and feed scheduler. Fresh packages stage an unconfigured profile without activating lists or services. SSH, CIS and OS hardening require a separate explicit configuration operation.\n\nUsage:\n  syswarden install [flags]\n\nFlags:\n      --approve-plan string   exact SHA256 of the reviewed current activation plan; never implied by package installation\n  -h, --help                  help for install\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "Approve the exact explicit activation plan flag; fresh native package installation remains inactive."
+    },
+    {
+      "case": "help:syswarden reload",
+      "stream": "stdout",
+      "before": "Reload configuration and restart security engines\n\nUsage:\n  syswarden reload [flags]\n\nFlags:\n  -h, --help         help for reload\n      --no-restart   Do not restart syswarden-core.service (used by systemd)\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Reapply policy and normally restart syswarden-core\n\nUsage:\n  syswarden reload [flags]\n\nFlags:\n      --approve-plan string   exact SHA256 of the reviewed current activation plan; never implied by package installation\n  -h, --help                  help for reload\n      --no-restart            Do not restart syswarden-core.service (used by systemd)\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "Approve the exact explicit activation plan flag while retaining the existing no-restart option, which does not create approval."
     }
   ],
   "approved_cli_public_differences": [
@@ -392,9 +406,9 @@
     {
       "path": "syswarden install",
       "field": "long",
-      "reason": "Expose the host-mutating installation scope.",
+      "reason": "Describe inactive fresh native staging and separate explicit administrator activation without changing historical upgrade selections.",
       "before": "Executes the fully automated SYSWARDEN installation pipeline.",
-      "after": "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs."
+      "after": "Installs the selected firewall services and feed scheduler. Fresh packages stage an unconfigured profile without activating lists or services. SSH, CIS and OS hardening require a separate explicit configuration operation."
     },
     {
       "path": "syswarden manual",
@@ -576,14 +590,14 @@
     {
       "path": "syswarden update",
       "field": "long",
-      "reason": "Document the signed-manifest verification boundary, the explicit offline qualification channel and the manual v4.02.8 first hop.",
+      "reason": "Approve the explicit preparation-only APK review selector and description, without download, package execution or effect authority; retain the protected offline selectors.",
       "before": "",
-      "after": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. The v4.02.8 first upgrade must use a separately verified manual package procedure."
+      "after": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. --review-apk-plan records only review of an existing protected APK preparation, without network discovery or package execution; it does not authorize package effects. The v4.02.8 first upgrade must use a separately verified manual package procedure."
     },
     {
       "path": "syswarden update",
       "field": "flags",
-      "reason": "Approve the two inseparable explicit selectors for the protected local qualification channel.",
+      "reason": "Approve the explicit preparation-only APK review selector and description, without download, package execution or effect authority; retain the protected offline selectors.",
       "before": [
         {
           "name": "config",
@@ -628,6 +642,12 @@
           "type": "string",
           "default": "",
           "usage": "absolute path to a protected local signed-candidate bundle; disables all network discovery"
+        },
+        {
+          "name": "review-apk-plan",
+          "type": "string",
+          "default": "",
+          "usage": "record review of an existing protected APK preparation by exact SHA-256; no download or package execution"
         }
       ]
     },
@@ -763,7 +783,7 @@
       "field": "command",
       "before": null,
       "after": "added",
-      "reason": "Add a read-only development entry point for protected SSH migration planning. No application or service mutation is exposed."
+      "reason": "Add a protected SSH development command group for read-only planning and observation, plus separately approved original-configuration restoration. Forward migration and completed recovery remain unavailable."
     },
     {
       "path": "syswarden ssh-policy plan",
@@ -799,6 +819,208 @@
       "before": null,
       "after": "added",
       "reason": "Inspect an interrupted SSH activation using the independently approved original plan, exact protected intent and publication records, installed parser and current systemd endpoints. This read-only development command preserves the recovery requirement and does not retry activation, mutate files, prove consumed policy or authenticate access."
+    },
+    {
+      "path": "syswarden ssh-policy restore-original",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Expose fixed-path root-only recovery inspection and separately approved original-inode restoration with one retained-target systemd reload request. Preserve runtime/access uncertainty and partial error facts; bypass automatic configuration/firewall repair without bypassing the removal barrier for application. No forward migration or completed recovery is authorized."
+    },
+    {
+      "path": "syswarden ssh-policy assess-restoration",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Inspect complete original-restoration history with the original and independently approved recovery digests, pinned parser and current endpoints. This read-only command preserves uncertainty after a visible reload intent, does not repair durability or replay dispatch, and does not establish consumed policy, authenticated access or completed recovery."
+    },
+    {
+      "path": "syswarden ssh-policy access-request",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Issue422 private SSH access exchange with explicit independent approvals; no policy publication, reload or migration acceptance."
+    },
+    {
+      "path": "syswarden ssh-policy access-issue",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Issue422 private SSH access exchange with explicit independent approvals; no policy publication, reload or migration acceptance."
+    },
+    {
+      "path": "syswarden ssh-policy access-record",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Issue422 private SSH access exchange with explicit independent approvals; no policy publication, reload or migration acceptance."
+    },
+    {
+      "path": "syswarden ssh-policy access-probe",
+      "field": "command",
+      "before": null,
+      "after": "added",
+      "reason": "Issue422 private SSH access exchange with explicit independent approvals; no policy publication, reload or migration acceptance."
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-request",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-issue",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-probe",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-record",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ssh-policy restoration-access-inspect",
+      "field": "command",
+      "reason": "Add a separately authorized restored SSH access evidence operation without accepting completed recovery or migration.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden config recover-edit",
+      "field": "command",
+      "reason": "Add separately reviewed recovery of interrupted ordinary TOML publication without host activation or implicit cleanup.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden config preview",
+      "field": "command",
+      "reason": "Add a bounded read-only review of configured host effects without runtime observation or activation authority.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden install",
+      "field": "flags",
+      "reason": "Require exact explicit activation plan approval for new TOML; package hooks and no-restart cannot grant approval.",
+      "before": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for install"
+        }
+      ],
+      "after": [
+        {
+          "name": "approve-plan",
+          "type": "string",
+          "default": "",
+          "usage": "exact SHA256 of the reviewed current activation plan; never implied by package installation"
+        },
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for install"
+        }
+      ]
+    },
+    {
+      "path": "syswarden reload",
+      "field": "flags",
+      "reason": "Require exact explicit activation plan approval for new TOML; package hooks and no-restart cannot grant approval.",
+      "before": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for reload"
+        },
+        {
+          "name": "no-restart",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "Do not restart syswarden-core.service (used by systemd)"
+        }
+      ],
+      "after": [
+        {
+          "name": "approve-plan",
+          "type": "string",
+          "default": "",
+          "usage": "exact SHA256 of the reviewed current activation plan; never implied by package installation"
+        },
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for reload"
+        },
+        {
+          "name": "no-restart",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "Do not restart syswarden-core.service (used by systemd)"
+        }
+      ]
+    },
+    {
+      "path": "syswarden config activate",
+      "field": "command",
+      "reason": "Add the consumed explicit TOML activation boundary before recovery or normalization, with separate approved and applied state.",
+      "before": null,
+      "after": "added"
     }
   ],
   "package_platform_contract": {
@@ -1106,9 +1328,19 @@
       "literal": "ed25519.Verify(publicKey, manifestBytes, signature)"
     },
     {
-      "id": "release-three-packages",
+      "id": "release-versioned-unsigned-package-inventory",
       "path": "scripts/ci/release_gate.py",
-      "literal": "f\"syswarden_{version}_x86_64.apk\","
+      "literal": "Return the unsigned build inventory in update-manifest identity order."
+    },
+    {
+      "id": "release-v5-publication-refused-before-staging",
+      "path": "scripts/ci/release_gate.py",
+      "literal": "def prepare(args: argparse.Namespace) -> None:\n    _require_supported_publication(args.tag)"
+    },
+    {
+      "id": "release-v5-publication-refused-before-verification",
+      "path": "scripts/ci/release_gate.py",
+      "literal": "def expected_release_assets(tag: str) -> set[str]:\n    _require_supported_publication(tag)"
     },
     {
       "id": "release-signed-manifest",

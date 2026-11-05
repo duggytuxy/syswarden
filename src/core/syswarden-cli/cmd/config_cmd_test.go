@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -33,11 +34,14 @@ func TestConfigCommandReturnsErrorWhenModulesAreUnavailable_SW_CFG_001(t *testin
 	}
 }
 
-func TestConfigCommandPropagatesEditorFailureAndUsesExactIntegrationPath_SW_CFG_001(t *testing.T) {
+func TestConfigCommandPropagatesEditorFailureAndUsesPrivateIntegrationCopy_SW_CFG_001(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "config")
 	if err := os.MkdirAll(filepath.Join(root, "modules"), 0750); err != nil {
 		t.Fatal(err)
 	}
+	previousContext := configCmd.Context()
+	configCmd.SetContext(context.Background())
+	t.Cleanup(func() { configCmd.SetContext(previousContext) })
 	previousRoot := configEditorRoot
 	previousLauncher := launchConfigEditor
 	previousEditor, editorWasSet := os.LookupEnv("EDITOR")
@@ -68,8 +72,11 @@ func TestConfigCommandPropagatesEditorFailureAndUsesExactIntegrationPath_SW_CFG_
 		t.Fatalf("config editor error = %v", err)
 	}
 	want := filepath.Join(root, "modules", "40-integrations.toml")
-	if openedPath != want {
-		t.Fatalf("integration editor path = %q, want %q", openedPath, want)
+	if openedPath == want || filepath.Base(openedPath) != "40-integrations.toml" {
+		t.Fatalf("integration editor must use a private copy, got %q", openedPath)
+	}
+	if _, err := os.Lstat(filepath.Dir(openedPath)); !os.IsNotExist(err) {
+		t.Fatal("failed editor left a working directory")
 	}
 	if strings.Contains(output.String(), "updated successfully") {
 		t.Fatalf("failed editor emitted false success: %s", output.String())

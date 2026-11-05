@@ -103,7 +103,6 @@ func installWireGuardTransactionHarness(t *testing.T) *wireGuardTransactionHarne
 	previousInputOutput := wireGuardCommandInputOutput
 	previousForwarding := wireGuardForwardingTransactionFactory
 	previousRuntimeForwarding := wireGuardForwardingRuntimeReconciler
-	previousQR := wireGuardQRCodeRender
 	previousServiceDefinition := attestWireGuardServiceDefinition
 	previousHookExecutables := wireGuardServerHookExecutableAttestor
 	previousAfterCommit := wireGuardAfterOwnershipCommit
@@ -130,7 +129,6 @@ func installWireGuardTransactionHarness(t *testing.T) *wireGuardTransactionHarne
 		wireGuardCommandInputOutput = previousInputOutput
 		wireGuardForwardingTransactionFactory = previousForwarding
 		wireGuardForwardingRuntimeReconciler = previousRuntimeForwarding
-		wireGuardQRCodeRender = previousQR
 		attestWireGuardServiceDefinition = previousServiceDefinition
 		wireGuardServerHookExecutableAttestor = previousHookExecutables
 		wireGuardAfterOwnershipCommit = previousAfterCommit
@@ -258,10 +256,6 @@ func installWireGuardTransactionHarness(t *testing.T) *wireGuardTransactionHarne
 		harness.runtimeForwarding = append(harness.runtimeForwarding, value)
 		return harness.runtimeForwardErr
 	}
-	wireGuardQRCodeRender = func(string) error {
-		harness.events = append(harness.events, "qr")
-		return nil
-	}
 	return harness
 }
 
@@ -280,7 +274,6 @@ func TestSetupWireGuardPublishesAttestedTransactionBeforeMutation_SW2_WGSTATE_00
 		"activate",
 		"preflight:6",
 		"preflight:7",
-		"qr",
 	}
 	if !reflect.DeepEqual(harness.events, wantEvents) {
 		t.Fatalf("transaction events:\n got: %v\nwant: %v", harness.events, wantEvents)
@@ -312,31 +305,6 @@ func TestSetupWireGuardPublishesAttestedTransactionBeforeMutation_SW2_WGSTATE_00
 	}
 }
 
-func TestSetupWireGuardKeepsProtectedClientFileWhenOptionalQRRendererIsAbsent_SW2_WGSTATE_001(t *testing.T) {
-	harness := installWireGuardTransactionHarness(t)
-	wireGuardQRCodeRender = func(string) error {
-		harness.events = append(harness.events, "qr-unavailable")
-		return errors.New("qrencode is not installed")
-	}
-	if err := SetupWireguard(); err != nil {
-		t.Fatalf("optional QR renderer failure aborted WireGuard setup: %v", err)
-	}
-	if !strings.Contains(strings.Join(harness.events, ","), "qr-unavailable") {
-		t.Fatalf("optional QR renderer was not attempted: %v", harness.events)
-	}
-	inventory, err := wireguardstate.Inspect(harness.root)
-	clientPresent := false
-	for _, path := range inventory.Artifacts {
-		if path == wireguardstate.ClientConfigurationPath {
-			clientPresent = true
-			break
-		}
-	}
-	if err != nil || !clientPresent {
-		t.Fatalf("protected client configuration is unavailable after QR warning: inventory=%#v err=%v", inventory, err)
-	}
-}
-
 func TestSetupWireGuardReusesOnlyFullyAttestedState_SW2_WGSTATE_001(t *testing.T) {
 	harness := installWireGuardTransactionHarness(t)
 	if err := SetupWireguard(); err != nil {
@@ -363,7 +331,7 @@ func TestSetupWireGuardReusesOnlyFullyAttestedState_SW2_WGSTATE_001(t *testing.T
 	if harness.commandCalls != commandCalls {
 		t.Fatalf("reuse regenerated key/network inputs: before=%d after=%d", commandCalls, harness.commandCalls)
 	}
-	wantEvents := []string{"preflight:1", "preflight:2", "sysctl", "preflight:3", "activate", "preflight:4", "preflight:5", "qr"}
+	wantEvents := []string{"preflight:1", "preflight:2", "sysctl", "preflight:3", "activate", "preflight:4", "preflight:5"}
 	if !reflect.DeepEqual(harness.events, wantEvents) {
 		t.Fatalf("reuse events:\n got: %v\nwant: %v", harness.events, wantEvents)
 	}
@@ -436,9 +404,6 @@ func TestSetupWireGuardReuseFinalAttestationRejectsLateRuntimeDrift_SW2_WGSTATE_
 					test.name, harness.serviceState, baseline, harness.rollbackCalls,
 					harness.nftCleanupCalls, harness.sysctlRestoreCalls,
 				)
-			}
-			if strings.Contains(strings.Join(harness.events, ","), "qr") {
-				t.Fatalf("late %s drift emitted success output: %v", test.name, harness.events)
 			}
 		})
 	}
@@ -584,7 +549,7 @@ func TestSetupWireGuardInactiveReuseRecoversOnlyExactTokenizedStaleTable_SW2_FWB
 	wireGuardStaleNFTCleanup = func(identity wireguardstate.ServerConfigurationIdentity) error {
 		staleCleanupCalls++
 		harness.events = append(harness.events, "cleanup-stale-token")
-		if identity != exactWireGuardNFTIdentity() {
+		if identity != scopedWireGuardIdentity() {
 			t.Fatalf("stale cleanup identity = %#v", identity)
 		}
 		return nil
@@ -813,9 +778,6 @@ func TestSetupWireGuardPostCommitDriftCannotReturnSuccessOrLeaveUnprovenRuntime_
 	inventory, err := wireguardstate.Inspect(harness.root)
 	if err != nil || !inventory.Empty() {
 		t.Fatalf("post-commit compensation left generated state or transaction debris: inventory=%#v err=%v", inventory, err)
-	}
-	if strings.Contains(strings.Join(harness.events, ","), "qr") {
-		t.Fatal("post-commit drift was reported as success")
 	}
 	if locked || guardAcquisitions != 1 || guardReleases != 1 {
 		t.Fatalf("complete setup guard lifecycle: locked=%v acquisitions=%d releases=%d", locked, guardAcquisitions, guardReleases)

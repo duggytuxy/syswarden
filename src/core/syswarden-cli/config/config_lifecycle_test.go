@@ -14,7 +14,7 @@ import (
 )
 
 // GlobalConfig remains compatible with existing direct readers because every
-// production ParseConfig call is confined to the single-threaded Cobra startup
+// production configuration publication is confined to the single-threaded Cobra startup
 // and install-preflight lifecycle. Adding a runtime reload call must first
 // replace direct access with an atomic snapshot API.
 func TestGlobalConfigWritersRemainInSingleThreadedLifecycle_SW_CFG_001(t *testing.T) {
@@ -36,15 +36,21 @@ func TestGlobalConfigWritersRemainInSingleThreadedLifecycle_SW_CFG_001(t *testin
 			return err
 		}
 		ast.Inspect(parsed, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
+			name := ""
+			switch expression := node.(type) {
+			case *ast.SelectorExpr:
+				// Include function-value references passed into the startup
+				// loader, not only a direct config.ParseConfig(...) call.
+				name = expression.Sel.Name
+			case *ast.CallExpr:
+				if function, ok := expression.Fun.(*ast.Ident); ok && parsed.Name.Name == "config" {
+					name = function.Name
+				}
 			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if ok && selector.Sel.Name == "ParseConfig" {
+			if name == "ParseConfig" || name == "ParseConfigForInspection" || name == "PrepareInstallationConfiguration" {
 				relative, relErr := filepath.Rel(moduleRoot, path)
 				if relErr == nil {
-					callers[filepath.ToSlash(relative)] = struct{}{}
+					callers[filepath.ToSlash(relative)+":"+name] = struct{}{}
 				}
 			}
 			return true
@@ -59,8 +65,13 @@ func TestGlobalConfigWritersRemainInSingleThreadedLifecycle_SW_CFG_001(t *testin
 		callerFiles = append(callerFiles, caller)
 	}
 	sort.Strings(callerFiles)
-	want := []string{"cmd/install.go", "cmd/root.go"}
+	want := []string{
+		"cmd/install.go:PrepareInstallationConfiguration",
+		"cmd/root.go:ParseConfig",
+		"cmd/root.go:ParseConfigForInspection",
+		"config/minimal_defaults.go:ParseConfig",
+	}
 	if !reflect.DeepEqual(callerFiles, want) {
-		t.Fatalf("production ParseConfig callers = %s, want startup-only callers %s", fmt.Sprint(callerFiles), fmt.Sprint(want))
+		t.Fatalf("production configuration publication callers = %s, want startup-only callers %s", fmt.Sprint(callerFiles), fmt.Sprint(want))
 	}
 }

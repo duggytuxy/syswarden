@@ -16,6 +16,9 @@ const legacyWireGuardRetirementHint = "inspect explicit retirement with 'sudo sy
 // dependency changes. A pending ownership transaction retains priority: the
 // operation-aware recovery must finish before ordinary reconciliation checks.
 func PreflightLegacyWireGuardConflict() error {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	inventory, err := wireguardstate.Inspect(wireGuardFilesystemRoot)
 	if err != nil {
 		return err
@@ -32,6 +35,9 @@ func PreflightLegacyWireGuardConflict() error {
 // namespace and is left alone. This function never logs configuration contents
 // or changes services, keys or nftables.
 func preflightLegacyWireGuardConflict() error {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	return inspectLegacyWireGuardConflict(wireGuardFilesystemRoot, wireGuardExpectedOwnerUID, wireGuardExpectedOwnerGID)
 }
 

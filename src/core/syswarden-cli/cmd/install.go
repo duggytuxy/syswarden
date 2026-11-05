@@ -9,7 +9,6 @@ import (
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
 	"syswarden-cli/pkg/network"
-	"syswarden-cli/pkg/security"
 	"syswarden-cli/pkg/system"
 
 	"github.com/spf13/cobra"
@@ -20,8 +19,27 @@ var preflightLegacyWireGuardForInstall = network.PreflightLegacyWireGuardConflic
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install SYSWARDEN and configure security modules",
-	Long:  "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs.",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	Long:  "Installs the selected firewall services and feed scheduler. Fresh packages stage an unconfigured profile without activating lists or services. SSH, CIS and OS hardening require a separate explicit configuration operation.",
+	RunE: func(cmd *cobra.Command, args []string) (result error) {
+		defer func() { recordConfigurationActivationFailure(cmd, result) }()
+		if err := preflightWireGuardPolicyTransition(); err != nil {
+			return fmt.Errorf("WireGuard policy transition requires recovery before lifecycle mutation: %w", err)
+		}
+		if freshNativePackageInstallation() && !system.OfflineQualificationPackageInstall() {
+			if err := stageFreshNativeConfiguration("/etc/syswarden/config"); err != nil {
+				return installStageError("fresh package configuration staging failed", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "[INFO] Package installed without activating lists, modules, hardening, services or firewall rules. Configure TOML with 'syswarden config', run 'syswarden config validate', then explicitly run 'syswarden install' when ready.")
+			return nil
+		}
+		plan := nativeServicePlanForInstall(cmd)
+		if plan.Deferred() {
+			fmt.Println("[INFO] Package staged without automatic host activation; existing service state is preserved. Review the service pair and configuration before an explicit online install.")
+			return nil
+		}
+		if err := plan.Revalidate(); err != nil {
+			return installStageError("native service state changed before installation", err)
+		}
 		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
 		if err := preflightSystemdFirewallOrderingForInstall(); err != nil {
 			return installStageError("systemd firewall ordering preflight failed before host mutation", err)
@@ -33,10 +51,15 @@ var installCmd = &cobra.Command{
 			fmt.Println("[INFO] Candidate package staged without host activation; the qualification updater must attest it before activation.")
 			return nil
 		}
+		if configurationActivationExecution(cmd) != nil {
+			if err := beginConfigurationActivationApplication(cmd); err != nil {
+				return installStageError("activation authority changed before installation effects", err)
+			}
+		}
 		if err := preflightLegacyWireGuardForInstall(); err != nil {
 			return installStageError("historical WireGuard conflict detected before configuration or dependency changes", err)
 		}
-		if system.OfflineQualificationActivation() {
+		if system.OfflineQualificationActivation() && configurationActivationExecution(cmd) == nil {
 			if err := prepareOfflineQualificationActivationConfiguration(
 				"/opt/syswarden/syswarden-auto.conf",
 				"/etc/syswarden/config",
@@ -51,6 +74,9 @@ var installCmd = &cobra.Command{
 		initialFirewallBackend := configuredFirewallBackend()
 		initialFirewallErr := hostFirewallBackendPreflight(initialFirewallBackend)
 		if initialFirewallErr != nil {
+			if configurationActivationExecution(cmd) != nil {
+				return installStageError("reviewed firewall selection requires an explicit configuration correction before a new approval", initialFirewallErr)
+			}
 			compatibilityClass, compatibilityEligible := classifyInstallFirewallCompatibilityError(initialFirewallErr)
 			if initialFirewallBackend != "nftables" || !compatibilityEligible {
 				return installStageError("firewall backend preflight failed before configuration repair", initialFirewallErr)
@@ -79,7 +105,7 @@ var installCmd = &cobra.Command{
 			fmt.Println("[INFO] Migrated the historical default firewall byte family from nftables to keep after typed host-state attestation.")
 		}
 
-		if err := installConfigPreflight("/etc/syswarden/config"); err != nil {
+		if err := prepareCapturedInstallConfiguration(cmd); err != nil {
 			return installStageError("configuration preflight failed before host mutation", err)
 		}
 		if err := preflightConfiguredCronScheduling(); err != nil {
@@ -89,6 +115,9 @@ var installCmd = &cobra.Command{
 			return installStageError("firewall backend preflight failed", err)
 		}
 
+		for _, line := range config.ModulePlan(config.GlobalConfig) {
+			fmt.Println("[PLAN] " + line)
+		}
 		if err := installDependenciesForInstall(); err != nil {
 			return installStageError("dependency installation failed", err)
 		}
@@ -101,15 +130,25 @@ var installCmd = &cobra.Command{
 		if err := preflightWireGuardForInstall(); err != nil {
 			return installStageError("WireGuard preflight failed before SSH or firewall mutation", err)
 		}
+		if err := preflightModuleDependencies(); err != nil {
+			return installStageError("selected module prerequisite failed", err)
+		}
 		if os.Getenv("SYSWARDEN_PKG_INSTALL") == "1" {
-			if err := preparePackagedLegacyDynamicBanUpgrade(); err != nil {
+			if err := plan.Revalidate(); err != nil {
+				return installStageError("native service state changed before legacy recovery", err)
+			}
+			restart := restartCoreServiceForInstall
+			if plan != nil {
+				restart = plan.RestartExistingCore
+			}
+			if err := preparePackagedLegacyDynamicBanUpgradeWithRestart(restart); err != nil {
 				return installStageError("legacy dynamic firewall recovery failed", err)
 			}
 		}
 
-		if err := configureSSHForInstall(); err != nil {
-			return installStageError("SSH configuration failed", err)
-		}
+		// Installation and upgrades preserve SSH configuration and running access.
+		// Historical generated hardening booleans do not authorize a new change.
+		fmt.Println("[INFO] Preserving SSH, CIS and OS policy; package installation does not activate host hardening.")
 
 		if err := prepareNetworkIntelligenceForInstall(); err != nil {
 			return err
@@ -122,6 +161,9 @@ var installCmd = &cobra.Command{
 		// Phase 2: Firewall Orchestration
 		fmt.Println("[SYSWARDEN] Starting Firewall Engine...")
 
+		if err := plan.Revalidate(); err != nil {
+			return installStageError("native service state changed before firewall mutation", err)
+		}
 		if err := system.OptimizeHostFirewall(); err != nil {
 			return installStageError("host firewall optimization failed", err)
 		}
@@ -152,15 +194,6 @@ var installCmd = &cobra.Command{
 			return installStageError("AbuseIPDB configuration failed", err)
 		}
 
-		// Phase 4: Security Hardening (Wave 1 of Grand Purge)
-		fmt.Println("[SYSWARDEN] Starting OS & CIS Hardening...")
-		if err := security.ApplyCISHardening(); err != nil {
-			return installStageError("CIS hardening failed", err)
-		}
-		if err := security.ApplyOSHardening(); err != nil {
-			return installStageError("OS hardening failed", err)
-		}
-
 		// Phase 2.5: Private Network & HA (Wave 2 of Grand Purge)
 		fmt.Println("[SYSWARDEN] Starting Private Network & HA Cluster...")
 		if err := setupWireGuardWithoutQualificationEgress(); err != nil {
@@ -172,16 +205,31 @@ var installCmd = &cobra.Command{
 
 		// Phase 5: Deployment Orchestration
 		fmt.Println("[SYSWARDEN] Starting Systemd Orchestration...")
-		if err := system.SetupService(); err != nil {
+		if err := system.SetupServiceWithInstallation(plan); err != nil {
 			return installStageError("service setup failed", err)
 		}
 		if err := removeExactLegacyCompletionAfterInstall(); err != nil {
 			return installStageError("legacy shell completion reconciliation failed", err)
 		}
 
-		fmt.Println("[SYSWARDEN] v4.10.4 native installation complete.")
+		if err := markConfigurationActivationApplied(cmd); err != nil {
+			return installStageError("record successful activation", err)
+		}
+		fmt.Println("[SYSWARDEN] v4.10.4 installation operations completed; final qualification remains separate.")
 		return nil
 	},
+}
+
+type installServicePlanKey struct{}
+
+var prepareNativeServicesForInstall = system.PrepareNativeServiceInstallation
+
+func nativeServicePlanForInstall(cmd *cobra.Command) *system.NativeServiceInstallation {
+	if cmd == nil || cmd.Context() == nil {
+		return nil
+	}
+	plan, _ := cmd.Context().Value(installServicePlanKey{}).(*system.NativeServiceInstallation)
+	return plan
 }
 
 var installConfigPreflight = prepareInstallConfiguration
@@ -203,7 +251,6 @@ var recoverPendingWireGuardForwardingForInstall = network.RecoverPendingWireGuar
 var recoverPendingWireGuardForInstall = network.RecoverPendingWireguardState
 var preflightWireGuardForInstall = network.PreflightWireguard
 var setupWireGuardForInstall = network.SetupWireguard
-var configureSSHForInstall = system.ConfigureSSH
 var applyPoliciesForInstall = firewall.ApplyPolicies
 var hostCronSchedulingPreflight = func(haEnabled bool) error {
 	_, err := system.PreflightRuntimeCronScheduling(haEnabled)
@@ -333,6 +380,7 @@ func prepareNetworkIntelligenceForInstall() error {
 			config.GlobalConfig.GeoCodes,
 			config.GlobalConfig.GeoAllowed,
 			config.GlobalConfig.LANMode,
+			config.GlobalConfig.OSINTEnabled,
 		); err != nil {
 			return installStageError("offline last-known-good feed attestation failed", err)
 		}
@@ -354,6 +402,7 @@ func prepareNetworkIntelligenceForInstall() error {
 		config.GlobalConfig.ASNAllowed,
 		config.GlobalConfig.LANMode,
 		config.GlobalConfig.UseSpamhaus,
+		config.GlobalConfig.OSINTEnabled,
 	); err != nil {
 		return installStageError("failed to download threat intelligence feeds", err)
 	}
@@ -370,6 +419,10 @@ func preflightConfiguredFirewallBackend() error {
 }
 
 func preparePackagedLegacyDynamicBanUpgrade() error {
+	return preparePackagedLegacyDynamicBanUpgradeWithRestart(restartCoreServiceForInstall)
+}
+
+func preparePackagedLegacyDynamicBanUpgradeWithRestart(restart func() error) error {
 	repaired, err := quarantineLegacyDynamicBanIntervals()
 	if err != nil {
 		return err
@@ -377,7 +430,7 @@ func preparePackagedLegacyDynamicBanUpgrade() error {
 	if !repaired {
 		return nil
 	}
-	if err := restartCoreServiceForInstall(); err != nil {
+	if err := restart(); err != nil {
 		return fmt.Errorf("restart the packaged core after legacy dynamic-ban quarantine: %w", err)
 	}
 	// A final pass closes the narrow race in which the historical process had
@@ -443,15 +496,19 @@ func installStageError(stage string, err error) error {
 	return fmt.Errorf("[ERROR] %s: %w", stage, err)
 }
 
+// Production activation consumes the pre-approved immutable capture. The
+// compatibility helper remains available to isolated legacy migration tests;
+// it is never invoked after the command approval boundary.
+func prepareCapturedInstallConfiguration(cmd *cobra.Command) error {
+	if configurationActivationExecution(cmd) != nil {
+		return revalidateConfigurationActivation(cmd)
+	}
+	return installConfigPreflight("/etc/syswarden/config")
+}
+
 func prepareInstallConfiguration(configRoot string) error {
-	if err := config.RemoveRetiredWebTUIConfiguration(configRoot); err != nil {
-		return fmt.Errorf("remove retired Web-TUI configuration: %w", err)
-	}
-	if err := config.EnsureDefaults(configRoot); err != nil {
-		return fmt.Errorf("complete missing modular defaults: %w", err)
-	}
-	if err := config.ParseConfig(configRoot); err != nil {
-		return fmt.Errorf("validate modular configuration: %w", err)
+	if err := config.PrepareInstallationConfiguration(configRoot); err != nil {
+		return err
 	}
 	if config.GlobalConfig == nil {
 		return fmt.Errorf("validated configuration is unavailable")
@@ -465,4 +522,11 @@ func prepareInstallConfiguration(configRoot string) error {
 
 func init() {
 	rootCmd.AddCommand(installCmd)
+}
+
+var preflightModuleDependencies = func() error {
+	if err := system.PreflightSelectedModuleDependencies(); err != nil {
+		return err
+	}
+	return integration.PreflightWazuh()
 }

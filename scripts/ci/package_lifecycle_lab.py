@@ -31,8 +31,10 @@ from typing import Sequence
 
 try:
     from scripts.ci import package_qualification_matrix as qualification_matrix
+    from scripts.ci import native_activation_descriptor
 except ModuleNotFoundError:  # Direct execution from scripts/ci.
     import package_qualification_matrix as qualification_matrix
+    import native_activation_descriptor
 
 
 SCHEMA_VERSION = 5
@@ -814,6 +816,15 @@ LIVE_TELEMETRY_STATE_ATTRIBUTES = (
 )
 
 BASH_COMPLETION_PATH = "/usr/share/bash-completion/completions/syswarden"
+APK_RECOVERY_HOOK_PATH = "/etc/apk/commit_hooks.d/syswarden-recovery"
+APK_RECOVERY_HOOK_FIRST_VERSION = "5.00.0"
+APK_RECOVERY_HOOK_SHA256 = (
+    "c38eb138669360b3d664cc97c390ef5852964be64bc55991b5f664e586084522"
+)
+APK_LAUNCHER_RECOVERY_HOOK_SHA256 = (
+    "3bbcf99328b042cdd1cdd632eeee5603245d9a067e85828b7d9022849585680d"
+)
+APK_SHARED_LAUNCHERS = frozenset({"/usr/local/bin/syswarden", "/usr/local/bin/syswarden-tui"})
 RPM_DOCUMENTATION_ROOT = "/usr/share/doc/syswarden"
 GEOIP_DATA_LICENSE_PATH = "/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
 GEOIP_DATA_LICENSE_FIRST_VERSION = "4.04.0"
@@ -951,6 +962,7 @@ def _generated_cleanup_event_checks(
     label: str,
     *,
     exact_rsyslog: bool = False,
+    reviewed_apk: bool = False,
 ) -> tuple[str, ...]:
     keys = [
         "systemd_core",
@@ -977,7 +989,7 @@ def _generated_cleanup_event_checks(
         "cis_coredump_quarantine_absent",
         "rsyslog_antiforging_exact_removed",
         "rsyslog_selinux_provenance_removed",
-        "completion_residual",
+        "completion_exact_removed" if reviewed_apk else "completion_residual",
     ]
     if exact_rsyslog:
         keys.extend(
@@ -1002,7 +1014,7 @@ def _generated_cleanup_event_checks(
             "cron_d_owned",
             "cron_d_pending",
             "root_crontab_bytes",
-            "root_crontab_legacy_residual",
+            "root_crontab_legacy_retired" if reviewed_apk else "root_crontab_legacy_residual",
         )
     )
     return tuple(f"{scenario}.{label}.generated.{key}" for key in keys)
@@ -1152,7 +1164,13 @@ def expected_event_checks(
         installed("recovery.candidate", "recovery")
         return tuple(checks)
 
+    reviewed_apk = (family == "apk" and candidate_version is not None
+                    and _uses_apk_recovery_payload(family, "candidate", candidate_version))
+    if reviewed_apk:
+        checks.append(f"{scenario}.operator-protection.before")
     installed("install.candidate", "fresh")
+    if reviewed_apk:
+        checks.append(f"{scenario}.operator-protection.installed")
 
     if family == "deb" and scenario == "remove":
         deb_removed("remove")
@@ -1193,6 +1211,11 @@ def expected_event_checks(
             removal_label,
         )
     )
+    if reviewed_apk:
+        checks.extend(f"{scenario}.{key}" for key in (
+            "reviewed-cron-recovery", "reviewed-list-recovery",
+            "reviewed-ui-config-recovery",
+        ))
     checks.extend(
         (
             f"{scenario}.{removal_label}",
@@ -1206,13 +1229,41 @@ def expected_event_checks(
             scenario,
             removal_label,
             exact_rsyslog=True,
+            reviewed_apk=reviewed_apk,
         )
     )
-    if family in {"deb", "rpm", "apk"}:
+    if reviewed_apk:
+        checks.append(f"{scenario}.{removal_label}.state.opt_root")
+        checks.extend(f"{scenario}.{removal_label}.state.{key}" for key in (
+            "operator_config_retained", "config_root",
+        ))
+        checks.extend(
+            f"{scenario}.{removal_label}.state.{key}.{attribute}"
+            for key in ("unrelated_config", "unrelated_ui", "unrelated_certificate")
+            for attribute in ("type", "hash", "mode", "owner")
+        )
+        checks.extend(f"{scenario}.{removal_label}.state.{key}"
+                      for key in ("data_root", "log_root"))
+    elif family in {"deb", "rpm", "apk"}:
         checks.extend(
             f"{scenario}.{removal_label}.state.{key}"
             for key in ("opt_root", "config_root", "data_root", "log_root")
         )
+    if reviewed_apk:
+        checks.extend((f"{scenario}.product-rules.removed",
+                       f"{scenario}.recovery-payload.removed",
+                       f"{scenario}.operator-protection.removed",
+                       f"{scenario}.operator-protection.reload",
+                       f"{scenario}.product-rules.reloaded",
+                       f"{scenario}.restart-one.database",
+                       f"{scenario}.restart-one.payload_inventory"))
+        checks.extend(check.replace(f"{scenario}.{removal_label}.", f"{scenario}.restart-one.")
+                      for check in tuple(checks)
+                      if check.startswith(f"{scenario}.{removal_label}.state."))
+        checks.extend((f"{scenario}.product-rules.restart",
+                       f"{scenario}.recovery-payload.restart",
+                       f"{scenario}.operator-protection.restart",
+                       f"{scenario}.restart-one.no_recreation"))
     if family == "rpm":
         checks.append(f"{scenario}.{removal_label}.purge-equivalent")
     return tuple(checks)
@@ -2057,6 +2108,39 @@ def build_historical_transition_containerfile(
     return f"FROM {common_image}\n{transition_bootstrap}"
 
 
+def complete_removal_configuration_seed() -> str:
+    """Prepare a complete historical policy before adding operator sentinels.
+
+    Removal scenarios exercise preservation of preconfigured installations.
+    They do not establish standard-list-only fresh installation acceptance.
+    An incomplete custom module must never rely on installer default repair.
+    """
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "src/core/syswarden-cli/config/historical_defaults_v4104.json"
+    ).read_bytes()
+    if hashlib.sha256(fixture).hexdigest() != (
+        "4a249386079b44d1bdac4fc0288dc818938762e67126fb20dd5d3c3d7221faaa"
+    ):
+        raise LifecycleLabError("historical removal configuration fixture changed")
+    templates = json.loads(fixture)
+    lines = [
+        "seed_complete_removal_configuration() {",
+        "    [ ! -e /etc/syswarden/config ] && [ ! -L /etc/syswarden/config ] || return 1",
+        "    (umask 027; mkdir -p /etc/syswarden/config/modules) || return 1",
+    ]
+    for relative, content in templates.items():
+        destination = shlex.quote("/etc/syswarden/config/" + relative)
+        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        lines.extend((
+            f"    printf '%s' {shlex.quote(encoded)} | base64 -d > {destination} || return 1",
+            f"    chmod 0640 {destination} || return 1",
+            f"    [ \"$(sha256sum {destination} | awk '{{ print $1 }}')\" = {digest} ] || return 1",
+        ))
+    return "\n".join((*lines, "}"))
+
+
 LIFECYCLE_SCRIPT = r'''#!/bin/sh
 # ShellCheck cannot infer function calls passed through run_step.
 # shellcheck disable=SC2317
@@ -2107,7 +2191,7 @@ FAILURES=0
 PREFIX="${SCENARIO}"
 INVOCATION="initial"
 
-if [ "${SCENARIO}" = "upgrade-rollback" ] && [ -f "${RESTART_STATE_FILE}" ]; then
+if [ -f "${RESTART_STATE_FILE}" ] && { [ "${SCENARIO}" = "upgrade-rollback" ] || [ "${PACKAGE_FAMILY}" = apk ]; }; then
     INVOCATION="$(sed -n '1p' "${RESTART_STATE_FILE}")"
     printf 'CONTAINER RESTART %s\n' "${INVOCATION}" >> "${COMMAND_LOG}"
 else
@@ -2882,20 +2966,51 @@ package_uses_systemd_wireguard_ordering_payload() {
         "${systemd_ordering_artifact_version}"
 }
 
+package_uses_apk_recovery_payload() {
+    case "$1" in
+        candidate) apk_recovery_version="${EXPECTED_CANDIDATE_VERSION}" ;;
+        previous) apk_recovery_version="${EXPECTED_PREVIOUS_VERSION}" ;;
+        *) return 2 ;;
+    esac
+    case "${PACKAGE_FAMILY}" in
+        apk) ;;
+        deb|rpm) return 1 ;;
+        *) return 2 ;;
+    esac
+    printf '%s\n' "${apk_recovery_version}" | \
+        LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)\.[0-9]{2}\.(0|[1-9][0-9]*)$' || return 2
+    apk_recovery_major="${apk_recovery_version%%.*}"
+    apk_recovery_patch="${apk_recovery_version##*.}"
+    [ "${#apk_recovery_major}" -le 10 ] && \
+        [ "${#apk_recovery_patch}" -le 10 ] || return 2
+    [ "${apk_recovery_major}" -le 2147483647 ] && \
+        [ "${apk_recovery_patch}" -le 2147483647 ] || return 2
+    [ "${apk_recovery_major}" -ge 5 ]
+}
+
 validate_manifest_contract() {
     manifest="$1"
     artifact_role="$2"
     case "${artifact_role}" in candidate|previous) ;; *) return 1 ;; esac
+    launcher_free_apk=0
+    if [ "${PACKAGE_FAMILY}" = apk ] && \
+       required_manifest_path "${manifest}" /opt/syswarden/activation-contract-v1.json && \
+       required_manifest_path "${manifest}" /etc/apk/commit_hooks.d/syswarden-recovery && \
+       ! grep -Eq '^/usr/local(/|$)' "${manifest}"; then
+        launcher_free_apk=1
+    fi
     for required in \
         /opt/syswarden/bin/syswarden-cli \
         /opt/syswarden/bin/syswarden-core \
         /opt/syswarden/bin/syswarden-tui \
-        /opt/syswarden/signatures.json \
-        /usr/local/bin/syswarden \
-        /usr/local/bin/syswarden-tui
+        /opt/syswarden/signatures.json
     do
         required_manifest_path "${manifest}" "${required}" || return 1
     done
+    if [ "${launcher_free_apk}" -eq 0 ]; then
+        required_manifest_path "${manifest}" /usr/local/bin/syswarden || return 1
+        required_manifest_path "${manifest}" /usr/local/bin/syswarden-tui || return 1
+    fi
     legacy_completion_payload=0
     if package_uses_legacy_completion_payload "${artifact_role}"; then
         legacy_completion_payload=1
@@ -2949,6 +3064,21 @@ validate_manifest_contract() {
             /usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf && return 1
     fi
 
+    apk_recovery_payload=0
+    if [ "${launcher_free_apk}" -eq 1 ] || package_uses_apk_recovery_payload "${artifact_role}"; then
+        apk_recovery_payload=1
+        required_manifest_path "${manifest}" \
+            /etc/apk/commit_hooks.d/syswarden-recovery || return 1
+    else
+        apk_recovery_payload_rc=$?
+        [ "${apk_recovery_payload_rc}" -eq 1 ] || return 1
+        required_manifest_path "${manifest}" \
+            /etc/apk/commit_hooks.d/syswarden-recovery && return 1
+    fi
+    activation_descriptor_payload=0
+    if required_manifest_path "${manifest}" /opt/syswarden/activation-contract-v1.json; then
+        activation_descriptor_payload=1
+    fi
     case "${PACKAGE_FAMILY}" in
         deb)
             if [ "${legacy_completion_payload}" -eq 1 ]; then
@@ -2965,12 +3095,20 @@ validate_manifest_contract() {
                 allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=19
             fi
+            expected_manifest_count=$((expected_manifest_count + activation_descriptor_payload))
+            allowed="(${allowed})|^/opt/syswarden/activation-contract-v1\\.json$"
             [ "$(wc -l < "${manifest}" | tr -d ' ')" = \
                 "${expected_manifest_count}" ] || return 1
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
             ;;
         apk)
-            if [ "${legacy_completion_payload}" -eq 1 ]; then
+            if [ "${launcher_free_apk}" -eq 1 ]; then
+                allowed='^/(etc/apk/commit_hooks\.d/syswarden-recovery|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt)$'
+                expected_manifest_count=8
+            elif [ "${apk_recovery_payload}" -eq 1 ]; then
+                allowed='^/(etc/apk/commit_hooks\.d/syswarden-recovery|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt)$'
+                expected_manifest_count=10
+            elif [ "${legacy_completion_payload}" -eq 1 ]; then
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=6
             elif [ "${geoip_data_license_payload}" -eq 1 ]; then
@@ -2980,6 +3118,8 @@ validate_manifest_contract() {
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden)$'
                 expected_manifest_count=7
             fi
+            expected_manifest_count=$((expected_manifest_count + activation_descriptor_payload))
+            allowed="(${allowed})|^/opt/syswarden/activation-contract-v1\\.json$"
             [ "$(wc -l < "${manifest}" | tr -d ' ')" = \
                 "${expected_manifest_count}" ] || return 1
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
@@ -3003,6 +3143,7 @@ validate_manifest_contract() {
             else
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             fi
+            allowed="(${allowed})|^/opt/syswarden/activation-contract-v1\\.json$"
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
             required_manifest_path "${manifest}" /usr/lib/.build-id || return 1
             awk '
@@ -3055,12 +3196,35 @@ validate_inventory_contract() {
     inventory="$1"
     artifact_role="$2"
     case "${artifact_role}" in candidate|previous) ;; *) return 1 ;; esac
+    launcher_free_apk=0
+    if [ "${PACKAGE_FAMILY}" = apk ] && \
+       awk -F '\t' '$1 == "/opt/syswarden/activation-contract-v1.json" { d++ } $1 == "/etc/apk/commit_hooks.d/syswarden-recovery" { h++ } $1 ~ /^\/usr\/local(\/|$)/ { a++ } END { exit d == 1 && h == 1 && a == 0 ? 0 : 1 }' "${inventory}"; then
+        launcher_free_apk=1
+    fi
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-cli file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-cli" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-core file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-core" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-tui file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-tui" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/signatures.json file 640 "$(awk -F '\t' '$1 == "/opt/syswarden/signatures.json" { print $6 }' "${inventory}")" || return 1
-    inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden symlink 777 /opt/syswarden/bin/syswarden-cli || return 1
-    inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden-tui symlink 777 /opt/syswarden/bin/syswarden-tui || return 1
+    # Historical artifacts lack this file. A present descriptor must bind the
+    # exact recorded CLI/core bytes and current runtime contract, never a name.
+    if awk -F '\t' '$1 == "/opt/syswarden/activation-contract-v1.json" { found = 1 } END { exit found ? 0 : 1 }' "${inventory}"; then
+        activation_cli_hash="$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-cli" { print $6 }' "${inventory}")"
+        activation_core_hash="$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-core" { print $6 }' "${inventory}")"
+        printf '%s\n' "${activation_cli_hash}" "${activation_core_hash}" | \
+            LC_ALL=C grep -Ev '^[0-9a-f]{64}$' | grep -q . && return 1
+        activation_descriptor_hash="$(printf '{"schema":"syswarden-native-activation-v1","architecture":"linux-amd64","approval_schema":"syswarden-activation-approval-v1","source_contract":"syswarden-toml-source-v1","environment":"toml-only-reject-modular-environment-v1","cli_sha256":"%s","core_sha256":"%s"}\n' \
+            "${activation_cli_hash}" "${activation_core_hash}" | sha256sum | awk '{ print $1 }')" || return 1
+        activation_current_hash="$(printf '{"schema":"syswarden-native-activation-v2","architecture":"linux-amd64","approval_schema":"syswarden-activation-approval-v1","source_contract":"syswarden-toml-source-v1","environment":"toml-only-reject-modular-environment-v1","cli_sha256":"%s","core_sha256":"%s","publication_exclusion":"config-directory-flock-and-native-debt-v1"}\n' \
+            "${activation_cli_hash}" "${activation_core_hash}" | sha256sum | awk '{ print $1 }')" || return 1
+        if ! inventory_has_exact_entry "${inventory}" /opt/syswarden/activation-contract-v1.json file 644 "${activation_current_hash}"; then
+            [ "${artifact_role}" = previous ] || return 1
+            inventory_has_exact_entry "${inventory}" /opt/syswarden/activation-contract-v1.json file 644 "${activation_descriptor_hash}" || return 1
+        fi
+    fi
+    if [ "${launcher_free_apk}" -eq 0 ]; then
+        inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden symlink 777 /opt/syswarden/bin/syswarden-cli || return 1
+        inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden-tui symlink 777 /opt/syswarden/bin/syswarden-tui || return 1
+    fi
     legacy_completion_payload=0
     if package_uses_legacy_completion_payload "${artifact_role}"; then
         legacy_completion_payload=1
@@ -3103,6 +3267,20 @@ validate_inventory_contract() {
         [ "${systemd_ordering_payload_rc}" -eq 1 ] || return 1
         grep -Fq \
             '/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf' \
+            "${inventory}" && return 1
+    fi
+    if [ "${launcher_free_apk}" -eq 1 ]; then
+        inventory_has_exact_entry "${inventory}" \
+            /etc/apk/commit_hooks.d/syswarden-recovery file 755 \
+            3bbcf99328b042cdd1cdd632eeee5603245d9a067e85828b7d9022849585680d || return 1
+    elif package_uses_apk_recovery_payload "${artifact_role}"; then
+        inventory_has_exact_entry "${inventory}" \
+            /etc/apk/commit_hooks.d/syswarden-recovery file 755 \
+            c38eb138669360b3d664cc97c390ef5852964be64bc55991b5f664e586084522 || return 1
+    else
+        apk_recovery_payload_rc=$?
+        [ "${apk_recovery_payload_rc}" -eq 1 ] || return 1
+        grep -Fq '/etc/apk/commit_hooks.d/syswarden-recovery' \
             "${inventory}" && return 1
     fi
     if awk -F '\t' '$2 == "missing" || $2 == "unsupported" { found = 1 } END { exit found ? 0 : 1 }' "${inventory}"; then
@@ -4397,6 +4575,9 @@ attest_preinstall_networkless_config_after_previous() {
     return 1
 }
 
+# __COMPLETE_REMOVAL_CONFIGURATION_SEED__
+# __V5_APK_REMOVAL_FIXTURE__
+
 write_seeded_operator_token() {
     seeded_operator_token="$1"
     {
@@ -4431,37 +4612,39 @@ write_seeded_operator_token() {
 }
 
 seed_state() {
+    configure_operator_fixture_paths
+    mkdir -p "${FIXTURE_CONFIG%/*}" "${FIXTURE_DATA%/*}" "${FIXTURE_CERTIFICATE%/*}" || return 1
     mkdir -p \
         /etc/syswarden/config/modules \
         /etc/syswarden/lists \
         /etc/syswarden/tls || return 1
     mkdir -p /var/lib/syswarden/ui || return 1
     printf '%s\n' 'operator-setting=preserve-exactly' > \
-        /etc/syswarden/config/lifecycle-operator.conf || return 1
+        "${FIXTURE_CONFIG}" || return 1
     write_seeded_operator_token /etc/syswarden/config/modules/99-user.toml || return 1
     printf '%s\n' '198.51.100.42' > /etc/syswarden/lists/syswarden_blacklist.ipv4 || return 1
     printf '%s\n' '2001:db8::42' > /etc/syswarden/lists/syswarden_blacklist.ipv6 || return 1
-    printf '%s\n' '{"schema":1,"sentinel":"lifecycle-operator-preserve-exactly"}' > /var/lib/syswarden/ui/lifecycle-operator.json || return 1
+    printf '%s\n' '{"schema":1,"sentinel":"lifecycle-operator-preserve-exactly"}' > "${FIXTURE_DATA}" || return 1
     printf '%s\n' '{"timestamp":"1970-01-01T00:00:00Z","github_stars":"","github_release":"","profile_name":"lifecycle-operator","system":{"hostname":"lifecycle-fixture","uptime":"","load_average":"","ram_used_mb":0,"ram_total_mb":0,"disk_used_mb":0,"disk_total_mb":0,"cores":"0","arch":"unknown","os":"unknown","cpu_model":"","server_ip":"127.0.0.1","services":[],"ports":[]},"layer3":{"global_blocked":0,"geoip_blocked":0,"asn_blocked":0,"l7_banned":0,"zero_trust_mode":false},"waf":{"total_banned":0,"total_detected":0,"active_signatures":0,"signatures_data":[],"targeted_ports":[],"banned_ips":[],"top_attackers":[],"risk_radar":[],"sparkline_24h":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"allowed_events":[]},"whitelist":{"active_ips":0,"ips":[]}}' > /var/lib/syswarden/ui/data.json || return 1
     printf '%s\n' \
         '-----BEGIN CERTIFICATE-----' \
         'lot0-lifecycle-certificate' \
         '-----END CERTIFICATE-----' > \
-        /etc/syswarden/tls/operator.pem || return 1
-    chmod 0640 /etc/syswarden/config/lifecycle-operator.conf || return 1
+        "${FIXTURE_CERTIFICATE}" || return 1
+    chmod 0640 "${FIXTURE_CONFIG}" || return 1
     chmod 0640 /etc/syswarden/config/modules/99-user.toml || return 1
     chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv4 || return 1
     chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv6 || return 1
-    chmod 0600 /var/lib/syswarden/ui/lifecycle-operator.json || return 1
+    chmod 0600 "${FIXTURE_DATA}" || return 1
     chmod 0600 /var/lib/syswarden/ui/data.json || return 1
-    chmod 0600 /etc/syswarden/tls/operator.pem || return 1
+    chmod 0600 "${FIXTURE_CERTIFICATE}" || return 1
 
-    STATE_CONFIG_HASH="$(hash_file /etc/syswarden/config/lifecycle-operator.conf)" || return 1
+    STATE_CONFIG_HASH="$(hash_file "${FIXTURE_CONFIG}")" || return 1
     STATE_TOKEN_HASH="$(hash_file /etc/syswarden/config/modules/99-user.toml)" || return 1
     STATE_LIST_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv4)" || return 1
     STATE_LIST_IPV6_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv6)" || return 1
-    STATE_OPERATOR_DATA_HASH="$(hash_file /var/lib/syswarden/ui/lifecycle-operator.json)" || return 1
-    STATE_CERT_HASH="$(hash_file /etc/syswarden/tls/operator.pem)" || return 1
+    STATE_OPERATOR_DATA_HASH="$(hash_file "${FIXTURE_DATA}")" || return 1
+    STATE_CERT_HASH="$(hash_file "${FIXTURE_CERTIFICATE}")" || return 1
     {
         printf 'STATE_CONFIG_HASH=%s\n' "${STATE_CONFIG_HASH}"
         printf 'STATE_TOKEN_HASH=%s\n' "${STATE_TOKEN_HASH}"
@@ -5035,7 +5218,7 @@ live_telemetry_schema_valid() {
     live_telemetry_stream_sha256="$({ jq -c --stream 'select(length == 2)' "${live_telemetry_path}" || printf 'stream-error\n'; } | sha256sum | awk '{print $1}')" || return 1
     live_telemetry_normalized_stream_sha256="$({ jq -c . "${live_telemetry_path}" || printf 'parse-error\n'; } | jq -c --stream 'select(length == 2)' | sha256sum | awk '{print $1}')" || return 1
     [ "${live_telemetry_stream_sha256}" = "${live_telemetry_normalized_stream_sha256}" ] || return 1
-    jq -e --arg kpi_contract "${live_telemetry_contract}" '
+    jq -e --arg kpi_contract "${live_telemetry_contract}" --rawfile telemetry_source "${live_telemetry_path}" '
         def integer: type == "number" and (floor == .);
         def optional_string($key):
             (has($key) | not) or (.[$key] | type == "string");
@@ -5101,13 +5284,157 @@ live_telemetry_schema_valid() {
                 (if .peak_window_hits >= .effective_threshold or .threshold_reached then 20 else 0 end)
              end) as $score |
             if $score > 100 then 100 elif $score < 0 then 0 else $score end;
+        # Compare local chronology as seconds and nanoseconds separately. jq
+        # floating-point epochs can otherwise lose a sub-microsecond reversal.
+        def grc_local_timestamp:
+            if canonical_grc_timestamp and . != "0001-01-01T00:00:00Z" and
+               ((contains(".") | not) or test("\\.[0-9]{0,8}[1-9]Z$")) then
+                capture("^(?<whole>[^.]+?)(?:\\.(?<fraction>[0-9]+))?Z$") as $parts |
+                [($parts.whole + "Z" | fromdateiso8601),
+                 ((($parts.fraction // "") + "000000000")[:9] | tonumber)]
+            else error("noncanonical local native timestamp") end;
+        def grc_local_ipv6_text:
+            . as $groups |
+            ([range(0; 8) | . as $start |
+              select($groups[$start] == 0 and ($start == 0 or $groups[$start - 1] != 0)) |
+              {start: $start, length: ([range($start; 9) |
+                  select(. == 8 or $groups[.] != 0)][0] - $start)}] |
+             sort_by([(-.length), .start])[0] // {start: 0, length: 0}) as $run |
+            ($groups | map(. as $group |
+                [($group / 4096 | floor), (($group / 256 | floor) % 16),
+                 (($group / 16 | floor) % 16), ($group % 16)] |
+                map(. as $digit | "0123456789abcdef"[$digit:$digit + 1]) | join("") |
+                sub("^0+"; "") | if . == "" then "0" else . end)) as $words |
+            if $run.length >= 2 then
+                ($words[:$run.start] | join(":")) + "::" +
+                ($words[$run.start + $run.length:] | join(":"))
+            else $words | join(":") end;
+        def grc_local_address:
+            if test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$") then
+                (split(".") | map(tonumber)) as $groups |
+                if all($groups[]; . <= 255) then
+                    {groups: $groups, width: 8, canonical: ($groups | map(tostring) | join("."))}
+                else error("invalid local native IPv4 address") end
+            elif test("^[0-9a-f:]+$") then
+                split("::") as $sides |
+                ($sides[0] | if . == "" then [] else split(":") end) as $left |
+                (if ($sides | length) == 2 then
+                    $sides[1] | if . == "" then [] else split(":") end
+                 else [] end) as $right |
+                if (($sides | length) == 1 and ($left | length) == 8 or
+                    ($sides | length) == 2 and (($left + $right) | length) < 8) and
+                   all(($left + $right)[]; test("^[0-9a-f]{1,4}$")) then
+                    ($left + [range(0; 8 - (($left + $right) | length)) | "0"] + $right |
+                     map(reduce (explode[]) as $digit (0;
+                         . * 16 + (if $digit <= 57 then $digit - 48 else $digit - 87 end)))) as $groups |
+                    if $groups[:5] == [0, 0, 0, 0, 0] and $groups[5] == 65535 then
+                        error("mapped local native IPv6 address")
+                    else {groups: $groups, width: 16, canonical: ($groups | grc_local_ipv6_text)} end
+                else error("invalid local native IPv6 address") end
+            else error("invalid local native address") end;
+        def grc_local_entry_valid:
+            type == "string" and length <= 64 and
+            (split("/") as $parts |
+             ($parts[0] | grc_local_address) as $address |
+             $parts[0] == $address.canonical and
+             (if ($parts | length) == 1 then true
+              elif ($parts | length) == 2 and ($parts[1] | test("^(0|[1-9][0-9]{0,2})$")) then
+                  ($parts[1] | tonumber) as $prefix |
+                  $prefix <= ($address.width * ($address.groups | length)) and
+                  all(range(0; ($address.groups | length)); . as $index |
+                      ($prefix - $index * $address.width |
+                       if . < 0 then 0 elif . > $address.width then $address.width else . end) as $used |
+                      ($address.groups[$index] % pow(2; $address.width - $used)) == 0)
+              else false end));
+        def grc_local_claim_valid($snapshot; $updated; $captured):
+            type == "object" and
+            (keys - ["confirmed_at", "expires_at"]) ==
+                ["cause", "created_at", "entry", "generation", "state", "transition_at"] and
+            (.entry | grc_local_entry_valid) and
+            (.generation | integer and . > 0 and . <= $snapshot.sequence) and
+            optional_string("expires_at") and optional_string("confirmed_at") and
+            ((.created_at | grc_local_timestamp) as $created |
+             (.transition_at | grc_local_timestamp) as $transition |
+             (if (.expires_at // "") == "" then null else .expires_at | grc_local_timestamp end) as $expiry |
+             $created <= $transition and $transition <= $updated and
+             ($expiry == null or $expiry > $created) and
+             (if .state == "active" then
+                  .cause == "verified-ban" and (.confirmed_at // "") == "" and
+                  ($expiry == null or $expiry > $captured)
+              elif .state == "deleted" or .state == "expired" or .state == "tombstoned" then
+                  (.cause == "verified-deletion" or .cause == "native-expiry") and
+                  (.state != "deleted" or .cause == "verified-deletion") and
+                  (.state != "expired" or .cause == "native-expiry") and
+                  (.cause != "native-expiry" or ($expiry != null and $transition >= $expiry)) and
+                  (if .state == "tombstoned" then
+                       (.confirmed_at | grc_local_timestamp) as $confirmed |
+                       $confirmed >= [$transition[0] + 30, $transition[1]] and $confirmed <= $updated
+                   else (.confirmed_at // "") == "" end)
+              else false end));
+        def grc_local_snapshot_valid:
+            . as $snapshot |
+            type == "object" and
+            keys == ["active", "captured_at", "claims", "deleted", "expired", "identity", "model_sha256", "schema_version", "sequence", "tombstoned", "truncated", "updated_at"] and
+            .schema_version == 1 and
+            # Refuse sequence values beyond the exact jq integer range rather
+            # than accepting rounded uint64 generation comparisons.
+            (.sequence | integer and . > 0 and . <= 9007199254740991) and
+            (.identity | type == "string" and test("^[0-9a-f]{64}$")) and
+            (.model_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+            (.truncated | type == "boolean") and
+            (.claims | type == "array" and length <= 1024) and
+            ([.active, .expired, .deleted, .tombstoned] |
+             all(.[]; integer and . >= 0 and . <= 16384) and add <= 16384) and
+            (([.active, .expired, .deleted, .tombstoned] | add) as $total |
+             if .truncated then $total > (.claims | length) else $total == (.claims | length) end) and
+            ((.updated_at | grc_local_timestamp) as $updated |
+             (.captured_at | grc_local_timestamp) as $captured |
+             $captured >= $updated and
+             all(.claims[]; grc_local_claim_valid($snapshot; $updated; $captured))) and
+            ([.claims[].entry] as $entries | $entries == ($entries | unique)) and
+            all(["active", "expired", "deleted", "tombstoned"][]; . as $state |
+                ([$snapshot.claims[] | select(.state == $state)] | length) as $observed |
+                $observed <= $snapshot[$state] and
+                ($snapshot.truncated or $observed == $snapshot[$state]));
+        def grc_local_lifecycle_valid:
+            . as $lifecycle |
+            (keys - ["active_claims", "deleted_claims", "expired_claims", "runtime_snapshot_complete", "runtime_snapshot_truncated", "tombstoned_claims"]) ==
+                ["deletion_records", "expiry_records", "runtime_captured_at", "runtime_local_snapshot", "runtime_model_sha256", "runtime_state_linked", "scope", "tombstone_records"] and
+            .runtime_state_linked == true and
+            ((has("runtime_snapshot_complete") and .runtime_snapshot_complete == true and
+              (has("runtime_snapshot_truncated") | not)) or
+             (has("runtime_snapshot_truncated") and .runtime_snapshot_truncated == true and
+              (has("runtime_snapshot_complete") | not))) and
+            optional_nonnegative_integer("active_claims") and
+            optional_nonnegative_integer("expired_claims") and
+            optional_nonnegative_integer("deleted_claims") and
+            optional_nonnegative_integer("tombstoned_claims") and
+            (.runtime_local_snapshot | grc_local_snapshot_valid) and
+            (.runtime_local_snapshot |
+             .truncated == ($lifecycle.runtime_snapshot_truncated // false) and
+             .model_sha256 == $lifecycle.runtime_model_sha256 and
+             .captured_at == $lifecycle.runtime_captured_at and
+             .active == ($lifecycle.active_claims // 0) and
+             .expired == ($lifecycle.expired_claims // 0) and
+             .deleted == ($lifecycle.deleted_claims // 0) and
+             .tombstoned == ($lifecycle.tombstoned_claims // 0));
+        # Every numeric local lifecycle field is an integer on the wire. Bind
+        # its parsed value back to the whitespace-free source so jq rounding
+        # cannot accept fractional or exponent spellings as Go integer fields.
+        def grc_local_wire_valid:
+            (walk(if type == "number" then . + 0 else . end) | tojson) as $canonical |
+            ($telemetry_source |
+             gsub("(?<quoted>\"(?:[^\"\\\\]|\\\\.)*\")|[ \t\r\n]+"; .quoted // "")) |
+            contains("\"lifecycle\":" + $canonical);
         def grc_lifecycle_valid:
             type == "object" and
             (.deletion_records | integer and . >= 0) and
             (.expiry_records | integer and . >= 0) and
             (.tombstone_records | integer and . >= 0) and
             (.runtime_state_linked | type == "boolean") and
-            (if .runtime_state_linked then
+            (if .scope == "local-native-runtime-snapshot" then
+                 grc_local_lifecycle_valid and grc_local_wire_valid
+             elif .runtime_state_linked then
                 ((keys - ["active_claims", "deleted_claims", "expired_claims", "runtime_peer_checkpoint_sha256", "tombstoned_claims"]) ==
                  ["deletion_records", "expiry_records", "runtime_captured_at", "runtime_checkpoint_at", "runtime_checkpoint_sha256", "runtime_cluster_id", "runtime_coordination", "runtime_epoch", "runtime_model_sha256", "runtime_node_id", "runtime_role", "runtime_snapshot_complete", "runtime_snapshot_truncated", "runtime_state_linked", "scope", "tombstone_records"] or
                  (keys - ["active_claims", "deleted_claims", "expired_claims", "runtime_peer_checkpoint_sha256", "runtime_snapshot_truncated", "tombstoned_claims"]) ==
@@ -5233,6 +5560,8 @@ live_telemetry_schema_valid() {
              keys == ["admitted_events", "excluded_events", "journal_bytes_scanned", "journal_bytes_total", "journal_decode_errors", "records_truncated", "rejected_events"] and
              all(.[]; integer and . >= 0) and
              .journal_bytes_scanned <= .journal_bytes_total) and
+            ((.window.complete | not) or
+             .evidence.journal_bytes_scanned == .evidence.journal_bytes_total) and
             (.lifecycle | grc_lifecycle_valid) and
             (.records | type == "array" and length <= 512 and all(.[]; grc_record_valid)) and
             ((.records | length) == 0 and
@@ -5252,13 +5581,15 @@ live_telemetry_schema_valid() {
                 .evidence.rejected_events == 0 and .evidence.records_truncated == 0 and
                 .catalog.version != "" and
                 .lifecycle.runtime_state_linked and
-                .lifecycle.runtime_peer_checkpoint_sha256 == .lifecycle.runtime_checkpoint_sha256 and
                 all(.records[];
                     .catalog == $grc.catalog and .metric_quality == "attested" and
                     .policy_quality == "attested" and .hit_quality == "measured" and
                     .degraded_hits == 0 and .enforcement_state != "unknown") and
                 .lifecycle.runtime_snapshot_complete == true and
-                .lifecycle.runtime_coordination == "healthy"
+                (.lifecycle.scope == "local-native-runtime-snapshot" or
+                 (.lifecycle.scope == "ha-v2-runtime-snapshot" and
+                  .lifecycle.runtime_coordination == "healthy" and
+                  .lifecycle.runtime_peer_checkpoint_sha256 == .lifecycle.runtime_checkpoint_sha256))
              else true end);
         def feed_required_keys:
             ["accepted_count", "address_family", "attestation", "feed_name", "freshness", "rejected_count", "skipped_count", "source_origins", "state"];
@@ -5744,7 +6075,8 @@ record_unsupported_rollback_token_contract() {
 
 assert_all_state_preserved() {
     label="$1"
-    assert_preserved "${label}" config /etc/syswarden/config/lifecycle-operator.conf "${STATE_CONFIG_HASH}" 640
+    configure_operator_fixture_paths
+    assert_preserved "${label}" config "${FIXTURE_CONFIG}" "${STATE_CONFIG_HASH}" 640
     if [ "${SCENARIO}:${label}:${PACKAGE_FAMILY}" = upgrade-rollback:rollback:deb ] || \
        [ "${SCENARIO}:${label}:${PACKAGE_FAMILY}" = upgrade-rollback:rollback:rpm ]; then
         rollback_token_contract="$(
@@ -5766,8 +6098,8 @@ assert_all_state_preserved() {
     fi
     assert_preserved "${label}" list /etc/syswarden/lists/syswarden_blacklist.ipv4 "${STATE_LIST_HASH}" 600
     assert_preserved "${label}" list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6 "${STATE_LIST_IPV6_HASH}" 600
-    assert_preserved "${label}" operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600
-    assert_preserved "${label}" certificate /etc/syswarden/tls/operator.pem "${STATE_CERT_HASH}" 600
+    assert_preserved "${label}" operator_data "${FIXTURE_DATA}" "${STATE_OPERATOR_DATA_HASH}" 600
+    assert_preserved "${label}" certificate "${FIXTURE_CERTIFICATE}" "${STATE_CERT_HASH}" 600
     live_telemetry_expected_version="${EXPECTED_CANDIDATE_VERSION}"
     case "${SCENARIO}:${label}" in
         upgrade-rollback:previous|upgrade-rollback:rollback)
@@ -5831,7 +6163,11 @@ assert_deferred_purge_marker() {
 assert_dedicated_roots_absent() {
     label="$1"
     check_absent "${label}.state.opt_root" /opt/syswarden
-    check_absent "${label}.state.config_root" /etc/syswarden
+    if v5_apk_removal_profile; then
+        assert_fixture_configuration_retained || return 1
+    else
+        check_absent "${label}.state.config_root" /etc/syswarden
+    fi
     check_absent "${label}.state.data_root" /var/lib/syswarden
     check_absent "${label}.state.log_root" /var/log/syswarden
 }
@@ -6076,8 +6412,12 @@ seed_generated_runtime_artifacts() {
 
     mkdir -p /etc/bash_completion.d || return 1
     if [ ! -f /tmp/syswarden-completion-before ]; then
-        printf '%s\n' '# operator-owned ambiguous SysWarden completion' > \
-            /etc/bash_completion.d/syswarden || return 1
+        if v5_apk_removal_profile; then
+            cp /usr/share/bash-completion/completions/syswarden /etc/bash_completion.d/syswarden || return 1
+        else
+            printf '%s\n' '# operator-owned ambiguous SysWarden completion' > \
+                /etc/bash_completion.d/syswarden || return 1
+        fi
         chmod 0644 /etc/bash_completion.d/syswarden || return 1
         hash_file /etc/bash_completion.d/syswarden > \
             /tmp/syswarden-completion-before || return 1
@@ -6101,7 +6441,11 @@ seed_generated_runtime_artifacts() {
         {
             printf '%s\n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
             printf '%s\n' '# operator note mentioning syswarden-cli'
-            printf '%s\n' '23 * * * * /srv/operator/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+            if v5_apk_removal_profile; then
+                printf '%s\n' '23 * * * * /srv/operator/bin/operator-job >/dev/null 2>&1'
+            else
+                printf '%s\n' '23 * * * * /srv/operator/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+            fi
             printf ' \t \n'
         } > "${OPERATOR_CRON_FILE}"
         {
@@ -6163,7 +6507,9 @@ assert_generated_runtime_artifact_contract() {
         /etc/rsyslog.d/99-syswarden-antiforging.conf
     check_absent "${label}.generated.rsyslog_selinux_provenance_removed" \
         /etc/rsyslog.d/.syswarden-rsyslog-selinux-provenance-v1
-    if [ -f /etc/bash_completion.d/syswarden ] && [ ! -L /etc/bash_completion.d/syswarden ] && \
+    if v5_apk_removal_profile; then
+        check_absent "${label}.generated.completion_exact_removed" /etc/bash_completion.d/syswarden
+    elif [ -f /etc/bash_completion.d/syswarden ] && [ ! -L /etc/bash_completion.d/syswarden ] && \
        [ "$(hash_file /etc/bash_completion.d/syswarden 2>/dev/null || true)" = "$(cat /tmp/syswarden-completion-before)" ]; then
         record pass "${PREFIX}.${label}.generated.completion_residual" "ambiguous shell completion is preserved for manual recovery"
     else
@@ -6262,9 +6608,15 @@ assert_generated_runtime_artifact_contract() {
     esac
     check_absent "${label}.generated.cron_d_owned" /etc/cron.d/syswarden
     check_absent "${label}.generated.cron_d_pending" /etc/cron.d/.syswarden.pending-v1
+    legacy_check=root_crontab_legacy_residual
+    expected_legacy_count=1
+    if v5_apk_removal_profile; then
+        legacy_check=root_crontab_legacy_retired
+        expected_legacy_count=0
+    fi
     if ! LC_ALL=C crontab -l > /tmp/syswarden-root-cron-after 2>/tmp/syswarden-remove-cron.error; then
         record fail "${PREFIX}.${label}.generated.root_crontab_bytes" "root crontab could not be read after removal"
-        record fail "${PREFIX}.${label}.generated.root_crontab_legacy_residual" "legacy residual could not be verified"
+        record fail "${PREFIX}.${label}.generated.${legacy_check}" "legacy residual could not be verified"
         return
     fi
     cron_state="$(cat /tmp/syswarden-root-cron-after)"
@@ -6275,10 +6627,10 @@ assert_generated_runtime_artifact_contract() {
     fi
     legacy_count="$(printf '%s\n' "${cron_state}" | grep -F -x -c \
         '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1' || true)"
-    if [ "${legacy_count}" -eq 1 ] && [ ! -e /opt/syswarden/bin/syswarden-cli ] && [ ! -L /opt/syswarden/bin/syswarden-cli ]; then
-        record pass "${PREFIX}.${label}.generated.root_crontab_legacy_residual" "one exact inert legacy record remains as a bounded residual"
+    if [ "${legacy_count}" -eq "${expected_legacy_count}" ] && [ ! -e /opt/syswarden/bin/syswarden-cli ] && [ ! -L /opt/syswarden/bin/syswarden-cli ]; then
+        record pass "${PREFIX}.${label}.generated.${legacy_check}" "legacy cron count matches the version-bound fixture contract"
     else
-        record fail "${PREFIX}.${label}.generated.root_crontab_legacy_residual" "bounded inert legacy residual contract is not satisfied"
+        record fail "${PREFIX}.${label}.generated.${legacy_check}" "bounded inert legacy residual contract is not satisfied"
     fi
 }
 
@@ -6413,7 +6765,11 @@ scenario_upgrade_rollback_restart_two() {
 
 scenario_remove() {
     prepare_expected_payloads || return
+    seed_complete_removal_configuration || return
     seed_state || return
+    if v5_apk_removal_profile; then
+        run_step operator-protection.before seed_operator_firewall || return
+    fi
     if [ "${PACKAGE_FAMILY}" = deb ]; then
         seed_deb_removal_log || return
     fi
@@ -6421,6 +6777,9 @@ scenario_remove() {
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
+    if v5_apk_removal_profile; then
+        run_step operator-protection.installed probe_operator_firewall || return
+    fi
     case "${PACKAGE_FAMILY}" in
         deb)
             prepare_package_transition || return
@@ -6459,10 +6818,12 @@ scenario_remove() {
             ;;
         apk)
             seed_generated_runtime_artifacts exact-rsyslog remove || return
+            prepare_v5_apk_removal || return
             run_step remove remove_package || return
             assert_package_absent remove candidate
             assert_generated_runtime_artifact_contract remove exact-rsyslog
             assert_dedicated_roots_absent remove
+            finish_v5_apk_removal || return
             ;;
         rpm)
             seed_generated_runtime_artifacts exact-rsyslog final-removal || return
@@ -6481,7 +6842,11 @@ scenario_remove() {
 
 scenario_purge() {
     prepare_expected_payloads || return
+    seed_complete_removal_configuration || return
     seed_state || return
+    if v5_apk_removal_profile; then
+        run_step operator-protection.before seed_operator_firewall || return
+    fi
     if [ "${PACKAGE_FAMILY}" = deb ]; then
         seed_deb_removal_log || return
     fi
@@ -6489,7 +6854,11 @@ scenario_purge() {
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
+    if v5_apk_removal_profile; then
+        run_step operator-protection.installed probe_operator_firewall || return
+    fi
     seed_generated_runtime_artifacts exact-rsyslog purge || return
+    prepare_v5_apk_removal || return
     run_step purge purge_package || return
     assert_package_absent purge candidate
     assert_generated_runtime_artifact_contract purge exact-rsyslog
@@ -6499,6 +6868,7 @@ scenario_purge() {
             ;;
         apk)
             assert_dedicated_roots_absent purge
+            finish_v5_apk_removal || return
             ;;
     esac
 }
@@ -6520,10 +6890,18 @@ case "${SCENARIO}" in
         esac
         ;;
     remove)
-        scenario_remove || scenario_rc=$?
+        case "${INVOCATION}" in
+            initial) scenario_remove || scenario_rc=$? ;;
+            restart-one) scenario_v5_apk_removal_restart || scenario_rc=$? ;;
+            *) scenario_rc=1 ;;
+        esac
         ;;
     purge)
-        scenario_purge || scenario_rc=$?
+        case "${INVOCATION}" in
+            initial) scenario_purge || scenario_rc=$? ;;
+            restart-one) scenario_v5_apk_removal_restart || scenario_rc=$? ;;
+            *) scenario_rc=1 ;;
+        esac
         ;;
     *)
         record fail "scenario" "unsupported scenario ${SCENARIO}"
@@ -6542,6 +6920,14 @@ if [ "${FAILURES}" -ne 0 ]; then
 fi
 exit 0
 '''
+
+LIFECYCLE_SCRIPT = LIFECYCLE_SCRIPT.replace(
+    "# __COMPLETE_REMOVAL_CONFIGURATION_SEED__", complete_removal_configuration_seed()
+)
+LIFECYCLE_SCRIPT = LIFECYCLE_SCRIPT.replace(
+    "# __V5_APK_REMOVAL_FIXTURE__",
+    Path(__file__).with_name("package_v5_apk_removal.sh").read_text(encoding="utf-8"),
+)
 
 
 def parse_events(path: Path) -> list[dict[str, str]]:
@@ -6691,6 +7077,17 @@ def _uses_systemd_wireguard_ordering_payload(
     )
 
 
+def _uses_apk_recovery_payload(family: str, role: str, version: str) -> bool:
+    if family not in EXPECTED_SCENARIOS:
+        raise LifecycleLabError(f"unsupported inventory family: {family!r}")
+    if role not in {"previous", "candidate"}:
+        raise LifecycleLabError(f"unsupported package artifact role: {role!r}")
+    return family == "apk" and (
+        parse_syswarden_version(version)
+        >= parse_syswarden_version(APK_RECOVERY_HOOK_FIRST_VERSION)
+    )
+
+
 def _owns_systemd_ordering_directory(family: str, version: str) -> bool:
     return family == "rpm" and (
         parse_syswarden_version(version)
@@ -6722,6 +7119,7 @@ def _validate_manager_paths(
             "native package-manager inventory contains an unsafe path"
         )
     observed = set(paths)
+    activation_paths = observed & {"/" + native_activation_descriptor.DESCRIPTOR_PATH}
     legacy_completion = _uses_legacy_completion_payload(
         family,
         role,
@@ -6744,6 +7142,7 @@ def _validate_manager_paths(
     )
     if systemd_ordering_payload:
         expected_payload_paths.add(SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH)
+    expected_payload_paths.update(activation_paths)
     if family == "deb":
         expected = set(
             LEGACY_DEB_PACKAGE_PATHS
@@ -6757,6 +7156,7 @@ def _validate_manager_paths(
         if systemd_ordering_payload:
             expected.update(SYSTEMD_WIREGUARD_ORDERING_DEB_DIRECTORIES)
             expected.add(SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH)
+        expected.update(activation_paths)
         if observed != expected:
             raise LifecycleLabError("DEB native package inventory is not exact")
         return
@@ -6770,6 +7170,12 @@ def _validate_manager_paths(
                 else APK_PACKAGE_PATHS
             )
         )
+        launcher_free = bool(activation_paths) and APK_RECOVERY_HOOK_PATH in observed and not (APK_SHARED_LAUNCHERS & observed)
+        if launcher_free:
+            expected = expected - APK_SHARED_LAUNCHERS
+        if launcher_free or _uses_apk_recovery_payload(family, role, version):
+            expected = expected | {APK_RECOVERY_HOOK_PATH}
+        expected = expected | activation_paths
         if observed != expected:
             raise LifecycleLabError("APK native package inventory is not exact")
         return
@@ -6879,10 +7285,16 @@ def validate_inventory_snapshot(
         "/opt/syswarden/bin/syswarden-tui": "750",
         "/opt/syswarden/signatures.json": "640",
     }
+    descriptor_path = "/" + native_activation_descriptor.DESCRIPTOR_PATH
+    launcher_free_apk = family == "apk" and descriptor_path in entries and APK_RECOVERY_HOOK_PATH in entries and not (APK_SHARED_LAUNCHERS & entries.keys())
+    if descriptor_path in entries:
+        file_modes[descriptor_path] = "644"
     if not legacy_completion:
         file_modes[BASH_COMPLETION_PATH] = "644"
     if systemd_ordering_payload:
         file_modes[SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH] = "644"
+    if launcher_free_apk or _uses_apk_recovery_payload(family, role, version):
+        file_modes[APK_RECOVERY_HOOK_PATH] = "755"
     for path, mode in file_modes.items():
         entry = entries[path]
         if (
@@ -6893,6 +7305,19 @@ def validate_inventory_snapshot(
             raise LifecycleLabError(
                 f"package file type/mode/digest contract failed at {path}"
             )
+    if descriptor_path in entries:
+        expected_descriptor = native_activation_descriptor.descriptor_for_digests(
+            str(entries["/opt/syswarden/bin/syswarden-cli"]["value"]),
+            str(entries["/opt/syswarden/bin/syswarden-core"]["value"]),
+        )
+        expected_descriptor_hashes = {hashlib.sha256(expected_descriptor).hexdigest()}
+        if role == "previous":
+            legacy = native_activation_descriptor.descriptor_for_digests(
+                str(entries["/opt/syswarden/bin/syswarden-cli"]["value"]),
+                str(entries["/opt/syswarden/bin/syswarden-core"]["value"]), legacy=True)
+            expected_descriptor_hashes.add(hashlib.sha256(legacy).hexdigest())
+        if entries[descriptor_path]["value"] not in expected_descriptor_hashes:
+            raise LifecycleLabError("native activation descriptor does not bind the recorded runtimes")
     if license_payloads:
         attribution = entries[GEOIP_DATA_LICENSE_PATH]
         if (
@@ -6918,11 +7343,19 @@ def validate_inventory_snapshot(
             raise LifecycleLabError(
                 "systemd WireGuard ordering payload is not the pinned intact source"
             )
+    if launcher_free_apk or _uses_apk_recovery_payload(family, role, version):
+        expected_hook = APK_LAUNCHER_RECOVERY_HOOK_SHA256 if launcher_free_apk else APK_RECOVERY_HOOK_SHA256
+        if entries[APK_RECOVERY_HOOK_PATH]["value"] != expected_hook:
+            raise LifecycleLabError(
+                "APK recovery hook is not the pinned intact source"
+            )
     link_targets = {
         "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
         "/usr/local/bin/syswarden-tui": "/opt/syswarden/bin/syswarden-tui",
     }
     for path, target in link_targets.items():
+        if launcher_free_apk:
+            continue
         entry = entries[path]
         if (
             entry["type"] != "symlink"
@@ -9488,11 +9921,11 @@ def _json_dataclass_evidence(value: object) -> dict[str, object]:
     return rendered
 
 
-def _scenario_invocations(scenario: str) -> tuple[str, ...]:
+def _scenario_invocations(scenario: str, *, reviewed_apk: bool = False) -> tuple[str, ...]:
     if scenario == "upgrade-rollback":
         return ("initial", "restart-one", "restart-two")
     if scenario in {"remove", "purge"}:
-        return ("initial",)
+        return ("initial", "restart-one") if reviewed_apk else ("initial",)
     raise LifecycleLabError(f"unsupported lifecycle scenario {scenario!r}")
 
 
@@ -9532,9 +9965,9 @@ def _observed_restart_state(result_root: Path, scenario: str) -> str | None:
     return value.strip()
 
 
-def _final_restart_state(result_root: Path, scenario: str) -> str | None:
+def _final_restart_state(result_root: Path, scenario: str, *, reviewed_apk: bool = False) -> str | None:
     value = _observed_restart_state(result_root, scenario)
-    if scenario != "upgrade-rollback":
+    if scenario != "upgrade-rollback" and not reviewed_apk:
         if value is not None:
             raise LifecycleLabError(
                 f"{scenario} unexpectedly produced restart-state evidence"
@@ -9542,11 +9975,11 @@ def _final_restart_state(result_root: Path, scenario: str) -> str | None:
         return None
     if value is None:
         raise LifecycleLabError(
-            "upgrade-rollback lacks final restart-state evidence"
+            f"{scenario} lacks final restart-state evidence"
         )
     if value != "complete":
         raise LifecycleLabError(
-            "upgrade-rollback final restart-state evidence is not exact"
+            f"{scenario} final restart-state evidence is not exact"
         )
     return "complete"
 
@@ -9703,6 +10136,7 @@ def run_platform(
                 scenario,
                 pair,
             )
+            reviewed_apk = scenario in {"remove", "purge"} and _uses_apk_recovery_payload(spec.family, "candidate", pair.candidate.version)
             created = runner.run(run_args, timeout=60)
             last_command = created
             isolation: RuntimeIsolationEvidence | None = None
@@ -9727,7 +10161,7 @@ def run_platform(
                     result_root=result_root,
                 )
                 previous_starttime: int | None = None
-                for invocation in _scenario_invocations(scenario):
+                for invocation in _scenario_invocations(scenario, reviewed_apk=reviewed_apk):
                     if invocation == "initial":
                         boot_result = runner.run(
                             (podman, "start", container_name), timeout=60
@@ -9766,7 +10200,7 @@ def run_platform(
                         f"{invocation} boot for {spec.name} {scenario}",
                     )
                     attest_runtime_namespace(runner, podman, container_name, spec)
-                    pre_state = "absent" if invocation == "initial" else "active"
+                    pre_state = "absent" if invocation == "initial" or reviewed_apk else "active"
                     pre_exec = attest_runtime_snapshot(
                         runner, podman, container_name, spec, pre_state
                     )
@@ -9812,7 +10246,7 @@ def run_platform(
                         result_root, scenario
                     )
                     boot_record["restart_state"] = observed_restart_state
-                    if scenario != "upgrade-rollback" and observed_restart_state is not None:
+                    if scenario != "upgrade-rollback" and not reviewed_apk and observed_restart_state is not None:
                         raise LifecycleLabError(
                             f"{scenario} unexpectedly produced restart-state evidence"
                         )
@@ -9901,7 +10335,7 @@ def run_platform(
                 ]
             failed = [event for event in events if event["status"] == "fail"]
             try:
-                restart_state = _final_restart_state(result_root, scenario)
+                restart_state = _final_restart_state(result_root, scenario, reviewed_apk=reviewed_apk)
             except LifecycleLabError as exc:
                 restart_state = None
                 orchestration_error = (
@@ -9909,7 +10343,7 @@ def run_platform(
                     if orchestration_error is not None
                     else str(exc)
                 )
-            required_boots = len(_scenario_invocations(scenario))
+            required_boots = len(_scenario_invocations(scenario, reviewed_apk=reviewed_apk))
             scenario_status = (
                 "pass"
                 if created.returncode == 0
@@ -10748,11 +11182,12 @@ def validate_passing_active_scenario_runtime(
         "inventory_evidence",
         "log_tail",
     }
-    invocations = _scenario_invocations(scenario)
+    reviewed_apk = scenario in {"remove", "purge"} and _uses_apk_recovery_payload(spec.family, "candidate", str(platform_result.get("candidate_version", "")))
+    invocations = _scenario_invocations(scenario, reviewed_apk=reviewed_apk)
     expected_restart_states = (
         ("restart-one", "restart-two", "complete")
         if scenario == "upgrade-rollback"
-        else (None,)
+        else ("restart-one", "complete") if reviewed_apk else (None,)
     )
     boots = scenario_result.get("boots")
     cleanup = scenario_result.get("cleanup")
@@ -10763,7 +11198,7 @@ def validate_passing_active_scenario_runtime(
         or scenario_result.get("lifecycle_exec_exit_codes")
         != [0] * len(invocations)
         or scenario_result.get("restart_state")
-        != ("complete" if scenario == "upgrade-rollback" else None)
+        != ("complete" if scenario == "upgrade-rollback" or reviewed_apk else None)
         or scenario_result.get("orchestration_error") is not None
         or not isinstance(cleanup, dict)
         or set(cleanup)
@@ -10840,7 +11275,7 @@ def validate_passing_active_scenario_runtime(
             "distinct": True,
         }:
             raise LifecycleLabError("real restart evidence is not exact")
-        pre_expectation = "absent" if index == 0 else "active"
+        pre_expectation = "absent" if index == 0 or reviewed_apk else "active"
         post_expectation = "active" if scenario == "upgrade-rollback" else "absent"
         pre = _validate_runtime_snapshot_evidence(
             boot.get("pre_exec"),

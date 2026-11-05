@@ -117,9 +117,14 @@ jobs:
             scripts/ci/package_systemd_ordering_artifact_gate_test.py \
             scripts/ci/package_systemd_ordering_preflight_test.py \
             scripts/ci/package_wireguard_preflight_test.py \
+            scripts/ci/package_variant_metadata_test.py \
+            scripts/ci/generated_package_header_gate_test.py \
             scripts/ci/go_toolchain_evaluation_test.py \
             scripts/ci/native_package_signature_gate_test.py \
+            scripts/ci/native_verifier_process_test.py \
             scripts/ci/native_package_signing_bundle_test.py \
+            scripts/ci/native_package_identity_evidence_test.py \
+            scripts/ci/native_rpm_preservation_test.py \
             scripts/ci/native_package_signing_workflow_test.py \
             scripts/ci/native_capability_evidence_test.py \
             scripts/ci/native_feed_evidence_test.py \
@@ -130,7 +135,12 @@ jobs:
             scripts/ci/native_release_evidence_workflow_test.py \
             scripts/ci/package_qualification_matrix_test.py \
             scripts/ci/package_lifecycle_contract_test.py \
+            scripts/ci/package_install_phase_test.py \
+            scripts/ci/package_fresh_configuration_test.py \
+            scripts/ci/native_fresh_configuration_probe_test.py \
+            scripts/ci/apk_protected_path_probe_test.py \
             scripts/ci/package_lifecycle_lab_test.py \
+            scripts/ci/package_v5_apk_removal_test.py \
             scripts/ci/package_stage_gate_test.py \
             scripts/ci/performance_evidence_test.py \
             scripts/ci/performance_gate_test.py \
@@ -138,6 +148,7 @@ jobs:
             scripts/ci/source_allocation_gate_test.py \
             scripts/ci/performance_channel_aggregate_test.py \
             scripts/ci/release_gate_test.py \
+            scripts/ci/release_gate_inventory_test.py \
             scripts/ci/release_qualification_adapter_test.py \
             scripts/ci/release_qualification_gate_test.py \
             scripts/ci/release_qualification_workflow_test.py \
@@ -190,6 +201,8 @@ jobs:
               exit 1
             fi
           fi
+          source scripts/ci/package_variant_metadata.sh
+          syswarden_select_workflow_package_variants "${SOURCE_TAG#v}"
           SOURCE_DATE_EPOCH="$(git -c core.fsmonitor=false log -1 --format=%ct HEAD)"
           if [[ ! "${SOURCE_DATE_EPOCH}" =~ ^[1-9][0-9]*$ ]]; then
             echo "ERROR: unable to derive a reproducible source timestamp from HEAD." >&2
@@ -447,6 +460,8 @@ jobs:
             "${STAGING_AMD64}/opt/syswarden/bin/syswarden-core" \
             "${STAGING_AMD64}/opt/syswarden/bin/syswarden-tui"
           chmod 0640 "${STAGING_AMD64}/opt/syswarden/signatures.json"
+          python3 -B "${EXACT_SOURCE_ROOT}/scripts/ci/native_activation_descriptor.py" \
+            --root "${STAGING_AMD64}"
 
           # Create a symlink for global execution from the terminal (Routing to Go CLI)
           ln -s /opt/syswarden/bin/syswarden-cli \
@@ -470,9 +485,11 @@ jobs:
             "${STAGING_AMD64}/usr/lib/systemd/system/syswarden-core.service.d/10-syswarden-socket-ownership.conf"
 
       - name: Stage Opt-in RHEL Package-owned RPM Payload
+        if: startsWith(env.VERSION, '4.')
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${VERSION}" == 4.* ]] || { echo 'RHEL package-owned generation is unavailable for v5.' >&2; exit 1; }
           cp -a "${STAGING_AMD64}/." "${RHEL_PROFILE_STAGING}/"
           # RHEL vendor units already carry the socket ownership capability.
           cmp -s \
@@ -537,7 +554,6 @@ jobs:
             local stage="$2"
             install -d -m 0755 \
               "${stage}/opt/syswarden/bin" \
-              "${stage}/usr/local/bin" \
               "${stage}/usr/share/bash-completion/completions" \
               "${stage}/usr/share/doc/syswarden"
             for component in syswarden-core syswarden-tui syswarden-cli; do
@@ -618,10 +634,6 @@ jobs:
             cp "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
               "${stage}/opt/syswarden/signatures.json"
             chmod 0640 "${stage}/opt/syswarden/signatures.json"
-            ln -s /opt/syswarden/bin/syswarden-cli \
-              "${stage}/usr/local/bin/syswarden"
-            ln -s /opt/syswarden/bin/syswarden-tui \
-              "${stage}/usr/local/bin/syswarden-tui"
             "${stage}/opt/syswarden/bin/syswarden-cli" completion bash > \
               "${stage}/usr/share/bash-completion/completions/syswarden"
             chmod 0644 \
@@ -692,6 +704,8 @@ jobs:
           }
 
           build_apk_stage amd64 "${STAGING_APK_AMD64}"
+          python3 -B "${EXACT_SOURCE_ROOT}/scripts/ci/native_activation_descriptor.py" \
+            --root "${STAGING_APK_AMD64}"
           for artifact in "${STAGING_APK_AMD64}"/opt/syswarden/bin/*; do
             validate_static_apk_binary "${artifact}" 'Advanced Micro Devices X86-64'
           done
@@ -734,9 +748,13 @@ jobs:
             --source \
             "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
             --contract scripts/ci/package_systemd_wireguard_ordering_contract.json
+          install -D -m 0755 "${EXACT_SOURCE_ROOT}/scripts/ci/package_apk_recovery_hook.sh" \
+            "${STAGING_APK_AMD64}/etc/apk/commit_hooks.d/syswarden-recovery"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_APK_AMD64}" \
             --service-manager openrc \
+            --apk-recovery-contract scripts/ci/package_apk_recovery_contract.json \
+            --apk-recovery-source "${EXACT_SOURCE_ROOT}/scripts/ci/package_apk_recovery_hook.sh" \
             --completion-contract scripts/ci/package_completion_contract.json \
             --geoip-data-license-contract \
             scripts/ci/package_geoip_data_license_contract.json \
@@ -789,14 +807,31 @@ jobs:
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_systemd_ordering_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_wireguard_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_install_phase.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/preinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
+          syswarden_set_native_install_phase preinstall "$@"
+          syswarden_require_fresh_native_install || exit 1
+          if [ -f /etc/alpine-release ]; then
+              syswarden_preflight_apk_launchers /
+          else
+              syswarden_preflight_launchers / before
+          fi
           syswarden_preflight_wireguard /
-          syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
           syswarden_preflight_systemd_ordering_dropin
           syswarden_preflight_systemd_socket_dropin
+          if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
+              if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+                 [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+                  printf '%s\n' 'Fresh installation refuses retained package-removal barriers.' >&2
+                  exit 1
+              fi
+              printf '%s\n' 'SysWarden fresh installation: pre-install host mutation deferred.'
+              exit 0
+          fi
+          syswarden_preflight_alpine_cronie
           if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
               if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
                  [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
@@ -859,10 +894,18 @@ jobs:
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > "${PACKAGE_SCRIPTS}/postinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> "${PACKAGE_SCRIPTS}/postinst.sh"
           cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> "${PACKAGE_SCRIPTS}/postinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_install_phase.sh" >> "${PACKAGE_SCRIPTS}/postinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/postinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
-          syswarden_preflight_alpine_cronie
+          syswarden_set_native_install_phase postinstall "$@"
+          syswarden_require_fresh_native_install || exit 1
+          if [ -f /etc/alpine-release ]; then
+              syswarden_preflight_apk_launchers /
+              /opt/syswarden/bin/syswarden-cli internal-apk-launchers --stage-fresh
+          else
+              syswarden_preflight_launchers / after
+          fi
           syswarden_preflight_install_barriers
           if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
               if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
@@ -873,8 +916,17 @@ jobs:
               printf '%s\n' 'SysWarden offline qualification staging: post-install host mutation deferred.'
               exit 0
           fi
-          ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
-          ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
+          if [ "${SYSWARDEN_NATIVE_INSTALL_PHASE:-unknown}" = fresh ]; then
+              if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+                 [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+                  printf '%s\n' 'Fresh installation refuses retained package-removal barriers.' >&2
+                  exit 1
+              fi
+              # Fresh CLI staging validates TOML only, including on an offline image.
+              /opt/syswarden/bin/syswarden-cli install
+              exit 0
+          fi
+          syswarden_preflight_alpine_cronie
 
           package_service_manager() {
               if [ -f /etc/alpine-release ]; then
@@ -1064,8 +1116,10 @@ jobs:
 
           if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
               cleanup_generated_runtime_artifacts || exit 1
-              syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
-              syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
+              if [ ! -f /etc/alpine-release ]; then
+                  syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
+                  syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
+              fi
               syswarden_remove_exact_runtime_socket /run/syswarden.sock || exit 1
               syswarden_remove_exact_runtime_socket /run/syswarden-control.sock || exit 1
               if [ "$1" = "remove" ] || [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
@@ -1115,11 +1169,32 @@ jobs:
           printf '%s\n' 'Root crontab bytes and ambiguous legacy host artifacts were preserved for manual recovery.' >&2
           EOF
 
+          # Upgrade hooks require the separately approved live native dispatcher.
+          cp "${EXACT_SOURCE_ROOT}/scripts/ci/package_apk_preupgrade.sh" "${PACKAGE_SCRIPTS}/preupgrade.sh"
+          cp "${EXACT_SOURCE_ROOT}/scripts/ci/package_apk_postupgrade.sh" "${PACKAGE_SCRIPTS}/postupgrade.sh"
           chmod 0755 \
             "${PACKAGE_SCRIPTS}/preinst.sh" \
+            "${PACKAGE_SCRIPTS}/preupgrade.sh" \
             "${PACKAGE_SCRIPTS}/postinst.sh" \
+            "${PACKAGE_SCRIPTS}/postupgrade.sh" \
             "${PACKAGE_SCRIPTS}/postrm.sh" \
             "${PACKAGE_SCRIPTS}/prerm.sh"
+
+          source "${EXACT_SOURCE_ROOT}/scripts/ci/package_variant_metadata.sh"
+          syswarden_select_workflow_package_variants "${VERSION}"
+          for variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do
+            syswarden_select_workflow_package_variant "${VERSION}" "${variant}"
+            SELECTED_PACKAGE_SCRIPTS="${PACKAGE_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            SELECTED_PACKAGE_RPM_SCRIPTS="${PACKAGE_RPM_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            if [[ -n "${PACKAGE_SCRIPT_SUBDIRECTORY}" ]]; then
+              install -d -m 0700 "${SELECTED_PACKAGE_SCRIPTS}" "${SELECTED_PACKAGE_RPM_SCRIPTS}"
+              for script_name in preinst.sh preupgrade.sh postinst.sh postupgrade.sh prerm.sh postrm.sh; do
+                syswarden_render_local_package_hook "${PACKAGE_SCRIPTS}/${script_name}" > \
+                  "${SELECTED_PACKAGE_SCRIPTS}/${script_name}"
+                chmod 0755 "${SELECTED_PACKAGE_SCRIPTS}/${script_name}"
+              done
+            fi
+          done
 
           # rpmbuild expands RPM macros inside scriptlets. Double each percent
           # only in the private RPM inputs so final scriptlets stay byte-exact.
@@ -1137,10 +1212,15 @@ jobs:
               return 1
             fi
           }
-          for script_name in preinst.sh postinst.sh prerm.sh postrm.sh; do
-            prepare_rpm_scriptlet \
-              "${PACKAGE_SCRIPTS}/${script_name}" \
-              "${PACKAGE_RPM_SCRIPTS}/${script_name}"
+          for variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do
+            syswarden_select_workflow_package_variant "${VERSION}" "${variant}"
+            SELECTED_PACKAGE_SCRIPTS="${PACKAGE_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            SELECTED_PACKAGE_RPM_SCRIPTS="${PACKAGE_RPM_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            for script_name in preinst.sh postinst.sh prerm.sh postrm.sh; do
+              prepare_rpm_scriptlet \
+                "${SELECTED_PACKAGE_SCRIPTS}/${script_name}" \
+                "${SELECTED_PACKAGE_RPM_SCRIPTS}/${script_name}"
+            done
           done
 
       - name: Normalize Package Input Timestamps
@@ -1180,13 +1260,16 @@ jobs:
           normalize_package_mtimes \
             "${STAGING_AMD64}" \
             "${STAGING_APK_AMD64}" \
-            "${RHEL_PROFILE_STAGING}" \
-            "${RHEL_PROFILE_SOURCE}" \
-            "${RHEL_PROFILE_RPM_SCRIPTS}" \
             "${PACKAGE_SCRIPTS}" \
             "${PACKAGE_RPM_SCRIPTS}" \
-            "${RPM_CHANGELOG}" \
-            "${RHEL_PROFILE_RPM_CHANGELOG}"
+            "${RPM_CHANGELOG}"
+          if [[ "${VERSION}" == 4.* ]]; then
+            normalize_package_mtimes \
+              "${RHEL_PROFILE_STAGING}" \
+              "${RHEL_PROFILE_SOURCE}" \
+              "${RHEL_PROFILE_RPM_SCRIPTS}" \
+              "${RHEL_PROFILE_RPM_CHANGELOG}"
+          fi
           echo "RPM_CHANGELOG=${RPM_CHANGELOG}" >> "${GITHUB_ENV}"
           echo "RPM_CHANGELOG_EPOCH=${RPM_CHANGELOG_EPOCH}" >> "${GITHUB_ENV}"
           echo "RHEL_PROFILE_RPM_CHANGELOG=${RHEL_PROFILE_RPM_CHANGELOG}" >> "${GITHUB_ENV}"
@@ -1194,64 +1277,79 @@ jobs:
       - name: Build Debian Package (.deb)
         run: |
           set -euo pipefail
-          fpm -s dir -t deb \
-            -n syswarden \
-            -v "${VERSION}" \
-            -p "${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" \
-            --vendor "SysWarden Security" \
-            --maintainer "SysWarden Engineering" \
-            --description "SysWarden Host-based Security Orchestrator for Linux" \
-            --url "https://github.com/${{ github.repository }}" \
-            --license "GPL-3.0-or-later" \
-            --architecture amd64 \
-            --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
-            -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
-            -d "wireguard-tools" -d "qrencode" -d "jq" -d "unattended-upgrades" -d "apt-listchanges" -d "procps" -d "e2fsprogs" \
-            --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
-            --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
-            --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
-            --after-remove "${PACKAGE_SCRIPTS}/postrm.sh" \
-            -C "${STAGING_AMD64}" .
+          source "${EXACT_SOURCE_ROOT}/scripts/ci/package_variant_metadata.sh"
+          syswarden_select_workflow_package_variants "${VERSION}"
+          for variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do
+            syswarden_select_workflow_package_variant "${VERSION}" "${variant}"
+            SELECTED_PACKAGE_SCRIPTS="${PACKAGE_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            SELECTED_PACKAGE_RPM_SCRIPTS="${PACKAGE_RPM_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            fpm -s dir -t deb \
+              -n "${PACKAGE_NAME}" \
+              -v "${VERSION}" \
+              -p "${PACKAGE_ASSETS}/${PACKAGE_NAME}_${VERSION}_amd64.deb" \
+              --vendor "SysWarden Security" \
+              --maintainer "SysWarden Engineering" \
+              --description "SysWarden Host-based Security Orchestrator for Linux" \
+              --url "https://github.com/${{ github.repository }}" \
+              --license "GPL-3.0-or-later" \
+              --architecture amd64 \
+              --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
+              "${DEB_PACKAGE_FPM_DEPENDENCIES[@]}" \
+              "${PACKAGE_FPM_CONFLICTS[@]}" \
+              --before-install "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh" \
+              --after-install "${SELECTED_PACKAGE_SCRIPTS}/postinst.sh" \
+              --before-remove "${SELECTED_PACKAGE_SCRIPTS}/prerm.sh" \
+              --after-remove "${SELECTED_PACKAGE_SCRIPTS}/postrm.sh" \
+              -C "${STAGING_AMD64}" .
+          done
 
       - name: Build RHEL Family Package (.rpm)
         run: |
           set -euo pipefail
-          fpm -s dir -t rpm \
-            -n syswarden \
-            -v "${VERSION}" \
-            -p "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" \
-            --vendor "SysWarden Security" \
-            --maintainer "SysWarden Engineering" \
-            --description "SysWarden Host-based Security Orchestrator for Linux" \
-            --url "https://github.com/${{ github.repository }}" \
-            --license "GPL-3.0-or-later" \
-            --architecture x86_64 \
-            --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
-            --rpm-changelog "${RPM_CHANGELOG}" \
-            --rpm-digest sha256 \
-            --rpm-rpmbuild-define "_binary_filedigest_algorithm 8" \
-            --rpm-rpmbuild-define "_source_filedigest_algorithm 8" \
-            --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
-            --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
-            --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
-            -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
-            -d "wireguard-tools" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
-            -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
-            --before-install "${PACKAGE_RPM_SCRIPTS}/preinst.sh" \
-            --after-install "${PACKAGE_RPM_SCRIPTS}/postinst.sh" \
-            --before-remove "${PACKAGE_RPM_SCRIPTS}/prerm.sh" \
-            --after-remove "${PACKAGE_RPM_SCRIPTS}/postrm.sh" \
-            --directories /usr/lib/systemd/system/syswarden-core.service.d \
-            --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-core.service.d" \
-            --directories /usr/lib/systemd/system/syswarden-firewall.service.d \
-            --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-firewall.service.d" \
-            --directories /usr/share/doc/syswarden \
-            -C "${STAGING_AMD64}" .
+          source "${EXACT_SOURCE_ROOT}/scripts/ci/package_variant_metadata.sh"
+          syswarden_select_workflow_package_variants "${VERSION}"
+          for variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do
+            syswarden_select_workflow_package_variant "${VERSION}" "${variant}"
+            SELECTED_PACKAGE_SCRIPTS="${PACKAGE_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            SELECTED_PACKAGE_RPM_SCRIPTS="${PACKAGE_RPM_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            fpm -s dir -t rpm \
+              -n "${PACKAGE_NAME}" \
+              -v "${VERSION}" \
+              -p "${PACKAGE_ASSETS}/${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm" \
+              --vendor "SysWarden Security" \
+              --maintainer "SysWarden Engineering" \
+              --description "SysWarden Host-based Security Orchestrator for Linux" \
+              --url "https://github.com/${{ github.repository }}" \
+              --license "GPL-3.0-or-later" \
+              --architecture x86_64 \
+              --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
+              --rpm-changelog "${RPM_CHANGELOG}" \
+              --rpm-digest sha256 \
+              --rpm-rpmbuild-define "_binary_filedigest_algorithm 8" \
+              --rpm-rpmbuild-define "_source_filedigest_algorithm 8" \
+              --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
+              --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
+              --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
+              "${RPM_PACKAGE_FPM_DEPENDENCIES[@]}" \
+              "${PACKAGE_FPM_CONFLICTS[@]}" \
+              --before-install "${SELECTED_PACKAGE_RPM_SCRIPTS}/preinst.sh" \
+              --after-install "${SELECTED_PACKAGE_RPM_SCRIPTS}/postinst.sh" \
+              --before-remove "${SELECTED_PACKAGE_RPM_SCRIPTS}/prerm.sh" \
+              --after-remove "${SELECTED_PACKAGE_RPM_SCRIPTS}/postrm.sh" \
+              --directories /usr/lib/systemd/system/syswarden-core.service.d \
+              --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-core.service.d" \
+              --directories /usr/lib/systemd/system/syswarden-firewall.service.d \
+              --rpm-attr "0755,root,root:/usr/lib/systemd/system/syswarden-firewall.service.d" \
+              --directories /usr/share/doc/syswarden \
+              -C "${STAGING_AMD64}" .
+          done
 
       - name: Build Opt-in RHEL Package-owned Variant (.rpm)
+        if: startsWith(env.VERSION, '4.')
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${VERSION}" == 4.* ]] || { echo 'RHEL package-owned generation is unavailable for v5.' >&2; exit 1; }
           fpm -s dir -t rpm \
             -n syswarden \
             -v "${VERSION}" \
@@ -1308,57 +1406,88 @@ jobs:
           install -d -m 0700 "${TOOL_DIR}"
           GOBIN="${TOOL_DIR}" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           
-          cat << EOF > "${PACKAGE_CONFIGS}/nfpm_alpine_x86_64.yaml"
-          name: "syswarden"
+          source "${EXACT_SOURCE_ROOT}/scripts/ci/package_variant_metadata.sh"
+          syswarden_select_workflow_package_variants "${VERSION}"
+          for variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do
+            syswarden_select_workflow_package_variant "${VERSION}" "${variant}"
+            SELECTED_PACKAGE_SCRIPTS="${PACKAGE_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            SELECTED_PACKAGE_RPM_SCRIPTS="${PACKAGE_RPM_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+          cat << EOF > "${PACKAGE_CONFIGS}/nfpm_alpine_x86_64${PACKAGE_CONFIG_SUFFIX}.yaml"
+          name: "${PACKAGE_NAME}"
           arch: "amd64"
           platform: "linux"
           version: "${VERSION}"
+          version_schema: none${APK_PACKAGE_RELEASE_YAML}
           maintainer: "SysWarden Engineering"
           description: "SysWarden Host-based Security Orchestrator for Alpine Linux"
           vendor: "SysWarden Security"
           homepage: "https://github.com/${{ github.repository }}"
           license: "GPL-3.0-or-later"
           depends:
-            - nftables
-            - openrc
-            - cronie
-            - cronie-openrc
-            - curl
-            - wget
-            - rsyslog
-            - rsyslog-uxsock
-            - bash-completion
-            - wireguard-tools
-            - libqrencode-tools
-            - jq
-            - procps-ng
-            - e2fsprogs-extra
-            - shadow
+          ${APK_PACKAGE_DEPENDENCIES_YAML}${APK_PACKAGE_CONFLICTS_YAML}
           contents:
             - src: "${STAGING_APK_AMD64}/opt"
               dst: "/opt"
             - src: "${STAGING_APK_AMD64}/usr"
               dst: "/usr"
+            - src: "${STAGING_APK_AMD64}/etc/apk/commit_hooks.d/syswarden-recovery"
+              dst: "/etc/apk/commit_hooks.d/syswarden-recovery"
+              file_info:
+                mode: 0755
           scripts:
-            preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"
-            postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"
-            preremove: "${PACKAGE_SCRIPTS}/prerm.sh"
-            postremove: "${PACKAGE_SCRIPTS}/postrm.sh"
+            preinstall: "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"
+            postinstall: "${SELECTED_PACKAGE_SCRIPTS}/postinst.sh"
+            preremove: "${SELECTED_PACKAGE_SCRIPTS}/prerm.sh"
+            postremove: "${SELECTED_PACKAGE_SCRIPTS}/postrm.sh"
           apk:
             scripts:
-              preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"
-              postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"
+              preupgrade: "${SELECTED_PACKAGE_SCRIPTS}/preupgrade.sh"
+              postupgrade: "${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh"
           EOF
 
           "${TOOL_DIR}/nfpm" pkg \
-            --config "${PACKAGE_CONFIGS}/nfpm_alpine_x86_64.yaml" \
+            --config "${PACKAGE_CONFIGS}/nfpm_alpine_x86_64${PACKAGE_CONFIG_SUFFIX}.yaml" \
             --packager apk \
-            --target "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk"
+            --target "${PACKAGE_ASSETS}/${PACKAGE_NAME}_${VERSION}_x86_64.apk"
+          done
 
       - name: Validate Package Metadata
         shell: bash
         run: |
           set -euo pipefail
+
+          source "${EXACT_SOURCE_ROOT}/scripts/ci/package_variant_metadata.sh"
+          syswarden_select_workflow_package_variants "${VERSION}"
+
+          validate_exact_dependency_lines() {
+            local actual="$1"
+            shift
+            [[ "$(printf '%s\n' "${actual}" | LC_ALL=C sort)" == \
+               "$(printf '%s\n' "$@" | LC_ALL=C sort)" ]]
+          }
+
+          validate_deb_hook() {
+            local package="$1"
+            local hook="$2"
+            local member
+            member="$(dpkg-deb --ctrl-tarfile "${package}" | tar --list --file=- | \
+              awk -v expected="${hook}" '{ name=$0; sub(/^\.\//, "", name); if (name == expected) print }')"
+            [[ -n "${member}" && "${member}" != *$'\n'* ]]
+            cmp -s "${SELECTED_PACKAGE_SCRIPTS}/${hook}.sh" \
+              <(dpkg-deb --ctrl-tarfile "${package}" | tar --extract --to-stdout --file=- "${member}")
+          }
+
+          validate_apk_hook() {
+            local package="$1"
+            local member="$2"
+            local source="$3"
+            local count
+            count="$(tar --list --file "${package}" | \
+              awk -v expected="${member}" '$0 == expected { count++ } END { print count + 0 }')"
+            [[ "${count}" == 1 ]]
+            cmp -s "${SELECTED_PACKAGE_SCRIPTS}/${source}" \
+              <(tar --extract --to-stdout --file "${package}" "${member}")
+          }
 
           validate_deb() {
             local path="$1"
@@ -1367,6 +1496,24 @@ jobs:
             [[ "$(dpkg-deb --field "${path}" Architecture)" == "${architecture}" ]]
             [[ "$(dpkg-deb --field "${path}" License)" == "GPL-3.0-or-later" ]]
             [[ "$(dpkg-deb --field "${path}" Homepage)" == "https://github.com/${{ github.repository }}" ]]
+            if [[ "${VERSION}" == 5.* ]]; then
+              [[ "$(dpkg-deb --field "${path}" Package)" == "${PACKAGE_NAME}" ]]
+              [[ "$(dpkg-deb --field "${path}" Conflicts)" == "${PACKAGE_CONFLICT}" ]]
+              local field value dependencies hook
+              dependencies="$(dpkg-deb --field "${path}" Depends | tr ',' '\n' | sed 's/^ *//;s/ *$//')"
+              validate_exact_dependency_lines "${dependencies}" "${DEB_PACKAGE_DEPENDENCIES[@]}"
+              for field in Pre-Depends Recommends Suggests Enhances Breaks Provides Replaces; do
+                value="$(dpkg-deb --field "${path}" "${field}")" || return 1
+                [[ -z "${value}" ]]
+              done
+              for hook in preinst postinst prerm postrm; do
+                validate_deb_hook "${path}" "${hook}"
+              done
+              local extra_hooks
+              extra_hooks="$(dpkg-deb --ctrl-tarfile "${path}" | tar --list --file=- | \
+                awk '{ sub(/^\.\//, ""); if ($0 == "config" || $0 == "triggers") print }')"
+              [[ -z "${extra_hooks}" ]]
+            fi
           }
 
           validate_rpm_scriptlet() {
@@ -1410,6 +1557,49 @@ jobs:
             [[ "${actual_changelog_time}" == "${RPM_CHANGELOG_EPOCH}" ]]
             [[ "${actual_license}" == "GPL-3.0-or-later" ]]
             [[ "${actual_url}" == "https://github.com/${{ github.repository }}" ]]
+            if [[ "${VERSION}" == 5.* ]]; then
+              [[ "$(rpm --query --package --queryformat '%{NAME}' "${path}")" == "${PACKAGE_NAME}" ]]
+              [[ "$(rpm --query --package --queryformat '%{RELEASE}' "${path}")" == 1 ]]
+              [[ "$(rpm --query --package --queryformat '%{EPOCHNUM}' "${path}")" == 0 ]]
+              [[ "$(rpm --query --package --conflicts "${path}")" == "${PACKAGE_CONFLICT}" ]]
+              local requirements dependencies provides capability obsoletes
+              obsoletes="$(rpm --query --package --obsoletes "${path}")" || return 1
+              [[ -z "${obsoletes}" ]]
+              local relation tag extra
+              for relation in recommends suggests supplements enhances; do
+                extra="$(rpm --query --package "--${relation}" "${path}")" || return 1
+                [[ -z "${extra}" ]]
+              done
+              for tag in PRETRANS POSTTRANS VERIFYSCRIPT; do
+                extra="$(rpm --query --package --queryformat "%{${tag}}" "${path}")" || return 1
+                [[ -z "${extra}" || "${extra}" == '(none)' ]]
+              done
+              for tag in TRIGGERSCRIPTS FILETRIGGERSCRIPTS TRANSFILETRIGGERSCRIPTS; do
+                extra="$(rpm --query --package --queryformat "[%{${tag}}]" "${path}")" || return 1
+                [[ -z "${extra}" || "${extra}" == '(none)' ]]
+              done
+              requirements="$(rpm --query --package --requires "${path}")" || return 1
+              # These are native RPM format/interpreter requirements, not
+              # selectable product dependencies. Unknown requirements remain
+              # in the exact comparison and cause refusal.
+              dependencies="$(awk '
+                $0 == "/bin/sh" { next }
+                $0 == "rpmlib(CompressedFileNames) <= 3.0.4-1" { next }
+                $0 == "rpmlib(FileDigests) <= 4.6.0-1" { next }
+                $0 == "rpmlib(PayloadFilesHavePrefix) <= 4.0-1" { next }
+                $0 == "rpmlib(PayloadIsXz) <= 5.2-1" { next }
+                $0 == "rpmlib(PayloadIsZstd) <= 5.4.18-1" { next }
+                { print }
+              ' <<< "${requirements}")"
+              validate_exact_dependency_lines "${dependencies}" "${RPM_PACKAGE_DEPENDENCIES[@]}"
+              provides="$(rpm --query --package --provides "${path}")" || return 1
+              [[ "$(grep -Fxc -- "${PACKAGE_NAME} = ${VERSION}-1" <<< "${provides}")" == 1 ]]
+              [[ -z "$(LC_ALL=C sort <<< "${provides}" | uniq -d)" ]]
+              while IFS= read -r capability; do
+                [[ "${capability}" == "${PACKAGE_NAME} = ${VERSION}-1" || \
+                   "${capability}" == "${PACKAGE_NAME}(x86-64) = ${VERSION}-1" ]]
+              done <<< "${provides}"
+            fi
             scriptlets="$(rpm --query --package --scripts "${path}")" || return 1
             for forbidden_crontab_token in \
               syswarden_cron_candidate \
@@ -1425,10 +1615,10 @@ jobs:
                 return 1
               fi
             done
-            validate_rpm_scriptlet "${path}" PREIN "${PACKAGE_SCRIPTS}/preinst.sh"
-            validate_rpm_scriptlet "${path}" POSTIN "${PACKAGE_SCRIPTS}/postinst.sh"
-            validate_rpm_scriptlet "${path}" PREUN "${PACKAGE_SCRIPTS}/prerm.sh"
-            validate_rpm_scriptlet "${path}" POSTUN "${PACKAGE_SCRIPTS}/postrm.sh"
+            validate_rpm_scriptlet "${path}" PREIN "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh"
+            validate_rpm_scriptlet "${path}" POSTIN "${SELECTED_PACKAGE_SCRIPTS}/postinst.sh"
+            validate_rpm_scriptlet "${path}" PREUN "${SELECTED_PACKAGE_SCRIPTS}/prerm.sh"
+            validate_rpm_scriptlet "${path}" POSTUN "${SELECTED_PACKAGE_SCRIPTS}/postrm.sh"
           }
 
           validate_apk() {
@@ -1469,14 +1659,21 @@ jobs:
             [[ "${#postinstall_members[@]}" -eq 1 ]]
             [[ "${#postupgrade_members[@]}" -eq 1 ]]
             cmp -s \
-              <(tar --extract --to-stdout --file "${path}" "${preinstall_members[0]}") \
+              "${SELECTED_PACKAGE_SCRIPTS}/preinst.sh" \
+              <(tar --extract --to-stdout --file "${path}" "${preinstall_members[0]}")
+            cmp -s \
+              "${SELECTED_PACKAGE_SCRIPTS}/preupgrade.sh" \
               <(tar --extract --to-stdout --file "${path}" "${preupgrade_members[0]}")
             cmp -s \
-              <(tar --extract --to-stdout --file "${path}" "${postinstall_members[0]}") \
+              "${SELECTED_PACKAGE_SCRIPTS}/postinst.sh" \
+              <(tar --extract --to-stdout --file "${path}" "${postinstall_members[0]}")
+            cmp -s \
+              "${SELECTED_PACKAGE_SCRIPTS}/postupgrade.sh" \
               <(tar --extract --to-stdout --file "${path}" "${postupgrade_members[0]}")
             package_version="$(sed -n 's/^pkgver = //p' <<< "${metadata}")"
             package_architecture="$(sed -n 's/^arch = //p' <<< "${metadata}")"
-            python3 - "${VERSION}" "${package_version}" <<'PY'
+            if [[ "${VERSION}" == 4.* ]]; then
+              python3 - "${VERSION}" "${package_version}" <<'PY'
           import re
           import sys
 
@@ -1488,17 +1685,42 @@ jobs:
           if normalize(expected) != normalize(actual):
               raise SystemExit(f"APK version mismatch: expected {expected}, found {actual}")
           PY
+            fi
             [[ "${package_architecture}" == "${architecture}" ]]
+            if [[ "${VERSION}" == 5.* ]]; then
+              [[ "$(grep --count '^pkgname = ' <<< "${metadata}")" == 1 ]]
+              [[ "$(sed -n 's/^pkgname = //p' <<< "${metadata}")" == "${PACKAGE_NAME}" ]]
+              [[ "${package_version}" == "${VERSION}-r0" ]]
+              local dependencies
+              dependencies="$(sed -n 's/^depend = //p' <<< "${metadata}")"
+              validate_exact_dependency_lines "${dependencies}" "${APK_PACKAGE_DEPENDENCIES[@]}" "!${PACKAGE_CONFLICT}"
+              if grep -Eq '^(provides|replaces|install_if|triggers) = ' <<< "${metadata}"; then
+                return 1
+              fi
+              validate_apk_hook "${path}" .pre-install preinst.sh
+              validate_apk_hook "${path}" .pre-upgrade preupgrade.sh
+              validate_apk_hook "${path}" .post-install postinst.sh
+              validate_apk_hook "${path}" .post-upgrade postupgrade.sh
+              validate_apk_hook "${path}" .pre-deinstall prerm.sh
+              validate_apk_hook "${path}" .post-deinstall postrm.sh
+              [[ "$(tar --list --file "${path}" | awk '$0 == ".trigger" || $0 == "./.trigger" { count++ } END { print count + 0 }')" == 0 ]]
+            fi
           }
 
-          validate_deb "${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" amd64
-          validate_rpm "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" x86_64
-          validate_apk "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" x86_64
+          for variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do
+            syswarden_select_workflow_package_variant "${VERSION}" "${variant}"
+            SELECTED_PACKAGE_SCRIPTS="${PACKAGE_SCRIPTS}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            validate_deb "${PACKAGE_ASSETS}/${PACKAGE_NAME}_${VERSION}_amd64.deb" amd64
+            validate_rpm "${PACKAGE_ASSETS}/${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm" x86_64
+            validate_apk "${PACKAGE_ASSETS}/${PACKAGE_NAME}_${VERSION}_x86_64.apk" x86_64
+          done
 
       - name: Validate Opt-in RHEL Package-owned Variant
+        if: startsWith(env.VERSION, '4.')
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${VERSION}" == 4.* ]] || { echo 'RHEL package-owned generation is unavailable for v5.' >&2; exit 1; }
           standard="${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm"
           profile="${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm"
           [[ "$(rpm --query --package --queryformat '%{NAME}' "${standard}")" == syswarden ]]
@@ -1518,9 +1740,11 @@ jobs:
             --sha256 "${profile_sha256}"
 
       - name: Generate Opt-in RHEL Package-owned Checksums
+        if: startsWith(env.VERSION, '4.')
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${VERSION}" == 4.* ]] || { echo 'RHEL package-owned generation is unavailable for v5.' >&2; exit 1; }
           name="syswarden-${VERSION}-1.rhelpo.x86_64.rpm"
           (
             cd "${RHEL_PROFILE_ASSETS}"
@@ -1533,11 +1757,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          assets=(
-            "syswarden_${VERSION}_amd64.deb"
-            "syswarden-${VERSION}-1.x86_64.rpm"
-            "syswarden_${VERSION}_x86_64.apk"
-          )
+          source "${EXACT_SOURCE_ROOT}/scripts/ci/package_variant_metadata.sh"
+          syswarden_select_workflow_package_variants "${VERSION}"
+          assets=()
+          for variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do
+            syswarden_select_workflow_package_variant "${VERSION}" "${variant}"
+            assets+=(
+              "${PACKAGE_NAME}_${VERSION}_amd64.deb"
+              "${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm"
+              "${PACKAGE_NAME}_${VERSION}_x86_64.apk"
+            )
+          done
           (
             cd "${PACKAGE_ASSETS}"
             for asset in "${assets[@]}"; do
@@ -1557,26 +1787,49 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify-packages \
             --tag "${RELEASE_TAG}" \
             --packages "${PACKAGE_ASSETS}"
-          for format in deb rpm; do
-            case "${format}" in
-              deb) package="${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" ;;
-              rpm) package="${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" ;;
-            esac
-            PYTHONDONTWRITEBYTECODE=1 python3 \
-              scripts/ci/package_systemd_ordering_artifact_gate.py \
-              --format "${format}" \
-              --package "${package}" \
-              --source \
-              "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
-              --contract scripts/ci/package_systemd_wireguard_ordering_contract.json
-            PYTHONDONTWRITEBYTECODE=1 python3 \
-              scripts/ci/package_systemd_ordering_artifact_gate.py \
-              --artifact socket --format "${format}" \
-              --package "${package}" \
-              --source \
-              "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
-              --contract scripts/ci/package_systemd_socket_capability_contract.json
+          source "${EXACT_SOURCE_ROOT}/scripts/ci/package_variant_metadata.sh"
+          syswarden_select_workflow_package_variants "${VERSION}"
+          for variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do
+            syswarden_select_workflow_package_variant "${VERSION}" "${variant}"
+            for format in deb rpm; do
+              case "${format}" in
+                deb) package="${PACKAGE_ASSETS}/${PACKAGE_NAME}_${VERSION}_amd64.deb" ;;
+                rpm) package="${PACKAGE_ASSETS}/${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm" ;;
+              esac
+              PYTHONDONTWRITEBYTECODE=1 python3 \
+                scripts/ci/package_systemd_ordering_artifact_gate.py \
+                --format "${format}" \
+                --package "${package}" \
+                --source \
+                "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
+                --contract scripts/ci/package_systemd_wireguard_ordering_contract.json
+              PYTHONDONTWRITEBYTECODE=1 python3 \
+                scripts/ci/package_systemd_ordering_artifact_gate.py \
+                --artifact socket --format "${format}" \
+                --package "${package}" \
+                --source \
+                "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-core.service.d/10-syswarden-socket-ownership.conf" \
+                --contract scripts/ci/package_systemd_socket_capability_contract.json
+            done
           done
+
+      - name: Verify Generated Package Identities with Updater Parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export SYSWARDEN_GENERATED_PACKAGE_DIRECTORY="${PACKAGE_ASSETS}"
+          export SYSWARDEN_GENERATED_PACKAGE_VERSION="${RELEASE_TAG}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOMAXPROCS=2 \
+            go -C "${EXACT_SOURCE_ROOT}/src/core/syswarden-cli" test \
+              -buildvcs=false -p=2 -count=1 -timeout=3m -json ./pkg/system \
+              -run '^TestGeneratedNativePackageIdentity$' \
+              > "${PACKAGE_WORKSPACE}/generated-header-tests.jsonl"
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            "${EXACT_SOURCE_ROOT}/scripts/ci/generated_package_header_gate.py" \
+            --report "${PACKAGE_WORKSPACE}/generated-header-tests.jsonl" \
+            --packages "${PACKAGE_ASSETS}" --release "${RELEASE_TAG}" \
+            --summary "${PACKAGE_WORKSPACE}/generated-header-summary.json"
 
       - name: Validate Packaged Binary Provenance
         shell: bash
@@ -1606,7 +1859,7 @@ jobs:
             local relative="$3"
             local archive_member
             local count
-            local destination="${PAYLOAD_ATTEST_ROOT}/${format}/${relative}"
+            local destination="${PAYLOAD_ATTEST_VARIANT_ROOT}/${format}/${relative}"
             local temporary="${destination}.tmp"
             case "${format}" in
               deb)
@@ -1656,73 +1909,95 @@ jobs:
             mv -T -- "${temporary}" "${destination}"
           }
 
-          for relative in \
-            opt/syswarden/bin/syswarden-cli \
-            opt/syswarden/bin/syswarden-core \
-            opt/syswarden/bin/syswarden-tui \
-            opt/syswarden/signatures.json; do
-            extract_exact_member deb \
-              "${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" "${relative}"
-            extract_exact_member rpm \
-              "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" "${relative}"
-            extract_exact_member rpm-rhel-package-owned \
-              "${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm" "${relative}"
-            extract_exact_member apk \
-              "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" "${relative}"
-          done
+          source "${EXACT_SOURCE_ROOT}/scripts/ci/package_variant_metadata.sh"
+          syswarden_select_workflow_package_variants "${VERSION}"
+          for variant in "${WORKFLOW_PACKAGE_VARIANTS[@]}"; do
+            syswarden_select_workflow_package_variant "${VERSION}" "${variant}"
+            PAYLOAD_ATTEST_VARIANT_ROOT="${PAYLOAD_ATTEST_ROOT}${PACKAGE_SCRIPT_SUBDIRECTORY}"
+            install -d -m 0700 \
+              "${PAYLOAD_ATTEST_VARIANT_ROOT}/deb/opt/syswarden/bin" \
+              "${PAYLOAD_ATTEST_VARIANT_ROOT}/rpm/opt/syswarden/bin" \
+              "${PAYLOAD_ATTEST_VARIANT_ROOT}/apk/opt/syswarden/bin"
+            for relative in \
+              opt/syswarden/bin/syswarden-cli \
+              opt/syswarden/bin/syswarden-core \
+              opt/syswarden/bin/syswarden-tui \
+              opt/syswarden/signatures.json; do
+              extract_exact_member deb \
+                "${PACKAGE_ASSETS}/${PACKAGE_NAME}_${VERSION}_amd64.deb" "${relative}"
+              extract_exact_member rpm \
+                "${PACKAGE_ASSETS}/${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm" "${relative}"
+              extract_exact_member apk \
+                "${PACKAGE_ASSETS}/${PACKAGE_NAME}_${VERSION}_x86_64.apk" "${relative}"
+            done
 
-          PYTHONDONTWRITEBYTECODE=1 python3 \
-            "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
-            --root "${PAYLOAD_ATTEST_ROOT}/deb" \
-            --mode pie \
-            --revision "${SOURCE_COMMIT_SHA}" \
-            --vcs-time "${SOURCE_VCS_TIME}" \
-            --signatures-source \
-            "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
-            --reference-root "${STAGING_AMD64}" \
-            --expected-digest-contract \
-            "${VALIDATED_AMD64_DIGEST_CONTRACT}"
-          PYTHONDONTWRITEBYTECODE=1 python3 \
-            "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
-            --root "${PAYLOAD_ATTEST_ROOT}/rpm" \
-            --mode pie \
-            --revision "${SOURCE_COMMIT_SHA}" \
-            --vcs-time "${SOURCE_VCS_TIME}" \
-            --signatures-source \
-            "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
-            --reference-root "${STAGING_AMD64}" \
-            --expected-digest-contract \
-            "${VALIDATED_AMD64_DIGEST_CONTRACT}"
-          PYTHONDONTWRITEBYTECODE=1 python3 \
-            "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
-            --root "${PAYLOAD_ATTEST_ROOT}/rpm-rhel-package-owned" \
-            --mode pie \
-            --revision "${SOURCE_COMMIT_SHA}" \
-            --vcs-time "${SOURCE_VCS_TIME}" \
-            --signatures-source \
-            "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
-            --reference-root "${RHEL_PROFILE_STAGING}" \
-            --expected-digest-contract \
-            "${VALIDATED_AMD64_DIGEST_CONTRACT}"
-          PYTHONDONTWRITEBYTECODE=1 python3 \
-            "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
-            --root "${PAYLOAD_ATTEST_ROOT}/apk" \
-            --mode static \
-            --revision "${SOURCE_COMMIT_SHA}" \
-            --vcs-time "${SOURCE_VCS_TIME}" \
-            --signatures-source \
-            "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
-            --reference-root "${STAGING_APK_AMD64}" \
-            --expected-digest-contract \
-            "${VALIDATED_APK_AMD64_DIGEST_CONTRACT}"
+            PYTHONDONTWRITEBYTECODE=1 python3 \
+              "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+              --root "${PAYLOAD_ATTEST_VARIANT_ROOT}/deb" \
+              --mode pie \
+              --revision "${SOURCE_COMMIT_SHA}" \
+              --vcs-time "${SOURCE_VCS_TIME}" \
+              --signatures-source \
+              "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+              --reference-root "${STAGING_AMD64}" \
+              --expected-digest-contract \
+              "${VALIDATED_AMD64_DIGEST_CONTRACT}"
+            PYTHONDONTWRITEBYTECODE=1 python3 \
+              "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+              --root "${PAYLOAD_ATTEST_VARIANT_ROOT}/rpm" \
+              --mode pie \
+              --revision "${SOURCE_COMMIT_SHA}" \
+              --vcs-time "${SOURCE_VCS_TIME}" \
+              --signatures-source \
+              "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+              --reference-root "${STAGING_AMD64}" \
+              --expected-digest-contract \
+              "${VALIDATED_AMD64_DIGEST_CONTRACT}"
+            PYTHONDONTWRITEBYTECODE=1 python3 \
+              "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+              --root "${PAYLOAD_ATTEST_VARIANT_ROOT}/apk" \
+              --mode static \
+              --revision "${SOURCE_COMMIT_SHA}" \
+              --vcs-time "${SOURCE_VCS_TIME}" \
+              --signatures-source \
+              "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+              --reference-root "${STAGING_APK_AMD64}" \
+              --expected-digest-contract \
+              "${VALIDATED_APK_AMD64_DIGEST_CONTRACT}"
+          done
+          if [[ "${VERSION}" == 4.* ]]; then
+            PAYLOAD_ATTEST_VARIANT_ROOT="${PAYLOAD_ATTEST_ROOT}"
+            for relative in \
+              opt/syswarden/bin/syswarden-cli \
+              opt/syswarden/bin/syswarden-core \
+              opt/syswarden/bin/syswarden-tui \
+              opt/syswarden/signatures.json; do
+              extract_exact_member rpm-rhel-package-owned \
+                "${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm" "${relative}"
+            done
+
+            PYTHONDONTWRITEBYTECODE=1 python3 \
+              "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+              --root "${PAYLOAD_ATTEST_ROOT}/rpm-rhel-package-owned" \
+              --mode pie \
+              --revision "${SOURCE_COMMIT_SHA}" \
+              --vcs-time "${SOURCE_VCS_TIME}" \
+              --signatures-source \
+              "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+              --reference-root "${RHEL_PROFILE_STAGING}" \
+              --expected-digest-contract \
+              "${VALIDATED_AMD64_DIGEST_CONTRACT}"
+          fi
           (
             cd "${PACKAGE_ASSETS}"
             sha256sum --check --strict SHA256SUMS.txt
           )
-          (
-            cd "${RHEL_PROFILE_ASSETS}"
-            sha256sum --check --strict SHA256SUMS.txt
-          )
+          if [[ "${VERSION}" == 4.* ]]; then
+            (
+              cd "${RHEL_PROFILE_ASSETS}"
+              sha256sum --check --strict SHA256SUMS.txt
+            )
+          fi
           find "${PACKAGE_ASSETS}" -maxdepth 1 -type f -exec chmod 0444 -- {} +
           find "${RHEL_PROFILE_ASSETS}" -maxdepth 1 -type f -exec chmod 0444 -- {} +
 
@@ -1750,7 +2025,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Opt-in RHEL Package-owned Artifact
-        if: ${{ !github.event.act }}
+        if: ${{ !github.event.act && startsWith(env.VERSION, '4.') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: syswarden-rhel-package-owned-${{ env.VERSION }}
@@ -1770,7 +2045,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Opt-in RHEL Package-owned Artifact with Act-compatible protocol
-        if: ${{ github.event.act }}
+        if: ${{ github.event.act && startsWith(env.VERSION, '4.') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         env:
           ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'

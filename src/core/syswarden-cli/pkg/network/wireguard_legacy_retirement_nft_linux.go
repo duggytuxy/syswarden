@@ -36,7 +36,7 @@ func (host legacyWireGuardRecoveryHost) inspectRetirementForwardRules(ctx contex
 		return nil, 0, errors.Join(fmt.Errorf("shared forward chain changed during retirement inspection"), err)
 	}
 	if len(owned) == 1 && owned[0].SharedForward {
-		_, filtered, err := parseWireGuardSharedForward(wire, owned[0].OwnershipToken)
+		_, filtered, err := parseWireGuardSharedForward(wire, owned[0].OwnershipToken, owned[0])
 		if err != nil {
 			return nil, 0, err
 		}

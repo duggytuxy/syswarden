@@ -58,16 +58,22 @@ func (buffer *rpmQueryBoundedBuffer) Bytes() []byte {
 	return bytes.Clone(buffer.buffer.Bytes())
 }
 
-func installedRPMIdentityCommand(ctx context.Context) *exec.Cmd {
-	command := exec.CommandContext(
-		ctx,
-		installedRPMExecutablePath,
-		"--noplugins",
-		"--query",
-		"--queryformat",
-		installedRPMQueryFormat,
-		installedRPMPackageName,
-	)
+func installedRPMIdentityCommand(ctx context.Context, packageName string) (*exec.Cmd, error) {
+	if ctx == nil || !validNativeProductPackageName(packageName) {
+		return nil, errors.New("installed RPM query requires an exact native identity")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var command *exec.Cmd
+	switch packageName {
+	case compatibilityNativePackageName:
+		command = exec.CommandContext(ctx, installedRPMExecutablePath, "--noplugins", "--query", "--queryformat", installedRPMQueryFormat, compatibilityNativePackageName)
+	case baseNativePackageName:
+		command = exec.CommandContext(ctx, installedRPMExecutablePath, "--noplugins", "--query", "--queryformat", installedRPMQueryFormat, baseNativePackageName)
+	default:
+		return nil, errors.New("installed RPM query requires an exact native identity")
+	}
 	command.Env = []string{
 		"HOME=/nonexistent",
 		"LANG=C",
@@ -78,16 +84,22 @@ func installedRPMIdentityCommand(ctx context.Context) *exec.Cmd {
 	}
 	command.Dir = "/"
 	command.WaitDelay = installedRPMCommandWaitDelay
-	return command
+	return command, nil
 }
 
-func queryInstalledRPMIdentity(ctx context.Context) ([]byte, error) {
+func queryInstalledRPMIdentity(ctx context.Context, packageName string) ([]byte, error) {
 	stdout := &rpmQueryBoundedBuffer{limit: maximumInstalledRPMIdentityBytes}
 	stderr := &rpmQueryBoundedBuffer{limit: maximumInstalledRPMIdentityBytes}
-	command := installedRPMIdentityCommand(ctx)
+	command, err := installedRPMIdentityCommand(ctx, packageName)
+	if err != nil {
+		return nil, err
+	}
 	command.Stdout = stdout
 	command.Stderr = stderr
-	err := command.Run()
+	err = command.Run()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if stdout.overflow || stderr.overflow {
 		return nil, errors.New("installed RPM identity query exceeded its output limit")
 	}
@@ -126,6 +138,13 @@ func parseInstalledRPMIdentity(output []byte) (installedRPMIdentity, error) {
 }
 
 func validateInstalledStandardRPMRelease(output []byte, currentVersion string) error {
+	return validateInstalledStandardRPMReleaseForName(output, currentVersion, compatibilityNativePackageName)
+}
+
+func validateInstalledStandardRPMReleaseForName(output []byte, currentVersion, packageName string) error {
+	if !validNativeProductPackageName(packageName) {
+		return errors.New("installed RPM validation requires an exact native identity")
+	}
 	if _, err := parseReleaseVersion(currentVersion); err != nil {
 		return fmt.Errorf("validate running SysWarden version: %w", err)
 	}
@@ -133,8 +152,8 @@ func validateInstalledStandardRPMRelease(output []byte, currentVersion string) e
 	if err != nil {
 		return err
 	}
-	if identity.name != installedRPMPackageName {
-		return fmt.Errorf("installed RPM name %q does not match %q", identity.name, installedRPMPackageName)
+	if identity.name != packageName {
+		return fmt.Errorf("installed RPM name %q does not match %q", identity.name, packageName)
 	}
 	if identity.epoch != "0" {
 		return fmt.Errorf("installed RPM epoch %q does not match 0", identity.epoch)
@@ -164,12 +183,12 @@ func validateInstalledStandardRPMRelease(output []byte, currentVersion string) e
 	return nil
 }
 
-func attestInstalledStandardRPMRelease(ctx context.Context, currentVersion string) error {
-	output, err := queryInstalledRPMIdentity(ctx)
+func attestInstalledStandardRPMRelease(ctx context.Context, currentVersion, packageName string) error {
+	output, err := queryInstalledRPMIdentity(ctx, packageName)
 	if err != nil {
 		return err
 	}
-	return validateInstalledStandardRPMRelease(output, currentVersion)
+	return validateInstalledStandardRPMReleaseForName(output, currentVersion, packageName)
 }
 
 func (u *updater) attestStandardRPMChannel(ctx context.Context, target packageTarget, phase string) error {
@@ -179,9 +198,19 @@ func (u *updater) attestStandardRPMChannel(ctx context.Context, target packageTa
 	if u.attestRPM == nil {
 		return errors.New("installed RPM release attestation is unavailable; refusing the standard signed updater")
 	}
+	if ctx == nil || !validNativeProductPackageName(target.packageName) {
+		return errors.New("installed RPM channel requires an exact native identity and context")
+	}
 	attestationCtx, cancel := context.WithTimeout(ctx, installedRPMReleaseTimeout)
 	defer cancel()
-	if err := u.attestRPM(attestationCtx, u.currentVersion); err != nil {
+	if err := attestationCtx.Err(); err != nil {
+		return err
+	}
+	err := u.attestRPM(attestationCtx, u.currentVersion, target.packageName)
+	if ctxErr := attestationCtx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if err != nil {
 		return fmt.Errorf("attest installed RPM release %s: %w", phase, err)
 	}
 	return nil

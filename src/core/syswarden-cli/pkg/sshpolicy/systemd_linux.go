@@ -215,7 +215,10 @@ func classifySSHSystemd(units map[string]sshSystemdUnit, digest string) (Systemd
 			return SystemdSummary{}, fmt.Errorf("SSH service has an unresolved socket relationship")
 		}
 	}
-	if socket != nil && !instanced && service["TriggeredBy"] == "" {
+	// An unused inactive socket may be garbage-collected between manager
+	// queries. Its configured target must still resolve, but only an active
+	// socket must remain present in the service's reverse runtime relationship.
+	if socket != nil && !instanced && socket["ActiveState"] == "active" && service["TriggeredBy"] == "" {
 		return SystemdSummary{}, fmt.Errorf("SSH socket relationship is not reciprocal")
 	}
 	data, err := json.Marshal(units)

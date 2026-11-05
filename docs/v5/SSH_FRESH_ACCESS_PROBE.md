@@ -1,7 +1,8 @@
 # Fresh SSH access transport
 
 Status: private development component for v5.00.0. Refs #235, #337 and #422.
-This component is not exposed through the CLI or installer and does not make a
+The private [controller command](SSH_ACCESS_COMMANDS.md) exposes this component.
+It is not called by the installer and does not make a
 migration-ready package available.
 
 ## Input and authority boundary
@@ -93,8 +94,10 @@ causal policy-consumption acknowledgement, transaction-bound receipt handling,
 runtime-aware recovery, owned updates and separate native uninstall, remove and
 purge validation. Final v5.00.0 IVVQ acceptance remains open.
 
-Issue #422 still requires standard-list-only fresh native installation, with
+Issue #422 requires fresh native installation to select no list and defer
+activation until explicit configuration through `syswarden config`, with
 independent explicit TOML choices for SSH, CIS, OS hardening and optional
-modules. Production minimal-profile installer wiring is incomplete. This
+modules. The native hooks stage an unconfigured TOML profile; [native dependency
+transitions and package qualification](MINIMAL_NATIVE_INSTALL.md) remain open. This
 transport changes no installation defaults or administrator upgrade settings.
 BunkerWeb independence is preserved; product scope remains Linux AMD64 only.

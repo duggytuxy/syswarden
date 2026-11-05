@@ -77,8 +77,9 @@ access and separate uninstall, package remove and package purge outcomes.
 
 The minimal installation contract in
 [#422](https://github.com/duggytuxy/syswarden/issues/422) remains mandatory:
-fresh native packages select the standard list only; SSH, CIS and OS hardening
-need explicit independent TOML choices. This command neither changes package
+fresh native packages must select no list and defer activation until explicit
+configuration through `syswarden config`. SSH, CIS and OS hardening need explicit
+independent TOML choices. This command neither changes package
 defaults nor turns historical generated settings into consent.
 
 The internal [owned endpoint adapter](SSH_OWNED_ENDPOINTS.md) retains this

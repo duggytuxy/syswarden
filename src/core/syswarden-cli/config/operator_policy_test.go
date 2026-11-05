@@ -219,7 +219,10 @@ func requireOperatorPolicyContractOutcome(t *testing.T, err error, wantError str
 	}
 }
 
-const validOperatorPolicyModule = `[[operator_policy.rules]]
+const validOperatorPolicyModule = `[network]
+policy_mode = "host"
+
+[[operator_policy.rules]]
 id = "allow-icmp-v4"
 family = "ipv4"
 direction = "ingress"
@@ -238,7 +241,10 @@ source = "2001:db8::/64"
 action = "accept"
 `
 
-const validTransportOperatorPolicyModule = `[[operator_policy.rules]]
+const validTransportOperatorPolicyModule = `[network]
+policy_mode = "host"
+
+[[operator_policy.rules]]
 id = "allow-tcp-v4"
 family = "ipv4"
 direction = "ingress"

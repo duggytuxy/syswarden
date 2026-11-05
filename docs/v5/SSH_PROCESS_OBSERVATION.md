@@ -31,7 +31,11 @@ descriptors remain held throughout observation so their identities cannot be
 recycled during that lease. A different stable mount namespace is recorded:
 service hardening can legitimately create one. Its root must identify the same
 filesystem root, but this does not establish that every submount exposes the
-same configuration. The mount namespace and root must remain unchanged.
+same configuration. The mount namespace and root must remain unchanged. The
+separate [activation/restoration binder](SSH_ACTIVATION_BOUNDARY.md) therefore
+requires the same mount namespace as its inventory/parser verifier and refuses
+private views before dispatch. A successful read-only observation does not
+satisfy that additional mutation boundary.
 
 The process's system-manager cgroup must match exactly. Unified cgroup v2 and a
 single v1 `name=systemd` hierarchy are recognized. Missing, duplicate, ambiguous
@@ -69,8 +73,9 @@ process directory, never for configuration-supplied paths.
 ## Installation and qualification
 
 The [minimal native installation contract](https://github.com/duggytuxy/syswarden/issues/422)
-is unchanged: standard-list-only fresh packages, independent explicit TOML
-choices for SSH/CIS/OS hardening and optional modules, and preservation of
+requires fresh packages to select no list and defer activation until explicit
+configuration through `syswarden config`, with independent explicit TOML choices
+for SSH/CIS/OS hardening and optional modules and preservation of
 administrator configuration and existing protection on upgrade. An installed
 or running SSH service is not consent to apply a policy. BunkerWeb remains
 independent, including source-owned temporary bans, expiry and HA.

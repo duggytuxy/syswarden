@@ -223,7 +223,7 @@ func TestValidatedUserModuleCASIncludesMigrationMarkerThroughPublication_SW_CFG_
 	}
 }
 
-func TestValidatedUserModuleRestoresPreviousInodeWhenMigrationWinsAfterPrePublish_SW_CFG_002(t *testing.T) {
+func TestValidatedUserModulePreservesPreviousInodeWhenMigrationRunsBeforeExchange_SW_CFG_002(t *testing.T) {
 	root, userPath := initializedUserModule(t)
 	const previousUser = "# authoritative operator state\n[user]\nprofile_name = \"must-remain-effective\"\n"
 	if err := WriteValidatedUserModule(root, []byte(previousUser)); err != nil {
@@ -252,10 +252,9 @@ func TestValidatedUserModuleRestoresPreviousInodeWhenMigrationWinsAfterPrePublis
 			if err := originalPrePublish(); err != nil {
 				return err
 			}
-			// The real migrator runs after the writer's final marker CAS and
-			// publishes its generated no-replace user module while the previous
-			// inode is quarantined. It also completes quickly enough to remove its
-			// marker before the writer observes the publication conflict.
+			// The real migrator runs after the marker check while the original
+			// user module remains live. It preserves that inode, but changes
+			// other read modules. The final full snapshot check must refuse.
 			if err := (&Migrator{SourcePath: source, OutputDir: root}).Run(); err != nil {
 				return err
 			}
@@ -276,11 +275,11 @@ func TestValidatedUserModuleRestoresPreviousInodeWhenMigrationWinsAfterPrePublis
 	t.Cleanup(func() { publishValidatedUserModule = previousPublisher })
 
 	err = WriteValidatedUserModule(root, []byte("[user]\nprofile_name = \"candidate\"\n"))
-	if err == nil || !strings.Contains(err.Error(), "publish operator module without replacement") {
+	if err == nil || !strings.Contains(err.Error(), "final pre-publication configuration CAS") {
 		t.Fatalf("writer/migration publication conflict error = %v", err)
 	}
-	if migrationUserInfo == nil || os.SameFile(previousInfo, migrationUserInfo) {
-		t.Fatal("test migration did not publish a competing user-module inode")
+	if migrationUserInfo == nil || !os.SameFile(previousInfo, migrationUserInfo) {
+		t.Fatal("interleaved migration did not preserve the live operator inode")
 	}
 	restoredInfo, statErr := os.Lstat(userPath)
 	if statErr != nil {

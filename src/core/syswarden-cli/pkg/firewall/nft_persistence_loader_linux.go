@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"reflect"
@@ -235,12 +237,18 @@ type nftPersistenceLoaderInspection struct {
 	digest         string
 	resolvedBinary string
 	alias          *nftPersistenceLoaderAlias
+	openrc         *nftOpenRCObservation
 }
 
 // A loader attestation binds only this shared service and its effective entry
 // points. It does not attest product file ownership, other services, cron or
 // Fail2ban actions. Those producer guards remain independently required.
 func inspectNFTPersistenceLoader(ctx context.Context, host nftPersistenceFilesystem) (*nftPersistenceLoaderInspection, error) {
+	if _, err := host.snapshot("/etc/alpine-release"); err == nil {
+		return inspectNFTOpenRCLoader(ctx, host, nftOpenRCProfiles())
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("inspect nftables loader platform: %w", err)
+	}
 	inspection := &nftPersistenceLoaderInspection{host: host, files: make(map[string]nftPersistenceRead), xattrs: make(map[string]string)}
 	var err error
 	inspection.manager, err = host.snapshot("/usr/bin/systemctl")
@@ -292,6 +300,9 @@ func inspectNFTPersistenceLoader(ctx context.Context, host nftPersistenceFilesys
 func (inspection *nftPersistenceLoaderInspection) verify(ctx context.Context) error {
 	if inspection == nil || !validLegacyRetirementDigest(inspection.digest) || len(inspection.files) < 3 || len(inspection.status.entries) == 0 {
 		return fmt.Errorf("nftables loader inspection is incomplete")
+	}
+	if inspection.openrc != nil {
+		return inspection.verifyOpenRC(ctx)
 	}
 	status, err := queryNFTPersistenceLoader(ctx, inspection.host, inspection.manager)
 	if err != nil || !reflect.DeepEqual(status, inspection.status) {

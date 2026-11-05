@@ -1,8 +1,10 @@
 # Durable boundary for an SSH activation attempt
 
 Status: internal v5.00.0 component. Refs #235, #337 and #422.
-A private systemd target adapter exists. No CLI command or installer call is
-enabled, and no complete activation or migration is accepted by this component.
+A private systemd target adapter exists. No forward-activation CLI command or
+installer call is enabled, and no complete activation or migration is accepted
+by this component. Separately approved original-configuration restoration has
+its own [operator boundary](SSH_OPERATOR_RECOVERY.md).
 
 ## Why publication recovery needs a separate boundary
 
@@ -21,6 +23,33 @@ The journal lock remains held from publication verification through dispatch and
 lease closure. A repeated attempt, including one after reopening the journal,
 is refused. No result from this component claims policy consumption, operational
 recovery or a newly authenticated connection.
+
+## Coordinated first publication
+
+The internal migration session now requires both the exact approved plan and
+an independently approved controller enrollment before it changes configuration.
+It checks the explicit TOML selection and matches every enrolled direct or
+bastion route to the plan. A missing route, endpoint mismatch, revoked enrollment
+or an externally owned policy refuses the operation before publication.
+
+The session binds the actual systemd process, executable address space and
+listener generation before publishing. That same retained lease is checked
+through publication and handed once to the durable activation dispatcher. It
+never selects a replacement daemon after configuration has changed. The original
+bounded lifetime remains in force; the dispatch guard checks the published
+configuration and enrollment instead of reusing the obsolete original inventory.
+
+Enrollment must already occupy its protected path when the plan inventory is
+approved. Filling that existing reserved file binds the resulting enrollment
+separately; adding a new directory entry after approval changes the inventory
+and requires a new plan. This internal coordinator does not provision enrollment.
+
+A publication failure never triggers a reload. Once journal preparation exists,
+all partial facts and recovery uncertainty are returned, including errors while
+closing retained resources. Reopening the publication journal revalidates its
+full history under the original approval. It does not adopt a transaction from
+a previous attempt or permit an automatic retry. No public activation command,
+installer hook or terminal migration acceptance is enabled by this composition.
 
 ## Ordering and ownership
 
@@ -41,6 +70,17 @@ systemd activation target; it does not accept a serialized target or caller PID.
 That target qualifies the exact operation as a single `SIGHUP` sent through the
 original pidfd. It rechecks the stable manager invocation, qualified typed startup
 declaration, executable, process identity, namespaces, root and control group.
+Activation and original restoration additionally require the daemon to share the
+verifier's mount namespace. A stable private mount namespace may expose a
+different configuration through `BindReadOnlyPaths` even when the root inode,
+executable, endpoints and login behavior match. Such a service is refused before
+an activation lease, durable dispatch intent or signal can be produced. Both the
+target namespace and the verifier's held procfs namespace reference are rechecked
+throughout the lease. This does not remove or weaken administrator unit hardening;
+qualification of alternate daemon-visible graphs remains separate work. Read-only
+process/listener observations may still describe those services without granting
+activation authority.
+
 Active socket configurations, unqualified startup options and changing state
 remain refused. Its identity digest binds the operation and those observations.
 
@@ -97,6 +137,65 @@ closes listeners during its reload path, but a replacement observation alone
 cannot establish why that change occurred. The durable activation intent and
 recovery requirement remain in force even after this observation succeeds.
 
+## Address-space retirement after the request
+
+Listener replacement is now accompanied by a separate Linux address-space
+observation. Before dispatch the adapter opens the fixed `mem` entry beneath
+its retained process directory, read-only, with `openat2` restrictions against
+symlinks, escapes and mount crossings. Unsupported lookup or access is a refusal;
+there is no fallback or capability change. The descriptor must identify a
+root-owned procfs regular file with the expected mode, link count and size.
+
+One byte is requested only at address zero and immediately cleared. No memory
+contents, configurable address, dump or process attachment is exposed. An initial
+zero-byte `EIO` establishes a live referenced address space with an inaccessible
+probe address. After listener replacement, that same descriptor must return EOF.
+The still-held pidfd, executable, startup, manager and policy guards must continue
+to pass. An exited process therefore cannot establish a successful reload.
+A newly opened descriptor must again produce the initial result, and both
+observations are checked before return and when releasing the activation lease.
+Any failure retains the recovery requirement.
+
+The [Linux procfs implementation](https://github.com/torvalds/linux/blob/v6.12/fs/proc/base.c)
+retains the opened address space across an exec; it does not retarget that file
+to the process's next address space. This supports retirement evidence on the
+surviving, independently bound process. It is not an exact exec counter or proof
+of the current address-space identity: another `CLONE_VM` user can keep a space
+alive. Such sharing can delay retirement and cause refusal; a live replacement
+handle alone does not exclude another exec with a surviving sharer. There is no
+claim of protection against a hostile kernel, privileged writer or modified
+cooperating daemon. OpenSSH's documented
+[SIGHUP behavior](https://man.openbsd.org/sshd.8) and its qualified binary remain
+part of the supported startup contract.
+
+The byte count and operation sequence are bounded. Synchronous procfs open/read
+calls can wait for kernel execution or mapping locks, so the surrounding context
+deadline is not a hard preemption guarantee during a kernel stall. A cancelled
+request is refused at the next check. No background goroutine abandons a live
+memory handle, and no timeout success is synthesized.
+
+This observation strengthens the runtime evidence without acknowledging every
+policy directive or fresh administrator access. The durable activation fence
+remains. Before creating the signal lease, the binder now verifies configuration
+selection as well. A declaration with explicit `-f` must select exactly
+`/etc/ssh/sshd_config`. For a declaration without `-f`, the retained executable
+runs with fixed parser-only `-T -ddd` arguments. Its first main-file load event
+must name that exact path, and all effective directives must match the protected
+explicit-file parse except the forced diagnostic log level. Equal values from
+another compiled default do not pass. Missing, ambiguous or unsupported traces,
+changed inputs, cancellation and execution/output limits invalidate the result.
+The selection digest binds the startup declaration, executable and policy into
+the activation target. Raw trace content is not exposed in diagnostics.
+
+This is bounded evidence from a qualified parser, not independent daemon-build
+provenance or proof that the running service consumed every directive. Supported
+OpenSSH parsing/reload semantics and distribution builds still require native
+qualification. A concurrent legitimate reload can also overlap with this request;
+any eventual consumption claim must describe the guarded interval, not exclusive
+causation by this particular signal. Isolated tests exercise a real same-PID exec, no-op and early-exec
+refusals, cancellation, guard/access failures, process exit and descriptor
+closure. They do not qualify arbitrary shared-address-space daemons.
+
 An error during persistence prevents dispatch. From the write attempt onward,
 the result requires recovery because a failed write may still have left visible
 intent. Failure, cancellation, target drift and record replacement after
@@ -121,7 +220,11 @@ not implemented by this component. A separate read-only
 recorded intent and publication before observing current systemd endpoints. It
 always retains the recovery requirement and does not dispatch or resolve the
 attempt. Deleting the intent to bypass the fence is not a
-supported recovery procedure. Administrator changes and all recovery evidence
+supported recovery procedure. A separate
+[runtime recovery coordinator](SSH_RUNTIME_RECOVERY.md) now performs explicitly
+approved original-inode restoration and one restoring reload, including resume
+before dispatch. It retains recovery-required status until the remaining runtime
+and access acceptance is integrated. Administrator changes and all recovery evidence
 must be preserved when state is ambiguous.
 
 ## Validation and remaining integration
@@ -148,8 +251,9 @@ already-owned updates and the three separate uninstall/remove/purge paths still
 require integration and native evidence. A migration-ready package is not yet
 available. These component checks are intermediate evidence for v5.00.0 IVVQ.
 
-Issue422 still requires standard-list-only fresh APK/DEB/RPM installation,
-independent explicit TOML choices for SSH/CIS/OS and optional modules, and
+Issue #422 requires fresh APK/DEB/RPM installation to select no list and defer
+activation until explicit configuration through `syswarden config`, with
+independent explicit TOML choices for SSH/CIS/OS and optional modules and
 preservation of administrator settings and existing protection on upgrade.
 This change does not wire those production defaults. BunkerWeb's independent
 API, source ownership, expiry and HA remain unchanged. Linux AMD64 only.

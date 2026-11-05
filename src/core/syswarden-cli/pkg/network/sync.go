@@ -251,6 +251,11 @@ func getLocalBlocklist(file string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s:%d: %w", filepath.Clean(file), lineNumber+1, err)
 		}
+		// Recovery and unban callers still need the permissive legacy parser,
+		// but a stored universal block must never become an outgoing HA ban.
+		if prefix, err := netip.ParsePrefix(canonical); err == nil && prefix.Bits() == 0 {
+			return nil, fmt.Errorf("%s:%d: universal blocklist prefixes cannot be synchronized", filepath.Clean(file), lineNumber+1)
+		}
 		ips = append(ips, canonical)
 	}
 	return uniqueSortedHAIPs(ips), nil

@@ -72,7 +72,7 @@ func TestLegacyWireGuardMigrationPreservesKeysAndClientAndAllowsOwnedReuse(t *te
 			t.Fatal(err)
 		}
 		identity, err := wireguardstate.ParseServerConfiguration(server)
-		if err != nil || identity.OwnershipToken != strings.Repeat("b", 64) {
+		if err != nil || identity.OwnershipToken != strings.Repeat("b", 64) || identity.PolicyVersion != 2 || identity.IPv4Subnet != "10.66.66.0/24" {
 			t.Fatal("new hooks not bound to ownership", err)
 		}
 		if !bytes.Contains(server, []byte("PrivateKey = "+original.input.ServerPriv+"\n")) {

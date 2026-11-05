@@ -109,11 +109,19 @@ func pauseSSHListenerObservation(ctx context.Context) error {
 
 func (l *sshListenerReload) wait(ctx context.Context, guard func() error,
 	pause func(context.Context) error) error {
+	_, err := l.observe(ctx, guard, pause)
+	return err
+}
+
+// Return the exact stable generation so a production restoring observation can
+// bind the same sorted socket image used by the read-only listener summary.
+func (l *sshListenerReload) observe(ctx context.Context, guard func() error,
+	pause func(context.Context) error) ([]sshListenerSocket, error) {
 	if l == nil || ctx == nil || guard == nil || pause == nil || l.read == nil {
-		return ErrInventoryUnsafe
+		return nil, ErrInventoryUnsafe
 	}
 	if err := matchSSHEndpoints(l.expected, l.before, l.namespace); err != nil {
-		return err
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -122,27 +130,30 @@ func (l *sshListenerReload) wait(ctx context.Context, guard func() error,
 	// better observation. An unreadable/ambiguous sample fails immediately.
 	for range 150 {
 		if err := errors.Join(ctx.Err(), guard()); err != nil {
-			return err
+			return nil, err
 		}
 		current, err := l.read(ctx)
 		if err := errors.Join(err, ctx.Err(), guard()); err != nil {
-			return err
+			return nil, err
 		}
 		replaced, err := l.replaced(current)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if replaced {
 			if slices.Equal(candidate, current) {
-				return errors.Join(ctx.Err(), guard())
+				if err := errors.Join(ctx.Err(), guard()); err != nil {
+					return nil, err
+				}
+				return slices.Clone(current), nil
 			}
 			candidate = slices.Clone(current)
 		} else {
 			candidate = nil
 		}
 		if err := pause(ctx); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return errors.New("SSH listener replacement was not observed within the bounded window; runtime recovery remains required")
+	return nil, errors.New("SSH listener replacement was not observed within the bounded window; runtime recovery remains required")
 }

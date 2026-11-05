@@ -81,7 +81,7 @@ func TestSSHRetainedProcessSurvivesObservationAndRefusesDrift(t *testing.T) {
 }
 
 func TestSSHActivationTargetOneShotGuardAndCancellation(t *testing.T) {
-	for _, scenario := range []string{"success", "nil-context", "nil-guard", "bind-cancel", "request-cancel", "target-drift", "cancel-during-check", "policy-drift", "send-error", "cancel-after-send", "post-send-drift", "close-error"} {
+	for _, scenario := range []string{"success", "nil-context", "nil-guard", "bind-cancel", "request-cancel", "target-drift", "cancel-during-check", "cancel-during-pre-send", "target-drift-pre-send", "policy-drift", "send-error", "cancel-after-send", "post-send-drift", "close-error"} {
 		t.Run(scenario, func(t *testing.T) {
 			bound, cancelBound := context.WithCancel(context.Background())
 			defer cancelBound()
@@ -98,6 +98,14 @@ func TestSSHActivationTargetOneShotGuardAndCancellation(t *testing.T) {
 						cancel()
 						<-ctx.Done()
 						return ctx.Err()
+					}
+					return nil
+				}, preSend: func() error {
+					if scenario == "cancel-during-pre-send" {
+						cancel()
+					}
+					if scenario == "target-drift-pre-send" {
+						return ErrInventoryChanged
 					}
 					return nil
 				}, send: func() error {

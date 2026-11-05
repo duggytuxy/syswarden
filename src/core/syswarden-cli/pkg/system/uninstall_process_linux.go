@@ -45,19 +45,20 @@ var firewallMutatingCLISubcommands = map[string]struct{}{
 }
 
 type firewallRemovalProcessScanner struct {
-	procRoot    string
-	cliPath     string
-	tuiPath     string
-	corePath    string
-	rejectCore  bool
-	selfPID     int
-	readDir     func(string) ([]os.DirEntry, error)
-	openRoot    func(string) (*os.Root, error)
-	lstat       func(string) (os.FileInfo, error)
-	stat        func(string) (os.FileInfo, error)
-	readlink    func(string) (string, error)
-	validateCLI func(string) error
-	ownerUID    func(os.FileInfo) (uint32, bool)
+	procRoot        string
+	cliPath         string
+	tuiPath         string
+	corePath        string
+	rejectCore      bool
+	inspectAllUsers bool
+	selfPID         int
+	readDir         func(string) ([]os.DirEntry, error)
+	openRoot        func(string) (*os.Root, error)
+	lstat           func(string) (os.FileInfo, error)
+	stat            func(string) (os.FileInfo, error)
+	readlink        func(string) (string, error)
+	validateCLI     func(string) error
+	ownerUID        func(os.FileInfo) (uint32, bool)
 }
 
 func productionFirewallRemovalProcessScanner() firewallRemovalProcessScanner {
@@ -298,8 +299,12 @@ func (scanner firewallRemovalProcessScanner) scan() error {
 		if !ok {
 			return fmt.Errorf("process %d ownership is unavailable", pid)
 		}
-		if uid != 0 {
+		if uid != 0 && !scanner.inspectAllUsers {
 			continue
+		}
+		ownerClass := "root-owned"
+		if uid != 0 {
+			ownerClass = "non-root"
 		}
 
 		executablePath := filepath.Join(processPath, "exe")
@@ -308,14 +313,14 @@ func (scanner firewallRemovalProcessScanner) scan() error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("inspect root process %d executable: %w", pid, err)
+			return fmt.Errorf("inspect process %d executable: %w", pid, err)
 		}
 		executableTarget, err := scanner.readlink(executablePath)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("read root process %d executable target: %w", pid, err)
+			return fmt.Errorf("read process %d executable target: %w", pid, err)
 		}
 		exactCLI := exactRemovalProcessExecutable(executableInfo, cliInfo, executableTarget, scanner.cliPath)
 		exactTUI := exactRemovalProcessExecutable(executableInfo, tuiInfo, executableTarget, scanner.tuiPath)
@@ -355,7 +360,7 @@ func (scanner firewallRemovalProcessScanner) scan() error {
 					readlinkErr,
 				)
 			}
-			return fmt.Errorf("root-owned SysWarden %s is active as process %d", processName, pid)
+			return fmt.Errorf("%s SysWarden %s is active as process %d", ownerClass, processName, pid)
 		}
 		relativeCmdline := filepath.Join(entry.Name(), "cmdline")
 		firstCmdline, err := readBoundedFirewallRemovalProcFile(
@@ -405,7 +410,7 @@ func (scanner firewallRemovalProcessScanner) scan() error {
 			executableTarget != confirmedTarget {
 			return fmt.Errorf("exact SysWarden CLI process %d executable changed during attestation", pid)
 		}
-		return fmt.Errorf("root-owned SysWarden CLI firewall mutator %s is active as process %d", subcommand, pid)
+		return fmt.Errorf("%s SysWarden CLI firewall mutator %s is active as process %d", ownerClass, subcommand, pid)
 	}
 	return nil
 }

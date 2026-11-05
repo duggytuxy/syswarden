@@ -135,12 +135,14 @@ type sshProcessIdentity struct {
 // Private, short-lived read-only lease. A summary never replaces this live
 // handle and never grants authority to reload, signal or authenticate.
 type sshProcessBinding struct {
-	pid, uid, pidfd int
-	proc            *os.File
-	executable      inventoryStamp
-	digest, group   string
-	namespaces      map[string]*os.File
-	root            *os.File
+	pid, uid, pidfd  int
+	proc             *os.File
+	executable       inventoryStamp
+	digest, group    string
+	namespaces       map[string]*os.File
+	root             *os.File
+	verifier         *os.File
+	requireSameMount bool
 }
 
 func openSSHProcDirectory(parent *os.File, name string) (*os.File, error) {
@@ -178,7 +180,17 @@ func openSSHProcessLink(proc *os.File, name string) (*os.File, error) {
 	return os.NewFile(uintptr(fd), "ssh-process-kernel-object"), nil
 }
 
-func bindSSHProcess(pid, uid int, group string, executable inventoryStamp, digest string) (_ *sshProcessBinding, err error) {
+func bindSSHProcess(pid, uid int, group string, executable inventoryStamp, digest string) (*sshProcessBinding, error) {
+	return bindSSHProcessNamespaces(pid, uid, group, executable, digest, false)
+}
+
+// Read-only observation may describe a private mount namespace. Mutation must
+// instead qualify the same mount view as the guarded inventory and parser.
+func bindSSHProcessForActivation(pid, uid int, group string, executable inventoryStamp, digest string) (*sshProcessBinding, error) {
+	return bindSSHProcessNamespaces(pid, uid, group, executable, digest, true)
+}
+
+func bindSSHProcessNamespaces(pid, uid int, group string, executable inventoryStamp, digest string, sameMount bool) (_ *sshProcessBinding, err error) {
 	if pid <= 1 || pid > 1<<31-1 || uid < 0 || !validSSHControlGroup(group) || !lowerDigest.MatchString(digest) ||
 		!executable.exists || int64(executable.uid) != int64(uid) || executable.mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, ErrInventoryUnsafe
@@ -209,7 +221,7 @@ func bindSSHProcess(pid, uid int, group string, executable inventoryStamp, diges
 	if err != nil {
 		return nil, fmt.Errorf("pin SSH process: %w", err)
 	}
-	b := &sshProcessBinding{pid: pid, uid: uid, pidfd: pidfd, executable: executable, digest: digest, group: group, namespaces: make(map[string]*os.File)}
+	b := &sshProcessBinding{pid: pid, uid: uid, pidfd: pidfd, executable: executable, digest: digest, group: group, namespaces: make(map[string]*os.File), requireSameMount: sameMount}
 	complete := false
 	defer func() {
 		if !complete {
@@ -222,6 +234,12 @@ func bindSSHProcess(pid, uid int, group string, executable inventoryStamp, diges
 	b.proc, err = openSSHProcDirectory(proc, strconv.Itoa(pid))
 	if err != nil {
 		return nil, err
+	}
+	if sameMount {
+		b.verifier, err = openSSHProcDirectory(proc, strconv.Itoa(os.Getpid()))
+		if err != nil {
+			return nil, err
+		}
 	}
 	for _, name := range []string{"pid", "net", "user", "mnt"} {
 		b.namespaces[name], err = openSSHProcessLink(b.proc, "ns/"+name)
@@ -265,12 +283,12 @@ func (b *sshProcessBinding) Close() error {
 		}
 		delete(b.namespaces, name)
 	}
-	for _, file := range []*os.File{b.root, b.proc} {
+	for _, file := range []*os.File{b.root, b.proc, b.verifier} {
 		if file != nil {
 			err = errors.Join(err, file.Close())
 		}
 	}
-	b.root, b.proc = nil, nil
+	b.root, b.proc, b.verifier = nil, nil, nil
 	if b.pidfd >= 0 {
 		err = errors.Join(err, unix.Close(b.pidfd))
 		b.pidfd = -1
@@ -318,11 +336,33 @@ func readSSHProcText(proc *os.File, name string) ([]byte, error) {
 	return wire, nil
 }
 
+func (b *sshProcessBinding) checkMountView() error {
+	if b == nil {
+		return ErrInventoryClosed
+	}
+	if !b.requireSameMount {
+		return nil
+	}
+	if b.verifier == nil || b.namespaces["mnt"] == nil {
+		return ErrInventoryClosed
+	}
+	local, err := openSSHProcessLink(b.verifier, "ns/mnt")
+	if err != nil {
+		return err
+	}
+	localID, localErr := sshKernelFileIdentity(local)
+	targetID, targetErr := sshKernelFileIdentity(b.namespaces["mnt"])
+	if err := errors.Join(localErr, targetErr, local.Close()); err != nil || localID != targetID {
+		return errors.Join(fmt.Errorf("SSH activation requires the verifier mount namespace"), err)
+	}
+	return nil
+}
+
 func (b *sshProcessBinding) observe() (sshProcessIdentity, error) {
 	if b == nil || b.proc == nil || b.root == nil || len(b.namespaces) != 4 {
 		return sshProcessIdentity{}, ErrInventoryClosed
 	}
-	if err := b.alive(); err != nil {
+	if err := errors.Join(b.alive(), b.checkMountView()); err != nil {
 		return sshProcessIdentity{}, err
 	}
 	stat, err := readSSHProcText(b.proc, "stat")
@@ -376,7 +416,7 @@ func (b *sshProcessBinding) observe() (sshProcessIdentity, error) {
 		return sshProcessIdentity{}, err
 	}
 	after, err := sshProcessStart(stat, b.pid)
-	if err = errors.Join(err, b.alive()); err != nil || after != start {
+	if err = errors.Join(err, b.alive(), b.checkMountView()); err != nil || after != start {
 		return sshProcessIdentity{}, errors.Join(ErrInventoryChanged, err)
 	}
 	return result, nil

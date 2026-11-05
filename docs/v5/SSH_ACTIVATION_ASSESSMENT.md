@@ -95,9 +95,10 @@ SSH daemon, or establish native lifecycle acceptance.
 Actual runtime-aware recovery, causal policy-consumption acknowledgement,
 independent fresh authenticated access, already-owned updates and separate
 native uninstall/remove/purge still require integration and validation.
-Issue422 production minimal-profile wiring also remains open: fresh native
-packages must use only the standard list, optional SSH/CIS/OS protection must
-require explicit TOML choices, and upgrades must preserve administrator settings
+Issue #422 native qualification also remains open: fresh native packages must
+select no list and defer activation until explicit configuration through
+`syswarden config`, optional SSH/CIS/OS protection must require explicit TOML
+choices, and upgrades must preserve administrator settings
 and existing protection. BunkerWeb's independent contract is unchanged.
 Linux AMD64 only; these checks are intermediate v5.00.0 IVVQ evidence.
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -84,6 +85,7 @@ type runtimeConfig struct {
 }
 
 type coreConfig struct {
+	InstallProfile  string `mapstructure:"install_profile"`
 	ConfigDir       string `mapstructure:"config_dir"`
 	EnterpriseMode  bool   `mapstructure:"enterprise_mode"`
 	LogLevel        string `mapstructure:"log_level"`
@@ -95,6 +97,7 @@ type coreConfig struct {
 }
 
 type networkConfig struct {
+	PolicyMode     string           `mapstructure:"policy_mode"`
 	WhitelistInfra bool             `mapstructure:"whitelist_infra"`
 	LanSubnets     []string         `mapstructure:"lan_subnets"`
 	WhitelistIPs   []string         `mapstructure:"whitelist_ips"`
@@ -129,18 +132,20 @@ type wireGuardConfig struct {
 }
 
 type blocklistsConfig struct {
-	ListChoice  string `mapstructure:"list_choice"`
-	CustomURL   string `mapstructure:"custom_url"`
-	CustomURL6  string `mapstructure:"custom_url_ipv6"`
-	CustomHash  string `mapstructure:"custom_hash"`
-	CustomHash6 string `mapstructure:"custom_hash_ipv6"`
-	UseSpamhaus bool   `mapstructure:"use_spamhaus"`
+	OSINTEnabled bool   `mapstructure:"osint_enabled"`
+	ListChoice   string `mapstructure:"list_choice"`
+	CustomURL    string `mapstructure:"custom_url"`
+	CustomURL6   string `mapstructure:"custom_url_ipv6"`
+	CustomHash   string `mapstructure:"custom_hash"`
+	CustomHash6  string `mapstructure:"custom_hash_ipv6"`
+	UseSpamhaus  bool   `mapstructure:"use_spamhaus"`
 }
 
 type securityConfig struct {
-	Honeyports []string         `mapstructure:"honeyports"`
-	L2         l2Config         `mapstructure:"l2"`
-	Compliance complianceConfig `mapstructure:"compliance"`
+	DetectionEnabled bool             `mapstructure:"detection_enabled"`
+	Honeyports       []string         `mapstructure:"honeyports"`
+	L2               l2Config         `mapstructure:"l2"`
+	Compliance       complianceConfig `mapstructure:"compliance"`
 }
 
 type l2Config struct {
@@ -155,6 +160,8 @@ type complianceConfig struct {
 }
 
 type waapConfig struct {
+	Enabled                 bool   `mapstructure:"enabled"`
+	LogBridgeEnabled        bool   `mapstructure:"log_bridge_enabled"`
 	TrustedLogProducers     string `mapstructure:"trusted_log_producers"`
 	EnforcementMode         string `mapstructure:"enforcement_mode"`
 	BruteforceLogs          string `mapstructure:"bruteforce_logs"`
@@ -241,7 +248,7 @@ var deprecatedKeys = map[string]string{ // #nosec G101 -- keys name retired cred
 }
 
 func LoadConfig() error {
-	diagnostics, err := LoadConfigDirectory("/etc/syswarden/config")
+	diagnostics, err := loadApprovedConfigDirectory(context.Background(), "/etc/syswarden/config", activationStateDirectory, 0)
 	if err != nil {
 		return err
 	}
@@ -271,12 +278,16 @@ func FirewallBackendForMutation() (string, error) {
 	}
 }
 
-// LoadConfigDirectory validates an isolated candidate and publishes it only
-// after every file and policy value succeeds.
+// LoadConfigDirectory is the configuration inspection/test loader. Production
+// core startup uses LoadConfig and its independently verified approval boundary.
 func LoadConfigDirectory(configPath string) (Diagnostics, error) {
+	return loadConfigDirectory(configPath, readSecureRegularFile)
+}
+
+func loadConfigDirectory(configPath string, readFile func(*os.Root, string, string) ([]byte, error)) (Diagnostics, error) {
 	loadMu.Lock()
 	defer loadMu.Unlock()
-	candidate, diagnostics, err := loadCandidate(configPath)
+	candidate, diagnostics, err := loadCandidate(configPath, readFile)
 	if err != nil {
 		return diagnostics, err
 	}
@@ -294,8 +305,17 @@ func LoadConfigDirectory(configPath string) (Diagnostics, error) {
 	return diagnostics, nil
 }
 
-func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
+func loadCandidate(configPath string, readFile func(*os.Root, string, string) ([]byte, error)) (*viper.Viper, Diagnostics, error) {
+	return loadCandidateWithEnvironment(configPath, readFile, true)
+}
+
+func loadCandidateWithEnvironment(configPath string, readFile func(*os.Root, string, string) ([]byte, error), environment bool) (*viper.Viper, Diagnostics, error) {
 	diagnostics := Diagnostics{}
+	if !environment {
+		if err := rejectActivationContractEnvironment(); err != nil {
+			return nil, diagnostics, err
+		}
+	}
 	if err := rejectOperatorPolicyEnvironment(); err != nil {
 		return nil, diagnostics, err
 	}
@@ -304,16 +324,23 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 		return nil, diagnostics, fmt.Errorf("open configuration root: %w", err)
 	}
 	defer func() { _ = root.Close() }()
+	if err := verifyConfigurationReadBarrier(root, configPath); err != nil {
+		return nil, diagnostics, err
+	}
 	candidate := viper.New()
 	candidate.SetConfigType("toml")
-	configureEnvironment(candidate)
+	if environment {
+		configureEnvironment(candidate)
+	}
 	setDefaults(candidate, configPath)
 	observed := make(map[string]struct{})
+	var profileInventory unconfiguredProfileInventory
 	merge := func(relative string, content []byte) error {
 		document, err := parseDocument(content, relative)
 		if err != nil {
 			return err
 		}
+		profileInventory.record(relative, document)
 		flattenKeys("", document, observed)
 		if err := candidate.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("merge %s: %w", relative, err)
@@ -321,7 +348,7 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 		return nil
 	}
 	if _, err := root.Lstat("config.toml"); err == nil {
-		content, readErr := readSecureRegularFile(root, "config.toml", filepath.Join(configPath, "config.toml"))
+		content, readErr := readFile(root, "config.toml", filepath.Join(configPath, "config.toml"))
 		if readErr != nil {
 			return nil, diagnostics, readErr
 		}
@@ -355,7 +382,7 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 			if filepath.Ext(entry.Name()) != ".toml" {
 				continue
 			}
-			content, readErr := readSecureRegularFile(modules, entry.Name(), filepath.Join(modulesPath, entry.Name()))
+			content, readErr := readFile(modules, entry.Name(), filepath.Join(modulesPath, entry.Name()))
 			if readErr != nil {
 				return nil, diagnostics, readErr
 			}
@@ -381,7 +408,17 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 	sort.Strings(diagnostics.UnknownKeys)
 	sort.Strings(diagnostics.DeprecatedKeys)
 
-	resolveSaaSAlias(candidate, observed)
+	if err := profileInventory.validate(); err != nil {
+		return nil, diagnostics, err
+	}
+	if environment {
+		resolveSaaSAlias(candidate, observed)
+	} else {
+		resolveSaaSAliasFromTOML(candidate, observed)
+	}
+	if err := resolveOptionalModules(candidate); err != nil {
+		return nil, diagnostics, err
+	}
 	var typed runtimeConfig
 	if err := candidate.Unmarshal(&typed); err != nil {
 		return nil, diagnostics, fmt.Errorf("decode runtime configuration: %w", err)
@@ -412,6 +449,9 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 	// later environment lookup performed by Viper.
 	candidate.Set("operator_policy", typed.OperatorPolicy)
 	candidate.Set("network.whitelist_ips", typed.Network.WhitelistIPs)
+	if err := verifyConfigurationReadBarrier(root, configPath); err != nil {
+		return nil, diagnostics, err
+	}
 	return candidate, diagnostics, nil
 }
 
@@ -459,11 +499,21 @@ func resolveSaaSAlias(v *viper.Viper, observed map[string]struct{}) {
 	_, legacyFile := observed["integrations.saas.enabled"]
 	_, canonicalEnv := os.LookupEnv("SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS")
 	_, legacyEnv := os.LookupEnv("SYSWARDEN_INTEGRATIONS_SAAS_ENABLED")
-	if canonicalFile || canonicalEnv {
+	resolveSaaSAliasPresence(v, canonicalFile || canonicalEnv, legacyFile || legacyEnv)
+}
+
+func resolveSaaSAliasFromTOML(v *viper.Viper, observed map[string]struct{}) {
+	_, canonical := observed["network.saas.allow_monitors"]
+	_, legacy := observed["integrations.saas.enabled"]
+	resolveSaaSAliasPresence(v, canonical, legacy)
+}
+
+func resolveSaaSAliasPresence(v *viper.Viper, canonical, legacy bool) {
+	if canonical {
 		v.Set("integrations.saas.enabled", v.GetBool("network.saas.allow_monitors"))
 		return
 	}
-	if legacyFile || legacyEnv {
+	if legacy {
 		value := v.GetBool("integrations.saas.enabled")
 		v.Set("network.saas.allow_monitors", value)
 		v.Set("integrations.saas.enabled", value)
@@ -483,6 +533,9 @@ func parseDocument(content []byte, relative string) (map[string]any, error) {
 		if version < 0 || version > CurrentSchemaVersion {
 			return nil, fmt.Errorf("%s has unsupported schema_version %d", relative, version)
 		}
+	}
+	if err := validateOptionalModuleDocument(relative, document); err != nil {
+		return nil, err
 	}
 	if err := validateOperatorPolicyDocument(relative, document); err != nil {
 		return nil, err
@@ -572,6 +625,9 @@ func readSecureRegularFile(root *os.Root, name, display string) ([]byte, error) 
 }
 
 func validateRuntimeConfig(value *runtimeConfig) error {
+	if value != nil && value.Network.PolicyMode == "lists" && (value.Network.WireGuard.Enabled || value.Security.L2.EnableL2 || value.Security.L2.ARPProtect || value.Network.Geo.Enabled || value.Network.ASN.Enabled || len(value.Security.Honeyports) != 0 || len(value.OperatorPolicy.Rules) != 0) {
+		return fmt.Errorf("selected host firewall modules require explicit network.policy_mode = host")
+	}
 	if value.SchemaVersion < 0 || value.SchemaVersion > CurrentSchemaVersion {
 		return fmt.Errorf("unsupported schema_version %d", value.SchemaVersion)
 	}

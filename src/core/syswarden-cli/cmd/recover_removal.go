@@ -41,6 +41,11 @@ func newRecoverRemovalCommand() *cobra.Command {
 		Long:  "Inspect one bounded recovery inventory without changing the host. Review its metadata, exact digest and declared effects before applying. Legacy data archival requires stopped product services and explicit confirmation that the files have no other producer. Administrator configuration retention preserves reviewed files at their original paths. Cron and Fail2ban retirement stop managed product services, preserve unrelated protections and retain original files privately. This command does not infer ownership from a filename or create new ownership markers.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if apply {
+				if err := preflightWireGuardPolicyTransition(); err != nil {
+					return err
+				}
+			}
 			selection := ""
 			for _, candidate := range []struct {
 				selected bool

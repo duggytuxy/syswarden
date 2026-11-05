@@ -74,7 +74,7 @@ add rule inet syswarden_wg postrouting oifname "ens3" masquerade
 				t.Fatal(err)
 			}
 			identity, err := wireguardstate.ParseServerConfiguration(server)
-			if err != nil || !identity.SharedForward {
+			if err != nil || !identity.SharedForward || identity.PolicyVersion != 2 || identity.IPv4Subnet != "10.66.66.0/24" {
 				t.Fatal("migration did not retain shared forwarding", err)
 			}
 			client, err := wireguardstate.ReadVerifiedArtifact(host.filesystemRoot, manifest, wireguardstate.ClientConfigurationPath, host.expectedUID, host.expectedGID)

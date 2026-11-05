@@ -295,6 +295,17 @@ func testSysWardenOrderingPackageExecutor(
 	rpm bool,
 	version func(string) string,
 ) firewallManagerExecutor {
+	return testSysWardenOrderingPackageExecutorForVariant(t, path, dpkg, rpm, version, compatibilityNativePackageName)
+}
+
+func testSysWardenOrderingPackageExecutorForVariant(
+	t *testing.T,
+	path string,
+	dpkg bool,
+	rpm bool,
+	version func(string) string,
+	packageName string,
+) firewallManagerExecutor {
 	t.Helper()
 	binDirectory := t.TempDir()
 	executables := make(map[string]string)
@@ -321,13 +332,21 @@ func testSysWardenOrderingPackageExecutor(
 			return errors.New("unexpected package executable")
 		},
 		output: func(candidate string, arguments ...string) ([]byte, error) {
-			switch filepath.Base(candidate) {
+			manager := filepath.Base(candidate)
+			if name, matched := nativeRegistrationTestQuery(manager, arguments); matched {
+				state := ""
+				if name == packageName {
+					state = "installed"
+				}
+				return nativeRegistrationTestOutput(manager, name, state)
+			}
+			switch manager {
 			case "dpkg-query":
-				if reflect.DeepEqual(arguments, []string{"--listfiles", "syswarden"}) {
+				if reflect.DeepEqual(arguments, []string{"--listfiles", packageName}) {
 					return []byte("/.\n" + path + "\n"), nil
 				}
 				if reflect.DeepEqual(arguments, []string{
-					"--show", "--showformat=" + syswardenDropInDPKGVersionFormat, "syswarden",
+					"--show", "--showformat=" + syswardenDropInDPKGVersionFormat, packageName,
 				}) {
 					return []byte(version("dpkg") + "\tamd64\n"), nil
 				}
@@ -335,7 +354,7 @@ func testSysWardenOrderingPackageExecutor(
 				if reflect.DeepEqual(arguments, []string{
 					"--query", "--file", path, "--queryformat", syswardenDropInRPMOwnerFormat,
 				}) {
-					return []byte("syswarden\t" + version("rpm") + "\tx86_64\t8\n"), nil
+					return []byte(packageName + "\t" + version("rpm") + "\tx86_64\t8\n"), nil
 				}
 			}
 			return nil, errors.New("unexpected package query")
@@ -540,7 +559,24 @@ func testInstalledSysWardenPackageExecutor(
 			return errors.New("unexpected package executable")
 		},
 		output: func(candidate string, arguments ...string) ([]byte, error) {
-			switch filepath.Base(candidate) {
+			manager := filepath.Base(candidate)
+			if name, matched := nativeRegistrationTestQuery(manager, arguments); matched {
+				if name == baseNativePackageName {
+					return nativeRegistrationTestOutput(manager, name, "")
+				}
+				output, err := dpkgOutput, dpkgErr
+				if manager == "rpm" {
+					output, err = rpmOutput, rpmErr
+				}
+				if err != nil {
+					if string(output) == nativeProductPackageAbsentOutput(manager, name) {
+						return nativeRegistrationTestOutput(manager, name, "")
+					}
+					return output, err
+				}
+				return nativeRegistrationTestOutput(manager, name, "installed")
+			}
+			switch manager {
 			case "dpkg-query":
 				if !reflect.DeepEqual(arguments, []string{
 					"--show", "--showformat=" + syswardenDropInDPKGInstalledFormat, "syswarden",

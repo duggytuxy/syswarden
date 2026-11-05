@@ -67,8 +67,9 @@ fresh configuration-consumption evidence and independent access verification,
 with rollback and ownership preservation. Native migration and independent
 uninstall/remove/purge paths remain open under the v5.00.0 IVVQ contract.
 
-Issue422 requires standard-list-only fresh native packages, independent explicit
-TOML choices for SSH/CIS/OS hardening and optional modules, and preservation of
+Issue #422 requires fresh native packages to select no list and defer activation
+until explicit configuration through `syswarden config`, with independent explicit
+TOML choices for SSH/CIS/OS hardening and optional modules and preservation of
 administrator settings and existing protection during upgrades. This observer
 changes no defaults or installation calls. BunkerWeb remains independent,
 including source ownership, temporary-ban expiry and HA. Linux AMD64 only.

@@ -178,11 +178,30 @@ def bound_plumber_report_required(tag: str) -> bool:
 
 
 def package_names(version: str) -> list[str]:
-    return [
-        f"syswarden_{version}_amd64.deb",
-        f"syswarden-{version}-1.x86_64.rpm",
-        f"syswarden_{version}_x86_64.apk",
-    ]
+    """Return the unsigned build inventory in update-manifest identity order."""
+    identities = ["syswarden"]
+    if tag_components(f"v{version}")[0] >= 5:
+        identities.append("syswarden-base")
+    names: list[str] = []
+    for identity in identities:
+        names.extend(
+            [
+                f"{identity}_{version}_amd64.deb",
+                f"{identity}-{version}-1.x86_64.rpm",
+                f"{identity}_{version}_x86_64.apk",
+            ]
+        )
+    return names
+
+
+def _require_supported_publication(tag: str) -> None:
+    # A six-package build inventory is not publication authority. The current
+    # release evidence binds only one native package identity per format.
+    if tag_components(tag)[0] >= 5:
+        raise ReleaseGateError(
+            "v5 and later release publication requires identity-bound native "
+            "signature proofs; only unsigned package inventory validation is supported"
+        )
 
 
 def deb_signature_name(version: str) -> str:
@@ -1071,6 +1090,7 @@ def verify_signed_update_manifest(
 
 
 def prepare(args: argparse.Namespace) -> None:
+    _require_supported_publication(args.tag)
     repository = args.repository.resolve()
     version = parse_tag(args.tag)
     expected_plumber_commit = getattr(args, "expected_plumber_commit", None)
@@ -1191,6 +1211,7 @@ def prepare(args: argparse.Namespace) -> None:
 
 
 def expected_release_assets(tag: str) -> set[str]:
+    _require_supported_publication(tag)
     version = parse_tag(tag)
     assets = set(package_names(version)) | {
         PACKAGE_CHECKSUM_NAME,
@@ -1382,6 +1403,7 @@ def main() -> int:
             prepare(args)
             print(f"Release asset validation passed for {args.tag}")
         elif args.command == "verify":
+            _require_supported_publication(args.tag)
             repository = args.repository.resolve() if args.repository is not None else None
             verify_assets(
                 args.assets.resolve(),
@@ -1391,7 +1413,8 @@ def main() -> int:
             )
             print(f"Release asset inventory passed for {args.tag}")
         elif args.command == "verify-packages":
-            validate_packages(args.packages.resolve(), parse_tag(args.tag))
+            # Preserve a supplied root symlink for the inventory gate to reject.
+            validate_packages(args.packages.absolute(), parse_tag(args.tag))
             print(f"Package artifact validation passed for {args.tag}")
         elif args.command == "verify-bundle":
             validate_bundle(args.bundle.resolve())

@@ -57,6 +57,13 @@ func LegacyMigrationBackupPath(path string) string {
 func (snapshot LegacyMigrationSnapshot) OwnershipToken() string { return snapshot.journal.Token }
 func (snapshot LegacyMigrationSnapshot) Completed() bool        { return snapshot.Receipt != nil }
 
+// MatchesTargetServer compares a candidate to the already sealed target.
+// It never grants permission to replace a journal or its original evidence.
+func (snapshot LegacyMigrationSnapshot) MatchesTargetServer(server []byte) bool {
+	return (snapshot.Journal != nil || snapshot.Receipt != nil) &&
+		plannedArtifact(ServerConfigurationPath, server, 0, 0).SHA256 == snapshot.journal.ServerSHA256
+}
+
 func (snapshot LegacyMigrationSnapshot) OriginalArtifacts() []Artifact {
 	if snapshot.Journal == nil && snapshot.Receipt == nil {
 		return append([]Artifact(nil), snapshot.Live...)
@@ -100,6 +107,14 @@ func decodeLegacyMigration(content []byte, uid, gid uint32) (legacyMigrationJour
 // InspectLegacyMigration is read-only, including when a previous apply stopped
 // between publication phases. Backups remain permanently outside active paths.
 func InspectLegacyMigration(root string, uid, gid uint32) (LegacyMigrationSnapshot, error) {
+	if err := RefusePendingPolicyTransition(root); err != nil {
+		return LegacyMigrationSnapshot{}, err
+	}
+	if present, err := inventoryLogicalExists(root, PolicyTransitionReceiptPath); err != nil {
+		return LegacyMigrationSnapshot{}, err
+	} else if present {
+		return inspectPolicyLegacySuccessor(root, uid, gid)
+	}
 	snapshot := LegacyMigrationSnapshot{OriginalContents: make(map[string][]byte)}
 	journal, journalBytes, err := captureMigrationOptional(root, LegacyMigrationPath, uid, gid)
 	if err != nil {
@@ -428,6 +443,9 @@ func ContinueLegacyMigration(root string, expected LegacyMigrationSnapshot, serv
 }
 
 func preflightLegacyMigration(root string) error {
+	if err := RefusePendingPolicyTransition(root); err != nil {
+		return err
+	}
 	present, err := inventoryLogicalExists(root, LegacyMigrationPath)
 	if err != nil {
 		return err
@@ -436,4 +454,99 @@ func preflightLegacyMigration(root string) error {
 		return fmt.Errorf("historical WireGuard migration is pending; resume the exact reviewed migration before installation or removal")
 	}
 	return nil
+}
+
+// verifyPolicyPredecessor verifies immutable historical evidence without using
+// the current server as the predecessor's target. The intent separately binds
+// that exact v1 target to its retained original server and manifest.
+func verifyPolicyPredecessor(root string, intent policyTransitionIntent, uid, gid uint32) error {
+	paths := []string{LegacyMigrationReceiptPath, LegacyMigrationBackupPath(ServerConfigurationPath),
+		LegacyMigrationBackupPath(ClientConfigurationPath), LegacyMigrationBackupPath(ForwardingConfigurationPath), legacyMigrationOriginal}
+	if len(intent.Predecessor) == 0 {
+		for _, path := range append(paths, legacyMigrationStage) {
+			if present, err := inventoryLogicalExists(root, path); err != nil || present {
+				return errors.Join(fmt.Errorf("unbound historical migration evidence blocks policy transition"), err)
+			}
+		}
+		return nil
+	}
+	if len(intent.Predecessor) != len(paths) {
+		return fmt.Errorf("incomplete policy predecessor evidence")
+	}
+	var journal legacyMigrationJournal
+	for index, path := range paths {
+		actual, wire, err := captureLogical(root, path, uid, gid, maximumOwnedArtifactBytes)
+		if err != nil || !sameArtifact(actual, intent.Predecessor[index]) {
+			return errors.Join(fmt.Errorf("sealed policy predecessor changed"), err)
+		}
+		if index == 0 {
+			journal, err = decodeLegacyMigration(wire, uid, gid)
+			if err != nil || journal.Token != intent.Source.OwnershipToken || journal.ServerSHA256 != intent.Manifest.Artifacts[0].SHA256 ||
+				journal.Original[1].SHA256 != intent.Manifest.Artifacts[1].SHA256 {
+				return errors.Join(fmt.Errorf("policy predecessor does not bind the original owned generation"), err)
+			}
+		} else if index < 4 {
+			original := journal.Original[index-1]
+			original.Path, original.Device, original.Inode = path, 0, 0
+			if !artifactMatchesPlan(actual, original) {
+				return fmt.Errorf("policy predecessor backup differs from historical receipt")
+			}
+		} else {
+			// The intent sealed the actual original archive before mutation. Match
+			// its historical inode/bytes without rewriting the older device record.
+			original := policyArtifactAt(journal.Original[0], path)
+			bound := intent.Predecessor[index]
+			if !sameArtifact(bound, original) {
+				return fmt.Errorf("policy predecessor archive differs from historical receipt")
+			}
+		}
+	}
+	if present, err := inventoryLogicalExists(root, legacyMigrationStage); err != nil || present {
+		return errors.Join(fmt.Errorf("completed policy predecessor has a pending legacy stage"), err)
+	}
+	return nil
+}
+
+// A successor is an additional proof, never permission to edit an old receipt.
+// The original parser remains unchanged when no exact successor receipt exists.
+func inspectPolicyLegacySuccessor(root string, uid, gid uint32) (LegacyMigrationSnapshot, error) {
+	result := LegacyMigrationSnapshot{OriginalContents: make(map[string][]byte)}
+	transition, err := InspectPolicyTransition(root, uid, gid)
+	if err != nil || !transition.Complete || transition.State != "complete" || len(transition.intent.Predecessor) != 5 {
+		return result, errors.Join(fmt.Errorf("historical migration has no complete active policy successor"), err)
+	}
+	result.Receipt, _, err = captureMigrationOptional(root, LegacyMigrationReceiptPath, uid, gid)
+	if err != nil {
+		return result, err
+	}
+	_, receiptWire, err := captureLogical(root, LegacyMigrationReceiptPath, uid, gid, maximumOwnedArtifactBytes)
+	if err != nil {
+		return result, err
+	}
+	result.journal, err = decodeLegacyMigration(receiptWire, uid, gid)
+	if err != nil {
+		return result, err
+	}
+	for _, path := range canonicalArtifactPaths {
+		live, _, err := captureLogical(root, path, uid, gid, maximumOwnedArtifactBytes)
+		if err != nil {
+			return result, err
+		}
+		result.Live = append(result.Live, live)
+		backup, wire, err := captureLogical(root, LegacyMigrationBackupPath(path), uid, gid, maximumOwnedArtifactBytes)
+		if err != nil {
+			return result, err
+		}
+		result.Backups = append(result.Backups, backup)
+		result.OriginalContents[path] = wire
+	}
+	result.OriginalArchive, _, err = captureMigrationOptional(root, legacyMigrationOriginal, uid, gid)
+	if err != nil {
+		return result, err
+	}
+	result.Manifest, _, err = captureMigrationOptional(root, ManifestPath, uid, gid)
+	if err != nil {
+		return result, err
+	}
+	return result, nil
 }

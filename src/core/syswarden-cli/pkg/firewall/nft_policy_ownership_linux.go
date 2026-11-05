@@ -29,6 +29,7 @@ const (
 // Generation inputs are captured by the policy writer, before its transaction.
 // They are never inferred from an existing table or an unmarked source file.
 type nftPolicyGeneration struct {
+	PolicyMode         string                    `json:"policy_mode,omitempty"`
 	Base               nftV4028PersistenceInputs `json:"base"`
 	OperatorChain      string                    `json:"operator_chain"`
 	IPv6ControlPlane   string                    `json:"ipv6_control_plane,omitempty"`
@@ -53,6 +54,9 @@ func decodeNFTPolicyOwnership(content []byte) (nftPolicyOwnership, error) {
 		len(record.Generation.OperatorChain) == 0 || len(record.Generation.OperatorChain) > maximumCompiledOperatorPolicyBytes ||
 		record.Generation.IPv6ControlPlane != "" && record.Generation.IPv6ControlPlane != ipv6ControlPlaneVersion {
 		return record, fmt.Errorf("generated policy ownership has noncanonical or inconsistent fields")
+	}
+	if err := validateListPolicyGeneration(record.Generation.PolicyMode, record.Generation.Base); err != nil {
+		return record, err
 	}
 	if err := validateStrictAllowForwardGeneration(record.Generation.ForwardStrictAllow, record.Generation.Base); err != nil {
 		return record, err
@@ -116,7 +120,7 @@ func currentNFTInputsFromPreservedOwnership(source, ownership []byte, preservati
 	if err != nil || record.Generation.OperatorChain != operator.chain {
 		return empty, fmt.Errorf("operator policy requires separate preservation before product retirement")
 	}
-	input := nftCurrentPersistenceInputs{Base: record.Generation.Base, IPv6ControlPlane: record.Generation.IPv6ControlPlane, ForwardStrictAllow: record.Generation.ForwardStrictAllow}
+	input := nftCurrentPersistenceInputs{PolicyMode: record.Generation.PolicyMode, Base: record.Generation.Base, IPv6ControlPlane: record.Generation.IPv6ControlPlane, ForwardStrictAllow: record.Generation.ForwardStrictAllow}
 	if preservation != nil {
 		input.Operator = &nftPreservedOperatorInputs{Rules: rules, Proof: preservation.Proof}
 	}

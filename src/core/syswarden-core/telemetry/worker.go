@@ -587,7 +587,6 @@ func StartWorker(
 	wg *sync.WaitGroup,
 	fwManager FirewallManager,
 	logAllowed func(ip, service, payload string),
-	logBan ruleEvidenceLogger,
 	logShadowAlert ruleEvidenceLogger,
 	logDetected ruleEvidenceLogger,
 ) {
@@ -625,7 +624,7 @@ func StartWorker(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		monitorKernelDrops(ctx, fwManager, logBan, logShadowAlert, logDetected)
+		monitorKernelDrops(ctx, logShadowAlert, logDetected)
 	}()
 }
 
@@ -788,8 +787,8 @@ func kernelRuleEvidence(jail string, observedAt time.Time, eligible bool) (RuleE
 	return RuleEvidence{}, false
 }
 
-func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan, logShadowAlert, logDetected ruleEvidenceLogger) {
-	if logBan == nil {
+func monitorKernelDrops(ctx context.Context, logShadowAlert, logDetected ruleEvidenceLogger) {
+	if logShadowAlert == nil && logDetected == nil {
 		return
 	}
 
@@ -807,20 +806,23 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan, 
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
-		processKernelDropLine(scanner.Text(), time.Now().UTC(), strikes, fwManager, logBan, logShadowAlert, logDetected, utils.IsWhitelisted)
+		processKernelDropLine(scanner.Text(), time.Now().UTC(), strikes, logShadowAlert, logDetected, utils.IsWhitelisted)
 	}
 	_ = cmd.Wait()
 }
 
+// processKernelDropLine observes packet-log signals without enforcement authority.
+// Neither a trusted kernel record nor a syslog-shaped line authenticates the
+// packet source address. Thresholds classify observations only; runtime bans,
+// static persistence and external abuse reports belong to other boundaries.
 func processKernelDropLine(
 	line string,
 	observedAt time.Time,
 	strikes *kernelStrikeTracker,
-	fwManager FirewallManager,
-	logBan, logShadowAlert, logDetected ruleEvidenceLogger,
+	logShadowAlert, logDetected ruleEvidenceLogger,
 	isWhitelisted func(string) bool,
 ) {
-	if strikes == nil || logBan == nil || isWhitelisted == nil {
+	if strikes == nil || isWhitelisted == nil {
 		return
 	}
 	if strings.Contains(line, "[CATCH-ALL]") {
@@ -848,7 +850,7 @@ func processKernelDropLine(
 		}
 		// Port 62026 is owned by the catalogued syswarden-l4-protect rule
 		// flowing through the correlated UDS/direct engine. Keeping it out of
-		// the kernel producer prevents a second tracker, event and firewall ban.
+		// the kernel producer prevents a second tracker and event.
 		if extractField(line, "DPT=") == "62026" && extractField(line, "PROTO=") == "TCP" {
 			return
 		}
@@ -863,21 +865,12 @@ func processKernelDropLine(
 			}
 			return
 		}
-		if fwManager == nil {
-			log.Printf("[Telemetry Worker] Firewall unavailable; recording port-scan detection for %s", ip)
-			if logShadowAlert != nil {
-				logShadowAlert(ip, evidence.RuleID, line, evidence)
-			}
-			return
+		if logDetected != nil {
+			evidence.ObservationDisposition = "packet-source-unverified"
+			logDetected(ip, evidence.RuleID, line, evidence)
+		} else if logShadowAlert != nil {
+			logShadowAlert(ip, evidence.RuleID, line, evidence)
 		}
-		if err := fwManager.Ban(ip); err != nil {
-			log.Printf("[Telemetry Worker] Firewall rejected port-scan ban for %s: %v", ip, err)
-			if logShadowAlert != nil {
-				logShadowAlert(ip, evidence.RuleID, line, evidence)
-			}
-			return
-		}
-		logBan(ip, evidence.RuleID, line, evidence)
 		return
 	}
 	if strings.Contains(line, "[SYSWARDEN-HONEYPORT]") {
@@ -893,21 +886,12 @@ func processKernelDropLine(
 			}
 			return
 		}
-		if fwManager == nil {
-			log.Printf("[Telemetry Worker] Firewall unavailable; recording honeyport detection for %s", ip)
-			if logShadowAlert != nil {
-				logShadowAlert(ip, evidence.RuleID, line, evidence)
-			}
-			return
+		if logDetected != nil {
+			evidence.ObservationDisposition = "packet-source-unverified"
+			logDetected(ip, evidence.RuleID, line, evidence)
+		} else if logShadowAlert != nil {
+			logShadowAlert(ip, evidence.RuleID, line, evidence)
 		}
-		if err := fwManager.Ban(ip); err != nil {
-			log.Printf("[Telemetry Worker] Firewall rejected honeyport ban for %s: %v", ip, err)
-			if logShadowAlert != nil {
-				logShadowAlert(ip, evidence.RuleID, line, evidence)
-			}
-			return
-		}
-		logBan(ip, evidence.RuleID, line, evidence)
 		return
 	}
 	if strings.Contains(line, "[SYSWARDEN-ARP-FLOOD]") {
@@ -924,7 +908,7 @@ func processKernelDropLine(
 		evidence, _ := kernelRuleEvidence("L2-ARP-FLOOD", observedAt, net.ParseIP(ip) != nil)
 		evidence.ObservationDisposition = "kernel-packet-dropped"
 		// The kernel has already rate-limited/dropped this packet. No durable
-		// source ban is claimed unless a firewall mutation actually succeeds.
+		// source ban is available through this observation-only producer.
 		logDetected(ip, evidence.RuleID, line, evidence)
 	}
 }

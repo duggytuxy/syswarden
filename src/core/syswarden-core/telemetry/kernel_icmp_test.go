@@ -13,17 +13,16 @@ func TestKernelEchoRequestsDoNotCreateAlertsOrPortscanStrikes(t *testing.T) {
 	} {
 		t.Run(packet, func(t *testing.T) {
 			tracker := newKernelStrikeTracker()
-			firewall := &kernelTestFirewall{}
 			alerts := 0
 			alert := func(string, string, string, RuleEvidence) { alerts++ }
 			start := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
 			for probe := 0; probe < 20; probe++ {
 				processKernelDropLine("kernel: [SYSWARDEN-BLOCK] [CATCH-ALL] IN=eth0 OUT= "+packet,
-					start.Add(time.Duration(probe)*time.Second), tracker, firewall,
-					alert, alert, alert, func(string) bool { return false })
+					start.Add(time.Duration(probe)*time.Second), tracker,
+					alert, alert, func(string) bool { return false })
 			}
-			if alerts != 0 || len(firewall.bans) != 0 || len(tracker.observations) != 0 {
-				t.Fatalf("echo probes created alerts=%d bans=%v strikes=%v", alerts, firewall.bans, tracker.observations)
+			if alerts != 0 || len(tracker.observations) != 0 {
+				t.Fatalf("echo probes created alerts=%d strikes=%v", alerts, tracker.observations)
 			}
 		})
 	}
@@ -69,26 +68,25 @@ func TestKernelEchoProbesDoNotIncrementOrClearTransportStrikes(t *testing.T) {
 	for _, protocol := range []string{"TCP", "UDP"} {
 		t.Run(protocol, func(t *testing.T) {
 			tracker := newKernelStrikeTracker()
-			firewall := &kernelTestFirewall{}
 			var events []string
-			ban := func(_, jail, _ string, _ RuleEvidence) { events = append(events, "ban:"+jail) }
+			detected := func(_, jail, _ string, _ RuleEvidence) { events = append(events, "detected:"+jail) }
 			shadow := func(_, jail, _ string, _ RuleEvidence) { events = append(events, "shadow:"+jail) }
 			start := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
 			observe := func(packet string) {
 				processKernelDropLine("[CATCH-ALL] SRC=198.51.100.20 "+packet, start,
-					tracker, firewall, ban, shadow, nil, func(string) bool { return false })
+					tracker, shadow, detected, func(string) bool { return false })
 			}
 			observe("PROTO=" + protocol + " DPT=23")
 			observe("PROTO=" + protocol + " DPT=25")
 			for probe := 0; probe < 20; probe++ {
 				observe("PROTO=ICMP TYPE=8 CODE=0")
 			}
-			if len(events) != 2 || len(firewall.bans) != 0 {
-				t.Fatalf("echo probes changed transport sequence: %v / %v", events, firewall.bans)
+			if len(events) != 2 {
+				t.Fatalf("echo probes changed transport sequence: %v", events)
 			}
 			observe("PROTO=" + protocol + " DPT=445")
-			if strings.Join(events, ",") != "shadow:L3-PORTSCAN,shadow:L3-PORTSCAN,ban:L3-PORTSCAN" || len(firewall.bans) != 1 {
-				t.Fatalf("transport detection changed: %v / %v", events, firewall.bans)
+			if strings.Join(events, ",") != "shadow:L3-PORTSCAN,shadow:L3-PORTSCAN,detected:L3-PORTSCAN" {
+				t.Fatalf("transport detection changed: %v", events)
 			}
 		})
 	}
@@ -96,14 +94,13 @@ func TestKernelEchoProbesDoNotIncrementOrClearTransportStrikes(t *testing.T) {
 
 func TestKernelEchoExceptionDoesNotSuppressDedicatedAttackSignals(t *testing.T) {
 	tracker := newKernelStrikeTracker()
-	firewall := &kernelTestFirewall{}
 	var events []string
 	record := func(_, jail, _ string, _ RuleEvidence) { events = append(events, jail) }
 	for _, prefix := range []string{"[SYSWARDEN-HONEYPORT]", "[SYSWARDEN-ARP-FLOOD]"} {
 		processKernelDropLine(prefix+" SRC=198.51.100.20 PROTO=ICMP TYPE=8 CODE=0",
-			time.Now(), tracker, firewall, record, record, record, func(string) bool { return false })
+			time.Now(), tracker, record, record, func(string) bool { return false })
 	}
-	if strings.Join(events, ",") != "L3-HONEYPORT-SCAN,L2-ARP-FLOOD" || len(firewall.bans) != 1 {
-		t.Fatalf("dedicated attack signals changed: %v / %v", events, firewall.bans)
+	if strings.Join(events, ",") != "L3-HONEYPORT-SCAN,L2-ARP-FLOOD" {
+		t.Fatalf("dedicated attack signals changed: %v", events)
 	}
 }

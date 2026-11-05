@@ -56,6 +56,9 @@ func decodeSSHAccessEvidence(wire []byte, approval sshAccessEvidenceApproval, no
 		!record.RecoveryRequired || record.AssessedAt <= 0 || record.AssessedAt > now.Unix() || record.Controller != digestBytes(approval.Controller) {
 		return failure(err)
 	}
+	if record.Issuance != "" && !lowerDigest.MatchString(record.Issuance) {
+		return failure(nil)
+	}
 	for _, digest := range []string{record.Transaction, record.Plan, record.Parser, record.Intent, record.Target, record.Records} {
 		if !lowerDigest.MatchString(digest) {
 			return failure(nil)
@@ -134,7 +137,8 @@ func observeSSHActivationAccessEvidence(ctx context.Context, journal *sshJournal
 	guard := func() error {
 		authorityErr := authorize()
 		now := clock()
-		if now.Before(last) {
+		// Expiry uses wall time; a monotonic reading must not mask its rollback.
+		if now.Before(last) || now.Round(0).Before(last.Round(0)) {
 			return ErrInventoryChanged
 		}
 		last = now
@@ -151,8 +155,16 @@ func observeSSHActivationAccessEvidence(ctx context.Context, journal *sshJournal
 	if err != nil {
 		return result, err
 	}
-	_, err = withSSHActivationEvidenceAssessment(ctx, journal, approved, parser, run,
-		func() error { return errors.Join(guard(), parserCheck(), ctx.Err()) }, observe, &image,
+	var issuance *sshFileImage
+	if record.Issuance != "" {
+		issued, err := readSSHPrivateChild(journal.directory, sshAccessIssuanceName, journal.uid, maxSSHAccessIssuanceBytes)
+		if err != nil || sshImageDigest(issued) != record.Issuance {
+			return result, errors.Join(ErrInventoryChanged, err)
+		}
+		issuance = &issued // Historical binding only, never current issuance authority.
+	}
+	_, err = withSSHActivationAccessAssessment(ctx, journal, approved, parser, run,
+		func() error { return errors.Join(guard(), parserCheck(), ctx.Err()) }, observe, &image, issuance,
 		func(_ context.Context, a *sshActivationAssessment, summary ActivationAssessment, recheck func() error) error {
 			history, err := sshActivationDigest(a.owned.records)
 			if err != nil || record.Records != history || record.Transaction != a.owned.prepared.Transaction ||

@@ -816,6 +816,54 @@ class DocumentationGateTest(unittest.TestCase):
         )
         self.assertTrue(any("naming/architecture mismatch" in error for error in errors))
 
+    def test_package_contract_uses_its_documented_version_instead_of_future_inventory(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        with mock.patch(
+            "documentation_gate.release_gate.package_names",
+            wraps=release_gate.package_names,
+        ) as inventory:
+            errors = documentation_gate.validate_package_source_contract(
+                REPO_ROOT, contract["package_platform_contract"],
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+            )
+        self.assertEqual(errors, [])
+        inventory.assert_called_once_with(
+            OPERATIONAL_WIKI_BASELINE_VERSION.removeprefix("v")
+        )
+        errors = documentation_gate.validate_package_source_contract(
+            REPO_ROOT, contract["package_platform_contract"], "v5.00.0"
+        )
+        self.assertTrue(any("documentation/release package inventory mismatch" in error for error in errors))
+
+    def test_variant_workflow_templates_preserve_the_historical_public_matrix(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        templates = [
+            "${PACKAGE_NAME}_${VERSION}_amd64.deb",
+            "${PACKAGE_NAME}-${VERSION}-1.x86_64.rpm",
+            "${PACKAGE_NAME}_${VERSION}_x86_64.apk",
+            "syswarden-${VERSION}-1.rhelpo.x86_64.rpm",
+        ]
+        for mutation in (None, "missing", "foreign-version", "foreign-name", "extra-rpm"):
+            with self.subTest(mutation=mutation):
+                changed = list(templates)
+                if mutation == "missing":
+                    changed.pop(0)
+                elif mutation == "foreign-version":
+                    changed[0] = changed[0].replace("${VERSION}", "5.00.1")
+                elif mutation == "foreign-name":
+                    changed[0] = changed[0].replace("${PACKAGE_NAME}", "syswarden-custom")
+                elif mutation == "extra-rpm":
+                    changed.append("${PACKAGE_NAME}-${VERSION}-2.x86_64.rpm")
+                with mock.patch("documentation_gate.read_text", return_value="\n".join(changed)):
+                    errors = documentation_gate.validate_package_source_contract(
+                        REPO_ROOT, contract["package_platform_contract"],
+                        OPERATIONAL_WIKI_BASELINE_VERSION,
+                    )
+                if mutation is None:
+                    self.assertEqual(errors, [])
+                else:
+                    self.assertTrue(any("workflow" in error for error in errors), errors)
+
     def test_native_tui_and_retired_current_surface_gate(self) -> None:
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         report = REPORT.read_text(encoding="utf-8")

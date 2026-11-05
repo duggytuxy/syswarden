@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -26,23 +25,29 @@ func TestStandaloneUninstallRejectsNativePackageRegistration(t *testing.T) {
 		{"apk", "", "apk del"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.manager+strings.TrimSpace(tc.output), func(t *testing.T) {
-			calls := 0
-			executor := testFirewallRemovalPackageExecutor(t, []string{tc.manager}, func(path string, args ...string) ([]byte, error) {
-				calls++
-				if filepath.Base(path) != tc.manager {
-					t.Fatal("unexpected manager")
+		for _, packageName := range nativeProductPackageNames {
+			t.Run(tc.manager+packageName+strings.TrimSpace(tc.output), func(t *testing.T) {
+				calls := 0
+				executor := testFirewallRemovalPackageExecutor(t, []string{tc.manager}, func(path string, args ...string) ([]byte, error) {
+					calls++
+					if filepath.Base(path) != tc.manager {
+						t.Fatal("unexpected manager")
+					}
+					name, matched := nativeRegistrationTestQuery(tc.manager, args)
+					if !matched {
+						t.Fatal("query not limited to the two native identities")
+					}
+					if name != packageName {
+						return nativeRegistrationTestOutput(tc.manager, name, "")
+					}
+					return []byte(strings.ReplaceAll(tc.output, "syswarden", packageName)), nil
+				})
+				err := preflightStandaloneUninstallWith(executor, func(string) (bool, error) { return false, nil })
+				if err == nil || !strings.Contains(err.Error(), tc.guidance+" "+packageName) || calls != 2 {
+					t.Fatalf("registration not protected: %v calls=%d", err, calls)
 				}
-				if !reflect.DeepEqual(args[len(args)-1:], []string{"syswarden"}) {
-					t.Fatal("query not limited to SysWarden")
-				}
-				return []byte(tc.output), nil
 			})
-			err := preflightStandaloneUninstallWith(executor, func(string) (bool, error) { return false, nil })
-			if err == nil || !strings.Contains(err.Error(), tc.guidance) || calls != 1 {
-				t.Fatalf("registration not protected: %v calls=%d", err, calls)
-			}
-		})
+		}
 	}
 }
 
@@ -56,7 +61,13 @@ func TestStandaloneUninstallAllowsOnlyProvenAbsentPackages(t *testing.T) {
 		{"rpm", "package syswarden is not installed\n", packageAuthorityTestExit(1)},
 		{"apk", "", packageAuthorityTestExit(1)},
 	} {
-		executor := testFirewallRemovalPackageExecutor(t, []string{tc.manager}, func(string, ...string) ([]byte, error) { return []byte(tc.output), tc.err })
+		executor := testFirewallRemovalPackageExecutor(t, []string{tc.manager}, func(_ string, args ...string) ([]byte, error) {
+			name, matched := nativeRegistrationTestQuery(tc.manager, args)
+			if !matched {
+				t.Fatal("unexpected native registration query")
+			}
+			return []byte(strings.ReplaceAll(tc.output, "syswarden", name)), tc.err
+		})
 		if err := preflightStandaloneUninstallWith(executor, func(string) (bool, error) { return false, nil }); err != nil {
 			t.Fatalf("%s absence rejected: %v", tc.manager, err)
 		}
@@ -94,10 +105,16 @@ func TestStandaloneUninstallRejectsAmbiguousOrUnavailableAuthority(t *testing.T)
 
 func TestStandaloneUninstallRejectsConflictingNativeManagers(t *testing.T) {
 	executor := testFirewallRemovalPackageExecutor(t, []string{"rpm", "apk"}, func(path string, args ...string) ([]byte, error) {
-		if filepath.Base(path) == "rpm" {
-			return []byte("syswarden\n"), nil
+		manager := filepath.Base(path)
+		name, matched := nativeRegistrationTestQuery(manager, args)
+		if !matched {
+			t.Fatal("unexpected native registration query")
 		}
-		return nil, nil
+		state := "installed"
+		if name == baseNativePackageName {
+			state = ""
+		}
+		return nativeRegistrationTestOutput(manager, name, state)
 	})
 	if err := preflightStandaloneUninstallWith(executor, func(string) (bool, error) { return false, nil }); err == nil || !strings.Contains(err.Error(), "multiple") {
 		t.Fatalf("conflicting claims: %v", err)
@@ -125,18 +142,20 @@ func TestUninstallAllowsOnlyExactlyAttestedSingleRPMProfile(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			called := false
-			executor := testFirewallRemovalPackageExecutor(t, test.managers, func(path string, _ ...string) ([]byte, error) {
+			executor := testFirewallRemovalPackageExecutor(t, test.managers, func(path string, args ...string) ([]byte, error) {
 				if test.queryErr != nil {
 					return nil, test.queryErr
 				}
-				switch filepath.Base(path) {
-				case "rpm":
-					return []byte("syswarden\n"), nil
-				case "dpkg-query":
-					return []byte("syswarden\tinstalled\n"), nil
-				default:
-					return nil, nil
+				manager := filepath.Base(path)
+				name, matched := nativeRegistrationTestQuery(manager, args)
+				if !matched {
+					t.Fatal("unexpected native registration query")
 				}
+				state := "installed"
+				if name == baseNativePackageName {
+					state = ""
+				}
+				return nativeRegistrationTestOutput(manager, name, state)
 			})
 			err := preflightUninstallWithProfile(executor, func(string) (bool, error) { return false, nil }, func() (bool, error) { called = true; return test.present, test.profileErr })
 			if called != test.wantCall || (err != nil) != test.wantError {

@@ -16,7 +16,10 @@ import (
 func TestInstalledRPMIdentityCommandUsesFixedBoundedContract(t *testing.T) {
 	t.Parallel()
 
-	command := installedRPMIdentityCommand(t.Context())
+	command, err := installedRPMIdentityCommand(t.Context(), compatibilityNativePackageName)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if command.Path != installedRPMExecutablePath {
 		t.Fatalf("RPM query executable = %q, want %q", command.Path, installedRPMExecutablePath)
 	}
@@ -173,13 +176,16 @@ func TestRHELPackageOwnedRPMIsRefusedBeforeReleaseAssetDownload(t *testing.T) {
 		return nil
 	})
 	u.currentVersion = "v4.10.4"
+	u.preflightNativeIdentity = func(context.Context) (nativeUpdateIdentity, error) {
+		return testCompatibilityUpdateIdentity("rpm"), nil
+	}
 	u.lookPath = func(name string) (string, error) {
 		if name == "dnf" {
 			return "/usr/bin/dnf", nil
 		}
 		return "", os.ErrNotExist
 	}
-	u.attestRPM = func(ctx context.Context, currentVersion string) error {
+	u.attestRPM = func(ctx context.Context, currentVersion, packageName string) error {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("RPM release attestation has no deadline")
 		}
@@ -239,6 +245,9 @@ func TestStandardRPMReleaseIsReattestedImmediatelyBeforeInstallation(t *testing.
 			return nil
 		},
 	)
+	u.preflightNativeIdentity = func(context.Context) (nativeUpdateIdentity, error) {
+		return testCompatibilityUpdateIdentity("rpm"), nil
+	}
 	u.lookPath = func(name string) (string, error) {
 		switch name {
 		case "dnf":
@@ -249,7 +258,7 @@ func TestStandardRPMReleaseIsReattestedImmediatelyBeforeInstallation(t *testing.
 			return "", os.ErrNotExist
 		}
 	}
-	u.attestRPM = func(ctx context.Context, currentVersion string) error {
+	u.attestRPM = func(ctx context.Context, currentVersion, packageName string) error {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("RPM release attestation has no deadline")
 		}
@@ -282,7 +291,7 @@ func TestNonRPMUpdaterDoesNotInvokeRPMReleaseAttestation(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int32
-	u := &updater{attestRPM: func(context.Context, string) error {
+	u := &updater{attestRPM: func(context.Context, string, string) error {
 		calls.Add(1)
 		return errors.New("must not run")
 	}}
@@ -300,5 +309,62 @@ func TestNonRPMUpdaterDoesNotInvokeRPMReleaseAttestation(t *testing.T) {
 		"test",
 	); err == nil || !strings.Contains(err.Error(), "attestation is unavailable") {
 		t.Fatalf("missing RPM release attestor error = %v", err)
+	}
+}
+
+func TestSelectedRPMChannelBindsOwnerAndCancellation(t *testing.T) {
+	for _, name := range []string{compatibilityNativePackageName, baseNativePackageName} {
+		t.Run(name, func(t *testing.T) {
+			command, err := installedRPMIdentityCommand(t.Context(), name)
+			if err != nil || command.Args[len(command.Args)-1] != name {
+				t.Fatalf("query=%v: %v", command, err)
+			}
+			wire := []byte(name + "\t0\t5.00.0\t1\tx86_64\n")
+			if err := validateInstalledStandardRPMReleaseForName(wire, "v5.00.0", name); err != nil {
+				t.Fatal(err)
+			}
+			for _, other := range []string{"foreign", compatibilityNativePackageName, baseNativePackageName} {
+				if other == name {
+					continue
+				}
+				if err := validateInstalledStandardRPMReleaseForName(wire, "v5.00.0", other); err == nil {
+					t.Fatal("foreign selected owner accepted")
+				}
+			}
+			for _, outcome := range []string{"success", "cancel-before", "cancel-during"} {
+				ctx, cancel := context.WithCancel(t.Context())
+				calls := 0
+				if outcome == "cancel-before" {
+					cancel()
+				}
+				u := &updater{currentVersion: "v5.00.0", attestRPM: func(attestCtx context.Context, version, selected string) error {
+					calls++
+					if _, ok := attestCtx.Deadline(); !ok || version != "v5.00.0" || selected != name {
+						t.Fatal("selected channel contract changed")
+					}
+					if outcome == "cancel-during" {
+						cancel()
+					}
+					return nil
+				}}
+				err := u.attestStandardRPMChannel(ctx, packageTarget{format: packageFormatRPM, packageName: name}, "test")
+				cancel()
+				if outcome == "success" {
+					if err != nil || calls != 1 {
+						t.Fatalf("channel: %v, calls=%d", err, calls)
+					}
+				} else if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled evidence accepted: %v", err)
+				}
+				if outcome == "cancel-before" && calls != 0 {
+					t.Fatal("cancelled query ran")
+				}
+			}
+		})
+	}
+	for _, name := range []string{"", "foreign", "syswarden --query"} {
+		if cmd, err := installedRPMIdentityCommand(t.Context(), name); err == nil || cmd != nil {
+			t.Fatal("invalid owner constructed query")
+		}
 	}
 }

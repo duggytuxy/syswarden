@@ -223,7 +223,7 @@ func TestSSHAccessRequestStrictCanonicalApproval(t *testing.T) {
 	}
 }
 
-func protectedAccessFixture(t *testing.T) (*inventoryFixture, migrationPlan, sshTransactionDependencies, *sshJournal, *sshProbeFixture, *sshProbeFixture, []sshAccessRoutePins, []sshAccessCredentials, sshParserRun, sshEndpointObserver) {
+func protectedAccessFixture(t *testing.T, beforePlan ...func(*inventoryFixture)) (*inventoryFixture, migrationPlan, sshTransactionDependencies, *sshJournal, *sshProbeFixture, *sshProbeFixture, []sshAccessRoutePins, []sshAccessCredentials, sshParserRun, sshEndpointObserver) {
 	t.Helper()
 	target := newSSHProbeFixture(t, "success")
 	jump := newSSHProbeFixture(t, "bastion", target.peer.Address)
@@ -234,6 +234,9 @@ func protectedAccessFixture(t *testing.T) (*inventoryFixture, migrationPlan, ssh
 	via.ID, via.Route = "via-bastion", "proxyjump"
 	plan.intent.Contexts = []accessContext{direct, via}
 	f.intent(plan.intent)
+	for _, setup := range beforePlan {
+		setup(f)
+	}
 	plan = f.plan()
 	result, err := executeSSHTransaction(t.Context(), f.root, os.Geteuid(), plan.summary.PlanSHA256, deps)
 	if err != nil || !result.Published {

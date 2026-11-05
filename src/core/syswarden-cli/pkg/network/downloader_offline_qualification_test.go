@@ -11,6 +11,10 @@ import (
 	"testing"
 )
 
+func retiredOSINTFixtureSources() []string {
+	return []string{"https://cinsscore.com/list/ci-badguys.txt", "https://lists.blocklist.de/lists/all.txt"}
+}
+
 func offlineQualificationSources(rawURLs []string) (string, string) {
 	type sourcePair struct {
 		origin   string
@@ -45,7 +49,7 @@ func offlineQualificationStatus(path string, content []byte) offlineQualificatio
 			State:         "current",
 		},
 	}
-	sources := osintThreatIntelSources()
+	sources := retiredOSINTFixtureSources()
 	quality := feedEvidenceIntersection
 	if strings.HasSuffix(path, ".ipv4") {
 		mirrors := system.ThreatIntelMirrors("1")
@@ -242,7 +246,7 @@ func TestUnselectedThreatIntelTargetsCoverSelectionTransitions(t *testing.T) {
 		{name: "custom v4 only", choice: "3", ipv4URL: "https://feeds.example/v4", want: []string{"syswarden_threatintel.ipv6"}},
 		{name: "custom v6 only", choice: "3", ipv6URL: "https://feeds.example/v6", want: []string{"syswarden_threatintel.ipv4"}},
 		{name: "custom dual stack", choice: "3", ipv4URL: "https://feeds.example/v4", ipv6URL: "https://feeds.example/v6"},
-		{name: "managed", choice: "1"},
+		{name: "managed", choice: "1", want: []string{"syswarden_threatintel.ipv6"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -341,7 +345,7 @@ func TestOfflineQualificationCustomFeedAcceptsRawAuthorityHashSeparateFromCanoni
 	}
 }
 
-func TestManagedSelectionRetiresCustomIPv6BeforeZeroOrFreshOSINTPublication(t *testing.T) {
+func TestManagedSelectionRetiresCustomIPv6AndRejectsRetiredSupplement(t *testing.T) {
 	customURL := "https://feeds.example.test/custom.ipv6"
 	customContent := []byte("2606:4700:4700::1111/128\n")
 	customDigest := sha256.Sum256(customContent)
@@ -385,7 +389,7 @@ func TestManagedSelectionRetiresCustomIPv6BeforeZeroOrFreshOSINTPublication(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Join(retired, ",") != "syswarden_threatintel.ipv6" {
+			if len(retired) != 0 {
 				t.Fatalf("retired feeds = %#v", retired)
 			}
 			if _, exists := active["syswarden_threatintel.ipv6"]; exists {
@@ -396,8 +400,8 @@ func TestManagedSelectionRetiresCustomIPv6BeforeZeroOrFreshOSINTPublication(t *t
 			}
 			if test.publishFresh {
 				fresh := offlineQualificationStatus("syswarden_threatintel.ipv6", customContent)
-				if err := validateManagedThreatIntelEvidence(fresh, "1", 6); err != nil {
-					t.Fatalf("fresh OSINT IPv6 evidence rejected: %v", err)
+				if err := validateManagedThreatIntelEvidence(fresh, "1", 6); err == nil {
+					t.Fatal("retired OSINT IPv6 evidence accepted")
 				}
 			}
 		})
@@ -450,7 +454,7 @@ func TestManagedSelectionRetiresCustomOrWrongDataShieldIPv4(t *testing.T) {
 	}
 }
 
-func TestManagedSelectionKeepsTwoCompatibleFeedsWithoutRemoval(t *testing.T) {
+func TestManagedSelectionKeepsDataShieldAndRetiresSupplement(t *testing.T) {
 	ipv4Content := []byte("1.1.1.1/32\n")
 	ipv6Content := []byte("2606:4700:4700::1111/128\n")
 	reader := func(path string) ([]byte, offlineQualificationFeedEvidence, error) {
@@ -471,7 +475,7 @@ func TestManagedSelectionKeepsTwoCompatibleFeedsWithoutRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(retired) != 0 || removeCalls != 0 {
+	if len(retired) != 0 || removeCalls != 1 {
 		t.Fatalf("compatible feeds retired=%#v removeCalls=%d", retired, removeCalls)
 	}
 }
@@ -506,7 +510,7 @@ func TestManagedIPv4RequiresSelectedDataShieldContribution(t *testing.T) {
 		evidence.sourceIdentity = identities
 		return evidence
 	}
-	osint := osintThreatIntelSources()
+	osint := retiredOSINTFixtureSources()
 	standardMirrors := system.ThreatIntelMirrors("1")
 	if len(standardMirrors) < 2 {
 		t.Fatal("standard Data-Shield source inventory is incomplete")
@@ -539,8 +543,9 @@ func TestManagedIPv4RequiresSelectedDataShieldContribution(t *testing.T) {
 			selection: "1", evidence: makeEvidence(feedEvidenceOriginQuorum, standardMirrors[:2]),
 		},
 		{
-			name:      "standard Data-Shield and OSINT union",
-			selection: "1",
+			name:       "standard Data-Shield and OSINT union",
+			wantReject: true,
+			selection:  "1",
 			evidence: makeEvidence(
 				feedEvidenceAuthenticatedUnion,
 				append(append([]string(nil), standardMirrors[:2]...), osint...),

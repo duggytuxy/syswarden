@@ -79,7 +79,11 @@ func observeSSHOwnedRecordSet(journal *sshJournal, activation bool) (map[string]
 // Only the evidence writer and explicit read-only observer accept the extra
 // record. Ordinary appraisal, activation and recovery keep their closed sets.
 func observeSSHRecordMembership(journal *sshJournal, activation, evidence bool) (map[string]string, error) {
-	if evidence && !activation {
+	return observeSSHIssuedRecordMembership(journal, activation, evidence, false)
+}
+
+func observeSSHIssuedRecordMembership(journal *sshJournal, activation, evidence, issuance bool) (map[string]string, error) {
+	if (evidence || issuance) && !activation {
 		return nil, ErrInventoryUnsafe
 	}
 	if err := journal.recheck(); err != nil {
@@ -90,6 +94,9 @@ func observeSSHRecordMembership(journal *sshJournal, activation, evidence bool) 
 		count++
 	}
 	if evidence {
+		count++
+	}
+	if issuance {
 		count++
 	}
 	names, err := sshDirectoryNames(journal.directory, count)
@@ -106,6 +113,9 @@ func observeSSHRecordMembership(journal *sshJournal, activation, evidence bool) 
 	}
 	if evidence {
 		expected[sshAccessEvidenceName] = true
+	}
+	if issuance {
+		expected[sshAccessIssuanceName] = true
 	}
 	records := make(map[string]string, count)
 	for _, name := range names {

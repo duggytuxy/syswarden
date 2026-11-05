@@ -25,8 +25,22 @@ type wireGuardSharedForwardState struct {
 
 // Only rules carrying this manifest's exact token and expression are owned.
 // The containing chain and every other rule remain operator-managed.
-func parseWireGuardSharedForward(wire []byte, token string) (wireGuardSharedForwardState, []byte, error) {
+func parseWireGuardSharedForward(wire []byte, token string, expected ...wireguardstate.ServerConfigurationIdentity) (wireGuardSharedForwardState, []byte, error) {
 	state := wireGuardSharedForwardState{Rules: []LegacyWireGuardForwardRuleEvidence{}}
+	identity := wireguardstate.ServerConfigurationIdentity{OwnershipToken: token}
+	if len(expected) > 1 {
+		return state, nil, fmt.Errorf("ambiguous shared forwarding policy identity")
+	}
+	if len(expected) == 1 {
+		identity = expected[0]
+		if identity.OwnershipToken != token || validateWireGuardPolicyIdentity(identity) != nil {
+			return state, nil, fmt.Errorf("shared forwarding policy identity does not match")
+		}
+	}
+	comment := wireGuardSharedForwardCommentPrefix + token
+	if identity.PolicyVersion == 2 {
+		comment = "syswarden-wg-forward-v2:" + token
+	}
 	var envelope struct {
 		NFTables []map[string]json.RawMessage `json:"nftables"`
 	}
@@ -85,7 +99,10 @@ func parseWireGuardSharedForward(wire []byte, token string) (wireGuardSharedForw
 					return state, nil, fmt.Errorf("shared forwarding rule identity is ambiguous")
 				}
 				seen[rule.Handle] = true
-				if rule.Comment != wireGuardSharedForwardCommentPrefix+token {
+				if rule.Comment != comment {
+					if token != "" && strings.HasPrefix(rule.Comment, "syswarden-wg-forward-") && strings.HasSuffix(rule.Comment, ":"+token) {
+						return state, nil, fmt.Errorf("shared forwarding token has a different policy version")
+					}
 					continue
 				}
 				if !wireGuardOwnershipTokenName.MatchString(token) || decodeStrictWireGuardNFTObject(raw, &rule, "owned shared forward rule") != nil {
@@ -93,6 +110,16 @@ func parseWireGuardSharedForward(wire []byte, token string) (wireGuardSharedForw
 				}
 				signature, err := wireGuardNFTExpressionSignature(rule.Expr)
 				direction := strings.TrimSuffix(signature, "=wg-syswarden:accept")
+				if identity.PolicyVersion == 2 {
+					signature, err = wireGuardScopedNFTExpressionSignature(rule.Expr)
+					direction = ""
+					permits := wireGuardScopedForwardOrder(identity)
+					if signature == permits[0] {
+						direction = "iifname"
+					} else if signature == permits[1] {
+						direction = "oifname"
+					}
+				}
 				if err != nil || (direction != "iifname" && direction != "oifname") || directions[direction] {
 					return state, nil, fmt.Errorf("owned shared forwarding expression is changed or duplicated")
 				}
@@ -116,7 +143,7 @@ func parseWireGuardSharedForward(wire []byte, token string) (wireGuardSharedForw
 	return state, filtered, err
 }
 
-func inspectWireGuardSharedForward(ctx context.Context, runner wireGuardNFTCommandRunner, token string) (wireGuardSharedForwardState, error) {
+func inspectWireGuardSharedForward(ctx context.Context, runner wireGuardNFTCommandRunner, token string, identity ...wireguardstate.ServerConfigurationIdentity) (wireGuardSharedForwardState, error) {
 	empty := wireGuardSharedForwardState{Rules: []LegacyWireGuardForwardRuleEvidence{}}
 	wire, err := runner.Run(ctx, "-a", "-j", "list", "chains")
 	if err != nil {
@@ -130,7 +157,7 @@ func inspectWireGuardSharedForward(ctx context.Context, runner wireGuardNFTComma
 	if err != nil {
 		return empty, err
 	}
-	state, _, err := parseWireGuardSharedForward(wire, token)
+	state, _, err := parseWireGuardSharedForward(wire, token, identity...)
 	if err != nil || state.ChainHandle != handle {
 		return empty, errors.Join(fmt.Errorf("shared forwarding chain changed during inspection"), err)
 	}
@@ -141,7 +168,7 @@ func attestWireGuardSharedForward(ctx context.Context, runner wireGuardNFTComman
 	if !identity.SharedForward {
 		return nil
 	}
-	state, err := inspectWireGuardSharedForward(ctx, runner, identity.OwnershipToken)
+	state, err := inspectWireGuardSharedForward(ctx, runner, identity.OwnershipToken, identity)
 	if err != nil {
 		return err
 	}
@@ -181,7 +208,7 @@ func inspectWireGuardSharedCleanup(ctx context.Context, runner wireGuardNFTComma
 		}
 		state.TableHandle, state.TableSHA256 = handle, retirementDigest(wire)
 	}
-	state.Forward, err = inspectWireGuardSharedForward(ctx, runner, identity.OwnershipToken)
+	state.Forward, err = inspectWireGuardSharedForward(ctx, runner, identity.OwnershipToken, identity)
 	return state, err
 }
 

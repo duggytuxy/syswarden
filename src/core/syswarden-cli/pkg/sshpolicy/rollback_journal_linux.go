@@ -121,13 +121,19 @@ func inspectSSHRollback(journal *sshJournal) (sshPublicationPosition, error) {
 }
 
 func matchSSHRollback(journal *sshJournal, prepared sshPreparation, start sshRollbackStart, current sshStoredInventory) (sshPublicationPosition, sshStoredInventory, error) {
+	return matchSSHRecordedRollback(journal, prepared, start, current, sshRollbackName)
+}
+
+// History matching alone cannot authorize mutation. Each caller retains its
+// own exact membership, approval and live runtime or no-activation fence.
+func matchSSHRecordedRollback(journal *sshJournal, prepared sshPreparation, start sshRollbackStart, current sshStoredInventory, phaseName func(int, bool) string) (sshPublicationPosition, sshStoredInventory, error) {
 	previous := start.Before
 	position := sshPublicationPosition{0, "complete"}
 	gap := false
 	var pending *sshPublicationRecord
 	for step := 1; step <= 2; step++ {
-		intent, intentErr := journal.readSSHPhase(sshRollbackName(step, false), step, false, prepared, start.Prepared)
-		complete, completeErr := journal.readSSHPhase(sshRollbackName(step, true), step, true, prepared, start.Prepared)
+		intent, intentErr := journal.readSSHPhase(phaseName(step, false), step, false, prepared, start.Prepared)
+		complete, completeErr := journal.readSSHPhase(phaseName(step, true), step, true, prepared, start.Prepared)
 		if errors.Is(intentErr, unix.ENOENT) {
 			if !errors.Is(completeErr, unix.ENOENT) {
 				return position, previous, ErrInventoryChanged

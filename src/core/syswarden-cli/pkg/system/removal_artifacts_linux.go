@@ -350,6 +350,9 @@ func preflightDedicatedProductLogTree() error {
 }
 
 func preflightHostProductRemovalArtifacts() error {
+	if err := PreflightAPKLauncherRemoval(); err != nil {
+		return err
+	}
 	for _, path := range []string{"/opt/syswarden", "/etc/syswarden"} {
 		if err := preflightDedicatedRemovalTree(path); err != nil {
 			return fmt.Errorf("preflight dedicated product root %s: %w", path, err)
@@ -357,6 +360,9 @@ func preflightHostProductRemovalArtifacts() error {
 	}
 	if err := preflightDedicatedProductLogTree(); err != nil {
 		return fmt.Errorf("preflight shared product log root: %w", err)
+	}
+	if applicable, err := apkLauncherLifecycleAppliesAt("/"); err != nil || applicable {
+		return err
 	}
 	for _, link := range []struct {
 		path   string

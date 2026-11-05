@@ -11,6 +11,9 @@ import (
 //go:embed historical_defaults_v4028.json
 var historicalDefaultModelsV4028 []byte
 
+//go:embed historical_defaults_v4104.json
+var historicalDefaultModelsV4104 []byte
+
 // CheckModularRetirementState preserves the recoverable source and destination
 // of an interrupted configuration migration before any default is retired.
 func CheckModularRetirementState(outputDir string) error {
@@ -21,10 +24,20 @@ func CheckModularRetirementState(outputDir string) error {
 // It does not load operator data, inspect the filesystem or authorize removal
 // of a modified or migrated configuration.
 func DefaultModularFileModels(outputDir string) (map[string]string, error) {
+	return defaultModularFileModels(outputDir, false)
+}
+
+// Retain the previous generated standard profile as an exact ownership model;
+// changing fresh defaults must not make its unchanged files unrecognizable.
+func defaultModularFileModels(outputDir string, standard bool) (map[string]string, error) {
 	m := &Migrator{OutputDir: outputDir}
 	data, err := m.freshDefaultConfigData()
 	if err != nil {
 		return nil, err
+	}
+	if standard {
+		data["SYSWARDEN_INSTALL_PROFILE"] = StandardInstallProfile
+		data["SYSWARDEN_LIST_CHOICE"] = "1"
 	}
 	modules, err := m.renderModules(data)
 	if err != nil {
@@ -49,9 +62,17 @@ func DefaultModularFileVariants(outputDir string) (map[string][]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	standard, err := defaultModularFileModels(outputDir, true)
+	if err != nil {
+		return nil, err
+	}
 	var historical map[string]string
 	if err := json.Unmarshal(historicalDefaultModelsV4028, &historical); err != nil || len(historical) != len(current) {
 		return nil, fmt.Errorf("historical default template inventory is invalid")
+	}
+	var previous map[string]string
+	if err := json.Unmarshal(historicalDefaultModelsV4104, &previous); err != nil || len(previous) != len(current) {
+		return nil, fmt.Errorf("previous default template inventory is invalid")
 	}
 	variants := make(map[string][]string, len(current))
 	for path, content := range current {
@@ -60,7 +81,11 @@ func DefaultModularFileVariants(outputDir string) (map[string][]string, error) {
 			return nil, fmt.Errorf("historical default template is unavailable")
 		}
 		old = strings.ReplaceAll(old, "/etc/syswarden/config", outputDir)
-		variants[path] = []string{content, old}
+		prior, exists := previous[filepath.ToSlash(path)]
+		if !exists || prior == "" {
+			return nil, fmt.Errorf("previous default template is unavailable")
+		}
+		variants[path] = []string{content, standard[path], old, strings.ReplaceAll(prior, "/etc/syswarden/config", outputDir)}
 	}
 	path := filepath.Join("modules", historicalDefaultCoreModuleName)
 	if historical[filepath.ToSlash(path)] != historicalDefaultCoreModule {

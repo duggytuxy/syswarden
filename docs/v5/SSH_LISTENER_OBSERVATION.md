@@ -68,9 +68,9 @@ these boundaries for each claimed service and container profile.
 
 ## Installation and validation
 
-Issue422 remains unchanged: fresh native packages use the standard list only;
-SSH/CIS/OS hardening and optional modules require independent explicit TOML
-choices. Upgrades preserve administrator settings and existing protection.
+Issue #422 requires fresh native packages to select no list and defer activation
+until explicit configuration through `syswarden config`. SSH/CIS/OS hardening
+and optional modules require independent explicit TOML choices. Upgrades preserve administrator settings and existing protection.
 Neither an active process nor a listening socket supplies hardening consent.
 BunkerWeb remains independent, including source-owned temporary bans, expiry
 and HA. Linux AMD64 is the supported architecture.

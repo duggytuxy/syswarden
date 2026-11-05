@@ -106,6 +106,9 @@ func decodeWireGuardFilesystemBinding(wire []byte) (wireGuardFilesystemBindingJo
 }
 
 func recoverWireGuardFilesystemBinding() error {
+	if err := RefusePendingWireGuardPolicyTransition(); err != nil {
+		return err
+	}
 	journalPresent, err := wireGuardPrivatePathPresent(wireGuardFilesystemBindingPath)
 	if err != nil {
 		return err

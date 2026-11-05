@@ -246,8 +246,9 @@ func InspectHistoricalDefaultFirewallCompatibility(configDir string) (*Historica
 // ApplyHistoricalDefaultFirewallCompatibility atomically publishes a previously
 // inspected plan. The caller-supplied host revalidation must prove the typed
 // dormant nftables state without mutation at every transaction barrier. The
-// target module is rolled back if either bound configuration or host state
-// changes before, during, or immediately after publication.
+// target module is rolled back on configuration or host-state drift only while
+// the exact published and retained original identities still match. Concurrent
+// target edits are preserved with the original inode for explicit recovery.
 func ApplyHistoricalDefaultFirewallCompatibility(
 	plan *HistoricalDefaultFirewallCompatibilityPlan,
 	revalidateHost func() error,
@@ -268,7 +269,7 @@ func ApplyHistoricalDefaultFirewallCompatibility(
 		return revalidateHost()
 	}
 	prePublish := func() error {
-		if err := plan.snapshot.revalidate(plan.configDir, historicalDefaultSnapshotTargetQuarantined, nil); err != nil {
+		if err := plan.snapshot.revalidate(plan.configDir, historicalDefaultSnapshotBefore, nil); err != nil {
 			return err
 		}
 		return revalidateHost()
