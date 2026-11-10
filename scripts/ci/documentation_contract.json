@@ -201,37 +201,338 @@
     {
       "case": "help:syswarden update",
       "stream": "stdout",
-      "reason": "Approve the exact offline qualification description and its two inseparable explicit selector flags.",
+      "reason": "Approve the exact offline qualification description and its two inseparable explicit selector flags. pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved.",
       "before": "Check and install SYSWARDEN updates\n\nUsage:\n  syswarden update [flags]\n\nFlags:\n  -h, --help   help for update\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
-      "after": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. The v4.02.8 first upgrade must use a separately verified manual package procedure.\n\nUsage:\n  syswarden update [flags]\n\nFlags:\n      --candidate-version string      exact candidate version required from the offline qualification bundle\n  -h, --help                          help for update\n      --qualification-bundle string   absolute path to a protected local signed-candidate bundle; disables all network discovery\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n"
+      "after": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. The v4.02.8 first upgrade must use a separately verified manual package procedure.\n\nUsage:\n  syswarden update [flags]\n\nFlags:\n      --candidate-version string      exact candidate version required from the offline qualification bundle\n  -h, --help[=true|false]             help for update\n      --qualification-bundle string   absolute path to a protected local signed-candidate bundle; disables all network discovery\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n"
     },
     {
       "case": "help:syswarden",
       "stream": "stdout",
-      "reason": "Approve the exact Linux-only root help transition, including the explicit digest-authorized historical WireGuard recovery command and wider command-column padding; the internal package-removal command remains absent from the rendered help. Include the authenticated runtime-unblock command without changing the existing command descriptions. Include the explicit bounded recover-removal command with its exact public description. The recovery description covers complete removal, including independently preserved administrator policy. Include the read-only ssh-policy planning entry point with its exact public description; no migration application is exposed.",
+      "reason": "Approve the exact Linux-only root help transition, including the explicit digest-authorized historical WireGuard recovery command and wider command-column padding; the internal package-removal command remains absent from the rendered help. Include the authenticated runtime-unblock command without changing the existing command descriptions. Include the explicit bounded recover-removal command with its exact public description. The recovery description covers complete removal, including independently preserved administrator policy. Include the read-only ssh-policy planning entry point with its exact public description; no migration application is exposed. pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved.",
       "before": "SYSWARDEN v4.02.8 is a Next-Gen Host-based WAF and Security Orchestrator.\n\nUsage:\n  syswarden [flags]\n  syswarden [command]\n\nAvailable Commands:\n  alerts          Launch the real-time TUI dashboard for alerts\n  allow-ssh       Allows direct SSH bypass for this IP\n  audit           Performs a full Enterprise SYSWARDEN Audit\n  block           Hot-adds an IP to the kernel drop set\n  check           Perform a global diagnostic on an IP\n  completion      Generate the autocompletion script for the specified shell\n  config          Open the interactive configuration editor\n  config-get      Get a configuration value by key\n  ha-sync         Synchronizes the firewall blocklist with the configured HA peer\n  help            Help about any command\n  install         Install SYSWARDEN and configure security modules\n  list            Displays all custom IP registries\n  manual          Comprehensive SysAdmin Manual and Documentation\n  migrate-config  Migrate from old config format to modular TOML format\n  reload          Reload configuration and restart security engines\n  revoke-ssh      Revokes direct SSH bypass\n  tui             Launch the SYSWARDEN Enterprise Dashboard (TUI)\n  unblock         Purges an IP from the blocklist\n  uninstall       Completely remove SYSWARDEN from the system\n  unwhitelist     Revokes global VIP access\n  update          Check and install SYSWARDEN updates\n  update-feeds    Silently update Threat Intelligence feeds and reload firewall\n  web-token       Manage the Web-TUI secure access token\n  web-tui         Start the Web-TUI server (WebTTY)\n  whitelist       Grants global VIP access and bypasses the firewall\n  whitelist-infra Auto-detects and whitelists infrastructure IPs\n\nFlags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n  -h, --help            help for syswarden\n\nUse \"syswarden [command] --help\" for more information about a command.\n",
-      "after": "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.\n\nUsage:\n  syswarden [flags]\n  syswarden [command]\n\nAvailable Commands:\n  alerts                  Stream kernel and WAAP alert events\n  allow-ssh               Add an address to the SSH exception registry\n  audit                   Run a local SYSWARDEN operational diagnostic\n  block                   Add addresses or CIDRs to the persistent blocklist\n  check                   Inspect recorded firewall state for an address or CIDR\n  completion              Generate the autocompletion script for the specified shell\n  config                  Open the interactive configuration editor\n  config-get              Get a configuration value by key\n  ha-fence                Administer the native-sync migration fence\n  ha-sync                 Push missing local blocklist entries to configured HA peers\n  help                    Help about any command\n  install                 Install SYSWARDEN and configure security modules\n  list                    Displays all custom IP registries\n  manual                  Display the built-in operator reference\n  migrate-config          Migrate from old config format to modular TOML format\n  recover-removal         Inspect bounded recovery for complete product removal\n  recover-wireguard       Inspect and explicitly recover exact historical WireGuard nftables state\n  reload                  Reapply policy and normally restart syswarden-core\n  revoke-ssh              Remove an address from the SSH exception registry\n  runtime-unblock         Remove local runtime claims through the authenticated core\n  ssh-policy              Inspect the dedicated SSH policy migration\n  tui                     Launch the local SYSWARDEN terminal dashboard\n  unblock                 Remove addresses or CIDRs from the persistent blocklist\n  uninstall               Delete SysWarden services, rules, configuration, data, and logs\n  unwhitelist             Remove addresses or CIDRs from the persistent whitelist\n  update                  Install a release verified by a signed manifest\n  update-feeds            Refresh remote intelligence, validate embedded GeoIP data, and reapply firewall policy\n  whitelist               Add addresses or CIDRs to the persistent whitelist\n  whitelist-infra         Auto-detects and whitelists infrastructure IPs\n\nFlags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n  -h, --help            help for syswarden\n\nUse \"syswarden [command] --help\" for more information about a command.\n"
+      "after": "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.\n\nUsage:\n  syswarden [flags]\n  syswarden [command]\n\nAvailable Commands:\n  alerts                  Stream kernel and WAAP alert events\n  allow-ssh               Add an address to the SSH exception registry\n  audit                   Run a local SYSWARDEN operational diagnostic\n  block                   Add addresses or CIDRs to the persistent blocklist\n  check                   Inspect recorded firewall state for an address or CIDR\n  completion              Generate the autocompletion script for the specified shell\n  config                  Open the interactive configuration editor\n  config-get              Get a configuration value by key\n  ha-fence                Administer the native-sync migration fence\n  ha-sync                 Push missing local blocklist entries to configured HA peers\n  help                    Help about any command\n  install                 Install SYSWARDEN and configure security modules\n  list                    Displays all custom IP registries\n  manual                  Display the built-in operator reference\n  migrate-config          Migrate from old config format to modular TOML format\n  recover-removal         Inspect bounded recovery for complete product removal\n  recover-wireguard       Inspect and explicitly recover exact historical WireGuard nftables state\n  reload                  Reapply policy and normally restart syswarden-core\n  revoke-ssh              Remove an address from the SSH exception registry\n  runtime-unblock         Remove local runtime claims through the authenticated core\n  ssh-policy              Inspect the dedicated SSH policy migration\n  tui                     Launch the local SYSWARDEN terminal dashboard\n  unblock                 Remove addresses or CIDRs from the persistent blocklist\n  uninstall               Delete SysWarden services, rules, configuration, data, and logs\n  unwhitelist             Remove addresses or CIDRs from the persistent whitelist\n  update                  Install a release verified by a signed manifest\n  update-feeds            Refresh remote intelligence, validate embedded GeoIP data, and reapply firewall policy\n  whitelist               Add addresses or CIDRs to the persistent whitelist\n  whitelist-infra         Auto-detects and whitelists infrastructure IPs\n\nFlags:\n      --config string       config file (default \"/opt/syswarden/syswarden-auto.conf\")\n  -h, --help[=true|false]   help for syswarden\n\nUse \"syswarden [command] --help\" for more information about a command.\n"
     },
     {
       "case": "help:syswarden config",
       "stream": "stdout",
-      "reason": "Approve the exact addition of the non-mutating validation and migration subcommands to configuration help.",
+      "reason": "Approve the exact addition of the non-mutating validation and migration subcommands to configuration help. pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved.",
       "before": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
-      "after": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n  syswarden config [command]\n\nAvailable Commands:\n  migrate     Migrate the historical configuration to modular TOML\n  validate    Validate modular configuration without modifying it\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nUse \"syswarden config [command] --help\" for more information about a command.\n"
+      "after": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n  syswarden config [command]\n\nAvailable Commands:\n  migrate     Migrate the historical configuration to modular TOML\n  validate    Validate modular configuration without modifying it\n\nFlags:\n  -h, --help[=true|false]   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nUse \"syswarden config [command] --help\" for more information about a command.\n"
     },
     {
       "case": "help:syswarden whitelist",
       "stream": "stdout",
-      "reason": "Approve the exact service-scoped whitelist flag and its bounded positional compatibility help.",
+      "reason": "Approve the exact service-scoped whitelist flag and its bounded positional compatibility help. pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved.",
       "before": "Grants global VIP access and bypasses the firewall\n\nUsage:\n  syswarden whitelist <IP>... [PORT] [flags]\n\nFlags:\n  -h, --help   help for whitelist\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
-      "after": "Records each entry in the persistent whitelist and reapplies firewall policy. Use --port for a TCP service-scoped entry. A single final positional [PORT] remains temporarily accepted for compatibility. Verify the resulting kernel rule before relying on the entry.\n\nUsage:\n  syswarden whitelist <IP|CIDR>... [PORT] [flags]\n\nFlags:\n  -h, --help          help for whitelist\n      --port string   Scope every whitelist entry to this TCP destination port\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n"
+      "after": "Records each entry in the persistent whitelist and reapplies firewall policy. Use --port for a TCP service-scoped entry. A single final positional [PORT] remains temporarily accepted for compatibility. Verify the resulting kernel rule before relying on the entry.\n\nUsage:\n  syswarden whitelist <IP|CIDR>... [PORT] [flags]\n\nFlags:\n  -h, --help[=true|false]   help for whitelist\n      --port string         Scope every whitelist entry to this TCP destination port\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n"
     },
     {
       "case": "arity:syswarden whitelist:0",
       "stream": "stderr",
-      "reason": "Approve the exact zero-argument usage transition induced by the service-scoped whitelist flag.",
+      "reason": "Approve the exact zero-argument usage transition induced by the service-scoped whitelist flag. pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved.",
       "before": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden whitelist <IP>... [PORT] [flags]\n\nFlags:\n  -h, --help   help for whitelist\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n",
-      "after": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden whitelist <IP|CIDR>... [PORT] [flags]\n\nFlags:\n  -h, --help          help for whitelist\n      --port string   Scope every whitelist entry to this TCP destination port\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n"
+      "after": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden whitelist <IP|CIDR>... [PORT] [flags]\n\nFlags:\n  -h, --help[=true|false]   help for whitelist\n      --port string         Scope every whitelist entry to this TCP destination port\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n"
+    },
+    {
+      "case": "help:syswarden alerts",
+      "stream": "stdout",
+      "before": "Launch the real-time TUI dashboard for alerts\n\nUsage:\n  syswarden alerts [flags]\n\nFlags:\n  -h, --help   help for alerts\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Stream kernel and WAAP alert events\n\nUsage:\n  syswarden alerts [flags]\n\nFlags:\n  -h, --help[=true|false]   help for alerts\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden allow-ssh",
+      "stream": "stdout",
+      "before": "Allows direct SSH bypass for this IP\n\nUsage:\n  syswarden allow-ssh <IP> [PORT] [flags]\n\nFlags:\n  -h, --help   help for allow-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Records one address or CIDR in the SSH exception registry and reapplies firewall policy. Verify the resulting kernel rule before relying on it for access.\n\nUsage:\n  syswarden allow-ssh <IP> [PORT] [flags]\n\nFlags:\n  -h, --help[=true|false]   help for allow-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden allow-ssh:0",
+      "stream": "stderr",
+      "before": "Error: accepts between 1 and 2 arg(s), received 0\nUsage:\n  syswarden allow-ssh <IP> [PORT] [flags]\n\nFlags:\n  -h, --help   help for allow-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts between 1 and 2 arg(s), received 0\n",
+      "after": "Error: accepts between 1 and 2 arg(s), received 0\nUsage:\n  syswarden allow-ssh <IP> [PORT] [flags]\n\nFlags:\n  -h, --help[=true|false]   help for allow-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts between 1 and 2 arg(s), received 0\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden allow-ssh:3",
+      "stream": "stderr",
+      "before": "Error: accepts between 1 and 2 arg(s), received 3\nUsage:\n  syswarden allow-ssh <IP> [PORT] [flags]\n\nFlags:\n  -h, --help   help for allow-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts between 1 and 2 arg(s), received 3\n",
+      "after": "Error: accepts between 1 and 2 arg(s), received 3\nUsage:\n  syswarden allow-ssh <IP> [PORT] [flags]\n\nFlags:\n  -h, --help[=true|false]   help for allow-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts between 1 and 2 arg(s), received 3\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden allow-ssh:4",
+      "stream": "stderr",
+      "before": "Error: accepts between 1 and 2 arg(s), received 4\nUsage:\n  syswarden allow-ssh <IP> [PORT] [flags]\n\nFlags:\n  -h, --help   help for allow-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts between 1 and 2 arg(s), received 4\n",
+      "after": "Error: accepts between 1 and 2 arg(s), received 4\nUsage:\n  syswarden allow-ssh <IP> [PORT] [flags]\n\nFlags:\n  -h, --help[=true|false]   help for allow-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts between 1 and 2 arg(s), received 4\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden audit",
+      "stream": "stdout",
+      "before": "Performs a full Enterprise SYSWARDEN Audit\n\nUsage:\n  syswarden audit [flags]\n\nFlags:\n  -h, --help   help for audit\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Checks selected local services, files, firewall state, and configuration. Its output is not a compliance certification.\n\nUsage:\n  syswarden audit [flags]\n\nFlags:\n  -h, --help[=true|false]   help for audit\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden block",
+      "stream": "stdout",
+      "before": "Hot-adds an IP to the kernel drop set\n\nUsage:\n  syswarden block <IP>... [flags]\n\nFlags:\n  -h, --help   help for block\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Records each entry in the persistent blocklist and reapplies firewall policy; success does not independently prove final kernel state.\n\nUsage:\n  syswarden block <IP>... [flags]\n\nFlags:\n  -h, --help[=true|false]   help for block\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden block:0",
+      "stream": "stderr",
+      "before": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden block <IP>... [flags]\n\nFlags:\n  -h, --help   help for block\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n",
+      "after": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden block <IP>... [flags]\n\nFlags:\n  -h, --help[=true|false]   help for block\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden check",
+      "stream": "stdout",
+      "before": "Perform a global diagnostic on an IP\n\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Inspect recorded firewall state for an address or CIDR\n\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden check:0",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 0\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 0\n",
+      "after": "Error: accepts 1 arg(s), received 0\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 0\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden check:2",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 2\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 2\n",
+      "after": "Error: accepts 1 arg(s), received 2\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 2\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden check:3",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 3\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 3\n",
+      "after": "Error: accepts 1 arg(s), received 3\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 3\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden check:4",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 4\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 4\n",
+      "after": "Error: accepts 1 arg(s), received 4\nUsage:\n  syswarden check <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for check\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 4\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden completion",
+      "stream": "stdout",
+      "before": "Generate the autocompletion script for syswarden for the specified shell.\nSee each sub-command's help for details on how to use the generated script.\n\nUsage:\n  syswarden completion [command]\n\nAvailable Commands:\n  bash        Generate the autocompletion script for bash\n  fish        Generate the autocompletion script for fish\n  powershell  Generate the autocompletion script for powershell\n  zsh         Generate the autocompletion script for zsh\n\nFlags:\n  -h, --help   help for completion\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nUse \"syswarden completion [command] --help\" for more information about a command.\n",
+      "after": "Generate the autocompletion script for syswarden for the specified shell.\nSee each sub-command's help for details on how to use the generated script.\n\nUsage:\n  syswarden completion [command]\n\nAvailable Commands:\n  bash        Generate the autocompletion script for bash\n  fish        Generate the autocompletion script for fish\n  powershell  Generate the autocompletion script for powershell\n  zsh         Generate the autocompletion script for zsh\n\nFlags:\n  -h, --help[=true|false]   help for completion\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nUse \"syswarden completion [command] --help\" for more information about a command.\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden completion bash",
+      "stream": "stdout",
+      "before": "Generate the autocompletion script for the bash shell.\n\nThis script depends on the 'bash-completion' package.\nIf it is not installed already, you can install it via your OS's package manager.\n\nTo load completions in your current shell session:\n\n\tsource <(syswarden completion bash)\n\nTo load completions for every new session, execute once:\n\n#### Linux:\n\n\tsyswarden completion bash > /etc/bash_completion.d/syswarden\n\n#### macOS:\n\n\tsyswarden completion bash > $(brew --prefix)/etc/bash_completion.d/syswarden\n\nYou will need to start a new shell for this setup to take effect.\n\nUsage:\n  syswarden completion bash\n\nFlags:\n  -h, --help   help for bash\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Generate the autocompletion script for the bash shell.\n\nThis script depends on the 'bash-completion' package.\nIf it is not installed already, you can install it via your OS's package manager.\n\nTo load completions in your current shell session:\n\n\tsource <(syswarden completion bash)\n\nTo load completions for every new session, execute once:\n\n#### Linux:\n\n\tsyswarden completion bash > /etc/bash_completion.d/syswarden\n\n#### macOS:\n\n\tsyswarden completion bash > $(brew --prefix)/etc/bash_completion.d/syswarden\n\nYou will need to start a new shell for this setup to take effect.\n\nUsage:\n  syswarden completion bash\n\nFlags:\n  -h, --help[=true|false]   help for bash\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden completion fish",
+      "stream": "stdout",
+      "before": "Generate the autocompletion script for the fish shell.\n\nTo load completions in your current shell session:\n\n\tsyswarden completion fish | source\n\nTo load completions for every new session, execute once:\n\n\tsyswarden completion fish > ~/.config/fish/completions/syswarden.fish\n\nYou will need to start a new shell for this setup to take effect.\n\nUsage:\n  syswarden completion fish [flags]\n\nFlags:\n  -h, --help   help for fish\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Generate the autocompletion script for the fish shell.\n\nTo load completions in your current shell session:\n\n\tsyswarden completion fish | source\n\nTo load completions for every new session, execute once:\n\n\tsyswarden completion fish > ~/.config/fish/completions/syswarden.fish\n\nYou will need to start a new shell for this setup to take effect.\n\nUsage:\n  syswarden completion fish [flags]\n\nFlags:\n  -h, --help[=true|false]   help for fish\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden completion powershell",
+      "stream": "stdout",
+      "before": "Generate the autocompletion script for powershell.\n\nTo load completions in your current shell session:\n\n\tsyswarden completion powershell | Out-String | Invoke-Expression\n\nTo load completions for every new session, add the output of the above command\nto your powershell profile.\n\nUsage:\n  syswarden completion powershell [flags]\n\nFlags:\n  -h, --help   help for powershell\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Generate the autocompletion script for powershell.\n\nTo load completions in your current shell session:\n\n\tsyswarden completion powershell | Out-String | Invoke-Expression\n\nTo load completions for every new session, add the output of the above command\nto your powershell profile.\n\nUsage:\n  syswarden completion powershell [flags]\n\nFlags:\n  -h, --help[=true|false]   help for powershell\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden completion zsh",
+      "stream": "stdout",
+      "before": "Generate the autocompletion script for the zsh shell.\n\nIf shell completion is not already enabled in your environment you will need\nto enable it.  You can execute the following once:\n\n\techo \"autoload -U compinit; compinit\" >> ~/.zshrc\n\nTo load completions in your current shell session:\n\n\tsource <(syswarden completion zsh)\n\nTo load completions for every new session, execute once:\n\n#### Linux:\n\n\tsyswarden completion zsh > \"${fpath[1]}/_syswarden\"\n\n#### macOS:\n\n\tsyswarden completion zsh > $(brew --prefix)/share/zsh/site-functions/_syswarden\n\nYou will need to start a new shell for this setup to take effect.\n\nUsage:\n  syswarden completion zsh [flags]\n\nFlags:\n  -h, --help   help for zsh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Generate the autocompletion script for the zsh shell.\n\nIf shell completion is not already enabled in your environment you will need\nto enable it.  You can execute the following once:\n\n\techo \"autoload -U compinit; compinit\" >> ~/.zshrc\n\nTo load completions in your current shell session:\n\n\tsource <(syswarden completion zsh)\n\nTo load completions for every new session, execute once:\n\n#### Linux:\n\n\tsyswarden completion zsh > \"${fpath[1]}/_syswarden\"\n\n#### macOS:\n\n\tsyswarden completion zsh > $(brew --prefix)/share/zsh/site-functions/_syswarden\n\nYou will need to start a new shell for this setup to take effect.\n\nUsage:\n  syswarden completion zsh [flags]\n\nFlags:\n  -h, --help[=true|false]   help for zsh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden config-get",
+      "stream": "stdout",
+      "before": "Get a configuration value by key (e.g., core.firewall_backend).\nUseful for shell scripts that need to read the modular configuration.\n\nUsage:\n  syswarden config-get [key] [flags]\n\nFlags:\n  -h, --help   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Get a configuration value by key (e.g., core.firewall_backend).\nUseful for shell scripts that need to read the modular configuration.\n\nUsage:\n  syswarden config-get <key> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden config-get:0",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 0\nUsage:\n  syswarden config-get [key] [flags]\n\nFlags:\n  -h, --help   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 0\n",
+      "after": "Error: accepts 1 arg(s), received 0\nUsage:\n  syswarden config-get <key> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 0\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden config-get:2",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 2\nUsage:\n  syswarden config-get [key] [flags]\n\nFlags:\n  -h, --help   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 2\n",
+      "after": "Error: accepts 1 arg(s), received 2\nUsage:\n  syswarden config-get <key> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 2\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden config-get:3",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 3\nUsage:\n  syswarden config-get [key] [flags]\n\nFlags:\n  -h, --help   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 3\n",
+      "after": "Error: accepts 1 arg(s), received 3\nUsage:\n  syswarden config-get <key> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 3\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden config-get:4",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 4\nUsage:\n  syswarden config-get [key] [flags]\n\nFlags:\n  -h, --help   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 4\n",
+      "after": "Error: accepts 1 arg(s), received 4\nUsage:\n  syswarden config-get <key> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for config-get\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 4\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden ha-sync",
+      "stream": "stdout",
+      "before": "Forces an immediate synchronization of the local blocklist to the High Availability standby node over encrypted channels.\n\nUsage:\n  syswarden ha-sync [flags]\n\nFlags:\n  -h, --help   help for ha-sync\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Compares the local blocklist with each exact configured peer and pushes entries that the peer does not report. TLS 1.3 peer verification uses /etc/syswarden/ha-ca.pem when present and otherwise the system trust roots. CIDR peer entries authorize inbound clients only and are never dialed.\n\nUsage:\n  syswarden ha-sync [flags]\n\nFlags:\n  -h, --help[=true|false]   help for ha-sync\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden help",
+      "stream": "stdout",
+      "before": "Help provides help for any command in the application.\nSimply type syswarden help [path to command] for full details.\n\nUsage:\n  syswarden help [command] [flags]\n\nFlags:\n  -h, --help   help for help\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Help provides help for any command in the application.\nSimply type syswarden help [path to command] for full details.\n\nUsage:\n  syswarden help [command] [flags]\n\nFlags:\n  -h, --help[=true|false]   help for help\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden install",
+      "stream": "stdout",
+      "before": "Executes the fully automated SYSWARDEN installation pipeline.\n\nUsage:\n  syswarden install [flags]\n\nFlags:\n  -h, --help   help for install\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs.\n\nUsage:\n  syswarden install [flags]\n\nFlags:\n  -h, --help[=true|false]   help for install\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden list",
+      "stream": "stdout",
+      "before": "Displays all custom IP registries\n\nUsage:\n  syswarden list [flags]\n\nFlags:\n  -h, --help   help for list\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Displays all custom IP registries\n\nUsage:\n  syswarden list [flags]\n\nFlags:\n  -h, --help[=true|false]   help for list\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden manual",
+      "stream": "stdout",
+      "before": "Displays the exhaustive SYSWARDEN administration manual, including CLI commands, configuration parameters, and threat intelligence options.\n\nUsage:\n  syswarden manual [flags]\n\nFlags:\n  -h, --help   help for manual\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Displays the current product-command inventory, configuration layout, exposed ports, and lifecycle warnings. Cobra help and completion utilities remain available through --help.\n\nUsage:\n  syswarden manual [flags]\n\nFlags:\n  -h, --help[=true|false]   help for manual\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden migrate-config",
+      "stream": "stdout",
+      "before": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.\n\nUsage:\n  syswarden migrate-config [flags]\n\nFlags:\n      --dry-run         Show what would be done\n  -h, --help            help for migrate-config\n  -o, --output string   Output directory\n  -s, --source string   Source config file path\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.\n\nWith --dry-run, migrated file contents are not written and the source and\ndestination filesystem are not modified.\n\nUsage:\n  syswarden migrate-config [flags]\n\nFlags:\n      --dry-run[=true|false]   Validate migration without modifying source or destination files\n  -h, --help[=true|false]      help for migrate-config\n  -o, --output string          Output directory\n  -s, --source string          Source config file path\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden reload",
+      "stream": "stdout",
+      "before": "Reload configuration and restart security engines\n\nUsage:\n  syswarden reload [flags]\n\nFlags:\n  -h, --help         help for reload\n      --no-restart   Do not restart syswarden-core.service (used by systemd)\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Reapply policy and normally restart syswarden-core\n\nUsage:\n  syswarden reload [flags]\n\nFlags:\n  -h, --help[=true|false]         help for reload\n      --no-restart[=true|false]   Do not restart syswarden-core.service (used by systemd)\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden revoke-ssh",
+      "stream": "stdout",
+      "before": "Revokes direct SSH bypass\n\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Remove an address from the SSH exception registry\n\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden revoke-ssh:0",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 0\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 0\n",
+      "after": "Error: accepts 1 arg(s), received 0\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 0\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden revoke-ssh:2",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 2\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 2\n",
+      "after": "Error: accepts 1 arg(s), received 2\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 2\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden revoke-ssh:3",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 3\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 3\n",
+      "after": "Error: accepts 1 arg(s), received 3\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 3\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden revoke-ssh:4",
+      "stream": "stderr",
+      "before": "Error: accepts 1 arg(s), received 4\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 4\n",
+      "after": "Error: accepts 1 arg(s), received 4\nUsage:\n  syswarden revoke-ssh <IP> [flags]\n\nFlags:\n  -h, --help[=true|false]   help for revoke-ssh\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\naccepts 1 arg(s), received 4\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden tui",
+      "stream": "stdout",
+      "before": "Launch the SYSWARDEN Enterprise Dashboard (TUI)\n\nUsage:\n  syswarden tui [flags]\n\nFlags:\n  -h, --help   help for tui\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Launch the local SYSWARDEN terminal dashboard\n\nUsage:\n  syswarden tui [flags]\n\nFlags:\n  -h, --help[=true|false]   help for tui\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden unblock",
+      "stream": "stdout",
+      "before": "Purges an IP from the blocklist\n\nUsage:\n  syswarden unblock <IP>... [flags]\n\nFlags:\n  -h, --help   help for unblock\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Remove addresses or CIDRs from the persistent blocklist\n\nUsage:\n  syswarden unblock <IP>... [flags]\n\nFlags:\n  -h, --help[=true|false]   help for unblock\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden unblock:0",
+      "stream": "stderr",
+      "before": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden unblock <IP>... [flags]\n\nFlags:\n  -h, --help   help for unblock\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n",
+      "after": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden unblock <IP>... [flags]\n\nFlags:\n  -h, --help[=true|false]   help for unblock\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden uninstall",
+      "stream": "stdout",
+      "before": "Completely remove SYSWARDEN from the system\n\nUsage:\n  syswarden uninstall [flags]\n\nFlags:\n  -h, --help   help for uninstall\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Removes a standalone installation after verified cleanup. Standard native packages require their package manager. An exactly attested optional RHEL package-owned profile permits runtime preparation only; RPM then removes its preserved payload. This operation does not restore every prior host setting.\n\nUsage:\n  syswarden uninstall [flags]\n\nFlags:\n  -h, --help[=true|false]   help for uninstall\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden unwhitelist",
+      "stream": "stdout",
+      "before": "Revokes global VIP access\n\nUsage:\n  syswarden unwhitelist <IP>... [flags]\n\nFlags:\n  -h, --help   help for unwhitelist\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Remove addresses or CIDRs from the persistent whitelist\n\nUsage:\n  syswarden unwhitelist <IP>... [flags]\n\nFlags:\n  -h, --help[=true|false]   help for unwhitelist\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "arity:syswarden unwhitelist:0",
+      "stream": "stderr",
+      "before": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden unwhitelist <IP>... [flags]\n\nFlags:\n  -h, --help   help for unwhitelist\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n",
+      "after": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden unwhitelist <IP>... [flags]\n\nFlags:\n  -h, --help[=true|false]   help for unwhitelist\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden update-feeds",
+      "stream": "stdout",
+      "before": "Silently update Threat Intelligence feeds and reload firewall\n\nUsage:\n  syswarden update-feeds [flags]\n\nFlags:\n  -h, --help   help for update-feeds\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Refresh remote intelligence, validate embedded GeoIP data, and reapply firewall policy\n\nUsage:\n  syswarden update-feeds [flags]\n\nFlags:\n  -h, --help[=true|false]   help for update-feeds\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
+    },
+    {
+      "case": "help:syswarden whitelist-infra",
+      "stream": "stdout",
+      "before": "Auto-detects and whitelists infrastructure IPs\n\nUsage:\n  syswarden whitelist-infra [flags]\n\nFlags:\n  -h, --help   help for whitelist-infra\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Auto-detects and whitelists infrastructure IPs\n\nUsage:\n  syswarden whitelist-infra [flags]\n\nFlags:\n  -h, --help[=true|false]   help for whitelist-infra\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "reason": "pflag v1.1.0 explicitly documents optional boolean values as [=true|false] and aligns flag help columns, including usage printed after rejected arguments. An isolated old/new parser comparison verifies that exit codes, error text and all non-flag output remain unchanged; existing approved command descriptions are preserved."
     }
   ],
   "approved_cli_public_differences": [
