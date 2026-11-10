@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
 
       - name: Run Plumber analysis
-        uses: getplumber/plumber@2342834dc0b67d2c87a33ac86789e481ad869402 # v0.7.17
+        uses: getplumber/plumber@ec8cb3a7edd6a324b33e85109b627b2df6023d94 # v0.7.23
         with:
           version: v0.7.9
           verify-attestation: true
@@ -54,7 +54,7 @@ jobs:
           persist-credentials: false
 
       - name: Run and publish Plumber analysis
-        uses: getplumber/plumber@2342834dc0b67d2c87a33ac86789e481ad869402 # v0.7.17
+        uses: getplumber/plumber@ec8cb3a7edd6a324b33e85109b627b2df6023d94 # v0.7.23
         with:
           version: v0.7.9
           verify-attestation: true
