@@ -485,9 +485,17 @@ func TestSSHAccessSoftwareKeyPolicy(t *testing.T) {
 			}
 			peer := sshAccessPeer{"127.0.0.1:2222", "administrator", signer.PublicKey().Marshal(), pem.EncodeToMemory(block)}
 			if kind == "certificate" {
-				cert := &ssh.Certificate{Key: signer.PublicKey(), CertType: ssh.HostCert}
+				cert := &ssh.Certificate{
+					Key:             signer.PublicKey(),
+					CertType:        ssh.HostCert,
+					ValidPrincipals: []string{"127.0.0.1"},
+					ValidBefore:     ssh.CertTimeInfinity,
+				}
 				if err := cert.SignCert(rand.Reader, signer); err != nil {
 					t.Fatal(err)
+				}
+				if err := (&ssh.CertChecker{}).CheckCert("127.0.0.1", cert); err != nil {
+					t.Fatal("invalid host certificate fixture", err)
 				}
 				peer.HostKey = cert.Marshal()
 			}

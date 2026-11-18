@@ -256,7 +256,7 @@ Run the following groups before every push that can affect a release PR.
 
 ### Go modules
 
-For CLI, Core and TUI, run the normal tests, race tests and vet with Go 1.26.10,
+For CLI, Core and TUI, run the normal tests, race tests and vet with Go 1.26.11,
 `GOFLAGS=-mod=readonly`, the repository `go.work` file and the shared local
 compilation cache. Use `-count=1` for fresh test results and at most two local
 CPU workers by default. Run versionctl as its own module with `GOWORK=off`.
