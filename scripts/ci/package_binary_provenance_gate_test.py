@@ -22,7 +22,7 @@ VCS_TIME = "2026-09-04T20:03:22Z"
 
 def valid_build_info() -> str:
     return (
-        "/proc/self/fd/3: go1.26.10\n"
+        "/proc/self/fd/3: go1.26.11\n"
         "\tbuild\t-buildmode=pie\n"
         "\tbuild\t-trimpath=true\n"
         "\tbuild\tCGO_ENABLED=0\n"
@@ -38,11 +38,11 @@ def valid_build_info() -> str:
 
 class PackageBinaryProvenanceGateTests(unittest.TestCase):
     def test_rejects_compiler_before_or_outside_the_security_pin(self) -> None:
-        for version in ("go1.26.6", "go1.26.8", "go1.26.9", "go1.26.11", "go1.27.3"):
+        for version in ("go1.26.6", "go1.26.8", "go1.26.9", "go1.26.10", "go1.26.12", "go1.27.3"):
             with self.subTest(version=version):
-                with self.assertRaisesRegex(gate.ProvenanceError, "exactly Go 1.26.10"):
+                with self.assertRaisesRegex(gate.ProvenanceError, "exactly Go 1.26.11"):
                     gate.validate_build_info(
-                        valid_build_info().replace("go1.26.10", version),
+                        valid_build_info().replace("go1.26.11", version),
                         Path("candidate-binary"), REVISION, VCS_TIME,
                     )
 
