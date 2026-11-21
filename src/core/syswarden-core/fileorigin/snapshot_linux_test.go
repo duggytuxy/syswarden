@@ -166,7 +166,7 @@ func TestSnapshotPublicationRejectsUnsafeDirectoriesAndPaths(t *testing.T) {
 		if err := os.Mkdir(directory, 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(directory, 0777); err != nil {
+		if err := os.Chmod(directory, 0757); err != nil {
 			t.Fatal(err)
 		}
 
@@ -199,9 +199,13 @@ func TestSnapshotPublicationRejectsUnsafeDirectoriesAndPaths(t *testing.T) {
 	})
 
 	t.Run("relative-path", func(t *testing.T) {
+		t.Chdir(t.TempDir())
 		err := PublishSnapshot("data.json", DashboardSnapshot, []byte(`{}`))
-		if err == nil {
-			t.Fatal("relative snapshot path was accepted")
+		if err == nil || err.Error() != "snapshot destination is not a canonical product output" {
+			t.Fatalf("unexpected relative destination result: %v", err)
+		}
+		if _, err := os.Lstat("data.json"); !os.IsNotExist(err) {
+			t.Fatalf("relative snapshot destination was touched: %v", err)
 		}
 	})
 }
