@@ -144,3 +144,64 @@ func TestSnapshotPublicationRejectsLinksAndOversizedContent(t *testing.T) {
 		t.Fatal("refused publication created a target", err)
 	}
 }
+
+func TestSnapshotPublicationRejectsUnsafeDirectoriesAndPaths(t *testing.T) {
+	t.Run("group-writable-directory", func(t *testing.T) {
+		directory := filepath.Join(t.TempDir(), "shared")
+		if err := os.Mkdir(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(directory, 0770); err != nil {
+			t.Fatal(err)
+		}
+
+		err := PublishSnapshot(filepath.Join(directory, "data.json"), DashboardSnapshot, []byte(`{}`))
+		if err == nil {
+			t.Fatal("group-writable snapshot directory was accepted")
+		}
+	})
+
+	t.Run("world-writable-directory", func(t *testing.T) {
+		directory := filepath.Join(t.TempDir(), "shared")
+		if err := os.Mkdir(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(directory, 0777); err != nil {
+			t.Fatal(err)
+		}
+
+		err := PublishSnapshot(filepath.Join(directory, "data.json"), DashboardSnapshot, []byte(`{}`))
+		if err == nil {
+			t.Fatal("world-writable snapshot directory was accepted")
+		}
+	})
+
+	t.Run("symlinked-parent-directory", func(t *testing.T) {
+		base := t.TempDir()
+		realDirectory := filepath.Join(base, "real")
+		linkDirectory := filepath.Join(base, "linked")
+
+		if err := os.Mkdir(realDirectory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realDirectory, linkDirectory); err != nil {
+			t.Fatal(err)
+		}
+
+		err := PublishSnapshot(filepath.Join(linkDirectory, "data.json"), DashboardSnapshot, []byte(`{}`))
+		if err == nil {
+			t.Fatal("symlinked parent directory was accepted")
+		}
+
+		if _, err := os.Lstat(filepath.Join(realDirectory, "data.json")); !os.IsNotExist(err) {
+			t.Fatal("publication created a file through the symlink", err)
+		}
+	})
+
+	t.Run("relative-path", func(t *testing.T) {
+		err := PublishSnapshot("data.json", DashboardSnapshot, []byte(`{}`))
+		if err == nil {
+			t.Fatal("relative snapshot path was accepted")
+		}
+	})
+}
