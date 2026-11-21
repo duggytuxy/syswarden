@@ -151,7 +151,7 @@ func TestSnapshotPublicationRejectsUnsafeDirectoriesAndPaths(t *testing.T) {
 		if err := os.Mkdir(directory, 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(directory, 0770); err != nil {
+		if err := os.Chmod(directory, 0770); err != nil { // #nosec G302 -- this private fixture must be group-writable to test rejection
 			t.Fatal(err)
 		}
 
@@ -166,7 +166,7 @@ func TestSnapshotPublicationRejectsUnsafeDirectoriesAndPaths(t *testing.T) {
 		if err := os.Mkdir(directory, 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(directory, 0757); err != nil {
+		if err := os.Chmod(directory, 0757); err != nil { // #nosec G302 -- this private fixture must be writable by others to test rejection
 			t.Fatal(err)
 		}
 
