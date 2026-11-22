@@ -144,3 +144,68 @@ func TestSnapshotPublicationRejectsLinksAndOversizedContent(t *testing.T) {
 		t.Fatal("refused publication created a target", err)
 	}
 }
+
+func TestSnapshotPublicationRejectsUnsafeDirectoriesAndPaths(t *testing.T) {
+	t.Run("group-writable-directory", func(t *testing.T) {
+		directory := filepath.Join(t.TempDir(), "shared")
+		if err := os.Mkdir(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(directory, 0770); err != nil { // #nosec G302 -- this private fixture must be group-writable to test rejection
+			t.Fatal(err)
+		}
+
+		err := PublishSnapshot(filepath.Join(directory, "data.json"), DashboardSnapshot, []byte(`{}`))
+		if err == nil {
+			t.Fatal("group-writable snapshot directory was accepted")
+		}
+	})
+
+	t.Run("world-writable-directory", func(t *testing.T) {
+		directory := filepath.Join(t.TempDir(), "shared")
+		if err := os.Mkdir(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(directory, 0757); err != nil { // #nosec G302 -- this private fixture must be writable by others to test rejection
+			t.Fatal(err)
+		}
+
+		err := PublishSnapshot(filepath.Join(directory, "data.json"), DashboardSnapshot, []byte(`{}`))
+		if err == nil {
+			t.Fatal("world-writable snapshot directory was accepted")
+		}
+	})
+
+	t.Run("symlinked-parent-directory", func(t *testing.T) {
+		base := t.TempDir()
+		realDirectory := filepath.Join(base, "real")
+		linkDirectory := filepath.Join(base, "linked")
+
+		if err := os.Mkdir(realDirectory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realDirectory, linkDirectory); err != nil {
+			t.Fatal(err)
+		}
+
+		err := PublishSnapshot(filepath.Join(linkDirectory, "data.json"), DashboardSnapshot, []byte(`{}`))
+		if err == nil {
+			t.Fatal("symlinked parent directory was accepted")
+		}
+
+		if _, err := os.Lstat(filepath.Join(realDirectory, "data.json")); !os.IsNotExist(err) {
+			t.Fatal("publication created a file through the symlink", err)
+		}
+	})
+
+	t.Run("relative-path", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		err := PublishSnapshot("data.json", DashboardSnapshot, []byte(`{}`))
+		if err == nil || err.Error() != "snapshot destination is not a canonical product output" {
+			t.Fatalf("unexpected relative destination result: %v", err)
+		}
+		if _, err := os.Lstat("data.json"); !os.IsNotExist(err) {
+			t.Fatalf("relative snapshot destination was touched: %v", err)
+		}
+	})
+}
