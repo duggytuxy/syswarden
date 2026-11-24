@@ -11,6 +11,11 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+# New PR revisions supersede older analyses. Each trusted run and rerun has its own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.run_attempt }}-${{ github.run_attempt == '1' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}
+
 permissions:
   contents: read
 
@@ -440,6 +445,7 @@ jobs:
             python3 scripts/ci/security_gate.py base-ref \
               --raw "${RAW_BASE_REF}" --act "${ACT:-false}")"
           report="${RUNNER_TEMP}/gosec-${SCAN}.json"
+          sarif="${RUNNER_TEMP}/gosec-${SCAN}.sarif"
           diagnostics="${RUNNER_TEMP}/gosec-${SCAN}.log"
           target="./..."
           if [[ "${MODULE}" == "scripts/versionctl" ]]; then
@@ -448,8 +454,9 @@ jobs:
           fi
           (
             cd "${MODULE}"
-            gosec -tests -no-fail -fmt=json -out="${report}" "${target}" \
-              2>"${diagnostics}"
+            # Render both reports from the same findings and keep diagnostics on stderr.
+            gosec -tests -no-fail -fmt=json -out="${report}" \
+              -stdout -verbose=sarif -color=false "${target}" >"${sarif}" 2>"${diagnostics}"
           )
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/security_gate.py gosec-log \
             --log "${diagnostics}"
@@ -464,37 +471,12 @@ jobs:
             --cgo-enabled "${CGO_ENABLED}" \
             --module "${MODULE}" \
             --diagnostic-log "${diagnostics}"
-          cp "${report}" "gosec-${SCAN}.json"
-
-      - name: Create gosec SARIF report
-        shell: bash
-        env:
-          SCAN: ${{ matrix.scan }}
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: ${{ matrix.cgo_enabled }}
-          MODULE: ${{ matrix.module }}
-        run: |
-          set -euo pipefail
-          diagnostics="${RUNNER_TEMP}/gosec-${SCAN}-sarif.log"
-          target="./..."
-          if [[ "${MODULE}" == "scripts/versionctl" ]]; then
-            export GOWORK=off
-            target="."
-          fi
-          (
-            cd "${MODULE}"
-            gosec -tests -no-fail -fmt=sarif \
-              -out="${GITHUB_WORKSPACE}/gosec-${SCAN}.sarif" "${target}" \
-              2>"${diagnostics}"
-          )
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/security_gate.py gosec-log \
-            --log "${diagnostics}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/sarif_gate.py \
-            --report "gosec-${SCAN}.sarif" \
-            --json-report "gosec-${SCAN}.json" \
+            --report "${sarif}" \
+            --json-report "${report}" \
             --module "${MODULE}"
-          test -s "gosec-${SCAN}.sarif"
+          cp "${report}" "gosec-${SCAN}.json"
+          cp "${sarif}" "gosec-${SCAN}.sarif"
 
       - name: Upload gosec report artifact
         if: ${{ !github.event.act }}

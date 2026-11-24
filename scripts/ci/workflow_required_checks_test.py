@@ -448,6 +448,36 @@ github:
         )
         self.assertEqual(len(trusted_actions), len(set(trusted_actions)))
 
+    def test_only_superseded_pull_request_analyses_share_a_concurrency_group(self) -> None:
+        # A rerun of an older SHA must not cancel checks on the current PR head.
+        for workflow in (self.package, self.security, self.scorecard, self.compliance):
+            with self.subTest(workflow=workflow.splitlines()[0]):
+                self.assertEqual(workflow.count("\nconcurrency:\n"), 1)
+                self.assertIn(
+                    "concurrency:\n"
+                    "  group: ${{ github.workflow }}-${{ github.event_name }}-"
+                    "${{ github.run_attempt }}-${{ github.run_attempt == '1' && "
+                    "github.event.pull_request.number || github.run_id }}\n"
+                    "  cancel-in-progress: ${{ github.event_name == 'pull_request' "
+                    "&& github.run_attempt == '1' }}\n",
+                    workflow,
+                )
+        self.assertNotIn("concurrency:", self.scorecard_pr)
+
+    def test_dependabot_groups_only_routine_action_updates(self) -> None:
+        actions, go_modules = self.dependabot.split('  - package-ecosystem: "gomod"', 1)
+        self.assertIn(
+            "    groups:\n"
+            "      routine-actions:\n"
+            "        applies-to: version-updates\n"
+            '        patterns:\n          - "*"\n'
+            '        update-types:\n          - "minor"\n          - "patch"\n',
+            actions,
+        )
+        self.assertNotIn('          - "major"', actions)
+        self.assertNotIn("security-updates", actions)
+        self.assertNotIn("    groups:", go_modules)
+
     def test_dependabot_covers_every_go_module_weekly_once(self) -> None:
         github_actions_entry = (
             '  - package-ecosystem: "github-actions"\n'
@@ -587,6 +617,17 @@ github:
             with self.subTest(mutation=mutation):
                 with self.assertRaises(AssertionError):
                     self.assert_security_publication_result_contract(mutation)
+
+    def test_gosec_checks_both_reports_from_the_same_scan(self) -> None:
+        scan = job_block(self.security, "gosec")
+        self.assertEqual(len(re.findall(r"(?m)^ +gosec -tests ", scan)), 1)
+        self.assertIn('-fmt=json -out="${report}"', scan)
+        self.assertIn('-stdout -verbose=sarif -color=false "${target}" >"${sarif}" 2>"${diagnostics}"', scan)
+        for command in ("security_gate.py gosec-log", "security_gate.py gosec ", "sarif_gate.py"):
+            self.assertIn(command, scan)
+        self.assertIn('--report "${sarif}"', scan)
+        self.assertIn('--json-report "${report}"', scan)
+        self.assertIn('--diagnostic-log "${diagnostics}"', scan)
 
     def test_security_publication_remains_conditional(self) -> None:
         publication = job_block(self.security, "github-publication")

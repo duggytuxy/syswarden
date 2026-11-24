@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: '30 2 * * 1'
 
+# New PR revisions supersede older analyses. Each trusted run and rerun has its own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.run_attempt }}-${{ github.run_attempt == '1' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}
+
 permissions:
   contents: read
 
