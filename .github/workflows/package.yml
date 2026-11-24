@@ -27,6 +27,11 @@ on:
       - master
   workflow_dispatch:
 
+# New PR revisions supersede older analyses. Each trusted run and rerun has its own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.run_attempt }}-${{ github.run_attempt == '1' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}
+
 permissions:
   contents: read
 
@@ -80,7 +85,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.11'
           cache-dependency-path: |
@@ -306,7 +311,7 @@ jobs:
           dist/bin/syswarden-cli --help >/dev/null
 
       - name: Set up Ruby for FPM
-        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
+        uses: ruby/setup-ruby@be3c7df29b3349ec6bcfc6b4792f1cf9f5237d18 # v1.343.0
         with:
           ruby-version: '3.2'
 
