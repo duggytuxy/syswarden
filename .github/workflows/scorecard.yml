@@ -18,21 +18,9 @@ jobs:
   pull-request-analysis:
     name: Scorecard analysis (pull request)
     if: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
     permissions:
       contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Run OSSF Scorecard analysis
-        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
-        with:
-          results_file: results.sarif
-          results_format: sarif
-          publish_results: false
+    uses: ./.github/workflows/scorecard-pr.yml
 
   published-analysis:
     name: Scorecard analysis and publication

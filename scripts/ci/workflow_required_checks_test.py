@@ -74,6 +74,7 @@ class RequiredCheckWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         cls.scorecard = (WORKFLOWS / "scorecard.yml").read_text(encoding="utf-8")
+        cls.scorecard_pr = (WORKFLOWS / "scorecard-pr.yml").read_text(encoding="utf-8")
 
     def assert_security_publication_result_contract(self, gate: str) -> None:
         required = (
@@ -605,8 +606,15 @@ github:
         self.assertIn("    permissions:\n      contents: read\n", analysis)
         self.assertNotIn("security-events: write", analysis)
         self.assertNotIn("id-token: write", analysis)
-        self.assertIn("          publish_results: false\n", analysis)
-        self.assertNotIn("upload-sarif", analysis)
+        self.assertIn("    uses: ./.github/workflows/scorecard-pr.yml\n", analysis)
+        self.assertNotIn("secrets:", analysis)
+        self.assertIn("\non:\n  workflow_call:\n\npermissions:\n  contents: read\n", self.scorecard_pr)
+        self.assertNotIn(": write", self.scorecard_pr)
+        self.assertNotIn("upload-sarif", self.scorecard_pr)
+        scan = job_block(self.scorecard_pr, "analyze")
+        self.assertIn("          persist-credentials: false\n", scan)
+        self.assertIn("          publish_results: false\n", scan)
+        self.assertNotIn("publish_results: true", self.scorecard_pr)
 
     def test_scorecard_publication_is_push_or_schedule_only(self) -> None:
         publication = job_block(self.scorecard, "published-analysis")
@@ -619,7 +627,12 @@ github:
         self.assertIn("          publish_results: true\n", publication)
         self.assertIn("github/codeql-action/upload-sarif@", publication)
         self.assertEqual(self.scorecard.count("publish_results: true"), 1)
-        self.assertEqual(self.scorecard.count("publish_results: false"), 1)
+        # The OpenSSF verifier selects the first direct Scorecard job it finds.
+        scorecard_step = r"(?m)^ +uses: ossf/scorecard-action@([0-9a-f]{40}) "
+        direct_pins = re.findall(scorecard_step, self.scorecard)
+        self.assertEqual(len(direct_pins), 1)
+        self.assertEqual(re.findall(scorecard_step, publication), direct_pins)
+        self.assertEqual(re.findall(scorecard_step, self.scorecard_pr), direct_pins)
         self.assertEqual(self.scorecard.count("github/codeql-action/upload-sarif@"), 1)
         self.assertEqual(self.scorecard.count("security-events: write"), 1)
         self.assertEqual(self.scorecard.count("id-token: write"), 1)
