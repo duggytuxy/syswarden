@@ -144,7 +144,7 @@ class CandidateUpdateBundleWorkflowTests(unittest.TestCase):
             references,
             [
                 "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-                "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+                "actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5",
                 "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
                 "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
                 "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
