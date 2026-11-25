@@ -17,8 +17,6 @@ concurrency:
 permissions:
   contents: read
 
-# Scorecard v2.6.0 is missing its Linux AMD64 image. Keep both jobs on v2.5.0
-# until an upstream image can be pulled. See https://github.com/ossf/scorecard-action/issues/1752
 jobs:
   pull-request-analysis:
     name: Scorecard analysis (pull request)
